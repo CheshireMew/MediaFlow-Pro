@@ -1,0 +1,62 @@
+[project]
+name = "mediaflow-pro"
+version = "2.0.0"
+description = "Windows-native project-based video creation workstation built with PySide6/QML and MLT."
+authors = [
+    {name = "Weifeng"},
+]
+requires-python = ">=3.12,<3.13"
+license = "GPL-3.0-only"
+dependencies = [
+    "PySide6==6.11.1",
+    "pydantic==2.13.4",
+    "yt-dlp==2026.3.17",
+    "faster-whisper==1.2.1",
+    "openai==2.45.0",
+    "json-repair==0.61.4",
+]
+readme = "README.md"
+
+[project.scripts]
+mediaflow-pro = "mediaflow.desktop.app:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-qt==4.5.0",
+    "ruff==0.14.14",
+    "psutil==7.2.2",
+]
+build = [
+    "cmake==4.4.0",
+    "ninja==1.13.0",
+    "py7zr==1.1.3",
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.build]
+includes = ["mediaflow"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests/v2"]
+python_files = ["test_*.py"]
+addopts = ["-v", "--strict-markers"]
+markers = [
+    "integration: requires external services or real files",
+    "slow: tests that take more than 10 seconds",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

@@ -1,0 +1,46 @@
+# Python environments and caches
+__pycache__/
+*.py[cod]
+.venv/
+.pdm-python
+.pytest_cache/
+.ruff_cache/
+.cache/
+*.egg-info/
+
+# Local build and verification output
+.pdm-build/
+.temp/
+.tmp/
+build/
+dist/
+cmake-build-*/
+*.spec
+*.log
+
+# Local projects, models, and managed artifacts
+/bin/
+/data/
+/example/
+/models/
+/output/
+/temp/
+/tools/
+/user_data/
+/workspace/
+/workspace-state.json
+
+# Secrets and machine-local settings
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Assistant-local metadata
+/.claude/
+/.codex/

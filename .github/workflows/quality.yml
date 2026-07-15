@@ -1,0 +1,70 @@
+name: V2 Quality
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python 3.12 domain and persistence checks
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install V2 development dependencies
+        run: python -m pip install ".[dev]"
+      - name: Lint V2 source and verification scripts
+        run: >-
+          python -m ruff check
+          mediaflow
+          tests/v2
+          scripts/update_qm_translations.py
+          scripts/verify_display_capabilities.py
+          scripts/verify_license_inventory.py
+          scripts/verify_performance.py
+          scripts/verify_preview_performance.py
+          scripts/verify_real_user_chain.py
+          scripts/verify_release_runtime.py
+          scripts/verify_ui_matrix.py
+      - name: Run hardware-independent V2 tests
+        run: >-
+          python -m pytest
+          tests/v2/domain
+          tests/v2/application
+          tests/v2/infrastructure/test_project_documents.py
+          tests/v2/infrastructure/test_project_repository.py
+          tests/v2/infrastructure/test_settings_repository.py
+          tests/v2/desktop/test_i18n.py
+
+  native-policy:
+    name: Native preview source policy
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify the native plugin stays isolated
+        shell: pwsh
+        run: |
+          $forbidden = @(
+            'project.mfp',
+            'sqlite',
+            'yt-dlp',
+            '://'
+          )
+          foreach ($term in $forbidden) {
+            $matches = Select-String -Path mediaflow/desktop/native/* -Pattern $term -SimpleMatch
+            if ($matches) {
+              $matches | Format-Table
+              throw "Forbidden native-plugin responsibility found: $term"
+            }
+          }

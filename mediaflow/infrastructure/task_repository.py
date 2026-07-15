@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+from mediaflow.domain.enums import TaskKind, TaskStatus
+from mediaflow.domain.models import Task, now_ms
+from mediaflow.infrastructure.project_repository import PROJECT_FILE_NAME
+
+
+class TaskRepository:
+    """Thread-safe task persistence using one short SQLite connection per operation."""
+
+    def __init__(self, project_dir: str | Path):
+        self.project_dir = Path(project_dir).resolve(strict=True)
+        self.database_path = self.project_dir / PROJECT_FILE_NAME
+        if not self.database_path.is_file():
+            raise FileNotFoundError(self.database_path)
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA busy_timeout=5000")
+        return connection
+
+    def create(self, task: Task) -> Task:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT INTO task(
+                    id, project_id, sequence_id, kind, status, name, progress,
+                    message_code, input_asset_ids_json, parameters_json,
+                    artifacts_json, error, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                self._values(task),
+            )
+        return self.get(task.id)
+
+    def save(self, task: Task) -> Task:
+        current = self.get(task.id)
+        next_task = task.model_copy(update={"revision": current.revision + 1, "updated_at": now_ms()})
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """UPDATE task SET
+                    project_id=?, sequence_id=?, kind=?, status=?, name=?, progress=?,
+                    message_code=?, input_asset_ids_json=?, parameters_json=?,
+                    artifacts_json=?, error=?, revision=?, created_at=?, updated_at=?
+                WHERE id=? AND revision=?""",
+                (
+                    next_task.project_id,
+                    next_task.sequence_id,
+                    next_task.kind.value,
+                    next_task.status.value,
+                    next_task.name,
+                    next_task.progress,
+                    next_task.message_code,
+                    self._json(next_task.input_asset_ids),
+                    self._json(next_task.parameters),
+                    self._json(next_task.artifacts),
+                    next_task.error,
+                    next_task.revision,
+                    next_task.created_at,
+                    next_task.updated_at,
+                    next_task.id,
+                    current.revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"Concurrent task update rejected: {task.id}")
+        return self.get(task.id)
+
+    def get(self, task_id: str) -> Task:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM task WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return self._from_row(row)
+
+    def list(self) -> list[Task]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM task ORDER BY created_at, id").fetchall()
+        return [self._from_row(row) for row in rows]
+
+    def recover_interrupted(self) -> list[Task]:
+        recovered: list[Task] = []
+        for task in self.list():
+            if task.status == TaskStatus.RUNNING:
+                recovered.append(
+                    self.save(
+                        task.model_copy(
+                            update={
+                                "status": TaskStatus.PAUSED,
+                                "message_code": "interrupted_by_restart",
+                                "error": None,
+                            }
+                        )
+                    )
+                )
+        return recovered
+
+    @staticmethod
+    def _json(value: object) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    @classmethod
+    def _values(cls, task: Task) -> tuple[object, ...]:
+        return (
+            task.id,
+            task.project_id,
+            task.sequence_id,
+            task.kind.value,
+            task.status.value,
+            task.name,
+            task.progress,
+            task.message_code,
+            cls._json(task.input_asset_ids),
+            cls._json(task.parameters),
+            cls._json(task.artifacts),
+            task.error,
+            task.revision,
+            task.created_at,
+            task.updated_at,
+        )
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row) -> Task:
+        return Task(
+            id=row["id"],
+            project_id=row["project_id"],
+            sequence_id=row["sequence_id"],
+            kind=TaskKind(row["kind"]),
+            status=TaskStatus(row["status"]),
+            name=row["name"],
+            progress=row["progress"],
+            message_code=row["message_code"],
+            input_asset_ids=json.loads(row["input_asset_ids_json"]),
+            parameters=json.loads(row["parameters_json"]),
+            artifacts=json.loads(row["artifacts_json"]),
+            error=row["error"],
+            revision=row["revision"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
