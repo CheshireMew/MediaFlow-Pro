@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import builtins
 import json
 import sqlite3
 from pathlib import Path
 
-from mediaflow.domain.enums import TaskKind, TaskStatus
-from mediaflow.domain.models import Task, now_ms
-from mediaflow.infrastructure.project_repository import PROJECT_FILE_NAME
+from mediaflow.domain.enums import TaskStatus
+from mediaflow.domain.model_base import now_ms
+from mediaflow.domain.tasks import Task
+from mediaflow.infrastructure.project_schema import PROJECT_FILE_NAME
 
 
 class TaskRepository:
@@ -30,10 +32,10 @@ class TaskRepository:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """INSERT INTO task(
-                    id, project_id, sequence_id, kind, status, name, progress,
-                    message_code, input_asset_ids_json, parameters_json,
-                    artifacts_json, error, revision, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    id, project_id, sequence_id, command_json, status, progress,
+                    message_code, input_asset_ids_json,
+                    artifacts_json, execution_trace_json, error, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 self._values(task),
             )
         return self.get(task.id)
@@ -45,21 +47,20 @@ class TaskRepository:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """UPDATE task SET
-                    project_id=?, sequence_id=?, kind=?, status=?, name=?, progress=?,
-                    message_code=?, input_asset_ids_json=?, parameters_json=?,
-                    artifacts_json=?, error=?, revision=?, created_at=?, updated_at=?
+                    project_id=?, sequence_id=?, command_json=?, status=?, progress=?,
+                    message_code=?, input_asset_ids_json=?,
+                    artifacts_json=?, execution_trace_json=?, error=?, revision=?, created_at=?, updated_at=?
                 WHERE id=? AND revision=?""",
                 (
                     next_task.project_id,
                     next_task.sequence_id,
-                    next_task.kind.value,
+                    self._json(next_task.command.model_dump(mode="json")),
                     next_task.status.value,
-                    next_task.name,
                     next_task.progress,
                     next_task.message_code,
                     self._json(next_task.input_asset_ids),
-                    self._json(next_task.parameters),
                     self._json(next_task.artifacts),
+                    self._json([item.model_dump(mode="json") for item in next_task.execution_trace]),
                     next_task.error,
                     next_task.revision,
                     next_task.created_at,
@@ -79,15 +80,34 @@ class TaskRepository:
             raise KeyError(task_id)
         return self._from_row(row)
 
-    def list(self) -> list[Task]:
+    def list(self) -> builtins.list[Task]:
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM task ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
 
-    def recover_interrupted(self) -> list[Task]:
-        recovered: list[Task] = []
+    def delete(self, task_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute("DELETE FROM task WHERE id=?", (task_id,))
+            if cursor.rowcount != 1:
+                raise KeyError(task_id)
+
+    def delete_terminal(self) -> builtins.list[Task]:
+        tasks = [task for task in self.list() if task.status.is_terminal]
+        if not tasks:
+            return []
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.executemany(
+                "DELETE FROM task WHERE id=?",
+                [(task.id,) for task in tasks],
+            )
+        return tasks
+
+    def recover_interrupted(self) -> builtins.list[Task]:
+        recovered: builtins.list[Task] = []
         for task in self.list():
-            if task.status == TaskStatus.RUNNING:
+            if task.status.is_in_flight:
                 recovered.append(
                     self.save(
                         task.model_copy(
@@ -111,14 +131,13 @@ class TaskRepository:
             task.id,
             task.project_id,
             task.sequence_id,
-            task.kind.value,
+            cls._json(task.command.model_dump(mode="json")),
             task.status.value,
-            task.name,
             task.progress,
             task.message_code,
             cls._json(task.input_asset_ids),
-            cls._json(task.parameters),
             cls._json(task.artifacts),
+            cls._json([item.model_dump(mode="json") for item in task.execution_trace]),
             task.error,
             task.revision,
             task.created_at,
@@ -131,14 +150,13 @@ class TaskRepository:
             id=row["id"],
             project_id=row["project_id"],
             sequence_id=row["sequence_id"],
-            kind=TaskKind(row["kind"]),
+            command=json.loads(row["command_json"]),
             status=TaskStatus(row["status"]),
-            name=row["name"],
             progress=row["progress"],
             message_code=row["message_code"],
             input_asset_ids=json.loads(row["input_asset_ids_json"]),
-            parameters=json.loads(row["parameters_json"]),
             artifacts=json.loads(row["artifacts_json"]),
+            execution_trace=json.loads(row["execution_trace_json"]),
             error=row["error"],
             revision=row["revision"],
             created_at=row["created_at"],

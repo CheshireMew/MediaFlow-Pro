@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +38,7 @@ class TaskEventBus:
             self._subscribers[token] = handler
             snapshot = tuple(self._snapshot_provider()) if include_snapshot else ()
         for event in snapshot:
-            handler(event)
+            self._deliver(handler, event)
         return token
 
     def unsubscribe(self, token: int) -> None:
@@ -46,7 +49,21 @@ class TaskEventBus:
         with self._lock:
             subscribers = tuple(self._subscribers.values())
         for handler in subscribers:
+            self._deliver(handler, event)
+
+    @staticmethod
+    def _deliver(handler: TaskEventHandler, event: TaskEvent) -> None:
+        try:
             handler(event)
+        except Exception:
+            # Observers are projections of persisted task state. A broken UI or
+            # telemetry observer must never be able to rewrite a successful task.
+            logger.exception(
+                "Task event observer failed (task=%s, revision=%s, type=%s)",
+                event.task_id,
+                event.revision,
+                event.event_type,
+            )
 
     @property
     def subscriber_count(self) -> int:

@@ -4,7 +4,8 @@ import subprocess
 from pathlib import Path
 
 from mediaflow.application.asset_service import AssetService
-from mediaflow.application.subtitle_service import SubtitleService
+from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
+from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.infrastructure.asr_engine import FasterWhisperProcessEngine
 from mediaflow.infrastructure.media_probe import MediaProbe
@@ -44,7 +45,8 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
             compute_type="int8",
             language="en",
         )
-        document = SubtitleService(repository).transcribe_asset(
+        publication = SubtitlePublicationService(repository)
+        document = SubtitleAcquisitionService(repository, publication).transcribe_asset(
             asset.id,
             FasterWhisperProcessEngine(settings, paths),
             language="en",

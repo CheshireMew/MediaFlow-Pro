@@ -19,12 +19,13 @@ class RuntimePaths:
         runtime_dir = cls._runtime_dir()
         ffmpeg = cls._tool("MEDIAFLOW_FFMPEG", runtime_dir / "deps/ffmpeg/bin/ffmpeg.exe", "ffmpeg")
         ffprobe = cls._tool("MEDIAFLOW_FFPROBE", runtime_dir / "deps/ffmpeg/bin/ffprobe.exe", "ffprobe")
+        system_melt = shutil.which("melt")
         melt = cls._first_existing(
             [
                 Path(os.environ["MEDIAFLOW_MELT"]).expanduser() if os.environ.get("MEDIAFLOW_MELT") else None,
                 runtime_dir / "deps/mlt/bin/melt.exe",
                 Path("D:/Tools/MediaFlow/deps/shotcut-26.6.25/Shotcut/melt.exe"),
-                Path(shutil.which("melt")) if shutil.which("melt") else None,
+                Path(system_melt) if system_melt else None,
             ]
         )
         native_qml = cls._first_existing_directory(

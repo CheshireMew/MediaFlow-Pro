@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from mediaflow.application.ports import WorkflowCoordinatorDocuments
 from mediaflow.domain.enums import WorkflowStage, WorkflowStatus
-from mediaflow.domain.models import WorkflowRun
-from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.domain.workflows import WorkflowPayload, WorkflowPayloadPatch, WorkflowRun
 
 _NEXT_STAGE = {
     WorkflowStage.DOWNLOAD: WorkflowStage.PREPARE_MEDIA,
@@ -18,7 +18,12 @@ _NEXT_STAGE = {
 class WorkflowCoordinator:
     """Persist workflow transitions while task execution remains in TaskService."""
 
-    def __init__(self, repository: ProjectRepository, *, global_auto_continue: bool):
+    def __init__(
+        self,
+        repository: WorkflowCoordinatorDocuments,
+        *,
+        global_auto_continue: bool,
+    ):
         self.repository = repository
         project = repository.get_project()
         self.auto_continue = (
@@ -33,7 +38,7 @@ class WorkflowCoordinator:
         sequence_id: str,
         stage: WorkflowStage,
         asset_ids: list[str] | None = None,
-        payload: dict | None = None,
+        payload: WorkflowPayload | None = None,
         running: bool = False,
     ) -> WorkflowRun:
         project = self.repository.get_project()
@@ -45,7 +50,7 @@ class WorkflowCoordinator:
                 stage=stage,
                 status=(WorkflowStatus.RUNNING if running else WorkflowStatus.AWAITING_CONFIRMATION),
                 auto_continue=self.auto_continue,
-                payload=payload or {},
+                payload=payload or WorkflowPayload(),
                 message_code=f"workflow_{stage.value}_ready",
             )
         )
@@ -55,10 +60,12 @@ class WorkflowCoordinator:
         run_id: str,
         *,
         task_ids: list[str],
-        payload: dict | None = None,
+        payload: WorkflowPayloadPatch | None = None,
     ) -> WorkflowRun:
         run = self.repository.get_workflow_run(run_id)
-        merged = {**run.payload, **(payload or {}), "task_ids": task_ids}
+        merged = (
+            (payload or WorkflowPayloadPatch()).apply(run.payload).model_copy(update={"task_ids": task_ids})
+        )
         return self.repository.save_workflow_run(
             run.model_copy(
                 update={
@@ -74,12 +81,11 @@ class WorkflowCoordinator:
         run_id: str,
         *,
         asset_ids: list[str] | None = None,
-        payload: dict | None = None,
+        payload: WorkflowPayloadPatch | None = None,
     ) -> WorkflowRun:
         run = self.repository.get_workflow_run(run_id)
         next_stage = _NEXT_STAGE[run.stage]
-        merged = {**run.payload, **(payload or {})}
-        merged.pop("task_ids", None)
+        merged = (payload or WorkflowPayloadPatch()).apply(run.payload).model_copy(update={"task_ids": []})
         if next_stage == WorkflowStage.COMPLETE:
             return self.repository.save_workflow_run(
                 run.model_copy(

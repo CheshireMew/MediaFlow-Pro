@@ -14,9 +14,11 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickWindow
 from shiboken6 import getCppPointer, wrapInstance
 
-from mediaflow.desktop.app import create_engine, load_application_font
+from mediaflow.desktop.app import configure_application_font, create_engine
 from mediaflow.domain.enums import AssetKind, TrackKind
-from mediaflow.domain.models import Clip, MediaMetadata, SubtitleDocument, SubtitleSegment
+from mediaflow.domain.project import MediaMetadata
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
+from mediaflow.domain.timeline import Clip
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
@@ -118,7 +120,7 @@ def verify(root: Path) -> dict:
     project_dir = create_fixture(root)
     os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(root / "runtime")
     app = QGuiApplication.instance() or QGuiApplication([])
-    load_application_font(app)
+    configure_application_font(app)
     engine, controller = create_engine(app)
     try:
         started = time.perf_counter()
@@ -171,9 +173,7 @@ def verify(root: Path) -> dict:
 
 
 def main() -> None:
-    root = Path("D:/Tools/MediaFlow/test-runs") / (
-        "performance-" + datetime.now().strftime("%Y%m%d-%H%M%S")
-    )
+    root = Path("D:/Tools/MediaFlow/test-runs") / ("performance-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     print(json.dumps(verify(root), ensure_ascii=False, indent=2))
 
 

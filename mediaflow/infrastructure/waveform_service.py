@@ -4,8 +4,8 @@ import json
 from array import array
 from collections.abc import Callable
 
-from mediaflow.domain.models import Asset
-from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.application.ports import AssetProcessingDocuments
+from mediaflow.domain.project import Asset
 
 from .runtime_paths import RuntimePaths
 from .subprocess_runner import run_cancellable
@@ -15,7 +15,11 @@ class WaveformService:
     SAMPLE_RATE = 8_000
     BLOCK_SIZES = (128, 512, 2048, 8192)
 
-    def __init__(self, repository: ProjectRepository, paths: RuntimePaths | None = None):
+    def __init__(
+        self,
+        repository: AssetProcessingDocuments,
+        paths: RuntimePaths | None = None,
+    ):
         self.repository = repository
         self.paths = paths or RuntimePaths.discover()
 

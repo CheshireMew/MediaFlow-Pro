@@ -8,6 +8,8 @@ from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, QObject,
 class DictListModel(QAbstractListModel):
     def __init__(self, roles: list[str], parent: QObject | None = None):
         super().__init__(parent)
+        if not roles or len(set(roles)) != len(roles):
+            raise ValueError("Model roles must be non-empty and unique")
         self._roles = roles
         self._role_numbers = {Qt.UserRole + index + 1: role for index, role in enumerate(roles)}
         self._items: list[dict[str, Any]] = []
@@ -25,6 +27,16 @@ class DictListModel(QAbstractListModel):
         return self._items[index.row()].get(role_name) if role_name else None
 
     def set_items(self, items: list[dict[str, Any]]) -> None:
+        expected = set(self._roles)
+        for row, item in enumerate(items):
+            actual = set(item)
+            if actual != expected:
+                missing = sorted(expected - actual)
+                unexpected = sorted(actual - expected)
+                raise ValueError(
+                    f"Model row {row} does not match its declared roles; "
+                    f"missing={missing}, unexpected={unexpected}"
+                )
         key_role = self._roles[0]
         before_keys = [item.get(key_role) for item in self._items]
         after_keys = [item.get(key_role) for item in items]
@@ -82,9 +94,7 @@ class DictListModel(QAbstractListModel):
         for row, after in enumerate(items):
             before = self._items[row]
             changed_roles = [
-                role_by_name[name]
-                for name in self._roles
-                if before.get(name) != after.get(name)
+                role_by_name[name] for name in self._roles if before.get(name) != after.get(name)
             ]
             if changed_roles:
                 self._items[row] = after
@@ -145,6 +155,25 @@ class RecentProjectListModel(DictListModel):
                 "offlineAssetCount",
                 "pendingWorkflowCount",
                 "recentArtifact",
+                "coverUrl",
+            ],
+            parent,
+        )
+
+
+class DownloadEntryListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            [
+                "entryIndex",
+                "mediaId",
+                "title",
+                "pageUrl",
+                "duration",
+                "uploader",
+                "available",
+                "unavailableReason",
+                "selected",
             ],
             parent,
         )
@@ -184,7 +213,11 @@ class ClipListModel(DictListModel):
                 "endFrame",
                 "speed",
                 "pitchCompensation",
-                "kind",
+                "assetKind",
+                "trackKind",
+                "allowedTrackKinds",
+                "hasAudio",
+                "audioTrackPosition",
                 "waveformReady",
                 "x",
                 "y",
@@ -237,7 +270,6 @@ class TaskListModel(DictListModel):
         super().__init__(
             [
                 "taskId",
-                "name",
                 "displayName",
                 "kind",
                 "status",
@@ -245,8 +277,10 @@ class TaskListModel(DictListModel):
                 "progress",
                 "messageCode",
                 "messageLabel",
+                "queuePosition",
                 "error",
                 "artifacts",
+                "executionTrace",
             ],
             parent,
         )
@@ -255,7 +289,15 @@ class TaskListModel(DictListModel):
 class SubtitleDocumentListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["documentId", "assetId", "language", "isSource", "sourceDocumentId", "segmentCount"],
+            [
+                "documentId",
+                "assetId",
+                "mediaAssetId",
+                "language",
+                "isSource",
+                "sourceDocumentId",
+                "segmentCount",
+            ],
             parent,
         )
 
@@ -263,7 +305,15 @@ class SubtitleDocumentListModel(DictListModel):
 class SubtitleSegmentListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["segmentId", "startFrame", "endFrame", "text", "speaker", "confidence"],
+            [
+                "segmentId",
+                "startFrame",
+                "endFrame",
+                "text",
+                "speaker",
+                "confidence",
+                "hasOverlap",
+            ],
             parent,
         )
 
@@ -275,6 +325,8 @@ class SubtitlePlacementListModel(DictListModel):
                 "placementId",
                 "trackId",
                 "segmentId",
+                "clipId",
+                "audioTrackPosition",
                 "startFrame",
                 "endFrame",
                 "text",
@@ -285,10 +337,34 @@ class SubtitlePlacementListModel(DictListModel):
         )
 
 
+class GlossaryTermListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(["termId", "source", "target", "note", "category"], parent)
+
+
+class LlmProviderListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            ["providerId", "name", "baseUrl", "apiKey", "model", "enabled", "active"],
+            parent,
+        )
+
+
 class HighlightListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["highlightId", "assetId", "startFrame", "endFrame", "title", "reason", "score"],
+            [
+                "highlightId",
+                "assetId",
+                "documentId",
+                "sequenceId",
+                "startFrame",
+                "endFrame",
+                "title",
+                "reason",
+                "score",
+                "selected",
+            ],
             parent,
         )
 
@@ -313,7 +389,15 @@ class AudioBusListModel(DictListModel):
 class AudioEffectListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["effectId", "busId", "kind", "position", "enabled", "parameters"],
+            [
+                "effectId",
+                "busId",
+                "kind",
+                "displayName",
+                "position",
+                "enabled",
+                "parameters",
+            ],
             parent,
         )
 
@@ -321,6 +405,6 @@ class AudioEffectListModel(DictListModel):
 class AudioEffectParameterListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["key", "value", "minimum", "maximum", "step", "unit", "valueType"],
+            ["key", "label", "value", "minimum", "maximum", "step", "unit", "valueType"],
             parent,
         )

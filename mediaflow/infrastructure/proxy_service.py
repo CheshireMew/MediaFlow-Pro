@@ -4,9 +4,12 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from mediaflow.application.ports import AssetProcessingDocuments
 from mediaflow.domain.enums import ColorMode
-from mediaflow.domain.models import Asset, ProjectProfile
-from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.domain.project import (
+    Asset,
+    ProjectProfile,
+)
 
 from .runtime_paths import RuntimePaths
 from .subprocess_runner import run_cancellable
@@ -19,7 +22,11 @@ class ProxyDecision:
 
 
 class ProxyService:
-    def __init__(self, repository: ProjectRepository, paths: RuntimePaths | None = None):
+    def __init__(
+        self,
+        repository: AssetProcessingDocuments,
+        paths: RuntimePaths | None = None,
+    ):
         self.repository = repository
         self.paths = paths or RuntimePaths.discover()
 
@@ -141,9 +148,7 @@ class ProxyService:
                 if source_hdr
                 else ""
             )
-            sdr_filters = ",".join(
-                item for item in (sdr_color, scale, f"fps={fps}") if item
-            )
+            sdr_filters = ",".join(item for item in (sdr_color, scale, f"fps={fps}") if item)
             sdr_result = run_cancellable(
                 [
                     str(self.paths.ffmpeg),
@@ -186,16 +191,12 @@ class ProxyService:
                 check_cancelled=check_cancelled,
             )
             if sdr_result.returncode != 0 or not sdr_preview_output.is_file():
-                raise RuntimeError(
-                    f"SDR preview proxy generation failed: {sdr_result.stderr.strip()}"
-                )
+                raise RuntimeError(f"SDR preview proxy generation failed: {sdr_result.stderr.strip()}")
         return self.repository.update_asset(
             asset.model_copy(
                 update={
                     "proxy_path": str(output),
-                    "sdr_preview_proxy_path": (
-                        str(sdr_preview_output) if sdr_preview_output else None
-                    ),
+                    "sdr_preview_proxy_path": (str(sdr_preview_output) if sdr_preview_output else None),
                 }
             )
         )

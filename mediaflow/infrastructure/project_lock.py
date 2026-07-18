@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import BinaryIO
 
@@ -21,7 +22,7 @@ class ProjectWriteLock:
             stream.flush()
         stream.seek(0)
         try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
@@ -41,7 +42,7 @@ class ProjectWriteLock:
             return
         try:
             stream.seek(0)
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)

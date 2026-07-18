@@ -1,46 +1,44 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 
+from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
+from mediaflow.application.ports import TimelineEditorDocuments
+from mediaflow.application.timeline_diff import TimelineDiff
 from mediaflow.domain.effect_registry import transition_is_available
 from mediaflow.domain.enums import AssetKind, TrackKind, TransitionKind
-from mediaflow.domain.models import (
+from mediaflow.domain.model_base import new_id
+from mediaflow.domain.project import ProjectProfile, SequenceInOut
+from mediaflow.domain.timebase import (
+    reframe_frames,
+    source_frames_for_timeline_frames,
+)
+from mediaflow.domain.timeline import (
     Clip,
     ClipAudio,
     ClipTransform,
-    ProjectProfile,
     TimelineMarker,
     TimelineRange,
     TimelineState,
     Track,
     Transition,
-    new_id,
+    compatible_track_kinds,
 )
-from mediaflow.domain.timebase import (
-    frames_to_seconds,
-    seconds_to_frames,
-    source_frames_for_timeline_frames,
-)
-from mediaflow.infrastructure.project_repository import ProjectRepository
-
-
-@dataclass(slots=True)
-class TimelineRevision:
-    before: TimelineState
-    after: TimelineState
-    label: str
 
 
 class TimelineEditor:
     """Frame-accurate editing commands with a persisted command stack."""
 
-    def __init__(self, repository: ProjectRepository, sequence_id: str):
+    def __init__(
+        self,
+        repository: TimelineEditorDocuments,
+        sequence_id: str,
+        history: ProjectEditHistory | None = None,
+    ):
         self.repository = repository
         self.sequence_id = sequence_id
         self._state = repository.load_timeline(sequence_id)
-        self._undo: list[TimelineRevision] = []
-        self._redo: list[TimelineRevision] = []
+        self.history = history or ProjectEditHistory()
 
     @property
     def state(self) -> TimelineState:
@@ -48,16 +46,14 @@ class TimelineEditor:
 
     @property
     def can_undo(self) -> bool:
-        return bool(self._undo)
+        return self.history.can_undo
 
     @property
     def can_redo(self) -> bool:
-        return bool(self._redo)
+        return self.history.can_redo
 
     def reload(self) -> TimelineState:
         self._state = self.repository.load_timeline(self.sequence_id)
-        self._undo.clear()
-        self._redo.clear()
         return self.state
 
     def add_track(
@@ -133,27 +129,16 @@ class TimelineEditor:
 
     def set_sequence_profile(self, profile: ProjectProfile) -> TimelineState:
         old_profile = self._state.sequence.profile
-        if profile == old_profile:
+        if profile == old_profile and self._state.sequence.profile_confirmed:
             return self.state
 
         def reframe(value: int) -> int:
-            if (
-                old_profile.fps_numerator == profile.fps_numerator
-                and old_profile.fps_denominator == profile.fps_denominator
-            ):
-                return value
-            return seconds_to_frames(
-                frames_to_seconds(
-                    value,
-                    old_profile.fps_numerator,
-                    old_profile.fps_denominator,
-                ),
-                profile.fps_numerator,
-                profile.fps_denominator,
-            )
+            return reframe_frames(value, old_profile, profile)
 
         def mutate(state: TimelineState) -> None:
-            state.sequence = state.sequence.model_copy(update={"profile": profile})
+            state.sequence = state.sequence.model_copy(
+                update={"profile": profile, "profile_confirmed": True}
+            )
             state.clips = [
                 clip.model_copy(
                     update={
@@ -178,8 +163,7 @@ class TimelineEditor:
                 for transition in state.transitions
             ]
             state.markers = [
-                marker.model_copy(update={"frame": reframe(marker.frame)})
-                for marker in state.markers
+                marker.model_copy(update={"frame": reframe(marker.frame)}) for marker in state.markers
             ]
             state.ranges = [
                 item.model_copy(
@@ -190,8 +174,42 @@ class TimelineEditor:
                 )
                 for item in state.ranges
             ]
+            if state.sequence.in_out is not None:
+                state.sequence = state.sequence.model_copy(
+                    update={
+                        "in_out": SequenceInOut(
+                            in_frame=reframe(state.sequence.in_out.in_frame),
+                            out_frame=max(
+                                reframe(state.sequence.in_out.in_frame) + 1,
+                                reframe(state.sequence.in_out.out_frame),
+                            ),
+                        )
+                    }
+                )
 
         self._commit("修改序列配置", mutate, allow_locked_changes=True)
+        return self.state
+
+    def set_sequence_in_out(self, in_frame: int, out_frame: int) -> TimelineState:
+        duration = self._state.duration_frames
+        if duration <= 0:
+            raise ValueError("Sequence has no media to define in and out points")
+        bounds = SequenceInOut(
+            in_frame=max(0, min(duration - 1, in_frame)),
+            out_frame=max(1, min(duration, out_frame)),
+        )
+
+        def mutate(state: TimelineState) -> None:
+            state.sequence = state.sequence.model_copy(update={"in_out": bounds})
+
+        self._commit("设置序列入出点", mutate, allow_locked_changes=True)
+        return self.state
+
+    def clear_sequence_in_out(self) -> TimelineState:
+        def mutate(state: TimelineState) -> None:
+            state.sequence = state.sequence.model_copy(update={"in_out": None})
+
+        self._commit("清除序列入出点", mutate, allow_locked_changes=True)
         return self.state
 
     def add_clip(
@@ -272,9 +290,7 @@ class TimelineEditor:
                     None,
                 )
                 overlap_transition = (
-                    previous.model_copy(
-                        update={"track_id": destination, "duration": overlap}
-                    )
+                    previous.model_copy(update={"track_id": destination, "duration": overlap})
                     if previous
                     else Transition(
                         track_id=destination,
@@ -300,6 +316,60 @@ class TimelineEditor:
 
         self._commit("移动片段并调整转场" if overlap_transition else "移动片段", mutate)
         return self._clip(clip_id)
+
+    def move_clips(
+        self,
+        clip_ids: Iterable[str],
+        *,
+        primary_clip_id: str,
+        timeline_start: int,
+        track_id: str,
+        snap_targets: Iterable[int] = (),
+        snap_tolerance_frames: int = 0,
+    ) -> list[Clip]:
+        selected_ids = list(dict.fromkeys(clip_ids))
+        if primary_clip_id not in selected_ids:
+            raise ValueError("Primary clip must be part of the selection")
+        selected = [self._clip(clip_id) for clip_id in selected_ids]
+        primary = self._clip(primary_clip_id)
+        tracks = sorted(self._state.tracks, key=lambda item: item.position)
+        track_positions = {item.id: index for index, item in enumerate(tracks)}
+        if track_id not in track_positions:
+            raise KeyError(track_id)
+        frame_delta = (
+            self.snap_frame(timeline_start, snap_targets, snap_tolerance_frames) - primary.timeline_start
+        )
+        track_delta = track_positions[track_id] - track_positions[primary.track_id]
+        updates: dict[str, tuple[str, int]] = {}
+        for clip in selected:
+            destination_position = track_positions[clip.track_id] + track_delta
+            if not 0 <= destination_position < len(tracks):
+                raise ValueError("Selected clips cannot move outside the timeline tracks")
+            destination = tracks[destination_position]
+            asset = self.repository.get_asset(clip.asset_id)
+            self._validate_asset_track(asset.kind, destination.kind)
+            next_start = clip.timeline_start + frame_delta
+            if next_start < 0:
+                raise ValueError("Selected clips cannot move before the timeline start")
+            updates[clip.id] = (destination.id, next_start)
+
+        def mutate(state: TimelineState) -> None:
+            state.clips = [
+                clip.model_copy(
+                    update={
+                        "track_id": updates[clip.id][0],
+                        "timeline_start": updates[clip.id][1],
+                    }
+                )
+                if clip.id in updates
+                else clip
+                for clip in state.clips
+            ]
+            clips = {item.id: item for item in state.clips}
+            state.transitions = [item for item in state.transitions if self._transition_is_valid(item, clips)]
+
+        self._commit("移动多个片段", mutate)
+        return [self._clip(clip_id) for clip_id in selected_ids]
 
     def copy_clip(
         self,
@@ -344,11 +414,7 @@ class TimelineEditor:
                 }
             )
             clips = {item.id: item for item in state.clips}
-            state.transitions = [
-                item
-                for item in state.transitions
-                if self._transition_is_valid(item, clips)
-            ]
+            state.transitions = [item for item in state.transitions if self._transition_is_valid(item, clips)]
 
         self._commit("裁剪片段", mutate)
         return self._clip(clip_id)
@@ -455,66 +521,34 @@ class TimelineEditor:
         return self._clip(left.id), self._clip(right.id)
 
     def delete_clip(self, clip_id: str, *, ripple: bool = False) -> None:
-        source = self._clip(clip_id)
+        self.delete_clips([clip_id], ripple=ripple)
+
+    def delete_clips(self, clip_ids: Iterable[str], *, ripple: bool = False) -> None:
+        selected_ids = set(clip_ids)
+        if not selected_ids:
+            return
+        sources = [self._clip(clip_id) for clip_id in selected_ids]
+        source_track_ids = {clip.track_id for clip in sources}
 
         def mutate(state: TimelineState) -> None:
-            state.clips = [clip for clip in state.clips if clip.id != clip_id]
+            state.clips = [clip for clip in state.clips if clip.id not in selected_ids]
             state.transitions = [
                 transition
                 for transition in state.transitions
-                if transition.left_clip_id != clip_id and transition.right_clip_id != clip_id
+                if transition.left_clip_id not in selected_ids
+                and transition.right_clip_id not in selected_ids
             ]
             if ripple:
-                for index, clip in enumerate(state.clips):
-                    track = next(track for track in state.tracks if track.id == clip.track_id)
-                    if not track.locked and clip.timeline_start >= source.timeline_end:
-                        state.clips[index] = clip.model_copy(
-                            update={"timeline_start": clip.timeline_start - source.duration}
-                        )
-                state.markers = [
-                    marker.model_copy(
-                        update={
-                            "frame": (
-                                marker.frame - source.duration
-                                if marker.frame >= source.timeline_end
-                                else source.timeline_start
-                                if marker.frame >= source.timeline_start
-                                else marker.frame
-                            )
-                        }
-                    )
-                    for marker in state.markers
-                ]
-                adjusted_ranges: list[TimelineRange] = []
-                for item in state.ranges:
-                    if item.end_frame <= source.timeline_start:
-                        adjusted_ranges.append(item)
-                        continue
-                    if item.start_frame >= source.timeline_end:
-                        adjusted_ranges.append(
-                            item.model_copy(
-                                update={
-                                    "start_frame": item.start_frame - source.duration,
-                                    "end_frame": item.end_frame - source.duration,
-                                }
-                            )
-                        )
-                        continue
-                    start_frame = min(item.start_frame, source.timeline_start)
-                    end_frame = (
-                        item.end_frame - source.duration
-                        if item.end_frame > source.timeline_end
-                        else source.timeline_start
-                    )
-                    if end_frame > start_frame:
-                        adjusted_ranges.append(
-                            item.model_copy(
-                                update={"start_frame": start_frame, "end_frame": end_frame}
-                            )
-                        )
-                state.ranges = adjusted_ranges
+                TimelineDiff.apply_ripple(
+                    self._state,
+                    state,
+                    source_track_ids=source_track_ids,
+                )
 
-        self._commit("波纹删除" if ripple else "删除片段", mutate)
+        label = "波纹删除多个片段" if ripple else "删除多个片段"
+        if len(selected_ids) == 1:
+            label = "波纹删除" if ripple else "删除片段"
+        self._commit(label, mutate)
 
     def create_transition(
         self,
@@ -569,9 +603,7 @@ class TimelineEditor:
             raise ValueError("Transition duration exceeds the available clips")
 
         def mutate(state: TimelineState) -> None:
-            index = next(
-                index for index, item in enumerate(state.transitions) if item.id == transition_id
-            )
+            index = next(index for index, item in enumerate(state.transitions) if item.id == transition_id)
             state.transitions[index] = source.model_copy(
                 update={
                     "kind": kind,
@@ -617,9 +649,7 @@ class TimelineEditor:
 
         def mutate(state: TimelineState) -> None:
             index = next(index for index, item in enumerate(state.markers) if item.id == marker_id)
-            state.markers[index] = source.model_copy(
-                update={"frame": frame, "name": name, "color": color}
-            )
+            state.markers[index] = source.model_copy(update={"frame": frame, "name": name, "color": color})
 
         self._commit("调整标记", mutate)
         return self._marker(marker_id)
@@ -687,21 +717,11 @@ class TimelineEditor:
         self._commit("删除范围", mutate)
 
     def undo(self) -> TimelineState:
-        if not self._undo:
-            raise RuntimeError("Nothing to undo")
-        revision = self._undo.pop()
-        self._persist_change(revision.after, revision.before)
-        self._state = self._snapshot(revision.before)
-        self._redo.append(revision)
+        self.history.undo()
         return self.state
 
     def redo(self) -> TimelineState:
-        if not self._redo:
-            raise RuntimeError("Nothing to redo")
-        revision = self._redo.pop()
-        self._persist_change(revision.before, revision.after)
-        self._state = self._snapshot(revision.after)
-        self._undo.append(revision)
+        self.history.redo()
         return self.state
 
     @staticmethod
@@ -725,14 +745,46 @@ class TimelineEditor:
         before = self._snapshot(self._state)
         after = self._snapshot(before)
         mutate(after)
+        self._normalize_sequence_in_out(after)
         self._validate_timeline(after, allow_locked_changes=allow_locked_changes)
         if after == before:
             return
         self._persist_change(before, after)
         persisted = self.repository.load_timeline(self.sequence_id)
-        self._undo.append(TimelineRevision(before=before, after=persisted, label=label))
-        self._redo.clear()
         self._state = persisted
+        before_snapshot = self._snapshot(before)
+        after_snapshot = self._snapshot(persisted)
+
+        def restore(source: TimelineState, destination: TimelineState) -> None:
+            self._persist_change(source, destination)
+            self._state = self.repository.load_timeline(self.sequence_id)
+
+        self.history.push(
+            ProjectEditCommand(
+                label=label,
+                undo_action=lambda: restore(after_snapshot, before_snapshot),
+                redo_action=lambda: restore(before_snapshot, after_snapshot),
+            )
+        )
+
+    @staticmethod
+    def _normalize_sequence_in_out(state: TimelineState) -> None:
+        bounds = state.sequence.in_out
+        if bounds is None:
+            return
+        duration = state.duration_frames
+        if duration <= 0:
+            state.sequence = state.sequence.model_copy(update={"in_out": None})
+            return
+        in_frame = min(bounds.in_frame, duration - 1)
+        out_frame = min(bounds.out_frame, duration)
+        state.sequence = state.sequence.model_copy(
+            update={
+                "in_out": (
+                    SequenceInOut(in_frame=in_frame, out_frame=out_frame) if out_frame > in_frame else None
+                )
+            }
+        )
 
     @staticmethod
     def _snapshot(state: TimelineState) -> TimelineState:
@@ -762,9 +814,7 @@ class TimelineEditor:
         )
         if graph_is_unchanged:
             changed_clip_ids = {
-                clip_id
-                for clip_id, clip in after_clips.items()
-                if clip != before_clips[clip_id]
+                clip_id for clip_id, clip in after_clips.items() if clip != before_clips[clip_id]
             }
             self.repository.save_clip_changes(after, changed_clip_ids)
             return
@@ -785,19 +835,23 @@ class TimelineEditor:
         if len({item.id for item in state.ranges}) != len(state.ranges):
             raise ValueError("Range identifiers must be unique")
         for track in state.tracks:
-            clips = state.clips_for_track(track.id)
-            if not allow_locked_changes and track.locked and self._state.clips_for_track(track.id) != clips:
+            track_clips = state.clips_for_track(track.id)
+            if (
+                not allow_locked_changes
+                and track.locked
+                and self._state.clips_for_track(track.id) != track_clips
+            ):
                 raise PermissionError(f"Track is locked: {track.name}")
             previous: Clip | None = None
-            for clip in clips:
+            for clip in track_clips:
                 if clip.track_id not in tracks:
                     raise ValueError("Clip references an unknown track")
                 if previous is not None and clip.timeline_start < previous.timeline_end:
                     raise ValueError(f"Clips cannot overlap on the same track: {track.name}")
                 previous = clip
-        clips = {clip.id: clip for clip in state.clips}
+        clips_by_id = {clip.id: clip for clip in state.clips}
         for transition in state.transitions:
-            if not self._transition_is_valid(transition, clips):
+            if not self._transition_is_valid(transition, clips_by_id):
                 raise ValueError("Transition references clips that are no longer adjacent")
 
     def _track(self, track_id: str) -> Track:
@@ -851,12 +905,7 @@ class TimelineEditor:
 
     @staticmethod
     def _validate_asset_track(asset_kind: AssetKind, track_kind: TrackKind) -> None:
-        compatible = {
-            TrackKind.VIDEO: {AssetKind.VIDEO, AssetKind.IMAGE},
-            TrackKind.AUDIO: {AssetKind.VIDEO, AssetKind.AUDIO},
-            TrackKind.SUBTITLE: {AssetKind.SUBTITLE},
-        }
-        if asset_kind not in compatible[track_kind]:
+        if track_kind not in compatible_track_kinds(asset_kind):
             raise ValueError(f"Cannot place {asset_kind.value} on a {track_kind.value} track")
 
     @staticmethod

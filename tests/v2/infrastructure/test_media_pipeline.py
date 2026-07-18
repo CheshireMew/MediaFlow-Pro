@@ -9,10 +9,15 @@ from pathlib import Path
 
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.domain.enums import AssetKind, ColorMode, TrackKind
-from mediaflow.domain.models import ProjectProfile
+from mediaflow.composition import EditorProject
+from mediaflow.domain.downloads import DownloadRequest
+from mediaflow.domain.enums import AssetKind, AssetOrigin, ColorMode, TaskStatus, TrackKind
+from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.task_commands import DownloadMediaCommand
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
+from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -67,6 +72,12 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         assert asset.metadata.has_video is True
         assert asset.metadata.has_audio is True
         assert asset.metadata.duration_frames == 30
+        cover = ProjectCoverService(paths).cover_for(repository)
+        assert cover is not None and cover.is_file() and cover.stat().st_size > 0
+        cover_probe = MediaProbe(paths).probe(cover)
+        assert cover_probe.kind == AssetKind.IMAGE
+        assert (cover_probe.metadata.width, cover_probe.metadata.height) == (640, 360)
+        assert ProjectCoverService(paths).cover_for(repository) == cover
         default_profile = repository.get_sequence(repository.get_project().main_sequence_id).profile
         assert (default_profile.width, default_profile.height, default_profile.fps_numerator) == (
             1920,
@@ -93,7 +104,7 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         assert len(payload["levels"]["128"]) > 0
 
 
-def test_real_ytdlp_download_registers_observable_managed_asset(tmp_path: Path) -> None:
+def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp_path: Path) -> None:
     paths = RuntimePaths.discover()
     web_root = tmp_path / "web"
     web_root.mkdir()
@@ -107,18 +118,86 @@ def test_real_ytdlp_download_registers_observable_managed_asset(tmp_path: Path) 
     try:
         with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
             asset_service = AssetService(repository, MediaProbe(paths))
-            downloader = YtDlpDownloadService(asset_service)
+            downloader = YtDlpDownloadService()
             url = f"http://127.0.0.1:{server.server_address[1]}/sample.mp4"
             analyzed = downloader.analyze(url)
-            downloaded = downloader.download(url)
+            media_workspace = tmp_path / "WorkSpace"
+            downloaded = downloader.download(
+                DownloadRequest(
+                    entry=analyzed.entries[0],
+                    output_directory=str(media_workspace.resolve()),
+                ),
+            )
 
-            assert analyzed["title"] == "sample"
+            assert analyzed.title == "sample"
             assert len(downloaded) == 1
-            asset = downloaded[0]
-            assert asset.managed is True
-            assert asset.path.startswith("downloads/")
-            assert (repository.project_dir / asset.path).is_file()
+            asset = asset_service.register_output(downloaded[0], AssetOrigin.DOWNLOAD)
+            assert asset.managed is False
+            assert Path(asset.path).parent == media_workspace.resolve()
+            assert Path(asset.path).is_file()
             assert repository.list_assets()[0].id == asset.id
+            collection_entry = analyzed.entries[0].model_copy(update={"index": 1, "title": "Lesson One"})
+            collection_output = downloader.download(
+                DownloadRequest(
+                    entry=collection_entry,
+                    collection_title="Course",
+                    output_directory=str(media_workspace.resolve()),
+                ),
+            )[0]
+            collection_asset = asset_service.register_output(
+                collection_output,
+                AssetOrigin.DOWNLOAD,
+            )
+            collection_path = Path(collection_asset.path)
+            assert collection_path.parent.name == "Course"
+            assert collection_path.name.startswith("001 Lesson One [")
+        external_directory = tmp_path / "Configured Downloads"
+        with ProjectRepository.create(tmp_path / "External Project", "External") as repository:
+            downloaded = YtDlpDownloadService().download(
+                DownloadRequest(
+                    entry=analyzed.entries[0],
+                    output_directory=str(external_directory.resolve()),
+                ),
+            )
+            asset = AssetService(repository, MediaProbe(paths)).register_output(
+                downloaded[0],
+                AssetOrigin.DOWNLOAD,
+            )
+            assert asset.managed is False
+            assert Path(asset.path).parent == external_directory.resolve()
+            assert Path(asset.path).is_file()
+            assert repository.resolve_asset_path(asset) == Path(asset.path)
+        task_repository = ProjectRepository.create(tmp_path / "Task Download", "Task Download")
+        project = EditorProject(task_repository, settings=GlobalSettings(), paths=paths)
+        try:
+            plan = YtDlpDownloadService().analyze(url)
+            entry = plan.entries[0].model_copy(update={"index": 7, "title": "Task Lesson"})
+            selected_output = tmp_path / "Task Selected Output"
+            request = DownloadRequest(
+                entry=entry,
+                collection_title="Task Course",
+                output_directory=str(selected_output.resolve()),
+            )
+            task = project.start_task(
+                DownloadMediaCommand(request=request),
+            )
+
+            completed = project.tasks.wait(task.id, timeout=30)
+            persisted = project.tasks.get(task.id)
+            registered = task_repository.list_assets()
+
+            assert completed.status == TaskStatus.COMPLETED
+            assert isinstance(persisted.command, DownloadMediaCommand)
+            assert persisted.command.request == request
+            assert len(registered) == 1
+            visible_path = task_repository.resolve_asset_path(registered[0])
+            assert visible_path.is_file()
+            assert visible_path.parent.name == "Task Course"
+            assert visible_path.name.startswith("007 Task Lesson [")
+            assert visible_path.parent.parent == selected_output.resolve()
+            assert registered[0].managed is False
+        finally:
+            project.close()
     finally:
         server.shutdown()
         server.server_close()

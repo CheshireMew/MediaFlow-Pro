@@ -19,45 +19,61 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
 {
     setFlag(ItemHasContents, true);
     m_runtime->moveToThread(&m_workerThread);
-    connect(&m_workerThread, &QThread::finished, m_runtime, &QObject::deleteLater);
     connect(this, &MltPreviewItem::openRequested, m_runtime, &MltRuntime::openGraph, Qt::QueuedConnection);
+    connect(this, &MltPreviewItem::closeRequested, m_runtime, &MltRuntime::close, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::playRequested, m_runtime, &MltRuntime::play, Qt::QueuedConnection);
+    connect(this, &MltPreviewItem::playRangeRequested, m_runtime, &MltRuntime::playRange, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::pauseRequested, m_runtime, &MltRuntime::pause, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::seekRequested, m_runtime, &MltRuntime::seek, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::playbackRateRequested, m_runtime, &MltRuntime::setPlaybackRate, Qt::QueuedConnection);
+    connect(this, &MltPreviewItem::volumeRequested, m_runtime, &MltRuntime::setVolume, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::previewSizeRequested, m_runtime, &MltRuntime::setPreviewSize, Qt::QueuedConnection);
-    connect(m_runtime, &MltRuntime::frameReady, this, &MltPreviewItem::receiveFrame, Qt::QueuedConnection);
-    connect(m_runtime, &MltRuntime::positionChanged, this, [this](int value) {
+    connect(m_runtime, &MltRuntime::frameReady, this, &MltPreviewItem::queueFrame, Qt::DirectConnection);
+    connect(m_runtime, &MltRuntime::positionChanged, this, [this](int value, quint64 requestId) {
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         if (m_position != value) {
             m_position = value;
+            if (!m_seekPending)
+                m_requestedPosition = value;
             emit positionChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::durationChanged, this, [this](int value) {
+    connect(m_runtime, &MltRuntime::durationChanged, this, [this](int value, quint64 requestId) {
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         if (m_duration != value) {
             m_duration = value;
             emit durationChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::playingChanged, this, [this](bool value) {
+    connect(m_runtime, &MltRuntime::playingChanged, this, [this](bool value, quint64 requestId) {
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         if (m_playing != value) {
             m_playing = value;
             emit playingChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::droppedFramesChanged, this, [this](int value) {
+    connect(m_runtime, &MltRuntime::droppedFramesChanged, this, [this](int value, quint64 requestId) {
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         if (m_droppedFrames != value) {
             m_droppedFrames = value;
             emit droppedFramesChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::clockDriftChanged, this, [this](double value) {
+    connect(m_runtime, &MltRuntime::clockDriftChanged, this, [this](double value, quint64 requestId) {
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         if (!qFuzzyCompare(m_clockDriftMs, value)) {
             m_clockDriftMs = value;
             emit clockDriftChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::audioClockActiveChanged, this, [this](bool value) {
+    connect(m_runtime, &MltRuntime::audioClockActiveChanged, this, [this](bool value, quint64 requestId) {
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         if (m_audioClockActive != value) {
             m_audioClockActive = value;
             emit audioClockActiveChanged();
@@ -71,7 +87,15 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
 MltPreviewItem::~MltPreviewItem()
 {
     if (m_runtime) {
-        QMetaObject::invokeMethod(m_runtime, &MltRuntime::shutdown, Qt::BlockingQueuedConnection);
+        MltRuntime *runtime = m_runtime;
+        m_runtime = nullptr;
+        QMetaObject::invokeMethod(
+            runtime,
+            [runtime]() {
+                runtime->shutdown();
+                delete runtime;
+            },
+            Qt::BlockingQueuedConnection);
     }
     m_workerThread.quit();
     m_workerThread.wait();
@@ -83,7 +107,12 @@ void MltPreviewItem::setSource(const QString &value)
         return;
     m_source = value;
     emit sourceChanged();
-    openIfReady();
+    if (m_source.isEmpty()) {
+        const quint64 requestId = beginRequest(false);
+        emit closeRequested(requestId);
+        return;
+    }
+    scheduleOpen(false);
 }
 
 void MltPreviewItem::setRuntimeRoot(const QString &value)
@@ -92,7 +121,16 @@ void MltPreviewItem::setRuntimeRoot(const QString &value)
         return;
     m_runtimeRoot = value;
     emit runtimeRootChanged();
-    openIfReady();
+    scheduleOpen();
+}
+
+void MltPreviewItem::setReloadToken(int value)
+{
+    if (m_reloadToken == value)
+        return;
+    m_reloadToken = value;
+    emit reloadTokenChanged();
+    scheduleOpen();
 }
 
 void MltPreviewItem::setPlaybackRate(double value)
@@ -107,6 +145,16 @@ void MltPreviewItem::setPlaybackRate(double value)
     emit playbackRateRequested(value);
 }
 
+void MltPreviewItem::setVolume(double value)
+{
+    value = qBound(0.0, value, 1.0);
+    if (qFuzzyCompare(m_volume, value))
+        return;
+    m_volume = value;
+    emit volumeChanged();
+    emit volumeRequested(value);
+}
+
 void MltPreviewItem::setHdrEnabled(bool value)
 {
     if (m_hdrEnabled == value)
@@ -118,27 +166,40 @@ void MltPreviewItem::setHdrEnabled(bool value)
         m_hdrActive = active;
         emit hdrActiveChanged();
     }
-    openIfReady();
+    scheduleOpen();
 }
 
 void MltPreviewItem::play()
 {
-    emit playRequested();
+    clearError();
+    emit playRequested(m_requestId.load(std::memory_order_acquire));
+}
+
+void MltPreviewItem::playRange(int startFrame, int endFrame)
+{
+    clearError();
+    emit playRangeRequested(
+        startFrame,
+        endFrame,
+        m_requestId.load(std::memory_order_acquire));
 }
 
 void MltPreviewItem::pause()
 {
-    emit pauseRequested();
+    emit pauseRequested(m_requestId.load(std::memory_order_acquire));
 }
 
 void MltPreviewItem::seek(int frame)
 {
-    emit seekRequested(frame);
+    clearError();
+    m_requestedPosition = qMax(0, frame);
+    m_seekPending = true;
+    emit seekRequested(frame, m_requestId.load(std::memory_order_acquire));
 }
 
 void MltPreviewItem::reload()
 {
-    openIfReady();
+    scheduleOpen();
 }
 
 QSGNode *MltPreviewItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
@@ -183,15 +244,64 @@ void MltPreviewItem::geometryChange(const QRectF &newGeometry, const QRectF &old
     }
 }
 
-void MltPreviewItem::receiveFrame(const QImage &image, int frame, int duration)
+void MltPreviewItem::queueFrame(
+    const QImage &image,
+    int frame,
+    int duration,
+    quint64 requestId)
 {
+    if (requestId != m_requestId.load(std::memory_order_acquire))
+        return;
+    bool scheduleDelivery = false;
     {
         const QMutexLocker locker(&m_frameMutex);
+        m_pendingFrame = image;
+        m_pendingPosition = frame;
+        m_pendingDuration = duration;
+        m_pendingRequestId = requestId;
+        if (!m_frameDeliveryScheduled) {
+            m_frameDeliveryScheduled = true;
+            scheduleDelivery = true;
+        }
+    }
+    if (scheduleDelivery) {
+        QMetaObject::invokeMethod(
+            this,
+            &MltPreviewItem::deliverLatestFrame,
+            Qt::QueuedConnection);
+    }
+}
+
+void MltPreviewItem::deliverLatestFrame()
+{
+    QImage image;
+    int frame = 0;
+    int duration = 0;
+    quint64 requestId = 0;
+    {
+        const QMutexLocker locker(&m_frameMutex);
+        image = m_pendingFrame;
+        frame = m_pendingPosition;
+        duration = m_pendingDuration;
+        requestId = m_pendingRequestId;
+        m_frameDeliveryScheduled = false;
+    }
+    if (requestId != m_requestId.load(std::memory_order_acquire) || image.isNull())
+        return;
+    {
+        const QMutexLocker locker(&m_frameMutex);
+        if (requestId != m_requestId.load(std::memory_order_acquire))
+            return;
         m_frame = image;
     }
     if (m_position != frame) {
         m_position = frame;
         emit positionChanged();
+    }
+    const int expectedFrame = qBound(0, m_requestedPosition, qMax(0, duration - 1));
+    if (!m_seekPending || frame == expectedFrame) {
+        m_requestedPosition = frame;
+        m_seekPending = false;
     }
     if (m_duration != duration) {
         m_duration = duration;
@@ -200,26 +310,105 @@ void MltPreviewItem::receiveFrame(const QImage &image, int frame, int duration)
     update();
 }
 
-void MltPreviewItem::receiveError(const QString &message)
+void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
 {
+    if (requestId != m_requestId.load(std::memory_order_acquire))
+        return;
     if (m_errorString == message)
         return;
     m_errorString = message;
     emit errorStringChanged();
 }
 
+quint64 MltPreviewItem::beginRequest(bool preservePosition)
+{
+    if (preservePosition && !m_seekPending)
+        m_requestedPosition = m_position;
+    else if (!preservePosition) {
+        m_requestedPosition = 0;
+        m_seekPending = false;
+    }
+    const quint64 requestId = m_requestId.fetch_add(1, std::memory_order_acq_rel) + 1;
+    resetPresentationState(preservePosition);
+    return requestId;
+}
+
+void MltPreviewItem::resetPresentationState(bool preservePosition)
+{
+    {
+        const QMutexLocker locker(&m_frameMutex);
+        m_frame = QImage();
+        m_pendingFrame = QImage();
+        m_pendingRequestId = m_requestId.load(std::memory_order_acquire);
+    }
+    if (m_playing) {
+        m_playing = false;
+        emit playingChanged();
+    }
+    if (!preservePosition && m_position != 0) {
+        m_position = 0;
+        emit positionChanged();
+    }
+    if (m_duration != 0) {
+        m_duration = 0;
+        emit durationChanged();
+    }
+    if (m_droppedFrames != 0) {
+        m_droppedFrames = 0;
+        emit droppedFramesChanged();
+    }
+    if (!qFuzzyIsNull(m_clockDriftMs)) {
+        m_clockDriftMs = 0.0;
+        emit clockDriftChanged();
+    }
+    if (m_audioClockActive) {
+        m_audioClockActive = false;
+        emit audioClockActiveChanged();
+    }
+    clearError();
+    update();
+}
+
+void MltPreviewItem::clearError()
+{
+    if (m_errorString.isEmpty())
+        return;
+    m_errorString.clear();
+    emit errorStringChanged();
+}
+
+void MltPreviewItem::scheduleOpen(bool preservePosition)
+{
+    beginRequest(preservePosition);
+    if (m_openScheduled)
+        return;
+    m_openScheduled = true;
+    QMetaObject::invokeMethod(
+        this,
+        [this]() {
+            m_openScheduled = false;
+            openIfReady();
+        },
+        Qt::QueuedConnection);
+}
+
 void MltPreviewItem::openIfReady()
 {
     if (!m_source.isEmpty() && !m_runtimeRoot.isEmpty()) {
-        m_errorString.clear();
-        emit errorStringChanged();
+        clearError();
         const bool active = m_hdrEnabled && screenSupportsHdr();
         if (m_hdrActive != active) {
             m_hdrActive = active;
             emit hdrActiveChanged();
         }
         emit previewSizeRequested(qMax(64, qRound(width())), qMax(64, qRound(height())));
-        emit openRequested(m_source, m_runtimeRoot, m_hdrEnabled, m_hdrActive);
+        emit openRequested(
+            m_source,
+            m_runtimeRoot,
+            m_hdrEnabled,
+            m_hdrActive,
+            m_requestedPosition,
+            m_requestId.load(std::memory_order_acquire));
     }
 }
 

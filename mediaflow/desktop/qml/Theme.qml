@@ -2,10 +2,12 @@ pragma Singleton
 import QtQuick
 
 QtObject {
-    readonly property bool highContrast: projectController.settingsData.theme === "high_contrast"
+    readonly property bool highContrast: settingsController.settingsData.theme === "high_contrast"
     readonly property color window: highContrast ? "#000000" : "#0b0d10"
     readonly property color surface: highContrast ? "#080808" : "#12151a"
     readonly property color surfaceRaised: highContrast ? "#101010" : "#181c22"
+    readonly property color surfaceFloating: highContrast ? "#181818" : "#1d222a"
+    readonly property color surfaceSunken: highContrast ? "#050505" : "#0e1116"
     readonly property color surfaceHover: highContrast ? "#242424" : "#202631"
     readonly property color border: highContrast ? "#a0a0a0" : "#2a303a"
     readonly property color borderStrong: highContrast ? "#ffffff" : "#3b4552"
@@ -24,4 +26,14 @@ QtObject {
     readonly property int radius: 10
     readonly property int radiusLarge: 16
     readonly property int spacing: 12
+    readonly property int fontSizeCaption: 11
+    readonly property int fontSizeBodySmall: 12
+    readonly property int fontSizeBody: 13
+    readonly property int fontSizeBodyLarge: 14
+    readonly property int fontSizeTitleSmall: 15
+    readonly property int fontSizeSection: 16
+    readonly property int fontSizeTitle: 18
+    readonly property int fontSizeDisplay: 26
+    readonly property int fontSizeHero: 38
+    readonly property string monoFontFamily: "Consolas"
 }

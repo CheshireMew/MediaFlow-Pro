@@ -15,9 +15,9 @@ RowLayout {
         Layout.preferredWidth: 68
         text: root.label
         color: Theme.textMuted
-        font.pixelSize: 10
+        font.pixelSize: Theme.fontSizeCaption
     }
-    TextField {
+    AppTextField {
         id: editor
         Layout.fillWidth: true
         implicitHeight: 30
@@ -25,7 +25,7 @@ RowLayout {
         placeholderText: root.placeholderText
         placeholderTextColor: Theme.textMuted
         selectByMouse: true
-        font.pixelSize: 10
+        font.pixelSize: Theme.fontSizeCaption
         validator: DoubleValidator { notation: DoubleValidator.StandardNotation }
         background: Rectangle {
             radius: Theme.radiusSmall

@@ -2,13 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from mediaflow.application.highlight_service import HighlightService
+from mediaflow.domain.audio import AudioEffect
 from mediaflow.domain.enums import AssetKind, AudioEffectKind, TrackKind
-from mediaflow.domain.models import (
-    AudioEffect,
-    HighlightCandidate,
-    SubtitleDocument,
-    SubtitleSegment,
-)
+from mediaflow.domain.highlights import HighlightCandidate
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
 
@@ -181,3 +179,60 @@ def test_highlight_candidates_are_project_data_not_task_only_output(tmp_path: Pa
         repository.save_highlights([candidate])
         persisted = repository.list_highlights(asset.id)
         assert persisted == [candidate]
+
+
+def test_manual_highlight_selection_edit_and_short_draft_share_one_persisted_candidate(
+    tmp_path: Path,
+) -> None:
+    source_file = tmp_path / "source.mp4"
+    source_file.write_bytes(b"media")
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        asset = repository.import_external_asset(source_file, AssetKind.VIDEO)
+        project = repository.get_project()
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            language="zh_CN",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=100,
+            end_frame=500,
+            text="候选字幕",
+        )
+        repository.create_subtitle_document(document, [segment])
+        service = HighlightService(repository)
+        candidate = service.add_manual_candidate(
+            asset.id,
+            start_frame=120,
+            end_frame=420,
+            title="手动候选",
+            document_id=document.id,
+        )
+        assert service.set_selected(candidate.id, False).selected is False
+        assert service.set_selected(candidate.id, True).selected is True
+        updated = service.update_candidate(
+            candidate.id,
+            start_frame=150,
+            end_frame=390,
+            title="修改后的候选",
+        )
+        first = service.create_short_sequence(updated.id)
+        second = service.create_short_sequence(updated.id)
+        persisted = repository.list_highlights(asset.id)[0]
+        timeline = repository.load_timeline(first.id)
+        subtitle_track = next(track for track in timeline.tracks if track.kind == TrackKind.SUBTITLE)
+
+        assert first.id == second.id == persisted.sequence_id
+        assert len(repository.list_sequences()) == 2
+        assert [(clip.source_in, clip.duration) for clip in timeline.clips] == [(150, 240)]
+        assert repository.list_subtitle_placements(subtitle_track.id)
+
+        service.update_candidate(
+            candidate.id,
+            start_frame=180,
+            end_frame=360,
+            title="再次修改",
+        )
+        synced = repository.load_timeline(first.id)
+        assert [(clip.source_in, clip.duration) for clip in synced.clips] == [(180, 180)]

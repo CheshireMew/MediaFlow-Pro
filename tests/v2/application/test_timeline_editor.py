@@ -3,9 +3,12 @@ from pathlib import Path
 import pytest
 
 from mediaflow.application.sequence_service import SequenceService
+from mediaflow.application.timeline_diff import FrameInterval, RippleAdjustment, TimelineDiff
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.enums import AssetKind, ColorMode, TrackKind, TransitionKind
-from mediaflow.domain.models import ClipAudio, ProjectProfile, SubtitleDocument, SubtitleSegment
+from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
+from mediaflow.domain.timeline import ClipAudio
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
 
@@ -46,6 +49,32 @@ def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
     assert [(item.timeline_start, item.duration) for item in persisted.clips] == [(0, 40), (40, 60)]
 
 
+def test_sequence_in_out_is_persisted_undoable_and_does_not_trim_clip(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=10,
+        duration=100,
+    )
+    editor.set_sequence_in_out(12, 88)
+    state = repository.load_timeline(editor.sequence_id)
+    assert (state.sequence.in_out.in_frame, state.sequence.in_out.out_frame) == (12, 88)
+    assert state.clips[0] == clip
+
+    editor.undo()
+    assert repository.load_timeline(editor.sequence_id).sequence.in_out is None
+    assert repository.load_timeline(editor.sequence_id).clips[0] == clip
+    editor.redo()
+    assert repository.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 88
+
+    editor.trim_clip(clip.id, timeline_start=0, source_in=10, duration=60)
+    assert repository.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 60
+    editor.clear_sequence_in_out()
+    assert repository.load_timeline(editor.sequence_id).sequence.in_out is None
+
+
 def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) -> None:
     repository, editor, asset, video_track = editor_fixture
     clip = editor.add_clip(
@@ -70,9 +99,7 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
     repository.create_subtitle_document(document, [segment])
     repository.place_subtitle_document(document.id, subtitle_track.id, follow_clips=True)
     placements = repository.list_subtitle_placements(subtitle_track.id)
-    assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [
-        (20, 40, clip.id)
-    ]
+    assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [(20, 40, clip.id)]
 
     editor.trim_clip(clip.id, timeline_start=20, source_in=30, duration=80)
     editor.move_clip(clip.id, timeline_start=40)
@@ -83,9 +110,7 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
         pitch_compensation=True,
     )
     placements = repository.list_subtitle_placements(subtitle_track.id)
-    assert [(item.start_frame, item.end_frame) for item in placements] == [
-        (40, 50)
-    ]
+    assert [(item.start_frame, item.end_frame) for item in placements] == [(40, 50)]
 
     left, right = editor.split_clip(clip.id, 45)
     placements = repository.list_subtitle_placements(subtitle_track.id)
@@ -96,9 +121,7 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
 
     editor.undo()
     placements = repository.list_subtitle_placements(subtitle_track.id)
-    assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [
-        (40, 50, clip.id)
-    ]
+    assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [(40, 50, clip.id)]
     editor.redo()
     assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
 
@@ -326,9 +349,38 @@ def test_timeline_range_creates_complete_editable_short_sequence(editor_fixture)
     assert [(item.start_frame, item.end_frame) for item in placements] == [(5, 15)]
 
 
+def test_short_creation_rolls_back_the_whole_use_case_on_late_failure(
+    editor_fixture,
+    monkeypatch,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=40,
+    )
+    selection = editor.add_range(5, 30, "Atomic short")
+    before_ids = [item.id for item in repository.list_sequences()]
+
+    def fail_after_sequence_was_staged(_state) -> None:
+        raise RuntimeError("late timeline failure")
+
+    monkeypatch.setattr(repository, "save_timeline", fail_after_sequence_was_staged)
+    with pytest.raises(RuntimeError, match="late timeline failure"):
+        SequenceService(repository).create_short_from_range(
+            editor.sequence_id,
+            selection.id,
+        )
+
+    assert [item.id for item in repository.list_sequences()] == before_ids
+
+
 def test_ripple_delete_moves_all_unlocked_tracks(editor_fixture) -> None:
     _, editor, asset, video_track = editor_fixture
     overlay_track = editor.add_track(TrackKind.VIDEO)
+    locked_track = editor.add_track(TrackKind.VIDEO)
     first = editor.add_clip(
         track_id=video_track.id,
         asset_id=asset.id,
@@ -343,10 +395,33 @@ def test_ripple_delete_moves_all_unlocked_tracks(editor_fixture) -> None:
         source_in=0,
         duration=20,
     )
+    locked = editor.add_clip(
+        track_id=locked_track.id,
+        asset_id=asset.id,
+        timeline_start=40,
+        source_in=0,
+        duration=20,
+    )
+    editor.set_track_state(
+        locked_track.id,
+        enabled=True,
+        locked=True,
+        muted=False,
+        solo=False,
+        audio_bus_id=locked_track.audio_bus_id,
+    )
     marker = editor.add_marker(45, "后续")
     selection = editor.add_range(35, 55, "后续选区")
+    before = editor.state
+    after = before.model_copy(update={"clips": [clip for clip in before.clips if clip.id != first.id]})
+    assert TimelineDiff.ripple_adjustments(
+        before,
+        after,
+        source_track_ids={video_track.id},
+    ) == [RippleAdjustment(interval=FrameInterval(0, 30), delta_frames=-30)]
     editor.delete_clip(first.id, ripple=True)
     assert next(clip for clip in editor.state.clips if clip.id == later.id).timeline_start == 10
+    assert next(clip for clip in editor.state.clips if clip.id == locked.id).timeline_start == 40
     assert next(item for item in editor.state.markers if item.id == marker.id).frame == 15
     shifted = next(item for item in editor.state.ranges if item.id == selection.id)
     assert (shifted.start_frame, shifted.end_frame) == (5, 25)
@@ -355,6 +430,109 @@ def test_ripple_delete_moves_all_unlocked_tracks(editor_fixture) -> None:
 def test_snapping_uses_nearest_frame_with_stable_tie_break() -> None:
     assert TimelineEditor.snap_frame(100, [104, 96], 4) == 96
     assert TimelineEditor.snap_frame(100, [105], 4) == 100
+
+
+def test_multi_clip_move_and_delete_are_each_one_persisted_command(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    first = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=20,
+    )
+    second = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=20,
+        source_in=20,
+        duration=20,
+    )
+    transition = editor.create_transition(
+        first.id,
+        second.id,
+        TransitionKind.DISSOLVE,
+        duration=6,
+    )
+
+    editor.move_clips(
+        [first.id, second.id],
+        primary_clip_id=first.id,
+        timeline_start=10,
+        track_id=video_track.id,
+    )
+    moved = repository.load_timeline(editor.sequence_id)
+    assert [(clip.id, clip.timeline_start) for clip in moved.clips] == [
+        (first.id, 10),
+        (second.id, 30),
+    ]
+    assert moved.transitions[0].id == transition.id
+    editor.undo()
+    assert [clip.timeline_start for clip in editor.state.clips] == [0, 20]
+
+    editor.delete_clips([first.id, second.id])
+    assert repository.load_timeline(editor.sequence_id).clips == []
+    editor.undo()
+    restored = repository.load_timeline(editor.sequence_id)
+    assert [clip.id for clip in restored.clips] == [first.id, second.id]
+    assert restored.transitions[0].id == transition.id
+
+
+def test_multi_track_ripple_diff_does_not_hide_one_tracks_gap(editor_fixture) -> None:
+    _, editor, asset, video_track = editor_fixture
+    overlay_track = editor.add_track(TrackKind.VIDEO)
+    first_gap = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=10,
+    )
+    first_later = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=20,
+        source_in=20,
+        duration=5,
+    )
+    blocker = editor.add_clip(
+        track_id=overlay_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=10,
+    )
+    second_gap = editor.add_clip(
+        track_id=overlay_track.id,
+        asset_id=asset.id,
+        timeline_start=30,
+        source_in=30,
+        duration=10,
+    )
+    second_later = editor.add_clip(
+        track_id=overlay_track.id,
+        asset_id=asset.id,
+        timeline_start=50,
+        source_in=50,
+        duration=5,
+    )
+    before = editor.state
+    deleted_ids = {first_gap.id, second_gap.id}
+    after = before.model_copy(update={"clips": [clip for clip in before.clips if clip.id not in deleted_ids]})
+    assert TimelineDiff.ripple_adjustments(
+        before,
+        after,
+        source_track_ids={video_track.id, overlay_track.id},
+    ) == [
+        RippleAdjustment(interval=FrameInterval(0, 10), delta_frames=-10),
+        RippleAdjustment(interval=FrameInterval(30, 40), delta_frames=-10),
+    ]
+
+    editor.delete_clips(deleted_ids, ripple=True)
+    positions = {clip.id: clip.timeline_start for clip in editor.state.clips}
+    assert positions[first_later.id] == 10
+    assert positions[blocker.id] == 0
+    assert positions[second_later.id] == 30
 
 
 def test_track_controls_and_reordering_share_the_command_stack(editor_fixture) -> None:

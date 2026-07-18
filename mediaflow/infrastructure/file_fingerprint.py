@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from mediaflow.domain.models import AssetFingerprint
+from mediaflow.domain.project import AssetFingerprint
 
 EDGE_CHUNK_SIZE = 1024 * 1024
 

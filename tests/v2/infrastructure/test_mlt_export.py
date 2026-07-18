@@ -3,21 +3,145 @@ import subprocess
 from pathlib import Path
 
 from mediaflow.application.asset_service import AssetService
+from mediaflow.application.highlight_service import HighlightService
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.domain.enums import AudioEffectKind, ColorMode, ExportFormat, TrackKind, TransitionKind
-from mediaflow.domain.models import (
-    AudioEffect,
-    ExportPreset,
-    ProjectProfile,
-    SubtitleDocument,
-    SubtitleSegment,
+from mediaflow.composition import EditorProject
+from mediaflow.domain.audio import AudioEffect
+from mediaflow.domain.enums import (
+    AudioEffectKind,
+    ColorMode,
+    ExportFormat,
+    TaskStatus,
+    TrackKind,
+    TransitionKind,
 )
+from mediaflow.domain.exports import ExportPreset, SubtitleStyle, WatermarkOverlay
+from mediaflow.domain.project import ProjectProfile, SequenceInOut
+from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
+from mediaflow.domain.task_commands import ExportHighlightsCommand
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
 from mediaflow.infrastructure.media_probe import MediaProbe
-from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
+from mediaflow.infrastructure.mlt import (
+    MltExportService,
+    SequenceBoundaryAnalysisService,
+    TimelineCompiler,
+)
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+
+
+def test_selected_highlight_candidates_batch_export_to_separate_real_videos(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "batch-source.mp4"
+    generate_real_media(source, paths, width=320, height=180)
+    repository = ProjectRepository.create(tmp_path / "Batch Project", "Batch Project")
+    assets = AssetService(repository, MediaProbe(paths))
+    asset = assets.import_external(source)
+    assets.adopt_main_profile_from_video(asset.id)
+    source_document = SubtitleDocument(
+        project_id=repository.get_project().id,
+        asset_id=asset.id,
+        language="en",
+    )
+    repository.create_subtitle_document(
+        source_document,
+        [
+            SubtitleSegment(
+                document_id=source_document.id,
+                start_frame=0,
+                end_frame=20,
+                text="Batch subtitle",
+            )
+        ],
+    )
+    highlights = HighlightService(repository)
+    first = highlights.add_manual_candidate(
+        asset.id,
+        start_frame=0,
+        end_frame=10,
+        title="First clip",
+        document_id=source_document.id,
+    )
+    second = highlights.add_manual_candidate(
+        asset.id,
+        start_frame=10,
+        end_frame=20,
+        title="Second clip",
+        document_id=source_document.id,
+    )
+    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    try:
+        output_dir = tmp_path / "batch-exports"
+        configured_preset = ExportPreset(
+            name="Configured batch preset",
+            format=ExportFormat.H264,
+            container="mp4",
+            video_codec="libx264",
+            audio_codec="aac",
+            pixel_format="yuv420p",
+            burn_subtitle_track_id="configured-source-track",
+            subtitle_style=SubtitleStyle(
+                font_family="Arial",
+                font_color="#00FF00",
+                shadow_size=6,
+            ),
+        )
+        task = project.start_task(
+            ExportHighlightsCommand(
+                sequence_id=repository.get_project().main_sequence_id,
+                candidate_ids=[first.id, second.id],
+                output_dir=str(output_dir),
+                preset=configured_preset,
+                burn_subtitles=True,
+            ),
+            [asset.id],
+        )
+        completed = project.tasks.wait(task.id, timeout=90)
+        outputs = [Path(path) for path in completed.artifacts if Path(path).suffix == ".mp4"]
+        assert completed.status == TaskStatus.COMPLETED, completed.error
+        assert len(outputs) == 2
+        assert all(path.is_file() and path.stat().st_size > 0 for path in outputs)
+        for output in outputs:
+            probe = subprocess.run(
+                [
+                    str(paths.ffprobe),
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "csv=p=0",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            assert probe.returncode == 0, probe.stderr
+            assert {"video", "audio"} <= set(probe.stdout.split())
+        assert len(repository.list_sequences()) == 3
+        assert all(item.sequence_id for item in repository.list_highlights(asset.id))
+        short_sequences = repository.list_sequences()[1:]
+        assert all(sequence.profile.fps_numerator == 25 for sequence in short_sequences)
+        for sequence in short_sequences:
+            graph = repository.project_dir / "cache" / "mlt" / f"{sequence.id}-export.mlt"
+            xml = graph.read_text(encoding="utf-8")
+            assert '<property name="family">Arial</property>' in xml
+            assert '<property name="fgcolour">0x00ff00ff</property>' in xml
+            assert '<property name="shadow">' in xml
+        for output in outputs:
+            probe = MediaProbe(paths).probe(
+                output,
+                timeline_profile=short_sequences[0].profile,
+            )
+            assert probe.metadata.duration_frames == 10
+    finally:
+        project.close()
 
 
 def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path: Path) -> None:
@@ -85,9 +209,7 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
         assert audio["codec_name"] == "aac"
         assert (video["width"], video["height"]) == (320, 180)
 
-        hardware = {
-            item["value"] for item in EncoderDiscoveryService(paths).video_options()
-        }
+        hardware = {item["value"] for item in EncoderDiscoveryService(paths).video_options()}
         if "h264_nvenc" in hardware:
             hardware_result = MltExportService(compiler, paths).export(
                 state,
@@ -101,9 +223,7 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
                 root / "exports" / "real-nvenc-export.mp4",
             )
             hardware_video = next(
-                stream
-                for stream in hardware_result.probe["streams"]
-                if stream["codec_type"] == "video"
+                stream for stream in hardware_result.probe["streams"] if stream["codec_type"] == "video"
             )
             assert hardware_video["codec_name"] == "h264"
 
@@ -128,6 +248,76 @@ def _generate_color_media(path: Path, paths: RuntimePaths, color: str) -> None:
         ],
         capture_output=True,
         timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+
+def _generate_watermark(path: Path, paths: RuntimePaths, color: str = "red") -> None:
+    result = subprocess.run(
+        [
+            str(paths.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c={color}:s=64x32:d=0.04",
+            "-frames:v",
+            "1",
+            str(path),
+        ],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+
+def _generate_edge_black_media(path: Path, paths: RuntimePaths) -> None:
+    result = subprocess.run(
+        [
+            str(paths.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=160x90:r=25:d=0.08",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=160x90:r=25:d=0.84",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=160x90:r=25:d=0.08",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=1",
+            "-filter_complex",
+            "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "3:a",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-g",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+            str(path),
+        ],
+        capture_output=True,
+        timeout=30,
         check=False,
     )
     assert result.returncode == 0, result.stderr.decode(errors="replace")
@@ -484,6 +674,194 @@ def test_subtitle_placement_is_burned_and_exported_as_external_srt(tmp_path: Pat
         assert sum(with_text) > sum(without_text) + 2.0
 
 
+def test_export_style_watermark_and_trim_reach_the_rendered_video(tmp_path: Path) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "black.mp4"
+    watermark_source = tmp_path / "watermark.png"
+    _generate_color_media(source, paths, "black")
+    _generate_watermark(watermark_source, paths)
+
+    with ProjectRepository.create(tmp_path / "Styled Export", "Styled Export") as repository:
+        asset_service = AssetService(repository, MediaProbe(paths))
+        asset = asset_service.import_external(source)
+        asset = asset_service.adopt_main_profile_from_video(asset.id)
+        watermark_asset = asset_service.import_external(watermark_source)
+        project = repository.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=75,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            language="zh",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=25,
+            end_frame=65,
+            text="样式已生效",
+        )
+        repository.create_subtitle_document(document, [segment])
+        repository.place_subtitle_document(document.id, subtitle_track.id)
+        style = SubtitleStyle(
+            font_family="Arial",
+            font_size=30,
+            font_color="#00FF00",
+            bold=False,
+            italic=True,
+            outline_size=3,
+            shadow_size=6,
+            outline_color="#0000FF",
+            background_enabled=True,
+            background_color="#FF0000",
+            background_opacity=0.4,
+            background_padding=9,
+            position_x=0.4,
+            position_y=0.7,
+            alignment="left",
+            multiline_alignment="top",
+        )
+        watermark = WatermarkOverlay(
+            enabled=True,
+            asset_id=watermark_asset.id,
+            position="TL",
+            position_x=0.72,
+            position_y=0.63,
+            width_ratio=0.2,
+            opacity=0.8,
+        )
+        preset = ExportPreset(
+            name="Styled Trim Test",
+            format=ExportFormat.H264,
+            container="mp4",
+            video_codec="libx264",
+            audio_codec=None,
+            pixel_format="yuv420p",
+            quality_value=18,
+            preset="veryfast",
+            gop_frames=25,
+            burn_subtitle_track_id=subtitle_track.id,
+            subtitle_style=style,
+            watermark=watermark,
+        )
+        editor.set_sequence_in_out(20, 70)
+        compiler = TimelineCompiler(repository)
+        graph = compiler.compile(
+            editor.state,
+            subtitle_track_id=subtitle_track.id,
+            subtitle_style=style,
+            watermark=watermark,
+        )
+        assert str(watermark_source.resolve()) in graph.xml
+        assert '<property name="family">Arial</property>' in graph.xml
+        assert '<property name="fgcolour">0x00ff00ff</property>' in graph.xml
+        assert '<property name="olcolour">0x0000ffff</property>' in graph.xml
+        assert '<property name="halign">left</property>' in graph.xml
+        assert '<property name="valign">top</property>' in graph.xml
+        assert '<property name="shadow">1</property>' in graph.xml
+        assert '<property name="pad">2</property>' in graph.xml
+        assert "62%/54.1111%:20%x17.7778%:80%" in graph.xml
+
+        result = MltExportService(compiler, paths).export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "styled-trim.mp4",
+        )
+        assert (result.start_frame, result.end_frame) == (20, 70)
+        video = next(item for item in result.probe["streams"] if item["codec_type"] == "video")
+        assert int(video["nb_frames"]) == 50
+        subtitle_text = result.subtitle_files[0].read_text(encoding="utf-8-sig")
+        assert "00:00:00,200 --> 00:00:01,800" in subtitle_text
+        watermark_frame, subtitle_frame = _frame_rgb_means(result.output_path, paths, [2, 15])
+        assert watermark_frame[0] > watermark_frame[1] + 2.0
+        assert sum(subtitle_frame) > sum(watermark_frame) + 1.0
+
+
+def test_smart_sequence_bounds_change_real_export_and_preserve_source_clips(tmp_path: Path) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "leading-black.mp4"
+    _generate_edge_black_media(source, paths)
+
+    with ProjectRepository.create(tmp_path / "Auto Trim", "Auto Trim") as repository:
+        asset_service = AssetService(repository, MediaProbe(paths))
+        asset = asset_service.import_external(source)
+        assert asset.metadata.has_audio is True
+        asset = asset_service.adopt_main_profile_from_video(asset.id)
+        project = repository.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            language="zh",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=10,
+            end_frame=15,
+            text="对白区间",
+        )
+        repository.create_subtitle_document(document, [segment])
+        repository.place_subtitle_document(document.id, subtitle_track.id)
+        base = ExportPreset(
+            name="Auto Trim",
+            format=ExportFormat.H264,
+            container="mp4",
+            video_codec="libx264",
+            audio_codec=None,
+            pixel_format="yuv420p",
+            quality_value=18,
+            preset="veryfast",
+            gop_frames=25,
+        )
+        service = MltExportService(TimelineCompiler(repository), paths)
+        analyzer = SequenceBoundaryAnalysisService(TimelineCompiler(repository), paths)
+        snapshot_hash = analyzer.snapshot_hash(editor.state)
+        analysis, artifact = analyzer.analyze(
+            editor.state,
+            expected_snapshot_hash=snapshot_hash,
+        )
+        assert artifact.is_file()
+        assert analysis.black_in_frame == 2
+        assert analysis.black_out_frame == 23
+        assert analysis.speech_in_frame == 7
+        assert analysis.speech_out_frame == 18
+        assert analysis.suggested == SequenceInOut(in_frame=7, out_frame=18)
+
+        original_clip = editor.state.clips[0]
+        editor.set_sequence_in_out(
+            analysis.suggested.in_frame,
+            analysis.suggested.out_frame,
+        )
+        assert editor.state.clips[0] == original_clip
+        trimmed = service.export(
+            editor.state,
+            base,
+            repository.project_dir / "exports" / "smart-bounds.mp4",
+        )
+        assert (trimmed.start_frame, trimmed.end_frame) == (7, 18)
+        video = next(item for item in trimmed.probe["streams"] if item["codec_type"] == "video")
+        assert int(video["nb_frames"]) == 11
+        first_frame, last_frame = _frame_rgb_means(trimmed.output_path, paths, [0, 10])
+        assert first_frame[0] > 150 and first_frame[1] < 80
+        assert last_frame[0] > 150 and last_frame[1] < 80
+
+
 def test_real_hevc_hdr10_export_is_ten_bit_and_carries_mastering_metadata(tmp_path: Path) -> None:
     paths = RuntimePaths.discover()
     source = tmp_path / "sdr-source.mp4"
@@ -646,9 +1024,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
             )
             assert not any(item["codec_type"] == "video" for item in result.probe["streams"])
             assert (
-                next(item for item in result.probe["streams"] if item["codec_type"] == "audio")[
-                    "codec_name"
-                ]
+                next(item for item in result.probe["streams"] if item["codec_type"] == "audio")["codec_name"]
                 == expected_codec
             )
 
@@ -668,9 +1044,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
             ),
             repository.project_dir / "exports" / "audio-5.1.wav",
         )
-        surround_audio = next(
-            item for item in surround.probe["streams"] if item["codec_type"] == "audio"
-        )
+        surround_audio = next(item for item in surround.probe["streams"] if item["codec_type"] == "audio")
         assert surround_audio["channels"] == 6
         assert surround_audio["sample_rate"] == "48000"
 
@@ -683,9 +1057,7 @@ def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
         project = repository.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        audio_track = next(
-            item for item in editor.state.tracks if item.kind == TrackKind.AUDIO
-        )
+        audio_track = next(item for item in editor.state.tracks if item.kind == TrackKind.AUDIO)
         editor.add_clip(
             track_id=audio_track.id,
             asset_id=asset.id,
@@ -710,9 +1082,7 @@ def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
             AudioEffectKind.LOUDNESS_NORMALIZE,
         ]
         for position, kind in enumerate(kinds):
-            repository.save_audio_effect(
-                AudioEffect(bus_id=master.id, kind=kind, position=position)
-            )
+            repository.save_audio_effect(AudioEffect(bus_id=master.id, kind=kind, position=position))
 
         result = MltExportService(TimelineCompiler(repository), paths).export(
             editor.state,
@@ -730,9 +1100,7 @@ def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
             ),
             repository.project_dir / "exports" / "effect-catalog.flac",
         )
-        audio = next(
-            item for item in result.probe["streams"] if item["codec_type"] == "audio"
-        )
+        audio = next(item for item in result.probe["streams"] if item["codec_type"] == "audio")
         assert audio["codec_name"] == "flac"
         assert audio["sample_rate"] == "48000"
         assert audio["channels"] == 2

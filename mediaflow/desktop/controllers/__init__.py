@@ -1,3 +1,3 @@
-from .project_controller import ProjectController
+from .controller_hub import EditorControllers
 
-__all__ = ["ProjectController"]
+__all__ = ["EditorControllers"]

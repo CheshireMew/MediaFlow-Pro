@@ -16,7 +16,12 @@ class OpenAIJsonClient:
         if not provider.api_key:
             raise ValueError("LLM provider API key is missing")
         self.provider = provider
-        self.client = OpenAI(api_key=provider.api_key, base_url=provider.base_url)
+        self.client = OpenAI(api_key=provider.api_key, base_url=provider.base_url, timeout=20.0)
+
+    def test_connection(self) -> None:
+        response = self.client.models.list()
+        if response.data is None:
+            raise RuntimeError("LLM provider returned an invalid model list")
 
     def complete_json(self, *, system: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = self.client.chat.completions.create(

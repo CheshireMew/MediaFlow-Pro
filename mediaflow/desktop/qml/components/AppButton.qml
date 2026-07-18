@@ -10,7 +10,7 @@ Button {
     implicitHeight: 36
     leftPadding: 14
     rightPadding: 14
-    font.pixelSize: 13
+    font.pixelSize: Theme.fontSizeBody
     font.weight: primary ? Font.DemiBold : Font.Medium
     contentItem: Text {
         text: control.text
@@ -27,13 +27,19 @@ Button {
                 return Theme.surface
             if (control.down)
                 return control.primary ? "#1472cf" : Theme.surfaceHover
+            if (control.checked)
+                return Theme.accentSoft
             if (control.hovered)
                 return control.primary ? Theme.accentHover : Theme.surfaceHover
             if (control.danger)
                 return "#4a252a"
             return control.primary ? Theme.accent : Theme.surfaceRaised
         }
-        border.color: control.primary ? "transparent" : control.danger ? "#76343a" : Theme.border
-        border.width: 1
+        border.color: control.activeFocus
+            ? (control.primary ? Theme.text : Theme.accentHover)
+            : control.primary ? "transparent"
+            : control.checked ? Theme.accent
+            : control.danger ? "#76343a" : Theme.border
+        border.width: control.activeFocus ? 2 : 1
     }
 }

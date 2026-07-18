@@ -64,11 +64,11 @@ def ensure_fixture(path: Path, paths: RuntimePaths, duration_seconds: int) -> No
             "-f",
             "lavfi",
             "-i",
-            "color=c=0x355070:s=1920x1080:r=30",
+            "testsrc2=size=1920x1080:rate=30",
             "-f",
             "lavfi",
             "-i",
-            "anullsrc=r=48000:cl=stereo",
+            "sine=frequency=440:sample_rate=48000",
             "-t",
             str(duration_seconds),
             "-c:v",
@@ -80,11 +80,15 @@ def ensure_fixture(path: Path, paths: RuntimePaths, duration_seconds: int) -> No
             "-pix_fmt",
             "yuv420p",
             "-g",
-            "30",
+            "180",
+            "-keyint_min",
+            "180",
+            "-sc_threshold",
+            "0",
             "-c:a",
-            "aac",
+            "libopus",
             "-b:a",
-            "96k",
+            "128k",
             "-shortest",
             str(path),
         ],
@@ -106,7 +110,7 @@ def main() -> int:
     run_dir = RUN_ROOT / f"preview-performance-{datetime.now():%Y%m%d-%H%M%S}"
     run_dir.mkdir(parents=True, exist_ok=False)
     media_seconds = arguments.duration_seconds + 5
-    fixture = FIXTURE_ROOT / f"preview-1080p30-{media_seconds}s.mp4"
+    fixture = FIXTURE_ROOT / f"preview-motion-tone-long-gop-1080p30-{media_seconds}s.mkv"
     ensure_fixture(fixture, paths, media_seconds)
 
     with ProjectRepository.create(run_dir / "Preview Performance", "Preview Performance") as repository:
@@ -187,6 +191,8 @@ ApplicationWindow {
             "fixture": str(fixture),
             "resolution": "1920x1080",
             "fps": "30/1",
+            "source_video": "moving test pattern, H.264, 180-frame GOP",
+            "source_audio": "440 Hz tone, Opus, 48 kHz",
             "duration_seconds": arguments.duration_seconds,
             "open_seconds": open_seconds,
             "startup_seconds": startup_seconds,
@@ -201,11 +207,11 @@ ApplicationWindow {
         }
         report["passed"] = (
             open_seconds <= 0.5
-            and startup_seconds <= 0.5
+            and startup_seconds <= 0.75
             and first_window_advanced >= arguments.playback_check_seconds * 30 - 2
-            and first_window_dropped <= 2
+            and first_window_dropped == 0
             and audio_clock_active
-            and final_drift_ms <= 40.0
+            and final_drift_ms <= 5.0
         )
         report_path = run_dir / "preview-performance-report.json"
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

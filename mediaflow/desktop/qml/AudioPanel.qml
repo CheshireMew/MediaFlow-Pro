@@ -15,46 +15,25 @@ ScrollView {
         width: scrollRoot.availableWidth
         spacing: 10
     function metric(name, suffix) {
-        const value = projectController.audioMetrics[name]
+        const value = audioController.audioMetrics[name]
         return value === undefined ? "—" : Number(value).toFixed(1) + " " + suffix
     }
-    function effectLabel(kind) {
-        const labels = {
-            "parametric_eq": qsTr("参数均衡器"), "high_pass": qsTr("高通"),
-            "low_pass": qsTr("低通"), "compressor": qsTr("压缩器"),
-            "limiter": qsTr("限制器"), "noise_gate": qsTr("噪声门"),
-            "rnnoise": "RNNoise", "channel_map": qsTr("声道映射"),
-            "loudness_normalize": qsTr("响度标准化"), "ducking": qsTr("自动闪避")
-        }
-        return labels[kind] || kind
-    }
-    function parameterLabel(key) {
-        const labels = {
-            "low_db": qsTr("低频增益"), "low_mid_db": qsTr("中低频增益"),
-            "high_mid_db": qsTr("中高频增益"), "high_db": qsTr("高频增益"),
-            "frequency_hz": qsTr("截止频率"), "threshold_db": qsTr("阈值"),
-            "ratio": qsTr("压缩比"), "attack_ms": qsTr("启动时间"),
-            "release_ms": qsTr("释放时间"), "ceiling_db": qsTr("上限"),
-            "mix": qsTr("混合"), "layout": qsTr("声道布局"),
-            "target_lufs": qsTr("目标响度"), "true_peak_db": qsTr("True Peak 上限"),
-            "driver_bus_id": qsTr("驱动总线"), "reduction_db": qsTr("衰减量")
-        }
-        return labels[key] || key
-    }
     function selectedEffectKind() {
-        const row = projectController.audioEffectsModel.findRow(
-            "effectId", projectController.selectedAudioEffectId)
-        return row < 0 ? "" : String(projectController.audioEffectsModel.get(row).kind)
+        const row = audioController.audioEffectsModel.findRow(
+            "effectId", audioController.selectedAudioEffectId)
+        return row < 0 ? "" : String(audioController.audioEffectsModel.get(row).kind)
     }
-    function presetLabel(key) {
-        const labels = {
-            "default": qsTr("默认"), "dialogue": qsTr("对白"),
-            "gentle": qsTr("轻柔"), "strong": qsTr("强力"),
-            "social": qsTr("社交平台"), "web": qsTr("网络视频"),
-            "broadcast": qsTr("广播"), "mono": qsTr("单声道"),
-            "stereo": qsTr("立体声"), "5.1": "5.1"
+    readonly property var channelLayoutOptions: [
+        {label: qsTr("单声道"), value: "mono"},
+        {label: qsTr("立体声"), value: "stereo"},
+        {label: "5.1", value: "5.1"}
+    ]
+    function channelLayoutIndex(value) {
+        for (var index = 0; index < channelLayoutOptions.length; ++index) {
+            if (channelLayoutOptions[index].value === String(value))
+                return index
         }
-        return labels[key] || key
+        return 0
     }
     component MetricBox: Rectangle {
         property string label
@@ -67,15 +46,15 @@ ScrollView {
         Column {
             anchors.centerIn: parent
             spacing: 2
-            Text { anchors.horizontalCenter: parent.horizontalCenter; text: parent.parent.label; color: Theme.textMuted; font.pixelSize: 9 }
-            Text { objectName: parent.parent.metricObjectName; anchors.horizontalCenter: parent.horizontalCenter; text: parent.parent.value; color: Theme.text; font.pixelSize: 12; font.weight: Font.DemiBold }
+            Text { anchors.horizontalCenter: parent.horizontalCenter; text: parent.parent.label; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+            Text { objectName: parent.parent.metricObjectName; anchors.horizontalCenter: parent.horizontalCenter; text: parent.parent.value; color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold }
         }
     }
-    Text { text: qsTr("专业音频"); color: Theme.text; font.pixelSize: 16; font.weight: Font.DemiBold }
-    Text { text: qsTr("48 kHz 浮点总线图"); color: Theme.textMuted; font.pixelSize: 10 }
+    Text { text: qsTr("专业音频"); color: Theme.text; font.pixelSize: Theme.fontSizeSection; font.weight: Font.DemiBold }
+    Text { text: qsTr("48 kHz 浮点总线图"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
     RowLayout {
         Layout.fillWidth: true
-        TextField {
+        AppTextField {
             id: newBusName
             Layout.fillWidth: true
             placeholderText: qsTr("新音频总线名称")
@@ -84,7 +63,7 @@ ScrollView {
         AppButton {
             text: qsTr("添加总线")
             onClicked: {
-                projectController.addAudioBus(newBusName.text)
+                audioController.addAudioBus(newBusName.text)
                 newBusName.clear()
             }
         }
@@ -101,17 +80,17 @@ ScrollView {
             spacing: 6
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: qsTr("序列响度"); color: Theme.text; font.pixelSize: 11; font.weight: Font.DemiBold }
+                Text { text: qsTr("序列响度"); color: Theme.text; font.pixelSize: Theme.fontSizeCaption; font.weight: Font.DemiBold }
                 Item { Layout.fillWidth: true }
                 Text {
-                    text: qsTr("目标 %1 LUFS / %2 dBTP").arg(projectController.settingsData.loudnessTarget).arg(projectController.settingsData.truePeak)
+                    text: qsTr("目标 %1 LUFS / %2 dBTP").arg(settingsController.settingsData.loudnessTarget).arg(settingsController.settingsData.truePeak)
                     color: Theme.textMuted
-                    font.pixelSize: 9
+                    font.pixelSize: Theme.fontSizeCaption
                 }
                 AppButton {
-                    text: projectController.audioAnalysisRunning ? qsTr("测量中…") : qsTr("重新测量")
-                    enabled: !projectController.audioAnalysisRunning
-                    onClicked: projectController.analyzeLoudness()
+                    text: audioController.audioAnalysisRunning ? qsTr("测量中…") : qsTr("重新测量")
+                    enabled: !audioController.audioAnalysisRunning
+                    onClicked: audioController.analyzeLoudness()
                 }
             }
             GridLayout {
@@ -128,10 +107,10 @@ ScrollView {
     ListView {
         id: busList
         Layout.fillWidth: true
-        Layout.preferredHeight: Math.min(240, contentHeight)
+        Layout.preferredHeight: Math.min(540, contentHeight)
         clip: true
         spacing: 6
-        model: projectController.audioBusesModel
+        model: audioController.audioBusesModel
         delegate: Rectangle {
             required property string busId
             required property string name
@@ -142,58 +121,79 @@ ScrollView {
             required property string parentBusId
             required property string channelLayout
             width: busList.width
-            height: 112
+            height: 126
             radius: Theme.radiusSmall
-            color: projectController.selectedAudioBusId === busId ? Theme.accentSoft : busMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-            border.color: projectController.selectedAudioBusId === busId ? Theme.accent : Theme.border
+            color: audioController.selectedAudioBusId === busId ? Theme.accentSoft : busMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+            border.color: audioController.selectedAudioBusId === busId ? Theme.accent : Theme.border
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 8; spacing: 4
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { Layout.fillWidth: true; text: displayName; color: Theme.text; font.pixelSize: 11; font.weight: Font.DemiBold }
-                    AppButton { text: muted ? qsTr("取消静音") : "M"; onClicked: projectController.updateAudioBus(busId, gainDb, !muted, solo) }
-                    AppButton { text: solo ? qsTr("取消独奏") : "S"; onClicked: projectController.updateAudioBus(busId, gainDb, muted, !solo) }
+                    Text { Layout.fillWidth: true; text: displayName; color: Theme.text; font.pixelSize: Theme.fontSizeCaption; font.weight: Font.DemiBold }
+                    AppButton {
+                        text: muted ? qsTr("取消静音") : qsTr("静音")
+                        Accessible.name: muted ? qsTr("取消静音") : qsTr("静音")
+                        ToolTip.visible: hovered
+                        ToolTip.text: Accessible.name
+                        onClicked: audioController.updateAudioBus(busId, gainDb, !muted, solo)
+                    }
+                    AppButton {
+                        text: solo ? qsTr("取消独奏") : qsTr("独奏")
+                        Accessible.name: solo ? qsTr("取消独奏") : qsTr("独奏")
+                        ToolTip.visible: hovered
+                        ToolTip.text: Accessible.name
+                        onClicked: audioController.updateAudioBus(busId, gainDb, muted, !solo)
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: gainDb.toFixed(1) + " dB"; color: Theme.textMuted; font.pixelSize: 9; Layout.preferredWidth: 48 }
+                    Text { text: gainDb.toFixed(1) + " dB"; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption; Layout.preferredWidth: 48 }
                     Slider {
                         Layout.fillWidth: true; from: -60; to: 12; value: gainDb
-                        onPressedChanged: if (!pressed) projectController.updateAudioBus(busId, value, muted, solo)
+                        onPressedChanged: if (!pressed) audioController.updateAudioBus(busId, value, muted, solo)
                     }
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: qsTr("输出到"); color: Theme.textMuted; font.pixelSize: 9 }
-                    ComboBox {
+                    Text { text: qsTr("输出到"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+                    Text {
                         Layout.fillWidth: true
-                        enabled: parentBusId.length > 0
-                        model: projectController.audioBusesModel
+                        visible: parentBusId.length === 0
+                        text: qsTr("主输出（直接输出）")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
+                    AppComboBox {
+                        Layout.fillWidth: true
+                        visible: parentBusId.length > 0
+                        model: audioController.audioBusesModel
                         textRole: "displayName"; valueRole: "busId"
-                        currentIndex: projectController.audioBusesModel.findRow("busId", parentBusId)
-                        onActivated: projectController.updateAudioBus(
+                        currentIndex: audioController.audioBusesModel.findRow("busId", parentBusId)
+                        onActivated: audioController.updateAudioBus(
                             busId, gainDb, muted, solo, String(currentValue), channelLayout)
                     }
-                    ComboBox {
-                        Layout.preferredWidth: 82
-                        model: ["mono", "stereo", "5.1"]
-                        currentIndex: model.indexOf(channelLayout)
-                        onActivated: projectController.updateAudioBus(
-                            busId, gainDb, muted, solo, parentBusId, currentText)
+                    AppComboBox {
+                        Layout.preferredWidth: 124
+                        model: root.channelLayoutOptions
+                        textRole: "label"
+                        valueRole: "value"
+                        currentIndex: root.channelLayoutIndex(channelLayout)
+                        onActivated: audioController.updateAudioBus(
+                            busId, gainDb, muted, solo, parentBusId, String(currentValue))
                     }
                 }
             }
-            MouseArea { id: busMouse; anchors.fill: parent; anchors.bottomMargin: 72; hoverEnabled: true; onClicked: projectController.selectAudioBus(busId) }
+            MouseArea { id: busMouse; anchors.fill: parent; anchors.bottomMargin: 72; hoverEnabled: true; onClicked: audioController.selectAudioBus(busId) }
         }
     }
-    Text { text: qsTr("轨道路由"); color: Theme.text; font.pixelSize: 12; font.weight: Font.DemiBold }
+    Text { text: qsTr("轨道路由"); color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold }
     ListView {
         id: routeList
         Layout.fillWidth: true
         Layout.preferredHeight: Math.min(112, contentHeight)
         clip: true
         spacing: 4
-        model: projectController.tracksModel
+        model: timelineController.tracksModel
         delegate: Rectangle {
             id: routeDelegate
             required property string trackId
@@ -213,14 +213,14 @@ ScrollView {
             RowLayout {
                 anchors.fill: parent
                 anchors.margins: 5
-                Text { Layout.fillWidth: true; text: routeDelegate.displayName; color: Theme.text; elide: Text.ElideRight; font.pixelSize: 10 }
-                ComboBox {
+                Text { Layout.fillWidth: true; text: routeDelegate.displayName; color: Theme.text; elide: Text.ElideRight; font.pixelSize: Theme.fontSizeCaption }
+                AppComboBox {
                     Layout.preferredWidth: 126
-                    model: projectController.audioBusesModel
+                    model: audioController.audioBusesModel
                     textRole: "displayName"
                     valueRole: "busId"
-                    currentIndex: projectController.audioBusesModel.findRow("busId", routeDelegate.audioBusId)
-                    onActivated: projectController.updateTrack(
+                    currentIndex: audioController.audioBusesModel.findRow("busId", routeDelegate.audioBusId)
+                    onActivated: timelineController.updateTrack(
                         routeDelegate.trackId, routeDelegate.model.enabled, routeDelegate.locked,
                         routeDelegate.muted, routeDelegate.solo, String(currentValue))
                 }
@@ -229,9 +229,9 @@ ScrollView {
     }
     RowLayout {
         Layout.fillWidth: true
-        Text { text: qsTr("效果链"); color: Theme.text; font.pixelSize: 12; font.weight: Font.DemiBold }
+        Text { text: qsTr("效果链"); color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold }
         Item { Layout.fillWidth: true }
-        ComboBox {
+        AppComboBox {
             id: effectKind
             Layout.preferredWidth: 120
             model: [
@@ -251,8 +251,8 @@ ScrollView {
         }
         AppButton {
             text: "+"
-            enabled: projectController.selectedAudioBusId.length > 0
-            onClicked: projectController.addAudioEffect(projectController.selectedAudioBusId, effectKind.currentValue)
+            enabled: audioController.selectedAudioBusId.length > 0
+            onClicked: audioController.addAudioEffect(audioController.selectedAudioBusId, effectKind.currentValue)
         }
     }
     ListView {
@@ -261,7 +261,7 @@ ScrollView {
         Layout.preferredHeight: Math.min(180, contentHeight)
         clip: true
         spacing: 5
-        model: projectController.audioEffectsModel
+        model: audioController.audioEffectsModel
         delegate: Rectangle {
             id: effectDelegate
             required property string effectId
@@ -269,22 +269,22 @@ ScrollView {
             required property int position
             required property var model
             width: effectList.width; height: 48; radius: Theme.radiusSmall
-            color: projectController.selectedAudioEffectId === effectId ? Theme.accentSoft : Theme.surfaceRaised
-            border.color: projectController.selectedAudioEffectId === effectId ? Theme.accent : Theme.border
+            color: audioController.selectedAudioEffectId === effectId ? Theme.accentSoft : Theme.surfaceRaised
+            border.color: audioController.selectedAudioEffectId === effectId ? Theme.accent : Theme.border
             z: dragHandle.drag.active ? 10 : 0
             RowLayout {
                 anchors.fill: parent; anchors.margins: 8
-                Text { text: "⋮⋮"; color: Theme.textMuted; font.pixelSize: 12 }
-                Text { Layout.fillWidth: true; text: root.effectLabel(kind); color: model.enabled ? Theme.text : Theme.textMuted; font.pixelSize: 11 }
-                Button { text: "↑"; enabled: position > 0; implicitWidth: 28; implicitHeight: 26; onClicked: projectController.moveAudioEffect(effectId, position - 1) }
-                Button { text: "↓"; enabled: position + 1 < effectList.count; implicitWidth: 28; implicitHeight: 26; onClicked: projectController.moveAudioEffect(effectId, position + 1) }
-                Switch { checked: model.enabled; onToggled: projectController.setAudioEffectEnabled(effectId, checked) }
+                Text { text: "⋮⋮"; color: Theme.textMuted; font.pixelSize: Theme.fontSizeBodySmall }
+                Text { Layout.fillWidth: true; text: displayName; color: model.enabled ? Theme.text : Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+                Button { text: "↑"; enabled: position > 0; implicitWidth: 28; implicitHeight: 26; onClicked: audioController.moveAudioEffect(effectId, position - 1) }
+                Button { text: "↓"; enabled: position + 1 < effectList.count; implicitWidth: 28; implicitHeight: 26; onClicked: audioController.moveAudioEffect(effectId, position + 1) }
+                Switch { checked: model.enabled; onToggled: audioController.setAudioEffectEnabled(effectId, checked) }
             }
             MouseArea {
                 anchors.left: parent.left; anchors.leftMargin: 34
                 anchors.right: parent.right; anchors.rightMargin: 118
                 anchors.top: parent.top; anchors.bottom: parent.bottom
-                onClicked: projectController.selectAudioEffect(effectId)
+                onClicked: audioController.selectAudioEffect(effectId)
             }
             MouseArea {
                 id: dragHandle
@@ -292,11 +292,11 @@ ScrollView {
                 cursorShape: Qt.SizeVerCursor
                 drag.target: effectDelegate
                 drag.axis: Drag.YAxis
-                onPressed: projectController.selectAudioEffect(effectId)
+                onPressed: audioController.selectAudioEffect(effectId)
                 onReleased: {
                     var target = Math.max(0, Math.min(effectList.count - 1,
                         Math.round(effectDelegate.y / (effectDelegate.height + effectList.spacing))))
-                    projectController.moveAudioEffect(effectId, target)
+                    audioController.moveAudioEffect(effectId, target)
                 }
             }
         }
@@ -312,32 +312,29 @@ ScrollView {
         objectName: "audioParameterPanel"
         Layout.fillWidth: true
         Layout.preferredHeight: Math.max(190, parameterList.contentHeight + 58)
-        visible: projectController.selectedAudioEffectId.length > 0
+        visible: audioController.selectedAudioEffectId.length > 0
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
             spacing: 6
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: qsTr("参数预设"); color: Theme.textMuted; font.pixelSize: 10 }
-                ComboBox {
+                Text { text: qsTr("参数预设"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+                AppComboBox {
                     id: effectPreset
                     Layout.fillWidth: true
                     textRole: "label"; valueRole: "presetId"
-                    model: projectController.audioEffectPresets(root.selectedEffectKind()).map(
-                        function(item) {
-                            return { presetId: item.presetId, label: root.presetLabel(item.presetId) }
-                        })
+                    model: audioController.audioEffectPresets(root.selectedEffectKind())
                 }
                 AppButton {
                     text: qsTr("应用")
                     enabled: effectPreset.count > 0
-                    onClicked: projectController.applyAudioEffectPreset(
-                        projectController.selectedAudioEffectId, String(effectPreset.currentValue))
+                    onClicked: audioController.applyAudioEffectPreset(
+                        audioController.selectedAudioEffectId, String(effectPreset.currentValue))
                 }
                 AppButton {
                     text: qsTr("移除效果")
-                    onClicked: projectController.removeAudioEffect(projectController.selectedAudioEffectId)
+                    onClicked: audioController.removeAudioEffect(audioController.selectedAudioEffectId)
                 }
             }
             ListView {
@@ -347,7 +344,7 @@ ScrollView {
                 Layout.fillHeight: true
                 clip: true
                 spacing: 6
-                model: projectController.audioEffectParametersModel
+                model: audioController.audioEffectParametersModel
                 delegate: ColumnLayout {
                     id: parameterDelegate
                     required property string key
@@ -362,11 +359,11 @@ ScrollView {
                     spacing: 2
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { Layout.fillWidth: true; text: root.parameterLabel(parameterDelegate.key); color: Theme.text; font.pixelSize: 10 }
+                        Text { Layout.fillWidth: true; text: parameterDelegate.label; color: Theme.text; font.pixelSize: Theme.fontSizeCaption }
                         Text {
                             visible: parameterDelegate.valueType === "number"
                             text: Number(parameterDelegate.model.value).toFixed(parameterDelegate.step < 1 ? 1 : 0) + " " + parameterDelegate.unit
-                            color: Theme.textMuted; font.pixelSize: 9
+                            color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption
                         }
                     }
                     Slider {
@@ -374,26 +371,29 @@ ScrollView {
                         visible: parameterDelegate.valueType === "number"
                         from: parameterDelegate.minimum; to: parameterDelegate.maximum; stepSize: parameterDelegate.step
                         value: Number(parameterDelegate.model.value)
-                        onPressedChanged: if (!pressed) projectController.setAudioEffectParameter(
-                            projectController.selectedAudioEffectId, parameterDelegate.key, value)
+                        onPressedChanged: if (!pressed) audioController.setAudioEffectParameter(
+                            audioController.selectedAudioEffectId, parameterDelegate.key, value)
                     }
-                    ComboBox {
+                    AppComboBox {
                         Layout.fillWidth: true
                         visible: parameterDelegate.valueType === "layout"
-                        model: ["mono", "stereo", "5.1"]
-                        currentIndex: model.indexOf(String(parameterDelegate.model.value))
-                        onActivated: projectController.setAudioEffectParameter(
-                            projectController.selectedAudioEffectId, parameterDelegate.key, currentText)
+                        model: root.channelLayoutOptions
+                        textRole: "label"
+                        valueRole: "value"
+                        currentIndex: root.channelLayoutIndex(parameterDelegate.model.value)
+                        onActivated: audioController.setAudioEffectParameter(
+                            audioController.selectedAudioEffectId, parameterDelegate.key,
+                            String(currentValue))
                     }
-                    ComboBox {
+                    AppComboBox {
                         Layout.fillWidth: true
                         visible: parameterDelegate.valueType === "bus"
-                        model: projectController.audioBusesModel
+                        model: audioController.audioBusesModel
                         textRole: "displayName"; valueRole: "busId"
-                        currentIndex: projectController.audioBusesModel.findRow(
+                        currentIndex: audioController.audioBusesModel.findRow(
                             "busId", String(parameterDelegate.model.value))
-                        onActivated: projectController.setAudioEffectParameter(
-                            projectController.selectedAudioEffectId, parameterDelegate.key, String(currentValue))
+                        onActivated: audioController.setAudioEffectParameter(
+                            audioController.selectedAudioEffectId, parameterDelegate.key, String(currentValue))
                     }
                 }
             }

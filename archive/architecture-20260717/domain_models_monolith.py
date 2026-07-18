@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from fractions import Fraction
@@ -15,12 +16,8 @@ from .enums import (
     ColorMode,
     ExportFormat,
     SequenceKind,
-    TaskKind,
-    TaskStatus,
     TrackKind,
     TransitionKind,
-    WorkflowStage,
-    WorkflowStatus,
 )
 
 
@@ -68,6 +65,59 @@ class ProjectProfile(DomainModel):
         return float(Fraction(self.fps_numerator, self.fps_denominator))
 
 
+class SubtitleStyle(DomainModel):
+    font_family: str = "Microsoft YaHei UI"
+    font_size: int = Field(default=24, ge=8, le=240)
+    font_color: str = "#FFFFFF"
+    bold: bool = True
+    italic: bool = False
+    outline_size: int = Field(default=2, ge=0, le=30)
+    shadow_size: int = Field(default=0, ge=0, le=30)
+    outline_color: str = "#000000"
+    background_enabled: bool = False
+    background_color: str = "#000000"
+    background_opacity: float = Field(default=0.0, ge=0.0, le=1.0)
+    background_padding: int = Field(default=5, ge=0, le=100)
+    position_x: float = Field(default=0.5, ge=0.0, le=1.0)
+    position_y: float = Field(default=0.88, ge=0.0, le=1.0)
+    alignment: Literal["left", "center", "right"] = "center"
+    multiline_alignment: Literal["top", "center", "bottom"] = "center"
+
+    @field_validator("font_family")
+    @classmethod
+    def non_empty_font(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Subtitle font family cannot be empty")
+        return value
+
+    @field_validator("font_color", "outline_color", "background_color")
+    @classmethod
+    def valid_hex_color(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not re.fullmatch(r"#[0-9A-F]{6}", value):
+            raise ValueError("Subtitle colors must use #RRGGBB")
+        return value
+
+
+class WatermarkOverlay(DomainModel):
+    enabled: bool = False
+    asset_id: str | None = None
+    position: Literal["TL", "TC", "TR", "LC", "C", "RC", "BL", "BC", "BR"] = "TR"
+    position_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    position_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    width_ratio: float = Field(default=0.2, ge=0.01, le=1.0)
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def enabled_has_asset(self) -> WatermarkOverlay:
+        if self.enabled and not self.asset_id:
+            raise ValueError("Enabled watermark requires an image asset")
+        if (self.position_x is None) != (self.position_y is None):
+            raise ValueError("Custom watermark position requires both X and Y")
+        return self
+
+
 class ExportPreset(DomainModel):
     id: str = Field(default_factory=new_id)
     name: str
@@ -82,6 +132,8 @@ class ExportPreset(DomainModel):
     gop_frames: int = 60
     audio_bitrate: int = 192_000
     burn_subtitle_track_id: str | None = None
+    subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
+    watermark: WatermarkOverlay = Field(default_factory=WatermarkOverlay)
     advanced: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -144,6 +196,17 @@ class Asset(DomainModel):
     created_at: int = Field(default_factory=now_ms)
 
 
+class SequenceInOut(DomainModel):
+    in_frame: int = Field(ge=0)
+    out_frame: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def positive_range(self) -> SequenceInOut:
+        if self.out_frame <= self.in_frame:
+            raise ValueError("Sequence out point must be after its in point")
+        return self
+
+
 class Sequence(DomainModel):
     id: str = Field(default_factory=new_id)
     project_id: str
@@ -151,6 +214,8 @@ class Sequence(DomainModel):
     kind: SequenceKind
     profile: ProjectProfile = Field(default_factory=ProjectProfile)
     export_preset: ExportPreset | None = None
+    in_out: SequenceInOut | None = None
+    archived: bool = False
     position: int = 0
     created_at: int = Field(default_factory=now_ms)
 
@@ -309,6 +374,7 @@ class SubtitleDocument(DomainModel):
     id: str = Field(default_factory=new_id)
     project_id: str
     asset_id: str
+    media_asset_id: str | None = None
     language: str
     source_document_id: str | None = None
     is_source: bool = True
@@ -345,54 +411,86 @@ class AudioBus(DomainModel):
 
 
 class ParametricEqParameters(DomainModel):
-    low_db: float = Field(default=0.0, ge=-24.0, le=24.0)
-    low_mid_db: float = Field(default=0.0, ge=-24.0, le=24.0)
-    high_mid_db: float = Field(default=0.0, ge=-24.0, le=24.0)
-    high_db: float = Field(default=0.0, ge=-24.0, le=24.0)
+    low_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
+    low_mid_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
+    high_mid_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
+    high_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
 
 
 class HighPassParameters(DomainModel):
-    frequency_hz: float = Field(default=80.0, ge=20.0, le=20_000.0)
+    frequency_hz: float = Field(
+        default=80.0, ge=20.0, le=20_000.0, json_schema_extra={"step": 10.0, "unit": "Hz"}
+    )
 
 
 class LowPassParameters(DomainModel):
-    frequency_hz: float = Field(default=16_000.0, ge=20.0, le=24_000.0)
+    frequency_hz: float = Field(
+        default=16_000.0,
+        ge=20.0,
+        le=24_000.0,
+        json_schema_extra={"step": 10.0, "unit": "Hz"},
+    )
 
 
 class CompressorParameters(DomainModel):
-    threshold_db: float = Field(default=-18.0, ge=-60.0, le=0.0)
-    ratio: float = Field(default=3.0, ge=1.0, le=20.0)
-    attack_ms: float = Field(default=10.0, ge=0.1, le=2_000.0)
-    release_ms: float = Field(default=120.0, ge=10.0, le=5_000.0)
+    threshold_db: float = Field(
+        default=-18.0, ge=-60.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
+    )
+    ratio: float = Field(default=3.0, ge=1.0, le=20.0, json_schema_extra={"step": 0.1, "unit": ":1"})
+    attack_ms: float = Field(default=10.0, ge=0.1, le=2_000.0, json_schema_extra={"step": 1.0, "unit": "ms"})
+    release_ms: float = Field(
+        default=120.0,
+        ge=10.0,
+        le=5_000.0,
+        json_schema_extra={"step": 5.0, "unit": "ms"},
+    )
 
 
 class LimiterParameters(DomainModel):
-    ceiling_db: float = Field(default=-1.0, ge=-20.0, le=0.0)
+    ceiling_db: float = Field(default=-1.0, ge=-20.0, le=0.0, json_schema_extra={"step": 0.1, "unit": "dB"})
 
 
 class NoiseGateParameters(DomainModel):
-    threshold_db: float = Field(default=-45.0, ge=-80.0, le=0.0)
+    threshold_db: float = Field(
+        default=-45.0, ge=-80.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
+    )
 
 
 class RnnoiseParameters(DomainModel):
-    mix: float = Field(default=1.0, ge=0.0, le=1.0)
+    mix: float = Field(default=1.0, ge=0.0, le=1.0, json_schema_extra={"step": 0.05, "unit": ""})
 
 
 class ChannelMapParameters(DomainModel):
-    layout: Literal["mono", "stereo", "5.1"] = "stereo"
+    layout: Literal["mono", "stereo", "5.1"] = Field(
+        default="stereo",
+        json_schema_extra={"step": 0.0, "unit": "", "value_type": "layout"},
+    )
 
 
 class LoudnessNormalizeParameters(DomainModel):
-    target_lufs: float = Field(default=-14.0, ge=-30.0, le=-5.0)
-    true_peak_db: float = Field(default=-1.0, ge=-9.0, le=0.0)
+    target_lufs: float = Field(
+        default=-14.0, ge=-30.0, le=-5.0, json_schema_extra={"step": 0.5, "unit": "LUFS"}
+    )
+    true_peak_db: float = Field(
+        default=-1.0, ge=-9.0, le=0.0, json_schema_extra={"step": 0.1, "unit": "dBTP"}
+    )
 
 
 class DuckingParameters(DomainModel):
-    driver_bus_id: str = ""
-    threshold_db: float = Field(default=-24.0, ge=-60.0, le=0.0)
-    reduction_db: float = Field(default=-10.0, ge=-40.0, le=0.0)
-    attack_ms: float = Field(default=120.0, ge=0.0, le=2_000.0)
-    release_ms: float = Field(default=300.0, ge=0.0, le=5_000.0)
+    driver_bus_id: str = Field(
+        default="",
+        json_schema_extra={"step": 0.0, "unit": "", "value_type": "bus"},
+    )
+    threshold_db: float = Field(
+        default=-24.0, ge=-60.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
+    )
+    reduction_db: float = Field(
+        default=-10.0, ge=-40.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
+    )
+    attack_ms: float = Field(default=120.0, ge=0.0, le=2_000.0, json_schema_extra={"step": 5.0, "unit": "ms"})
+    release_ms: float = Field(
+        default=300.0, ge=0.0, le=5_000.0, json_schema_extra={"step": 5.0, "unit": "ms"}
+    )
 
 
 _AUDIO_EFFECT_PARAMETER_TYPES: dict[AudioEffectKind, type[DomainModel]] = {
@@ -433,50 +531,22 @@ class HighlightCandidate(DomainModel):
     id: str = Field(default_factory=new_id)
     project_id: str
     asset_id: str
+    document_id: str | None = None
+    sequence_id: str | None = None
     start_frame: int
     end_frame: int
     title: str
     reason: str = ""
     score: float = 0.0
+    selected: bool = True
 
-
-class Task(DomainModel):
-    id: str = Field(default_factory=new_id)
-    project_id: str
-    sequence_id: str | None = None
-    kind: TaskKind
-    status: TaskStatus = TaskStatus.PENDING
-    name: str
-    progress: float = 0.0
-    message_code: str = "queued"
-    input_asset_ids: list[str] = Field(default_factory=list)
-    parameters: dict[str, Any] = Field(default_factory=dict)
-    artifacts: list[str] = Field(default_factory=list)
-    error: str | None = None
-    revision: int = 0
-    created_at: int = Field(default_factory=now_ms)
-    updated_at: int = Field(default_factory=now_ms)
-
-    @field_validator("progress")
-    @classmethod
-    def bounded_progress(cls, value: float) -> float:
-        if not 0.0 <= value <= 100.0:
-            raise ValueError("Task progress must be between 0 and 100")
-        return value
-
-
-class WorkflowRun(DomainModel):
-    id: str = Field(default_factory=new_id)
-    project_id: str
-    sequence_id: str
-    asset_ids: list[str] = Field(default_factory=list)
-    stage: WorkflowStage
-    status: WorkflowStatus
-    auto_continue: bool = False
-    payload: dict[str, Any] = Field(default_factory=dict)
-    message_code: str = ""
-    created_at: int = Field(default_factory=now_ms)
-    updated_at: int = Field(default_factory=now_ms)
+    @model_validator(mode="after")
+    def validate_range(self) -> HighlightCandidate:
+        if self.start_frame < 0 or self.end_frame <= self.start_frame:
+            raise ValueError("Highlight candidate must have a positive frame range")
+        if not self.title.strip():
+            raise ValueError("Highlight candidate title cannot be empty")
+        return self
 
 
 class TimelineState(DomainModel):

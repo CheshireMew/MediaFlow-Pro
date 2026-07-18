@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from fractions import Fraction
+from typing import Protocol
+
+
+class FrameRate(Protocol):
+    fps_numerator: int
+    fps_denominator: int
 
 
 def fps_fraction(numerator: int, denominator: int) -> Fraction:
@@ -27,6 +33,33 @@ def frames_to_seconds(
     fps_denominator: int,
 ) -> Fraction:
     return Fraction(frames, 1) / fps_fraction(fps_numerator, fps_denominator)
+
+
+def reframe_frames(frames: int, source: FrameRate, destination: FrameRate) -> int:
+    """Preserve media time while moving an integer frame value between clocks."""
+    return reframe_rate(
+        frames,
+        source.fps_numerator,
+        source.fps_denominator,
+        destination.fps_numerator,
+        destination.fps_denominator,
+    )
+
+
+def reframe_rate(
+    frames: int,
+    source_numerator: int,
+    source_denominator: int,
+    destination_numerator: int,
+    destination_denominator: int,
+) -> int:
+    if source_numerator == destination_numerator and source_denominator == destination_denominator:
+        return frames
+    return seconds_to_frames(
+        frames_to_seconds(frames, source_numerator, source_denominator),
+        destination_numerator,
+        destination_denominator,
+    )
 
 
 def source_frames_for_timeline_frames(

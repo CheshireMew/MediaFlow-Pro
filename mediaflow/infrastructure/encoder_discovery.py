@@ -27,9 +27,7 @@ class EncoderDiscoveryService:
         self.paths = paths or RuntimePaths.discover()
         bundled_ffmpeg = self.paths.melt.parent / "ffmpeg.exe" if self.paths.melt else None
         self.ffmpeg = (
-            bundled_ffmpeg
-            if bundled_ffmpeg is not None and bundled_ffmpeg.is_file()
-            else self.paths.ffmpeg
+            bundled_ffmpeg if bundled_ffmpeg is not None and bundled_ffmpeg.is_file() else self.paths.ffmpeg
         )
 
     def video_options(self) -> list[dict]:

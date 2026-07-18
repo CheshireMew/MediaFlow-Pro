@@ -7,7 +7,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from mediaflow.domain.enums import AssetKind, ColorMode
-from mediaflow.domain.models import MediaMetadata, ProjectProfile
+from mediaflow.domain.project import MediaMetadata, ProjectProfile
 from mediaflow.domain.timebase import seconds_to_frames
 
 from .runtime_paths import RuntimePaths
@@ -145,6 +145,8 @@ class MediaProbe:
     @staticmethod
     def _optional_int(value: object) -> int | None:
         try:
-            return int(value) if value is not None else None
+            if not isinstance(value, (str, bytes, bytearray, int, float)):
+                return None
+            return int(value)
         except (TypeError, ValueError):
             return None

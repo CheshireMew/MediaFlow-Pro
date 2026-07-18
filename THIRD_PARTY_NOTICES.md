@@ -14,6 +14,7 @@ This source repository does not contain a generated portable runtime. When a por
 | MLT Framework | 7.40.0 | Core libraries LGPL-2.1; melt and individual modules may use GPL or other compatible licenses | https://www.mltframework.org/docs/copyrightpolicy/ |
 | FFmpeg | n8.1.2 tested runtime | GPLv3-or-later for the tested build because it is configured with `--enable-gpl --enable-version3` | https://ffmpeg.org/legal.html |
 | yt-dlp | 2026.3.17 | Unlicense | https://github.com/yt-dlp/yt-dlp |
+| Playwright for Python | 1.61.0 | Apache-2.0 | https://github.com/microsoft/playwright-python |
 | faster-whisper | 1.2.1 | MIT | https://github.com/SYSTRAN/faster-whisper |
 | CTranslate2 | 4.8.1 | MIT | https://github.com/OpenNMT/CTranslate2 |
 | OpenAI Python library | 2.45.0 | Apache-2.0 | https://github.com/openai/openai-python |

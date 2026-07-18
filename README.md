@@ -1,6 +1,6 @@
 # MediaFlow Pro
 
-MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2 使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出；所有内部通信都在桌面进程内完成，不启动本地网络服务或浏览器自动化运行时。
+MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2 使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出；所有内部通信都在桌面进程内完成，不启动本地网络服务。仅在解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
 
 项目采用 GPLv3，下载能力以随运行环境提供的 yt-dlp 为准。
 
@@ -8,10 +8,12 @@ MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2
 
 - 可移动项目目录，`project.mfp` SQLite 文件是项目唯一数据来源。
 - 主序列与任意数量的短视频序列，共享素材、字幕、翻译和高光候选。
-- 多轨视频、音频和字幕时间线；支持移动、裁剪、分割、复制、普通删除、波纹删除、转场、变速、反向、画面变换和撤销/重做。
+- 多轨视频、音频和字幕时间线；支持多选、成组移动、Shift 临时关闭吸附、裁剪、分割、复制、普通删除、跨轨波纹删除、转场、变速、反向、画面变换，以及时间线与字幕文档共用的撤销/重做历史。
+- 时间线可一键分析最终合成画面的首尾黑屏，并以启用字幕中的首句、末句对白为准设置序列入点和出点；正常画面、音乐或环境声本身不会被视为对白。入出点只限定预览与导出范围，不移动或缩短素材，可继续拖动调整、清除或撤销。
+- 预览画布支持滚轮缩放、中键平移、直接拖动画面、缩放和旋转，并提供定位、倍速、音量、静音和全屏控制；长片段波形只读取并绘制当前视口覆盖的部分。
 - MLT 驱动的同源预览与导出，C++ Qt Quick 插件负责帧纹理、音频主时钟、定位和掉帧报告。
 - 自动代理、波形、素材指纹、离线检测和单个/批量重新定位。
-- yt-dlp 下载、faster-whisper 转录、OpenAI 兼容接口翻译与高光分析。
+- yt-dlp 下载；首页可先读取视频标题、分辨率、帧率与可用画质，再按视频信息创建并打开项目，项目界面显示真实下载进度。YouTube 合集使用扁平分析并保留失效条目位置，X/Twitter 同时识别当前推文和引用推文中的视频，B 站支持合集/分 P，抖音和快手提供浏览器监听回退；faster-whisper 转录；OpenAI 兼容接口翻译与高光分析。
 - SDR BT.709 与 HDR10 BT.2020/PQ 工程，支持 H.264、HEVC、AV1、ProRes 和独立字幕导出。
 - 多音频总线、内置效果链、ducking、LUFS 和 True Peak 测量。
 - 中文、英文、日文界面，键盘操作、高 DPI 和持久化面板布局。
@@ -33,23 +35,25 @@ tests/v2/             V2 单元、QML 与真实媒体集成测试
 scripts/              原生构建和验收脚本
 ```
 
-QML 不直接访问数据库或启动外部程序。Python 类型是唯一合同来源，MLT 图是从 `project.mfp` 编译出的派生结果。
+QML 不直接访问数据库或启动外部程序。桌面控制器和无头 CLI 都通过同一个 `EditorApplication` / `EditorProject` 应用接口执行真实编辑与任务流程；Python 类型是唯一合同来源，MLT 图是从 `project.mfp` 编译出的派生结果。
 
 完整边界与线程模型见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 项目目录
 
 ```text
-<ProjectName>/
-  project.mfp
-  downloads/
-  generated/
-  proxies/
-  cache/
-  exports/
+MediaFlow Pro/
+  WorkSpace/
+  Project/
+    <ProjectName>/
+      project.mfp
+      generated/
+      proxies/
+      cache/
+      exports/
 ```
 
-外部导入素材保留绝对引用；下载、代理、波形、字幕、翻译和导出由项目目录管理。素材失踪时会保持为离线记录，重新定位需要指纹验证或用户明确确认。
+应用目录是媒体和项目默认位置的唯一根目录。下载的视频与原始字幕默认进入应用级 `WorkSpace`，项目进入 `Project/<ProjectName>`，两者不会互相嵌套。合集按标题在 `WorkSpace` 中建立子目录，条目使用稳定序号、标题和媒体 ID 命名；项目通过绝对路径引用这些媒体。项目生成的字幕、代理、波形、分析结果和导出仍由各自的项目目录管理。素材失踪时会保持为离线记录，重新定位需要指纹验证或用户明确确认。
 
 ## 开发运行环境
 
@@ -59,6 +63,7 @@ QML 不直接访问数据库或启动外部程序。Python 类型是唯一合同
 - PySide6 / Qt 6.11.1
 - MLT 7.40
 - yt-dlp 2026.3.17
+- Playwright 1.61.0（复用本机 Chrome/Edge，不下载单独浏览器）
 - FFmpeg（GPL 构建）
 
 依赖、模型和构建缓存默认位于 `D:\Tools\MediaFlow`。若没有 D 盘，首次启动会要求用户明确选择运行环境目录，不会静默占用 C 盘；也可以预先设置 `MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`MEDIAFLOW_FFMPEG` 和 `MEDIAFLOW_FFPROBE`。
@@ -85,15 +90,45 @@ D:\Tools\MediaFlow\.venv\Scripts\python.exe -m mediaflow.desktop.app
 
 也可以把项目目录作为首个参数直接打开。
 
+## 无头 CLI
+
+`mediaflow-cli` 是桌面界面之外的结构化自动化入口，复用同一个 Editor API，不另起服务，也不复制任务实现。命令始终向标准输出写 JSON，失败时返回非零退出码和结构化错误。
+
+```powershell
+mediaflow-cli project-create --project D:\Projects\Demo --name Demo
+mediaflow-cli asset-import --project D:\Projects\Demo --source D:\Media\source.mp4
+mediaflow-cli project-inspect --project D:\Projects\Demo
+mediaflow-cli task-list --project D:\Projects\Demo
+```
+
+自动化程序也可以通过文件或标准输入发送统一请求：
+
+```json
+{
+  "command": "task.start",
+  "project": "D:\\Projects\\Demo",
+  "kind": "waveform",
+  "parameters": {"asset_id": "素材 ID"},
+  "input_asset_ids": ["素材 ID"]
+}
+```
+
+```powershell
+mediaflow-cli --request request.json
+Get-Content request.json -Raw | mediaflow-cli --request -
+```
+
+当前自动化边界到 CLI 为止，不需要常驻 MCP 服务。如果以后确实需要让支持 MCP 的外部客户端调用，只应增加转接层，Editor API 仍是唯一实现入口。
+
 ## 测试与真实验收
 
 ```powershell
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pytest tests\v2
-D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\verify_ui_matrix.py
-D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\verify_performance.py
-D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\verify_preview_performance.py
-D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\verify_display_capabilities.py
-D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\verify_real_user_chain.py
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_ui_matrix
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_performance
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_preview_performance
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_display_capabilities
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_real_user_chain
 ```
 
 测试覆盖领域计算、SQLite 事务、QML 页面、原生预览、代理、下载、转录、翻译、高光、MLT 导出、HDR 元数据及预览/导出抽帧比对。需要网络、模型或 API 凭据的验收脚本会使用真实服务，不以消费端伪造数据代替生产链路。

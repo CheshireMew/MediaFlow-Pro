@@ -7,7 +7,7 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from mediaflow.domain.models import TimelineState
+from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.subprocess_runner import run_cancellable
 

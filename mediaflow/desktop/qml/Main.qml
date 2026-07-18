@@ -1,17 +1,53 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
+import QtQuick.Window
 import "."
 import "components"
 
 ApplicationWindow {
     id: window
-    width: Math.max(minimumWidth, projectController.settingsData.windowWidth || 1600)
-    height: Math.max(minimumHeight, projectController.settingsData.windowHeight || 980)
+    width: 1600
+    height: 980
     minimumWidth: 1180
     minimumHeight: 720
     visible: true
-    title: projectController.hasProject ? projectController.projectName + " — MediaFlow Pro" : "MediaFlow Pro"
+    flags: Qt.Window | Qt.FramelessWindowHint
+    title: workspaceController.hasProject ? workspaceController.projectName : "MediaFlow Pro"
+    readonly property bool downloadPlanVisible: downloadPlanDialog.visible
+    readonly property int downloadPlanEntryCount: downloadEntries.count
+    readonly property string defaultProjectDirectory: String(
+        settingsController.settingsData.defaultProjectDirectory || "")
+    readonly property string defaultDownloadDirectory: String(
+        settingsController.settingsData.downloadDirectory || "")
+    readonly property string downloadDestinationLabel: defaultDownloadDirectory
+    readonly property var downloadResolutionOptions: {
+        const options = [{label: qsTr("最佳可用质量"), value: "best"}]
+        const heights = taskController.downloadPlanData.available_heights || []
+        for (const height of heights)
+            options.push({label: String(height) + "p", value: String(height) + "p"})
+        options.push({label: qsTr("仅下载音频"), value: "audio"})
+        return options
+    }
+    function indexOfValue(model, value) {
+        for (let index = 0; index < model.length; ++index) {
+            if (String(model[index].value) === String(value))
+                return index
+        }
+        return 0
+    }
+    function syncDownloadFormFromSettings() {
+        const data = settingsController.settingsData
+        downloadResolution.currentIndex = window.indexOfValue(
+            window.downloadResolutionOptions, data.downloadResolution || "best")
+        downloadCodec.currentIndex = window.indexOfValue(
+            downloadCodec.model, data.downloadCodec || "avc")
+        downloadSubtitles.checked = Boolean(data.downloadSubtitles)
+        downloadProjectName.clear()
+        downloadFilename.clear()
+        playlistItems.clear()
+    }
     color: Theme.window
     palette.window: Theme.window
     palette.windowText: Theme.text
@@ -25,64 +61,230 @@ ApplicationWindow {
     palette.placeholderText: Theme.textMuted
     palette.toolTipBase: Theme.surfaceRaised
     palette.toolTipText: Theme.text
-    onClosing: projectController.saveWindowSize(width, height)
+    Component.onCompleted: {
+        const data = settingsController.settingsData
+        width = Math.max(minimumWidth, Number(data.windowWidth || 1600))
+        height = Math.max(minimumHeight, Number(data.windowHeight || 980))
+    }
+    onClosing: settingsController.saveWindowSize(width, height)
 
-    Loader {
-        id: pageLoader
-        objectName: "pageLoader"
+    ColumnLayout {
         anchors.fill: parent
-        sourceComponent: projectController.hasProject ? workspaceComponent : homeComponent
+        spacing: 0
+        WindowTitleBar {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 42
+            hostWindow: window
+        }
+        Loader {
+            id: pageLoader
+            objectName: "pageLoader"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            sourceComponent: workspaceController.hasProject ? workspaceComponent : homeComponent
+        }
     }
     Component { id: homeComponent; HomeView {} }
     Component { id: workspaceComponent; Workspace {} }
 
+    FolderDialog {
+        id: downloadOutputDirectoryDialog
+        title: qsTr("选择媒体默认保存位置")
+        onAccepted: settingsController.setDefaultDownloadDirectory(selectedFolder.toLocalFile())
+    }
+
     Dialog {
-        id: downloadAnalysisDialog
+        id: downloadPlanDialog
         anchors.centerIn: parent
-        width: 480
+        width: Math.min(900, window.width - 64)
         modal: true
-        title: qsTr("确认下载")
+        title: workspaceController.hasProject ? qsTr("确认下载") : qsTr("视频信息与下载设置")
         standardButtons: Dialog.NoButton
         closePolicy: Popup.NoAutoClose
+        onOpened: Qt.callLater(window.syncDownloadFormFromSettings)
         contentItem: ColumnLayout {
             spacing: 10
             Text {
                 Layout.fillWidth: true
-                text: projectController.downloadAnalysisData.title || qsTr("已完成链接分析")
+                text: taskController.downloadPlanData.title || qsTr("已完成链接分析")
                 color: Theme.text
-                font.pixelSize: 14
+                font.pixelSize: Theme.fontSizeBodyLarge
                 font.weight: Font.DemiBold
                 wrapMode: Text.WordWrap
             }
             Text {
+                objectName: "downloadMediaSummary"
                 Layout.fillWidth: true
-                text: projectController.downloadAnalysisData.is_playlist
-                      ? qsTr("播放列表 · %1 项 · %2").arg(
-                            projectController.downloadAnalysisData.entry_count).arg(
-                            projectController.downloadAnalysisData.extractor || "yt-dlp")
-                      : qsTr("单个视频 · %1").arg(
-                            projectController.downloadAnalysisData.extractor || "yt-dlp")
+                text: {
+                    const data = taskController.downloadPlanData
+                    const parts = [data.kind === "collection"
+                        ? qsTr("媒体集合 · %1 项").arg(data.entryCount)
+                        : qsTr("单个视频")]
+                    if (data.width > 0 && data.height > 0)
+                        parts.push(String(data.width) + "×" + String(data.height))
+                    if (data.fps > 0)
+                        parts.push(Number(data.fps).toFixed(data.fps % 1 ? 2 : 0) + " fps")
+                    if (data.duration > 0)
+                        parts.push(qsTr("%1 秒").arg(Math.round(data.duration)))
+                    parts.push(data.extractor || "yt-dlp")
+                    return parts.join(" · ")
+                }
                 color: Theme.textMuted
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontSizeCaption
             }
-            ComboBox {
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !workspaceController.hasProject
+                Text {
+                    text: qsTr("项目名称")
+                    color: Theme.textMuted
+                    Layout.preferredWidth: 120
+                }
+                AppTextField {
+                    id: downloadProjectName
+                    objectName: "downloadProjectName"
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("留空将自动使用“未命名项目 1、2…”")
+                }
+            }
+            AppComboBox {
                 id: downloadResolution
+                objectName: "downloadResolution"
                 Layout.fillWidth: true
                 textRole: "label"; valueRole: "value"
-                model: [
-                    {label: qsTr("最佳可用质量"), value: "best"},
-                    {label: "2160p", value: "2160p"},
-                    {label: "1440p", value: "1440p"},
-                    {label: "1080p", value: "1080p"},
-                    {label: "720p", value: "720p"},
-                    {label: "480p", value: "480p"}
-                ]
+                model: window.downloadResolutionOptions
             }
-            TextField {
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: qsTr("视频编码"); color: Theme.textMuted; Layout.preferredWidth: 120 }
+                AppComboBox {
+                    id: downloadCodec
+                    objectName: "downloadCodec"
+                    Layout.fillWidth: true
+                    textRole: "label"; valueRole: "value"
+                    model: [
+                        {label: qsTr("最佳可用编码"), value: "best"},
+                        {label: qsTr("优先 H.264 / AVC 兼容编码"), value: "avc"}
+                    ]
+                }
+            }
+            AppCheckBox {
+                id: downloadSubtitles
+                objectName: "downloadSubtitles"
+                text: qsTr("同时下载字幕和自动字幕，并转换为 SRT")
+            }
+            AppTextField {
+                id: downloadFilename
+                Layout.fillWidth: true
+                placeholderText: taskController.downloadPlanData.kind === "collection"
+                                 ? qsTr("批量文件名前缀（可选）")
+                                 : qsTr("自定义文件名（可选）")
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: qsTr("媒体默认保存位置")
+                    color: Theme.textMuted
+                    Layout.preferredWidth: 136
+                }
+                PathDisplay {
+                    objectName: "downloadDestinationValue"
+                    Layout.fillWidth: true
+                    text: window.downloadDestinationLabel
+                }
+                AppButton {
+                    objectName: "chooseDownloadDirectoryButton"
+                    text: qsTr("更改")
+                    onClicked: downloadOutputDirectoryDialog.open()
+                }
+                AppButton {
+                    objectName: "resetMediaDirectoryButton"
+                    visible: window.defaultDownloadDirectory !== settingsController.builtInMediaDirectory
+                    text: qsTr("恢复默认")
+                    onClicked: settingsController.resetDefaultDownloadDirectory()
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("媒体会保存到应用目录下的 WorkSpace，与 Project 项目目录分开。")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeCaption
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: taskController.downloadPlanData.kind === "collection"
+                Text {
+                    text: qsTr("下载项目")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontSizeBodySmall
+                    font.weight: Font.DemiBold
+                }
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: qsTr("全选")
+                    onClicked: taskController.selectAllDownloadEntries(true)
+                }
+                AppButton {
+                    text: qsTr("清空")
+                    onClicked: taskController.selectAllDownloadEntries(false)
+                }
+            }
+            ListView {
+                id: downloadEntries
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? Math.min(220, Math.max(58, contentHeight)) : 0
+                visible: taskController.downloadPlanData.kind === "collection"
+                clip: true
+                spacing: 4
+                model: taskController.downloadEntriesModel
+                delegate: Rectangle {
+                    required property int entryIndex
+                    required property string mediaId
+                    required property string title
+                    required property string pageUrl
+                    required property string uploader
+                    required property real duration
+                    required property bool available
+                    required property string unavailableReason
+                    required property bool selected
+                    width: downloadEntries.width
+                    height: 48
+                    radius: Theme.radiusSmall
+                    color: Theme.surfaceRaised
+                    border.color: selected ? Theme.accent : Theme.border
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        AppCheckBox {
+                            checked: parent.parent.selected
+                            enabled: parent.parent.available
+                            onToggled: taskController.setDownloadEntrySelected(
+                                parent.parent.entryIndex, checked)
+                        }
+                        Text {
+                            text: entryIndex + "."
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSizeCaption
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+                            Text { Layout.fillWidth: true; text: parent.parent.parent.title; color: parent.parent.parent.available ? Theme.text : Theme.textMuted; font.pixelSize: Theme.fontSizeBodySmall; elide: Text.ElideRight }
+                            Text { text: parent.parent.parent.available ? parent.parent.parent.uploader : parent.parent.parent.unavailableReason; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+                        }
+                        Text {
+                            text: duration > 0 ? Math.round(duration) + "s" : ""
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSizeCaption
+                        }
+                    }
+                }
+            }
+            AppTextField {
                 id: playlistItems
                 Layout.fillWidth: true
-                visible: projectController.downloadAnalysisData.is_playlist || false
-                placeholderText: qsTr("播放列表项目，例如 1-5,8（留空为全部）")
+                visible: taskController.downloadPlanData.kind === "collection"
+                placeholderText: qsTr("也可手动输入项目范围，例如 1-5,8")
                 color: Theme.text
             }
             RowLayout {
@@ -90,14 +292,34 @@ ApplicationWindow {
                 AppButton {
                     Layout.fillWidth: true
                     text: qsTr("取消")
-                    onClicked: projectController.dismissDownloadAnalysis()
+                    onClicked: taskController.dismissDownloadPlan()
                 }
                 AppButton {
+                    objectName: "confirmDownloadButton"
                     Layout.fillWidth: true
                     primary: true
-                    text: qsTr("开始下载")
-                    onClicked: projectController.startAnalyzedDownload(
-                        String(downloadResolution.currentValue), playlistItems.text)
+                    enabled: taskController.downloadPlanReady
+                    text: workspaceController.hasProject
+                          ? qsTr("开始下载") : qsTr("下载并新建项目")
+                    onClicked: {
+                        if (workspaceController.hasProject) {
+                            taskController.submitDownloadPlan(
+                                String(downloadResolution.currentValue),
+                                playlistItems.text,
+                                downloadSubtitles.checked,
+                                String(downloadCodec.currentValue),
+                                downloadFilename.text)
+                        } else {
+                            taskController.createProjectAndDownload(
+                                window.defaultProjectDirectory,
+                                downloadProjectName.text,
+                                String(downloadResolution.currentValue),
+                                playlistItems.text,
+                                downloadSubtitles.checked,
+                                String(downloadCodec.currentValue),
+                                downloadFilename.text)
+                        }
+                    }
                 }
             }
         }
@@ -106,7 +328,7 @@ ApplicationWindow {
     Popup {
         id: errorPopup
         x: (window.width - width) / 2
-        y: 22
+        y: 54
         width: Math.min(560, window.width - 48)
         height: errorText.implicitHeight + 28
         modal: false
@@ -120,24 +342,73 @@ ApplicationWindow {
             id: errorText
             color: "#ffd8dc"
             wrapMode: Text.WordWrap
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSizeBodySmall
             verticalAlignment: Text.AlignVCenter
         }
         Timer { id: errorTimer; interval: 5000; onTriggered: errorPopup.close() }
     }
 
     Connections {
-        target: projectController
+        target: workspaceController
         function onErrorOccurred(message) {
-            errorText.text = message
+            errorText.text = message + " [" + workspaceController.lastErrorId + "]"
             errorPopup.open()
             errorTimer.restart()
         }
-        function onDownloadAnalysisChanged() {
-            if (projectController.downloadAnalysisReady)
-                downloadAnalysisDialog.open()
+        function onDownloadPlanChanged() {
+            if (taskController.downloadPlanReady)
+                downloadPlanDialog.open()
             else
-                downloadAnalysisDialog.close()
+                downloadPlanDialog.close()
         }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        z: 900
+        color: "transparent"
+        border.color: window.visibility === Window.Maximized ? "transparent" : Theme.borderStrong
+        border.width: 1
+    }
+
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.TopEdge; cursorShape: Qt.SizeVerCursor
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        height: 5; z: 1000
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.BottomEdge; cursorShape: Qt.SizeVerCursor
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        height: 5; z: 1000
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.LeftEdge; cursorShape: Qt.SizeHorCursor
+        anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+        width: 5; z: 1000
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.RightEdge; cursorShape: Qt.SizeHorCursor
+        anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+        width: 5; z: 1000
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.TopEdge | Qt.LeftEdge; cursorShape: Qt.SizeFDiagCursor
+        anchors.left: parent.left; anchors.top: parent.top
+        width: 8; height: 8; z: 1001
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.TopEdge | Qt.RightEdge; cursorShape: Qt.SizeBDiagCursor
+        anchors.right: parent.right; anchors.top: parent.top
+        width: 8; height: 8; z: 1001
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.BottomEdge | Qt.LeftEdge; cursorShape: Qt.SizeBDiagCursor
+        anchors.left: parent.left; anchors.bottom: parent.bottom
+        width: 8; height: 8; z: 1001
+    }
+    WindowResizeHandle {
+        hostWindow: window; edges: Qt.BottomEdge | Qt.RightEdge; cursorShape: Qt.SizeFDiagCursor
+        anchors.right: parent.right; anchors.bottom: parent.bottom
+        width: 8; height: 8; z: 1001
     }
 }

@@ -29,6 +29,8 @@ cmake-build-*/
 /user_data/
 /workspace/
 /workspace-state.json
+/Project/
+/WorkSpace/
 
 # Secrets and machine-local settings
 .env

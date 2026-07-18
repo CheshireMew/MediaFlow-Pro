@@ -1,5 +1,10 @@
 """Canonical MediaFlow Pro domain model."""
 
+from .audio import (
+    AudioBus,
+    AudioEffect,
+)
+from .downloads import DownloadEntry, DownloadPlan, DownloadRequest
 from .enums import (
     AssetKind,
     AssetOrigin,
@@ -13,32 +18,38 @@ from .enums import (
     TrackKind,
     TransitionKind,
 )
-from .models import (
+from .exports import ExportPreset
+from .highlights import HighlightCandidate
+from .model_base import (
+    DomainModel,
+    new_id,
+    now_ms,
+)
+from .project import (
     Asset,
     AssetFingerprint,
-    AudioBus,
-    AudioEffect,
-    Clip,
-    ClipAudio,
-    ClipTransform,
-    DomainModel,
-    ExportPreset,
-    HighlightCandidate,
     MediaMetadata,
     Project,
     ProjectProfile,
     Sequence,
+    SequenceInOut,
+)
+from .sequence_bounds import SequenceBoundaryAnalysis
+from .subtitles import (
     SubtitleDocument,
     SubtitlePlacement,
     SubtitleSegment,
-    Task,
+)
+from .tasks import Task
+from .timeline import (
+    Clip,
+    ClipAudio,
+    ClipTransform,
     TimelineMarker,
     TimelineRange,
     TimelineState,
     Track,
     Transition,
-    new_id,
-    now_ms,
 )
 
 __all__ = [
@@ -53,6 +64,10 @@ __all__ = [
     "TaskStatus",
     "TrackKind",
     "TransitionKind",
+    "DownloadEntry",
+    "DownloadPlan",
+    "DownloadRequest",
+    "SequenceBoundaryAnalysis",
     "Asset",
     "AssetFingerprint",
     "AudioBus",
@@ -67,6 +82,7 @@ __all__ = [
     "Project",
     "ProjectProfile",
     "Sequence",
+    "SequenceInOut",
     "SubtitleDocument",
     "SubtitlePlacement",
     "SubtitleSegment",

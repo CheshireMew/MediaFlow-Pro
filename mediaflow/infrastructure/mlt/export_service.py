@@ -8,8 +8,11 @@ from fractions import Fraction
 from pathlib import Path
 
 from mediaflow.domain.enums import ColorMode, ExportFormat, TrackKind
-from mediaflow.domain.models import ExportPreset, TimelineState
+from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.srt_time import format_srt_timestamp
 from mediaflow.domain.timebase import frames_to_seconds
+from mediaflow.domain.timeline import TimelineState
+from mediaflow.infrastructure.font_assets import apply_bundled_font_environment
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.subprocess_runner import run_cancellable
 
@@ -22,6 +25,8 @@ class ExportResult:
     project_graph_path: Path
     probe: dict
     subtitle_files: tuple[Path, ...] = ()
+    start_frame: int = 0
+    end_frame: int = 1
 
 
 class MltExportService:
@@ -49,11 +54,16 @@ class MltExportService:
             graph_path,
             use_proxies=False,
             subtitle_track_id=preset.burn_subtitle_track_id,
+            subtitle_style=preset.subtitle_style,
+            watermark=preset.watermark,
         )
+        start_frame, end_frame = self._resolve_export_range(state, preset)
         consumer = self._consumer_properties(state, preset)
         command = [
             str(self.paths.melt),
             str(graph_path),
+            f"in={start_frame}",
+            f"out={end_frame - 1}",
             "-consumer",
             f"avformat:{output}",
             *consumer,
@@ -65,6 +75,10 @@ class MltExportService:
         mlt_root = self.paths.melt.parent
         environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
         environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
+        apply_bundled_font_environment(
+            preset.subtitle_style.font_family if preset.subtitle_style else None,
+            environment,
+        )
         result = run_cancellable(
             command,
             cwd=mlt_root,
@@ -80,19 +94,48 @@ class MltExportService:
                 "MLT export failed:\n" + "\n".join(part for part in (result.stdout, result.stderr) if part)
             )
         probe = self._probe(output)
-        self._validate_probe(state, preset, probe)
-        subtitle_files = self._write_external_subtitles(state, output)
+        self._validate_probe(
+            state,
+            preset,
+            probe,
+            expected_duration_frames=end_frame - start_frame,
+        )
+        subtitle_files = self._write_external_subtitles(
+            state,
+            output,
+            start_frame=start_frame,
+            end_frame=end_frame,
+        )
         return ExportResult(
             output_path=output,
             project_graph_path=graph_path,
             probe=probe,
             subtitle_files=subtitle_files,
+            start_frame=start_frame,
+            end_frame=end_frame,
         )
+
+    def _resolve_export_range(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+    ) -> tuple[int, int]:
+        del preset
+        duration = max(1, state.duration_frames)
+        bounds = state.sequence.in_out
+        start = min(duration, bounds.in_frame) if bounds else 0
+        end = min(duration, bounds.out_frame) if bounds else duration
+        if end <= start:
+            raise ValueError("Sequence in and out points do not contain exportable media")
+        return start, end
 
     def _write_external_subtitles(
         self,
         state: TimelineState,
         output: Path,
+        *,
+        start_frame: int,
+        end_frame: int,
     ) -> tuple[Path, ...]:
         segments = {
             segment.id: segment
@@ -112,26 +155,33 @@ class MltExportService:
                 ).strip("_")
                 or "subtitle"
             )
-            destination = output.with_name(f"{output.stem}.{safe_name}.srt")
             lines: list[str] = []
-            for index, placement in enumerate(placements, start=1):
+            included = [
+                placement
+                for placement in placements
+                if placement.end_frame > start_frame and placement.start_frame < end_frame
+            ]
+            if not included:
+                continue
+            destination = output.with_name(f"{output.stem}.{safe_name}.srt")
+            for index, placement in enumerate(included, start=1):
                 segment = segments.get(placement.segment_id)
                 if segment is None:
                     raise RuntimeError("Subtitle export references a missing segment")
                 start = frames_to_seconds(
-                    placement.start_frame,
+                    max(start_frame, placement.start_frame) - start_frame,
                     state.sequence.profile.fps_numerator,
                     state.sequence.profile.fps_denominator,
                 )
                 end = frames_to_seconds(
-                    placement.end_frame,
+                    min(end_frame, placement.end_frame) - start_frame,
                     state.sequence.profile.fps_numerator,
                     state.sequence.profile.fps_denominator,
                 )
                 lines.extend(
                     [
                         str(index),
-                        f"{self._srt_time(start)} --> {self._srt_time(end)}",
+                        f"{format_srt_timestamp(start)} --> {format_srt_timestamp(end)}",
                         placement.text_override or segment.text,
                         "",
                     ]
@@ -141,14 +191,6 @@ class MltExportService:
             temporary.replace(destination)
             generated.append(destination)
         return tuple(generated)
-
-    @staticmethod
-    def _srt_time(value: Fraction) -> str:
-        total_ms = round(float(value) * 1000)
-        hours, remainder = divmod(total_ms, 3_600_000)
-        minutes, remainder = divmod(remainder, 60_000)
-        seconds, milliseconds = divmod(remainder, 1000)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
     def _consumer_properties(self, state: TimelineState, preset: ExportPreset) -> list[str]:
         profile = state.sequence.profile
@@ -271,7 +313,13 @@ class MltExportService:
         return json.loads(result.stdout)
 
     @staticmethod
-    def _validate_probe(state: TimelineState, preset: ExportPreset, probe: dict) -> None:
+    def _validate_probe(
+        state: TimelineState,
+        preset: ExportPreset,
+        probe: dict,
+        *,
+        expected_duration_frames: int,
+    ) -> None:
         streams = probe.get("streams") or []
         video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
@@ -338,11 +386,9 @@ class MltExportService:
             actual_fps_text = str(video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1")
             actual_fps = Fraction(actual_fps_text)
             if abs(actual_fps - expected_fps) > Fraction(1, 1000):
-                raise RuntimeError(
-                    f"Export frame rate mismatch: expected {expected_fps}, got {actual_fps}"
-                )
+                raise RuntimeError(f"Export frame rate mismatch: expected {expected_fps}, got {actual_fps}")
             expected_duration = Fraction(
-                max((clip.timeline_end for clip in state.clips), default=1),
+                expected_duration_frames,
                 1,
             ) / Fraction(profile.fps_numerator, profile.fps_denominator)
             actual_duration = Fraction(str(probe.get("format", {}).get("duration") or "0"))

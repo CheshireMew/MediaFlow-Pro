@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from mediaflow.application.workflow_stage_handlers import workflow_stage_handlers
+from mediaflow.domain.enums import WorkflowStage
+from mediaflow.infrastructure.project_repository import ProjectRepository
+
+ROOT = Path(__file__).resolve().parents[3]
+PYTHON_ROOTS = (ROOT / "mediaflow", ROOT / "scripts", ROOT / "tests")
+
+
+def _python_files() -> list[Path]:
+    return [
+        path
+        for source_root in PYTHON_ROOTS
+        for path in source_root.rglob("*.py")
+        if "archive" not in path.parts and path != Path(__file__).resolve()
+    ]
+
+
+def _tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _imported_modules(path: Path) -> set[str]:
+    modules: set[str] = set()
+    for node in ast.walk(_tree(path)):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def _class(path: Path, name: str) -> ast.ClassDef:
+    return next(node for node in _tree(path).body if isinstance(node, ast.ClassDef) and node.name == name)
+
+
+def test_removed_architecture_has_no_runtime_or_test_entry_point() -> None:
+    banned_modules = {
+        "mediaflow.domain." + "models",
+        "mediaflow.application.subtitle_" + "service",
+    }
+    banned_classes = {
+        "Project" + "Controller",
+        "Project" + "Documents",
+        "Subtitle" + "Service",
+    }
+    violations: list[str] = []
+    for path in _python_files():
+        tree = _tree(path)
+        imported = _imported_modules(path)
+        if imported & banned_modules:
+            violations.append(f"{path.relative_to(ROOT)} imports {sorted(imported & banned_modules)}")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name in banned_classes:
+                violations.append(f"{path.relative_to(ROOT)} defines {node.name}")
+            if isinstance(node, ast.ImportFrom) and node.level and node.module == "models":
+                violations.append(f"{path.relative_to(ROOT)} imports the removed relative models module")
+    qml_legacy_name = "project" + "Controller"
+    for path in (ROOT / "mediaflow" / "desktop" / "qml").rglob("*.qml"):
+        if qml_legacy_name in path.read_text(encoding="utf-8"):
+            violations.append(f"{path.relative_to(ROOT)} uses {qml_legacy_name}")
+    assert violations == []
+    assert not (ROOT / "mediaflow" / "domain" / "models.py").exists()
+    assert not (ROOT / "mediaflow" / "application" / "subtitle_service.py").exists()
+
+
+def test_domain_and_application_layers_do_not_depend_on_outer_layers() -> None:
+    violations: list[str] = []
+    for path in (ROOT / "mediaflow" / "domain").glob("*.py"):
+        for module in _imported_modules(path):
+            if module.startswith(("mediaflow.application", "mediaflow.infrastructure", "mediaflow.desktop")):
+                violations.append(f"{path.name} -> {module}")
+    for path in (ROOT / "mediaflow" / "application").glob("*.py"):
+        for module in _imported_modules(path):
+            if module.startswith(("mediaflow.infrastructure", "mediaflow.desktop")):
+                violations.append(f"{path.name} -> {module}")
+    assert violations == []
+
+
+def test_workflow_service_dispatches_to_complete_stage_registry() -> None:
+    assert set(workflow_stage_handlers()) == set(WorkflowStage)
+    path = ROOT / "mediaflow" / "application" / "project_workflow_service.py"
+    service = _class(path, "ProjectWorkflowService")
+    methods = {node.name: node for node in service.body if isinstance(node, ast.FunctionDef)}
+    assert methods["continue_run"].end_lineno - methods["continue_run"].lineno < 40
+    assert methods["handle_task"].end_lineno - methods["handle_task"].lineno < 40
+    assert "_stage_handlers[run.stage]" in path.read_text(encoding="utf-8")
+
+
+def test_repository_and_subtitle_capabilities_remain_split() -> None:
+    repository_bases = {base.__name__ for base in ProjectRepository.__mro__}
+    assert {
+        "ProjectCatalogRepository",
+        "TimelineRepository",
+        "AudioRepository",
+        "SubtitleRepository",
+        "HighlightRepository",
+    } <= repository_bases
+
+    acquisition = _class(
+        ROOT / "mediaflow" / "application" / "subtitle_acquisition.py",
+        "SubtitleAcquisitionService",
+    )
+    editing = _class(
+        ROOT / "mediaflow" / "application" / "subtitle_editing.py",
+        "SubtitleEditingService",
+    )
+    publication = _class(
+        ROOT / "mediaflow" / "application" / "subtitle_publication.py",
+        "SubtitlePublicationService",
+    )
+    acquisition_methods = {node.name for node in acquisition.body if isinstance(node, ast.FunctionDef)}
+    editing_methods = {node.name for node in editing.body if isinstance(node, ast.FunctionDef)}
+    publication_methods = {node.name for node in publication.body if isinstance(node, ast.FunctionDef)}
+    assert "transcribe_asset" in acquisition_methods
+    assert "update_segment" in editing_methods
+    assert publication_methods == {"__init__", "write_document_srt"}
+    assert "write_document_srt" not in acquisition_methods | editing_methods
+
+
+def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
+    session = _class(
+        ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py",
+        "ProjectSession",
+    )
+    session_methods = {node.name for node in session.body if isinstance(node, ast.FunctionDef)}
+    assert not any(name.startswith("_refresh_") for name in session_methods)
+    assert "_schedule_preview_graph" not in session_methods
+    assert "_compile_preview_graph" not in session_methods
+
+    qml_root = ROOT / "mediaflow" / "desktop" / "qml"
+    workspace = (qml_root / "Workspace.qml").read_text(encoding="utf-8")
+    export_panel = (qml_root / "ExportPanel.qml").read_text(encoding="utf-8")
+    assert len(workspace.splitlines()) <= 700
+    assert len(export_panel.splitlines()) <= 140
+    for component in ("PreviewViewport", "WorkflowBanner", "WorkspaceNavigation"):
+        assert component in workspace
+        assert (qml_root / "components" / f"{component}.qml").is_file()
+    timeline = (qml_root / "TimelineView.qml").read_text(encoding="utf-8")
+    assert "SequenceToolbar" in timeline
+    assert (qml_root / "components" / "SequenceToolbar.qml").is_file()
+    window_title_bar = (
+        qml_root / "components" / "WindowTitleBar.qml"
+    ).read_text(encoding="utf-8")
+    workspace_header = (
+        qml_root / "components" / "WorkspaceHeader.qml"
+    ).read_text(encoding="utf-8")
+    assert "WorkspaceHeader" in window_title_bar
+    assert "workspaceController.projectName" not in workspace_header
+    assert "ExportSettings" in export_panel
+    for component in (
+        "ExportSettings",
+        "ExportTechnicalSettings",
+        "ExportSubtitleSettings",
+        "ExportWatermarkSettings",
+    ):
+        assert (qml_root / "components" / f"{component}.qml").is_file()

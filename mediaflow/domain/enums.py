@@ -76,6 +76,7 @@ class ExportFormat(DomainEnum):
 
 class TaskKind(DomainEnum):
     ANALYZE = "analyze"
+    IMPORT = "import"
     DOWNLOAD = "download"
     PROXY = "proxy"
     WAVEFORM = "waveform"
@@ -92,6 +93,26 @@ class TaskStatus(DomainEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+    @property
+    def is_in_flight(self) -> bool:
+        return self in {TaskStatus.PENDING, TaskStatus.RUNNING}
+
+    @property
+    def is_active(self) -> bool:
+        return self in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED}
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
+    @property
+    def is_consumable(self) -> bool:
+        return self.is_terminal or self == TaskStatus.PAUSED
+
+    @property
+    def is_retryable(self) -> bool:
+        return self in {TaskStatus.FAILED, TaskStatus.CANCELLED}
 
 
 class WorkflowStage(DomainEnum):

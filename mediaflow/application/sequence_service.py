@@ -1,28 +1,35 @@
 from __future__ import annotations
 
+from mediaflow.application.ports import SequenceServiceDocuments
 from mediaflow.domain.enums import TrackKind
-from mediaflow.domain.models import (
-    Clip,
-    SubtitlePlacement,
-    TimelineMarker,
-    TimelineRange,
-    Track,
-    Transition,
-    new_id,
-)
+from mediaflow.domain.model_base import new_id
+from mediaflow.domain.subtitles import SubtitlePlacement
 from mediaflow.domain.timebase import (
-    frames_to_seconds,
-    seconds_to_frames,
+    reframe_frames,
     source_frames_for_timeline_frames,
 )
-from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, Track, Transition
 
 
 class SequenceService:
-    def __init__(self, repository: ProjectRepository):
+    def __init__(self, repository: SequenceServiceDocuments):
         self.repository = repository
 
     def create_short_from_range(
+        self,
+        source_sequence_id: str,
+        range_id: str,
+        *,
+        name: str | None = None,
+    ):
+        with self.repository.transaction():
+            return self._create_short_from_range(
+                source_sequence_id,
+                range_id,
+                name=name,
+            )
+
+    def _create_short_from_range(
         self,
         source_sequence_id: str,
         range_id: str,
@@ -81,16 +88,14 @@ class SequenceService:
                 clip.speed_denominator,
             )
             source_in = (
-                clip.source_in + source_delta
-                if clip.speed_numerator > 0
-                else clip.source_in - source_delta
+                clip.source_in + source_delta if clip.speed_numerator > 0 else clip.source_in - source_delta
             )
-            timeline_start = self._convert(
+            timeline_start = reframe_frames(
                 overlap_start - selected.start_frame,
                 source_profile,
                 destination_profile,
             )
-            timeline_end = self._convert(
+            timeline_end = reframe_frames(
                 overlap_end - selected.start_frame,
                 source_profile,
                 destination_profile,
@@ -100,7 +105,7 @@ class SequenceService:
                 track_id=track_map[clip.track_id],
                 asset_id=clip.asset_id,
                 timeline_start=timeline_start,
-                source_in=self._convert(source_in, source_profile, destination_profile),
+                source_in=reframe_frames(source_in, source_profile, destination_profile),
                 duration=max(1, timeline_end - timeline_start),
                 speed_numerator=clip.speed_numerator,
                 speed_denominator=clip.speed_denominator,
@@ -128,7 +133,10 @@ class SequenceService:
                     duration=min(
                         left.duration,
                         right.duration,
-                        max(1, self._convert(item.duration, source_profile, destination_profile)),
+                        max(
+                            1,
+                            reframe_frames(item.duration, source_profile, destination_profile),
+                        ),
                     ),
                     parameters=item.parameters,
                 )
@@ -137,7 +145,7 @@ class SequenceService:
         destination.markers = [
             TimelineMarker(
                 sequence_id=destination_sequence.id,
-                frame=self._convert(
+                frame=reframe_frames(
                     item.frame - selected.start_frame,
                     source_profile,
                     destination_profile,
@@ -149,12 +157,12 @@ class SequenceService:
             if selected.start_frame <= item.frame < selected.end_frame
         ]
         destination.ranges = []
-        for item in source.ranges:
-            start = max(item.start_frame, selected.start_frame)
-            end = min(item.end_frame, selected.end_frame)
-            if end <= start or item.id == selected.id:
+        for range_item in source.ranges:
+            start = max(range_item.start_frame, selected.start_frame)
+            end = min(range_item.end_frame, selected.end_frame)
+            if end <= start or range_item.id == selected.id:
                 continue
-            converted_start = self._convert(
+            converted_start = reframe_frames(
                 start - selected.start_frame,
                 source_profile,
                 destination_profile,
@@ -165,14 +173,14 @@ class SequenceService:
                     start_frame=converted_start,
                     end_frame=max(
                         converted_start + 1,
-                        self._convert(
+                        reframe_frames(
                             end - selected.start_frame,
                             source_profile,
                             destination_profile,
                         ),
                     ),
-                    name=item.name,
-                    color=item.color,
+                    name=range_item.name,
+                    color=range_item.color,
                 )
             )
         self.repository.save_timeline(destination)
@@ -187,7 +195,7 @@ class SequenceService:
                 end = min(placement.end_frame, selected.end_frame)
                 if end <= start:
                     continue
-                converted_start = self._convert(
+                converted_start = reframe_frames(
                     start - selected.start_frame,
                     source_profile,
                     destination_profile,
@@ -200,7 +208,7 @@ class SequenceService:
                         start_frame=converted_start,
                         end_frame=max(
                             converted_start + 1,
-                            self._convert(
+                            reframe_frames(
                                 end - selected.start_frame,
                                 source_profile,
                                 destination_profile,
@@ -211,15 +219,3 @@ class SequenceService:
                 )
         self.repository.add_subtitle_placements(placements)
         return self.repository.get_sequence(destination_sequence.id)
-
-    @staticmethod
-    def _convert(value: int, source_profile, destination_profile) -> int:
-        return seconds_to_frames(
-            frames_to_seconds(
-                value,
-                source_profile.fps_numerator,
-                source_profile.fps_denominator,
-            ),
-            destination_profile.fps_numerator,
-            destination_profile.fps_denominator,
-        )

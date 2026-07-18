@@ -15,12 +15,16 @@ class TransitionCapability:
 TRANSITION_CAPABILITIES = {
     kind: TransitionCapability(
         kind=kind,
-        minimum_bit_depth=10 if kind in {
+        minimum_bit_depth=10
+        if kind
+        in {
             TransitionKind.FADE,
             TransitionKind.DISSOLVE,
             TransitionKind.FADE_BLACK,
-        } else 8,
-        hdr10_verified=kind in {
+        }
+        else 8,
+        hdr10_verified=kind
+        in {
             TransitionKind.FADE,
             TransitionKind.DISSOLVE,
             TransitionKind.FADE_BLACK,

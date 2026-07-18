@@ -6,9 +6,23 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from mediaflow.application.ports import TimelineCompilationDocuments
+from mediaflow.domain.audio import (
+    AudioBus,
+    AudioEffect,
+)
 from mediaflow.domain.enums import AssetKind, AudioEffectKind, ColorMode, TrackKind, TransitionKind
-from mediaflow.domain.models import Asset, AudioBus, AudioEffect, Clip, TimelineState, Track, Transition
-from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.domain.exports import (
+    SubtitleStyle,
+    WatermarkOverlay,
+)
+from mediaflow.domain.project import Asset
+from mediaflow.domain.timeline import (
+    Clip,
+    TimelineState,
+    Track,
+    Transition,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +46,7 @@ class TimelineCompiler:
         TransitionKind.ZOOM: "affine",
     }
 
-    def __init__(self, repository: ProjectRepository):
+    def __init__(self, repository: TimelineCompilationDocuments):
         self.repository = repository
 
     def compile(
@@ -41,11 +55,13 @@ class TimelineCompiler:
         *,
         use_proxies: bool = False,
         subtitle_track_id: str | None = None,
+        subtitle_style: SubtitleStyle | None = None,
+        watermark: WatermarkOverlay | None = None,
         native_preview: bool = False,
         prefer_sdr_preview_proxy: bool = False,
     ) -> MltDocument:
         profile = state.sequence.profile
-        duration = max((clip.timeline_end for clip in state.clips), default=1)
+        duration = max(1, state.duration_frames)
         root = ET.Element(
             "mlt",
             {
@@ -110,6 +126,15 @@ class TimelineCompiler:
         for track in ordered_tracks:
             self._append_playlist(root, track, state, assets)
 
+        watermark_track = self._append_watermark_playlist(
+            root,
+            state,
+            watermark,
+            duration,
+        )
+        if watermark_track is not None:
+            source_paths.append(watermark_track[2])
+
         audio_root_id = self._append_audio_graph(
             root,
             state,
@@ -133,11 +158,31 @@ class TimelineCompiler:
                 "track",
                 {"producer": self._playlist_id(track.id), "hide": "audio"},
             )
+        if watermark_track is not None:
+            ET.SubElement(
+                tractor,
+                "track",
+                {"producer": watermark_track[0], "hide": "audio"},
+            )
         if audio_root_id:
             ET.SubElement(tractor, "track", {"producer": audio_root_id, "hide": "video"})
         self._append_layer_compositors(tractor, video_tracks, duration, native_preview=native_preview)
+        if watermark_track is not None:
+            self._append_watermark_compositor(
+                tractor,
+                b_track=len(video_tracks),
+                duration=duration,
+                geometry=watermark_track[1],
+                native_preview=native_preview,
+            )
         if not native_preview:
-            self._append_subtitle_filters(tractor, state, ordered_tracks, subtitle_track_id)
+            self._append_subtitle_filters(
+                tractor,
+                state,
+                ordered_tracks,
+                subtitle_track_id,
+                subtitle_style,
+            )
 
         ET.indent(root, space="  ")
         xml = ET.tostring(root, encoding="unicode", xml_declaration=True)
@@ -150,6 +195,8 @@ class TimelineCompiler:
         *,
         use_proxies: bool = False,
         subtitle_track_id: str | None = None,
+        subtitle_style: SubtitleStyle | None = None,
+        watermark: WatermarkOverlay | None = None,
         native_preview: bool = False,
         prefer_sdr_preview_proxy: bool = False,
     ) -> MltDocument:
@@ -157,6 +204,8 @@ class TimelineCompiler:
             state,
             use_proxies=use_proxies,
             subtitle_track_id=subtitle_track_id,
+            subtitle_style=subtitle_style,
+            watermark=watermark,
             native_preview=native_preview,
             prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
         )
@@ -493,12 +542,112 @@ class TimelineCompiler:
             self._property(transition, "mlt_service", "composite" if native_preview else "qtblend")
             self._property(transition, "always_active", "1")
 
+    def _append_watermark_playlist(
+        self,
+        root: ET.Element,
+        state: TimelineState,
+        watermark: WatermarkOverlay | None,
+        duration: int,
+    ) -> tuple[str, str, Path] | None:
+        if watermark is None or not watermark.enabled or not watermark.asset_id:
+            return None
+        asset = self.repository.get_asset(watermark.asset_id)
+        if asset.kind != AssetKind.IMAGE:
+            raise ValueError("Watermark asset must be an image")
+        source = self.repository.resolve_asset_path(asset)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        producer_id = f"watermark_producer_{asset.id}"
+        playlist_id = f"watermark_playlist_{asset.id}"
+        producer = ET.SubElement(root, "producer", {"id": producer_id})
+        self._property(producer, "mlt_service", "qimage")
+        self._property(producer, "resource", str(source))
+        self._property(producer, "length", str(duration))
+        self._property(producer, "ttl", "1")
+        self._property(producer, "eof", "pause")
+        self._property(producer, "set.test_audio", "1")
+        self._append_color_pipeline(producer, asset, state.sequence.profile.color_mode)
+        playlist = ET.SubElement(root, "playlist", {"id": playlist_id})
+        ET.SubElement(
+            playlist,
+            "entry",
+            {"producer": producer_id, "in": "0", "out": str(max(0, duration - 1))},
+        )
+        return playlist_id, self._watermark_geometry(state, asset, watermark), source
+
+    def _append_watermark_compositor(
+        self,
+        tractor: ET.Element,
+        *,
+        b_track: int,
+        duration: int,
+        geometry: str,
+        native_preview: bool,
+    ) -> None:
+        transition = ET.SubElement(
+            tractor,
+            "transition",
+            {"id": "watermark_composite", "in": "0", "out": str(max(0, duration - 1))},
+        )
+        self._property(transition, "a_track", "0")
+        self._property(transition, "b_track", str(b_track))
+        self._property(transition, "mlt_service", "affine" if native_preview else "qtblend")
+        self._property(transition, "always_active", "1")
+        self._property(transition, "transition.rect" if native_preview else "rect", geometry)
+
+    @staticmethod
+    def _watermark_geometry(
+        state: TimelineState,
+        asset: Asset,
+        watermark: WatermarkOverlay,
+    ) -> str:
+        profile = state.sequence.profile
+        width_ratio = watermark.width_ratio
+        source_width = asset.metadata.width or profile.width
+        source_height = asset.metadata.height or profile.height
+        height_ratio = min(
+            1.0,
+            profile.width * width_ratio * source_height / (source_width * profile.height),
+        )
+        margin_x = 0.045 if profile.height > profile.width else 0.03
+        margin_y = 0.035 if profile.height > profile.width else 0.05
+        if watermark.position_x is not None and watermark.position_y is not None:
+            center_x = watermark.position_x
+            center_y = watermark.position_y
+        else:
+            position = watermark.position
+            vertical = position[0] if len(position) == 2 and position[0] in {"T", "B"} else "C"
+            horizontal = (
+                position[1]
+                if len(position) == 2 and position[1] in {"L", "R"}
+                else position[0]
+                if len(position) == 2 and position[0] in {"L", "R"}
+                else "C"
+            )
+            center_x = {
+                "L": margin_x + width_ratio / 2,
+                "C": 0.5,
+                "R": 1.0 - margin_x - width_ratio / 2,
+            }[horizontal]
+            center_y = {
+                "T": margin_y + height_ratio / 2,
+                "C": 0.5,
+                "B": 1.0 - margin_y - height_ratio / 2,
+            }[vertical]
+        x = max(0.0, min(1.0 - width_ratio, center_x - width_ratio / 2))
+        y = max(0.0, min(1.0 - height_ratio, center_y - height_ratio / 2))
+        return (
+            f"{x * 100:g}%/{y * 100:g}%:"
+            f"{width_ratio * 100:g}%x{height_ratio * 100:g}%:{watermark.opacity * 100:g}%"
+        )
+
     def _append_subtitle_filters(
         self,
         tractor: ET.Element,
         state: TimelineState,
         tracks: list[Track],
         requested_track_id: str | None,
+        style: SubtitleStyle | None,
     ) -> None:
         subtitle_tracks = [track for track in tracks if track.kind == TrackKind.SUBTITLE and track.enabled]
         if requested_track_id:
@@ -516,7 +665,25 @@ class TimelineCompiler:
             for document in self.repository.list_subtitle_documents()
             for segment in self.repository.list_subtitle_segments(document.id)
         }
-        font_size = max(24, round(state.sequence.profile.height * 0.045))
+        resolved_style = style or SubtitleStyle()
+        scale = state.sequence.profile.height / 540.0
+        font_size = max(8, round(resolved_style.font_size * scale))
+        outline_size = max(0, round(resolved_style.outline_size * scale))
+        shadow_size = max(0, round(resolved_style.shadow_size * scale))
+        geometry_width = 0.9
+        geometry_height = 0.25
+        geometry_x = max(
+            0.0,
+            min(1.0 - geometry_width, resolved_style.position_x - geometry_width / 2),
+        )
+        geometry_y = max(
+            0.0,
+            min(1.0 - geometry_height, resolved_style.position_y - geometry_height / 2),
+        )
+        geometry = (
+            f"{geometry_x * 100:g}%/{geometry_y * 100:g}%:"
+            f"{geometry_width * 100:g}%x{geometry_height * 100:g}%:100"
+        )
         for placement in placements:
             segment = segments.get(placement.segment_id)
             if segment is None:
@@ -533,16 +700,39 @@ class TimelineCompiler:
             )
             self._property(subtitle, "mlt_service", "dynamictext")
             self._property(subtitle, "argument", text)
-            self._property(subtitle, "geometry", "5%/76%:90%x19%:100")
-            self._property(subtitle, "family", "Microsoft YaHei UI")
+            self._property(subtitle, "geometry", geometry)
+            self._property(subtitle, "family", resolved_style.font_family)
             self._property(subtitle, "size", str(font_size))
-            self._property(subtitle, "weight", "600")
-            self._property(subtitle, "fgcolour", "0xffffffff")
-            self._property(subtitle, "olcolour", "0x000000ff")
-            self._property(subtitle, "outline", str(max(2, font_size // 14)))
-            self._property(subtitle, "bgcolour", "0x00000000")
-            self._property(subtitle, "halign", "centre")
-            self._property(subtitle, "valign", "middle")
+            self._property(subtitle, "weight", "700" if resolved_style.bold else "400")
+            self._property(subtitle, "style", "italic" if resolved_style.italic else "normal")
+            self._property(subtitle, "fgcolour", self._mlt_color(resolved_style.font_color))
+            self._property(subtitle, "olcolour", self._mlt_color(resolved_style.outline_color))
+            self._property(subtitle, "outline", str(outline_size))
+            self._property(subtitle, "shadow", str(shadow_size))
+            self._property(subtitle, "pad", str(round(resolved_style.background_padding * scale)))
+            self._property(
+                subtitle,
+                "bgcolour",
+                self._mlt_color(
+                    resolved_style.background_color,
+                    resolved_style.background_opacity if resolved_style.background_enabled else 0.0,
+                ),
+            )
+            self._property(
+                subtitle,
+                "halign",
+                {"left": "left", "center": "centre", "right": "right"}[resolved_style.alignment],
+            )
+            self._property(
+                subtitle,
+                "valign",
+                {"top": "top", "center": "middle", "bottom": "bottom"}[resolved_style.multiline_alignment],
+            )
+
+    @staticmethod
+    def _mlt_color(value: str, opacity: float = 1.0) -> str:
+        alpha = max(0, min(255, round(opacity * 255)))
+        return f"0x{value[1:]}{alpha:02x}".lower()
 
     def _append_audio_graph(
         self,

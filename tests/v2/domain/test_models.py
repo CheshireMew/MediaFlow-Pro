@@ -3,9 +3,11 @@ from fractions import Fraction
 import pytest
 from pydantic import ValidationError
 
-from mediaflow.domain.enums import ColorMode
-from mediaflow.domain.models import Clip, ProjectProfile
+from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
+from mediaflow.domain.enums import ColorMode, SequenceKind
+from mediaflow.domain.project import ProjectProfile, Sequence
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
+from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
 
 
 def test_frame_timebase_preserves_ntsc_rate() -> None:
@@ -44,3 +46,42 @@ def test_reverse_clip_has_positive_timeline_duration() -> None:
         speed_numerator=-1,
     )
     assert clip.timeline_end == 42
+
+
+def test_timeline_media_duration_is_not_extended_by_annotations() -> None:
+    state = TimelineState(
+        sequence=Sequence(
+            project_id="project",
+            name="Sequence",
+            kind=SequenceKind.MAIN,
+        ),
+        clips=[
+            Clip(
+                track_id="video",
+                asset_id="asset",
+                timeline_start=12,
+                source_in=0,
+                duration=30,
+            )
+        ],
+        markers=[TimelineMarker(sequence_id="sequence", frame=500)],
+        ranges=[TimelineRange(sequence_id="sequence", start_frame=400, end_frame=600)],
+    )
+
+    assert state.duration_frames == 42
+
+
+def test_download_request_persists_one_absolute_output_directory(tmp_path) -> None:
+    entry = DownloadEntry(
+        index=1,
+        title="Video",
+        page_url="https://example.com/video",
+        download_url="https://example.com/video",
+    )
+    request = DownloadRequest(entry=entry, output_directory=str(tmp_path / "Selected"))
+
+    assert request.output_directory == str((tmp_path / "Selected").resolve())
+    with pytest.raises(ValidationError, match="cannot be empty"):
+        DownloadRequest(entry=entry, output_directory="")
+    with pytest.raises(ValidationError, match="must be absolute"):
+        DownloadRequest(entry=entry, output_directory="relative/folder")

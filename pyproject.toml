@@ -14,11 +14,13 @@ dependencies = [
     "faster-whisper==1.2.1",
     "openai==2.45.0",
     "json-repair==0.61.4",
+    "playwright==1.61.0",
 ]
 readme = "README.md"
 
 [project.scripts]
 mediaflow-pro = "mediaflow.desktop.app:main"
+mediaflow-cli = "mediaflow.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -26,6 +28,7 @@ dev = [
     "pytest-asyncio==1.4.0",
     "pytest-qt==4.5.0",
     "ruff==0.14.14",
+    "mypy==2.3.0",
     "psutil==7.2.2",
 ]
 build = [
@@ -60,3 +63,10 @@ line-length = 110
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+files = ["mediaflow/application"]
+platform = "win32"
+ignore_missing_imports = true
+check_untyped_defs = true
+disable_error_code = ["prop-decorator"]
