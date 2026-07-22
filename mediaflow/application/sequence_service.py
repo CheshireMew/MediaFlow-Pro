@@ -8,7 +8,14 @@ from mediaflow.domain.timebase import (
     reframe_frames,
     source_frames_for_timeline_frames,
 )
-from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, Track, Transition
+from mediaflow.domain.timeline import (
+    Clip,
+    TimelineMarker,
+    TimelineRange,
+    TimelineState,
+    Track,
+    Transition,
+)
 
 
 class SequenceService:
@@ -29,6 +36,47 @@ class SequenceService:
                 name=name,
             )
 
+    def create_short_from_bounds(
+        self,
+        source_sequence_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        name: str | None = None,
+    ):
+        with self.repository.transaction():
+            source, selected = self._bounded_selection(
+                source_sequence_id,
+                start_frame,
+                end_frame,
+                name=name,
+            )
+            return self._copy_selection(source, selected, name=name)
+
+    def sync_short_from_bounds(
+        self,
+        source_sequence_id: str,
+        short_sequence_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        name: str | None = None,
+    ):
+        with self.repository.transaction():
+            source, selected = self._bounded_selection(
+                source_sequence_id,
+                start_frame,
+                end_frame,
+                name=name,
+            )
+            destination_sequence = self.repository.get_sequence(short_sequence_id)
+            return self._copy_selection(
+                source,
+                selected,
+                name=name,
+                destination_sequence=destination_sequence,
+            )
+
     def _create_short_from_range(
         self,
         source_sequence_id: str,
@@ -41,12 +89,47 @@ class SequenceService:
             selected = next(item for item in source.ranges if item.id == range_id)
         except StopIteration as error:
             raise KeyError(range_id) from error
-        destination_sequence = self.repository.create_short_sequence(name or selected.name or "短视频")
+        return self._copy_selection(source, selected, name=name)
+
+    def _bounded_selection(
+        self,
+        source_sequence_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        name: str | None,
+    ) -> tuple[TimelineState, TimelineRange]:
+        source = self.repository.load_timeline(source_sequence_id)
+        start = max(0, int(start_frame))
+        end = min(source.duration_frames, int(end_frame))
+        if end <= start:
+            raise ValueError("短视频区间必须落在源时间轴内")
+        return source, TimelineRange(
+            sequence_id=source_sequence_id,
+            start_frame=start,
+            end_frame=end,
+            name=(name or "短视频").strip() or "短视频",
+        )
+
+    def _copy_selection(
+        self,
+        source: TimelineState,
+        selected: TimelineRange,
+        *,
+        name: str | None,
+        destination_sequence=None,
+    ):
+        destination_sequence = destination_sequence or self.repository.create_short_sequence(
+            name or selected.name or "短视频"
+        )
         destination = self.repository.load_timeline(destination_sequence.id)
         source_profile = source.sequence.profile
         destination_profile = destination.sequence.profile
 
-        source_buses = {item.id: item for item in self.repository.list_audio_buses(source_sequence_id)}
+        source_buses = {
+            item.id: item
+            for item in self.repository.list_audio_buses(source.sequence.id)
+        }
         destination_buses = self.repository.list_audio_buses(destination_sequence.id)
         destination_bus_by_name = {item.name: item.id for item in destination_buses}
         master_bus_id = next(item.id for item in destination_buses if item.parent_bus_id is None)
@@ -115,6 +198,14 @@ class SequenceService:
             )
             destination.clips.append(copied)
             clip_map[clip.id] = copied.id
+
+        destination.web_states = {
+            destination_clip_id: source.web_states[source_clip_id].model_copy(
+                update={"clip_id": destination_clip_id, "revision": 0}
+            )
+            for source_clip_id, destination_clip_id in clip_map.items()
+            if source_clip_id in source.web_states
+        }
 
         destination.transitions = []
         for item in source.transitions:

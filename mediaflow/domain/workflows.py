@@ -16,7 +16,6 @@ class WorkflowPayload(DomainModel):
     requests: list[DownloadRequest] = Field(default_factory=list)
     task_ids: list[str] = Field(default_factory=list)
     target_language: str = ""
-    document_ids_before_transcribe: list[str] = Field(default_factory=list)
     source_document_ids: list[str] = Field(default_factory=list)
     document_ids_before_translate: list[str] = Field(default_factory=list)
     translated_document_ids: list[str] = Field(default_factory=list)
@@ -30,7 +29,6 @@ class WorkflowPayloadPatch(DomainModel):
     requests: list[DownloadRequest] | None = None
     task_ids: list[str] | None = None
     target_language: str | None = None
-    document_ids_before_transcribe: list[str] | None = None
     source_document_ids: list[str] | None = None
     document_ids_before_translate: list[str] | None = None
     translated_document_ids: list[str] | None = None

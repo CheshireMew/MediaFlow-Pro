@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from mediaflow.domain.enums import (
     AssetKind,
-)
-from mediaflow.domain.task_commands import (
-    GenerateProxyCommand,
-    GenerateWaveformCommand,
 )
 
 from .controller_facet import ControllerFacet
@@ -18,7 +14,6 @@ class MediaController(ControllerFacet):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -36,6 +31,14 @@ class MediaController(ControllerFacet):
     @Property(QObject, constant=True)
     def assetsModel(self) -> QObject:
         return self._asset_model
+
+    @Property(QObject, constant=True)
+    def filteredAssetsModel(self) -> QObject:
+        return self._filtered_asset_model
+
+    @Slot(str)
+    def setAssetSearchText(self, value: str) -> None:
+        self._filtered_asset_model.setSearchText(value)
 
     @Property("QVariantList", notify=projectStateChanged)
     def watermarkAssetOptions(self) -> list[dict]:
@@ -64,6 +67,15 @@ class MediaController(ControllerFacet):
         row = self._asset_model.findRow("assetId", self.selectedAssetId)
         return self._asset_model.get(row)
 
+    @Slot(str, result=QUrl)
+    def assetUrl(self, asset_id: str) -> QUrl:
+        if not asset_id or not self._documents:
+            return QUrl()
+        try:
+            return QUrl.fromLocalFile(str(self._documents.resolve_asset_path(asset_id)))
+        except (KeyError, OSError, ValueError):
+            return QUrl()
+
     @Slot(str)
     def importMedia(self, path_url: str) -> None:
         try:
@@ -75,6 +87,19 @@ class MediaController(ControllerFacet):
     def importFiles(self, path_urls: list[object]) -> None:
         try:
             self._import_media_paths(path_urls)
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str)
+    def importWebPackage(self, directory_url: str) -> None:
+        try:
+            self._require_writable()
+            source = self._local_path(directory_url)
+            asset = self._project.web.import_package(source)
+            self._selected_asset_ids = [asset.id]
+            self._projector.refresh_all()
+            self.selectionChanged.emit()
+            self._set_status(f"已导入可编辑网页素材 {asset.name}")
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
@@ -98,8 +123,6 @@ class MediaController(ControllerFacet):
                 sequence_id=self._active_sequence_id,
                 purpose="watermark",
             )
-            self._task_drawer_open = True
-            self.taskDrawerChanged.emit()
             self._projector.refresh_tasks()
             self._set_status(f"正在导入水印 {source.name}")
         except Exception as error:
@@ -157,7 +180,7 @@ class MediaController(ControllerFacet):
             self._selected_asset_ids = [asset_id]
             self._projector.refresh_all()
             self.selectionChanged.emit()
-            self._set_status("已按用户确认替换素材内容，旧代理和波形已失效")
+            self._set_status("已替换素材内容，预览缓存和音频波形将重新生成")
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
@@ -192,34 +215,6 @@ class MediaController(ControllerFacet):
     @Slot(str, result=bool)
     def isAssetSelected(self, asset_id: str) -> bool:
         return asset_id in self._selected_asset_ids
-
-    @Slot(str)
-    def addAssetToTimeline(self, asset_id: str) -> None:
-        try:
-            self._require_writable()
-            self._queue_assets_for_timeline([asset_id])
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
-
-    @Slot()
-    def addSelectedAssetsToTimeline(self) -> None:
-        try:
-            self._require_writable()
-            asset_ids = list(self._selected_asset_ids)
-            if not asset_ids:
-                return
-            self._queue_assets_for_timeline(asset_ids)
-        except Exception as error:
-            self._pending_asset_batch_ids = []
-            self.errorOccurred.emit(str(error))
-
-    @Slot(str)
-    def generateProxy(self, asset_id: str) -> None:
-        self._start_task(GenerateProxyCommand(asset_id=asset_id), [asset_id])
-
-    @Slot(str)
-    def generateWaveform(self, asset_id: str) -> None:
-        self._start_task(GenerateWaveformCommand(asset_id=asset_id), [asset_id])
 
     @Slot(str, int, int, float, int, int, int, result="QVariantList")
     def waveformPeaks(

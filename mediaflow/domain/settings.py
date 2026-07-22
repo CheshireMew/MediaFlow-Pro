@@ -138,10 +138,10 @@ class LlmProviderSettings(DomainModel):
 class UiSettings(DomainModel):
     language: Literal["zh_CN", "en", "ja"] = "zh_CN"
     theme: Literal["dark", "high_contrast"] = "dark"
+    asset_view_mode: Literal["list", "thumbnails", "large_thumbnails"] = "list"
     window_width: int = 1600
     window_height: int = 980
-    left_panel_width: int = 288
-    inspector_width: int = 320
+    left_panel_width: int = 360
     timeline_height: int = 330
     default_project_directory: str = Field(default_factory=default_project_root)
     default_import_directory: str | None = None
@@ -151,7 +151,6 @@ class UiSettings(DomainModel):
         "window_width",
         "window_height",
         "left_panel_width",
-        "inspector_width",
         "timeline_height",
     )
     @classmethod
@@ -162,7 +161,7 @@ class UiSettings(DomainModel):
 
 
 class GlobalSettings(DomainModel):
-    schema_version: int = 12
+    schema_version: int = 13
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     asr: AsrSettings = Field(default_factory=AsrSettings)

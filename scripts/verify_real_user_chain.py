@@ -20,6 +20,9 @@ from mediaflow.domain.enums import TaskStatus, TrackKind, WorkflowStage, Workflo
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
 TEST_ROOT = Path("D:/Tools/MediaFlow/test-runs")
+WEB_STARTER = Path(
+    "E:/Work/BaiduSyncdisk/Code/Cheshire-skill/visual-multimedia/assets/web-media-starter"
+)
 
 
 class QuietFileHandler(SimpleHTTPRequestHandler):
@@ -296,7 +299,14 @@ def main() -> None:
             timeout=180,
         )
         video_asset_id = controller.media.selectedAssetId
-        controller.media.addAssetToTimeline(video_asset_id)
+        main_video_track = next(
+            track
+            for track in controller.session._editor.state.tracks
+            if track.kind == TrackKind.VIDEO
+        )
+        controller.timeline.dropAssets(
+            [video_asset_id], main_video_track.id, 0, 3.0, 0, True, False
+        )
         main_sequence_id = controller.workspace.activeSequenceId
 
         workflow_id = controller.workspace.workflowRunId
@@ -353,12 +363,25 @@ def main() -> None:
         music_asset_id = import_without_workflow(controller, music)
 
         controller.workspace.selectSequence(main_sequence_id)
-        controller.media.addAssetToTimeline(image_asset_id)
         video_clip = next(
             clip for clip in controller.session._editor.state.clips if clip.asset_id == video_asset_id
         )
+        controller.timeline.dropAssets(
+            [image_asset_id], video_clip.track_id, video_clip.timeline_end, 3.0, 0, True, False
+        )
         controller.timeline.addTransitionAfter(video_clip.id, "dissolve", 15)
-        controller.media.addAssetToTimeline(image_asset_id)
+        first_image_clip = next(
+            clip for clip in controller.session._editor.state.clips if clip.asset_id == image_asset_id
+        )
+        controller.timeline.dropAssets(
+            [image_asset_id],
+            first_image_clip.track_id,
+            first_image_clip.timeline_end,
+            3.0,
+            0,
+            True,
+            False,
+        )
         overlay_clip = controller.timeline.selectedClipId
         controller.timeline.addTrack("video")
         overlay_track = [
@@ -366,7 +389,33 @@ def main() -> None:
         ][-1]
         controller.timeline.moveClip(overlay_clip, 0, overlay_track.id)
         controller.timeline.setClipTransform(overlay_clip, 0.68, 0.08, 0.28, 0.28, 0, 0, 0, 0, 0, 0.9)
-        controller.media.addAssetToTimeline(music_asset_id)
+        controller.media.importWebPackage(QUrl.fromLocalFile(str(WEB_STARTER)).toString())
+        web_asset_id = controller.media.selectedAssetId
+        controller.timeline.addTrack("video")
+        web_track = [
+            track for track in controller.session._editor.state.tracks if track.kind == TrackKind.VIDEO
+        ][-1]
+        controller.timeline.dropAssets(
+            [web_asset_id], web_track.id, 0, 3.0, 0, True, False
+        )
+        web_clip_id = controller.timeline.selectedClipId
+        controller.web.selectLayer("title")
+        controller.web.updateLayer("title", {"content": "Real editable web chain"})
+        controller.web.setKeyframeAtFrame("opacity", 0.4, "ease_in_out", 0)
+        controller.web.setKeyframeAtFrame("opacity", 1.0, "ease_out", 25)
+        controller.web.updateThemeValue("accent", "#e6007a")
+        controller.web.updateDataValue("left_value", '"Desktop and CLI share state"')
+        persisted_web = repository.get_web_clip_state(web_clip_id)
+        if persisted_web.layers["title"].content != "Real editable web chain":
+            raise RuntimeError("Desktop web edit did not reach project state")
+        main_audio_track = next(
+            track
+            for track in controller.session._editor.state.tracks
+            if track.kind == TrackKind.AUDIO
+        )
+        controller.timeline.dropAssets(
+            [music_asset_id], main_audio_track.id, 0, 3.0, 0, True, False
+        )
         controller.timeline.setClipAudio(controller.timeline.selectedClipId, -8.0, 0.0, 12, 24)
         master = next(
             bus for bus in repository.list_audio_buses(main_sequence_id) if bus.parent_bus_id is None
@@ -394,7 +443,14 @@ def main() -> None:
         short_id = short_ids[0]
         controller.workspace.selectSequence(short_id)
         controller.subtitles.placeSubtitleDocument(translated_id)
-        controller.media.addAssetToTimeline(music_asset_id)
+        short_audio_track = next(
+            track
+            for track in controller.session._editor.state.tracks
+            if track.kind == TrackKind.AUDIO
+        )
+        controller.timeline.dropAssets(
+            [music_asset_id], short_audio_track.id, 0, 3.0, 0, True, False
+        )
         short_video = next(
             clip for clip in controller.session._editor.state.clips if clip.asset_id == video_asset_id
         )
@@ -425,6 +481,9 @@ def main() -> None:
             raise RuntimeError("Subtitle documents were not restored after reopening")
         if len(controller.session._tasks.list()) != task_count:
             raise RuntimeError("Task history changed after reopening")
+        reopened_web = reopened.get_web_clip_state(web_clip_id)
+        if reopened_web.layers["title"].content != "Real editable web chain":
+            raise RuntimeError("Editable web state was not restored after reopening")
 
         report = {
             "project": str(project_root),
@@ -440,6 +499,8 @@ def main() -> None:
             "short_export": str(short_output),
             "main_export_size": main_output.stat().st_size,
             "short_export_size": short_output.stat().st_size,
+            "web_clip_id": web_clip_id,
+            "web_state_revision": reopened_web.revision,
             "errors": errors,
         }
         report_path = project_root / "generated" / "real-user-chain-report.json"

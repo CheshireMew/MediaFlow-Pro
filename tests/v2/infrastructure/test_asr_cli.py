@@ -6,12 +6,10 @@ import zipfile
 from pathlib import Path
 
 from mediaflow.application.asset_service import AssetService
-from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
-from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.composition import EditorProject
-from mediaflow.domain.enums import TaskStatus
+from mediaflow.domain.enums import TaskStatus, TrackKind
 from mediaflow.domain.settings import AsrSettings, GlobalSettings
-from mediaflow.domain.task_commands import TranscribeAssetCommand, TranscribeRegionCommand
+from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure.asr_engine import (
     FasterWhisperCliEngine,
     LongAudioAsrEngine,
@@ -36,7 +34,7 @@ def _runtime_paths(tmp_path: Path) -> RuntimePaths:
     )
 
 
-def _generate_audio(path: Path, paths: RuntimePaths) -> None:
+def _generate_audio(path: Path, paths: RuntimePaths, *, duration_seconds: int = 1) -> None:
     result = subprocess.run(
         [
             str(paths.ffmpeg),
@@ -47,7 +45,7 @@ def _generate_audio(path: Path, paths: RuntimePaths) -> None:
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=440:duration=1",
+            f"sine=frequency=440:duration={duration_seconds}",
             str(path),
         ],
         capture_output=True,
@@ -89,22 +87,51 @@ print('100%', flush=True)
     assert isinstance(engine.engine, FasterWhisperCliEngine)
     progress: list[tuple[float, str]] = []
 
-    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = AssetService(repository, MediaProbe(paths)).import_external(source)
-        publication = SubtitlePublicationService(repository)
-        document = SubtitleAcquisitionService(repository, publication).transcribe_asset(
-            asset.id,
-            engine,
-            progress=lambda value, code: progress.append((value, code)),
+    repository = ProjectRepository.create(tmp_path / "Project", "Project")
+    asset = AssetService(repository, MediaProbe(paths)).import_external(source)
+    project = EditorProject(
+        repository,
+        settings=GlobalSettings(asr=settings),
+        paths=paths,
+    )
+    try:
+        sequence_id = repository.get_project().main_sequence_id
+        editor = project.timeline(sequence_id)
+        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        editor.add_clip(
+            track_id=audio_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
         )
+        project.tasks.events.subscribe(
+            lambda event: progress.append(
+                (float(event.payload["progress"]), str(event.payload["message_code"]))
+            ),
+            include_snapshot=False,
+        )
+        task = project.start_task(
+            TranscribeSequenceCommand(sequence_id=sequence_id),
+            [asset.id],
+            sequence_id=sequence_id,
+        )
+        completed = project.tasks.wait(task.id, timeout=10)
+        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+        assert completed.status == TaskStatus.COMPLETED
+        assert len(documents) == 1
+        document = documents[0]
         segments = repository.list_subtitle_segments(document.id)
         generated = list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
         assert [segment.text for segment in segments] == ["CLI producer output"]
         assert (segments[0].start_frame, segments[0].end_frame) == (3, 27)
         assert generated
         assert "CLI producer output" in generated[0].read_text(encoding="utf-8-sig")
-        assert any(value >= 95 and code == "transcribing" for value, code in progress)
-        assert progress[-1] == (100.0, "transcription_completed")
+        assert any(code == "transcribing" for _, code in progress)
+        assert (100.0, "transcription_completed") in progress
+        assert progress[-1] == (100.0, "completed")
+    finally:
+        project.close()
     prewarm_progress: list[tuple[float, str]] = []
     warmed_cli = RuntimeToolService(settings, paths).prewarm_cli(
         progress=lambda value, code: prewarm_progress.append((value, code))
@@ -174,7 +201,7 @@ def test_transcription_task_consumes_engine_and_smart_split_settings(tmp_path: P
     paths = _runtime_paths(tmp_path)
     source = tmp_path / "speech.wav"
     fake_cli = tmp_path / "task_faster_whisper.py"
-    _generate_audio(source, paths)
+    _generate_audio(source, paths, duration_seconds=4)
     fake_cli.write_text(
         """from pathlib import Path
 import sys
@@ -203,22 +230,55 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
+        sequence_id = repository.get_project().main_sequence_id
+        editor = project.timeline(sequence_id)
+        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        editor.add_clip(
+            track_id=audio_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
+        )
         task = project.start_task(
-            TranscribeAssetCommand(asset_id=asset.id),
+            TranscribeSequenceCommand(sequence_id=sequence_id),
             [asset.id],
+            sequence_id=sequence_id,
         )
         completed = project.tasks.wait(task.id, timeout=10)
-        documents = repository.list_subtitle_documents(asset.id)
+        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
         assert completed.status == TaskStatus.COMPLETED
         assert len(documents) == 1
         assert len(repository.list_subtitle_segments(documents[0].id)) == 2
+        subtitle_track = next(
+            track for track in repository.load_timeline(sequence_id).tracks
+            if track.kind == TrackKind.SUBTITLE
+        )
+        assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
+        rendered_audio = repository.project_dir / "generated" / "audio" / (
+            f"{sequence_id}-transcription.wav"
+        )
+        assert rendered_audio.is_file() and rendered_audio.stat().st_size > 1000
         assert completed.artifacts
         assert (repository.project_dir / completed.artifacts[0]).is_file()
+
+        repeated = project.start_task(
+            TranscribeSequenceCommand(sequence_id=sequence_id),
+            [asset.id],
+            sequence_id=sequence_id,
+        )
+        repeated_completed = project.tasks.wait(repeated.id, timeout=10)
+        repeated_documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+
+        assert repeated_completed.status == TaskStatus.COMPLETED
+        assert [document.id for document in repeated_documents] == [documents[0].id]
+        assert len(repository.list_subtitle_segments(documents[0].id)) == 2
+        assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
     finally:
         project.close()
 
 
-def test_region_transcription_task_extracts_audio_and_offsets_persisted_subtitles(
+def test_sequence_transcription_honors_in_out_and_offsets_persisted_subtitles(
     tmp_path: Path,
 ) -> None:
     paths = _runtime_paths(tmp_path)
@@ -254,27 +314,35 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
+        sequence_id = repository.get_project().main_sequence_id
+        editor = project.timeline(sequence_id)
+        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        editor.add_clip(
+            track_id=audio_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
+        )
+        editor.set_sequence_in_out(6, 24)
         task = project.start_task(
-            TranscribeRegionCommand(
-                asset_id=asset.id,
-                start_frame=6,
-                end_frame=24,
-                document_id="",
-                translate_after=False,
-            ),
+            TranscribeSequenceCommand(sequence_id=sequence_id),
             [asset.id],
+            sequence_id=sequence_id,
         )
         completed = project.tasks.wait(task.id, timeout=10)
-        documents = repository.list_subtitle_documents(asset.id)
+        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
         segments = repository.list_subtitle_segments(documents[0].id)
-        region_audio = list((repository.project_dir / "cache" / "asr-regions").glob("*.wav"))
+        timeline_audio = repository.project_dir / "generated" / "audio" / (
+            f"{sequence_id}-transcription.wav"
+        )
 
         assert completed.status == TaskStatus.COMPLETED
         assert len(documents) == 1
         assert [(item.start_frame, item.end_frame, item.text) for item in segments] == [
             (9, 21, "Region producer output")
         ]
-        assert region_audio and region_audio[0].stat().st_size > 1000
+        assert timeline_audio.is_file() and timeline_audio.stat().st_size > 1000
         assert completed.artifacts
         assert (repository.project_dir / completed.artifacts[0]).is_file()
     finally:

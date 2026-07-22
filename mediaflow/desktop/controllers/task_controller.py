@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from PySide6.QtGui import QDesktopServices
 
 from mediaflow.desktop.download_selection import parse_download_entry_selection
 from mediaflow.domain.downloads import DownloadRequest
-from mediaflow.domain.enums import TaskKind
+from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.task_commands import DownloadMediaCommand
 
@@ -16,11 +17,11 @@ from .controller_facet import ControllerFacet
 
 
 class TaskController(ControllerFacet):
+    taskCenterRequested = Signal()
     projectStateChanged = Signal()
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -48,6 +49,14 @@ class TaskController(ControllerFacet):
         return sum(task.status.is_active for task in self._task_view.values())
 
     @Property(int, notify=tasksChanged)
+    def inFlightTaskCount(self) -> int:
+        return sum(task.status.is_in_flight for task in self._task_view.values())
+
+    @Property(int, notify=tasksChanged)
+    def pausedTaskCount(self) -> int:
+        return sum(task.status == TaskStatus.PAUSED for task in self._task_view.values())
+
+    @Property(int, notify=tasksChanged)
     def terminalTaskCount(self) -> int:
         return sum(task.status.is_terminal for task in self._task_view.values())
 
@@ -67,10 +76,6 @@ class TaskController(ControllerFacet):
         data["entryCount"] = len(self._download_plan.entries)
         data["availableEntryCount"] = sum(entry.available for entry in self._download_plan.entries)
         return data
-
-    @Property(bool, notify=taskDrawerChanged)
-    def taskDrawerOpen(self) -> bool:
-        return self._task_drawer_open
 
     def _active_download_tasks(self):
         return [
@@ -98,6 +103,50 @@ class TaskController(ControllerFacet):
         if len(tasks) != 1 or not isinstance(tasks[0].command, DownloadMediaCommand):
             return ""
         return tasks[0].command.request.entry.title
+
+    @Slot(str, str, result="QVariantMap")
+    def latestTask(self, kind: str, context_id: str = "") -> dict:
+        return self._latest_matching_task(
+            lambda row: row.get("kind") == kind,
+            context_id,
+        )
+
+    @Slot(str, str, result="QVariantMap")
+    def latestCommandTask(self, command_type: str, context_id: str = "") -> dict:
+        return self._latest_matching_task(
+            lambda row: row.get("commandType") == command_type,
+            context_id,
+        )
+
+    @Slot(str, result="QVariantMap")
+    def latestMediaTask(self, asset_id: str = "") -> dict:
+        task = self._latest_matching_task(
+            lambda row: row.get("kind") in {"import", "proxy", "waveform"},
+            asset_id,
+        )
+        return {} if task.get("status") == "completed" else task
+
+    def _latest_matching_task(
+        self,
+        predicate: Callable[[dict], bool],
+        context_id: str,
+    ) -> dict:
+        matches: list[dict] = []
+        for index in range(self._task_model.rowCount()):
+            row = self._task_model.get(index)
+            if not predicate(row):
+                continue
+            if (
+                context_id
+                and context_id not in (row.get("inputAssetIds") or [])
+                and context_id != row.get("contextId")
+            ):
+                continue
+            matches.append(row)
+        return next(
+            (row for row in matches if row.get("status") in {"pending", "running", "paused"}),
+            matches[0] if matches else {},
+        )
 
     @Slot(str)
     def analyzeDownloadUrl(self, url: str) -> None:
@@ -406,6 +455,5 @@ class TaskController(ControllerFacet):
             self.errorOccurred.emit(str(error))
 
     @Slot()
-    def toggleTaskDrawer(self) -> None:
-        self._task_drawer_open = not self._task_drawer_open
-        self.taskDrawerChanged.emit()
+    def openTaskCenter(self) -> None:
+        self.taskCenterRequested.emit()

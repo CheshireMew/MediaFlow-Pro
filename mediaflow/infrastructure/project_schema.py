@@ -19,8 +19,8 @@ from mediaflow.infrastructure.project_serialization import (
 )
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 14
-MANAGED_DIRECTORIES = ("generated", "proxies", "cache", "exports")
+PROJECT_SCHEMA_VERSION = 18
+MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
 SCHEMA_SQL = """
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS project (
     root_path TEXT NOT NULL,
     main_sequence_id TEXT NOT NULL,
     workflow_auto_continue INTEGER NOT NULL DEFAULT -1,
+    content_revision INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -73,6 +74,11 @@ CREATE TABLE IF NOT EXISTS asset (
     metadata_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS web_asset (
+    asset_id TEXT PRIMARY KEY REFERENCES asset(id) ON DELETE CASCADE,
+    manifest_json TEXT NOT NULL,
+    source_hash TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audio_bus (
     id TEXT PRIMARY KEY,
     sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
@@ -109,6 +115,11 @@ CREATE TABLE IF NOT EXISTS clip (
     transform_json TEXT NOT NULL,
     audio_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS web_clip_state (
+    clip_id TEXT PRIMARY KEY REFERENCES clip(id) ON DELETE CASCADE,
+    state_json TEXT NOT NULL,
+    revision INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS transition (
     id TEXT PRIMARY KEY,
     track_id TEXT NOT NULL REFERENCES track(id) ON DELETE CASCADE,
@@ -142,6 +153,7 @@ CREATE TABLE IF NOT EXISTS subtitle_document (
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     asset_id TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
     media_asset_id TEXT REFERENCES asset(id) ON DELETE SET NULL,
+    sequence_id TEXT REFERENCES sequence(id) ON DELETE CASCADE,
     language TEXT NOT NULL,
     source_document_id TEXT REFERENCES subtitle_document(id) ON DELETE SET NULL,
     is_source INTEGER NOT NULL,
@@ -164,7 +176,8 @@ CREATE TABLE IF NOT EXISTS subtitle_placement (
     clip_id TEXT REFERENCES clip(id) ON DELETE CASCADE,
     start_frame INTEGER NOT NULL,
     end_frame INTEGER NOT NULL,
-    text_override TEXT
+    text_override TEXT,
+    timing_overridden INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS subtitle_track_document (
     track_id TEXT NOT NULL REFERENCES track(id) ON DELETE CASCADE,
@@ -828,6 +841,7 @@ class ProjectSchemaMigrator:
                                 legacy_task_command(
                                     str(task_row["kind"]),
                                     json.loads(task_row["parameters_json"]),
+                                    sequence_id=task_row["sequence_id"],
                                 )
                             ),
                             task_row["status"],
@@ -903,7 +917,168 @@ class ProjectSchemaMigrator:
                     )
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
-                    (PROJECT_SCHEMA_VERSION,),
+                    (14,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 14 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                columns = {
+                    item["name"]
+                    for item in connection.execute(
+                        "PRAGMA table_info(subtitle_placement)"
+                    ).fetchall()
+                }
+                if "timing_overridden" not in columns:
+                    connection.execute(
+                        "ALTER TABLE subtitle_placement ADD COLUMN timing_overridden "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (15,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 15 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                document_columns = {
+                    item["name"]
+                    for item in connection.execute(
+                        "PRAGMA table_info(subtitle_document)"
+                    ).fetchall()
+                }
+                if "sequence_id" not in document_columns:
+                    connection.execute(
+                        "ALTER TABLE subtitle_document ADD COLUMN sequence_id TEXT "
+                        "REFERENCES sequence(id) ON DELETE CASCADE"
+                    )
+                project_row = connection.execute(
+                    "SELECT main_sequence_id FROM project LIMIT 1"
+                ).fetchone()
+                main_sequence_id = str(project_row["main_sequence_id"]) if project_row else ""
+                for task_row in connection.execute(
+                    "SELECT id, sequence_id, command_json FROM task"
+                ).fetchall():
+                    command = json.loads(task_row["command_json"])
+                    if command.get("command_type") not in {
+                        "transcribe_asset",
+                        "transcribe_region",
+                    }:
+                        continue
+                    sequence_id = str(task_row["sequence_id"] or main_sequence_id)
+                    migrated: dict[str, Any] = {
+                        "command_type": "transcribe_sequence",
+                        "sequence_id": sequence_id,
+                    }
+                    if command.get("workflow"):
+                        migrated["workflow"] = command["workflow"]
+                    connection.execute(
+                        "UPDATE task SET command_json=? WHERE id=?",
+                        (_json(migrated), task_row["id"]),
+                    )
+                for run_row in connection.execute(
+                    "SELECT id, payload_json FROM workflow_run"
+                ).fetchall():
+                    payload = json.loads(run_row["payload_json"])
+                    if "document_ids_before_transcribe" not in payload:
+                        continue
+                    payload.pop("document_ids_before_transcribe", None)
+                    connection.execute(
+                        "UPDATE workflow_run SET payload_json=? WHERE id=?",
+                        (_json(payload), run_row["id"]),
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (16,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 16 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                project_columns = {
+                    item["name"]
+                    for item in connection.execute("PRAGMA table_info(project)").fetchall()
+                }
+                if "content_revision" not in project_columns:
+                    connection.execute(
+                        "ALTER TABLE project ADD COLUMN content_revision "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS web_asset (
+                           asset_id TEXT PRIMARY KEY REFERENCES asset(id) ON DELETE CASCADE,
+                           manifest_json TEXT NOT NULL,
+                           source_hash TEXT NOT NULL
+                       )"""
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS web_clip_state (
+                           clip_id TEXT PRIMARY KEY REFERENCES clip(id) ON DELETE CASCADE,
+                           state_json TEXT NOT NULL,
+                           revision INTEGER NOT NULL
+                       )"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (17,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 17 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                manifests: dict[str, dict[str, Any]] = {}
+                source_hashes: dict[str, str] = {}
+                for asset_row in connection.execute(
+                    "SELECT asset_id, manifest_json, source_hash FROM web_asset"
+                ).fetchall():
+                    manifest = json.loads(asset_row["manifest_json"])
+                    for layer in manifest.get("layers") or []:
+                        layer["editable"] = [
+                            field for field in layer.get("editable") or [] if field != "locked"
+                        ]
+                        constraints = layer.get("constraints")
+                        if isinstance(constraints, dict):
+                            constraints.pop("locked", None)
+                    manifests[str(asset_row["asset_id"])] = manifest
+                    source_hashes[str(asset_row["asset_id"])] = str(asset_row["source_hash"])
+                    connection.execute(
+                        "UPDATE web_asset SET manifest_json=? WHERE asset_id=?",
+                        (_json(manifest), asset_row["asset_id"]),
+                    )
+                state_rows = connection.execute(
+                    """SELECT state.clip_id, state.state_json, clip.asset_id
+                       FROM web_clip_state AS state
+                       JOIN clip ON clip.id=state.clip_id"""
+                ).fetchall()
+                for state_row in state_rows:
+                    asset_id = str(state_row["asset_id"])
+                    manifest = manifests.get(asset_id, {})
+                    editable_by_layer = {
+                        str(layer.get("id")): tuple(layer.get("editable") or [])
+                        for layer in manifest.get("layers") or []
+                    }
+                    layers = json.loads(state_row["state_json"])
+                    locks: dict[str, list[str]] = {}
+                    for layer_id, values in layers.items():
+                        if not isinstance(values, dict):
+                            continue
+                        locked = values.pop("locked", None)
+                        if locked is True:
+                            locks[str(layer_id)] = list(editable_by_layer.get(str(layer_id), ()))
+                    migrated = {
+                        "layers": layers,
+                        "layout_overrides": {},
+                        "animations": {},
+                        "theme": {},
+                        "data_snapshot": {"source_kind": "inline", "values": {}},
+                        "locks": locks,
+                        "source_hash": source_hashes.get(asset_id, ""),
+                        "variant_name": "",
+                    }
+                    connection.execute(
+                        "UPDATE web_clip_state SET state_json=? WHERE clip_id=?",
+                        (_json(migrated), state_row["clip_id"]),
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (18,),
                 )
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         if row is None or int(row["version"]) != PROJECT_SCHEMA_VERSION:

@@ -13,6 +13,7 @@ from .settings_controller import SettingsController
 from .subtitle_controller import SubtitleController
 from .task_controller import TaskController
 from .timeline_controller import TimelineController
+from .web_controller import WebController
 from .workspace_controller import WorkspaceController
 
 
@@ -35,6 +36,7 @@ class EditorControllers:
         self.audio = AudioController(self.session)
         self.tasks = TaskController(self.session)
         self.export = ExportController(self.session)
+        self.web = WebController(self.session)
         self.session._attach_controllers(self.context_properties())
 
     def context_properties(self) -> dict[str, QObject]:
@@ -48,6 +50,7 @@ class EditorControllers:
             "audioController": self.audio,
             "taskController": self.tasks,
             "exportController": self.export,
+            "webController": self.web,
         }
 
     def shutdown(self) -> None:

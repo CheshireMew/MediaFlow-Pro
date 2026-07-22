@@ -17,12 +17,14 @@ from mediaflow.domain.exports import (
     WatermarkOverlay,
 )
 from mediaflow.domain.project import Asset
+from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.domain.timeline import (
     Clip,
     TimelineState,
     Track,
     Transition,
 )
+from mediaflow.infrastructure.web_render_service import WebRenderCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +98,14 @@ class TimelineCompiler:
             asset = assets.get(clip.asset_id)
             if asset is None:
                 raise ValueError(f"Timeline references unknown asset: {clip.asset_id}")
-            source = self._source_path(
-                asset,
-                use_proxies=use_proxies,
-                prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+            source = (
+                WebRenderCache(self.repository).target(state, clip, asset).path
+                if asset.kind == AssetKind.WEB
+                else self._source_path(
+                    asset,
+                    use_proxies=use_proxies,
+                    prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+                )
             )
             if not source.is_file():
                 raise FileNotFoundError(source)
@@ -251,7 +257,11 @@ class TimelineCompiler:
         native_preview: bool,
     ) -> None:
         speed = clip.speed_numerator / clip.speed_denominator
-        service = "qimage" if asset.kind == AssetKind.IMAGE else "avformat"
+        service = (
+            "qimage"
+            if asset.kind == AssetKind.IMAGE or (asset.kind == AssetKind.WEB and source.suffix == ".png")
+            else "avformat"
+        )
         resource = str(source)
         if speed != 1.0:
             service = "timewarp"
@@ -272,7 +282,7 @@ class TimelineCompiler:
             self._property(producer, "warp_speed", str(speed))
             self._property(producer, "warp_resource", str(source))
             self._property(producer, "warp_pitch", "1" if clip.pitch_compensation else "0")
-        if asset.kind == AssetKind.IMAGE:
+        if service == "qimage":
             self._property(producer, "ttl", "1")
         elif transition_tail_frames and required_length > natural_length:
             freeze = ET.SubElement(
@@ -287,7 +297,7 @@ class TimelineCompiler:
             self._property(freeze, "mlt_service", "freeze")
             self._property(freeze, "frame", str(max(0, natural_length - 1)))
             self._property(freeze, "freeze_after", "1")
-        if asset.kind in {AssetKind.VIDEO, AssetKind.IMAGE}:
+        if asset.kind in {AssetKind.VIDEO, AssetKind.IMAGE, AssetKind.WEB}:
             self._append_color_pipeline(producer, asset, project_color_mode)
         self._append_clip_filters(
             producer,
@@ -424,7 +434,7 @@ class TimelineCompiler:
                 self._property(filter_element, "rect", rect)
                 self._property(filter_element, "rotation", str(transform.rotation))
         self._append_clip_audio_filters(producer, clip, producer_start=producer_start)
-        if asset.kind == AssetKind.IMAGE:
+        if asset.kind in {AssetKind.IMAGE, AssetKind.WEB}:
             self._property(producer, "set.test_audio", "1")
 
     def _append_clip_audio_filters(
@@ -649,11 +659,12 @@ class TimelineCompiler:
         requested_track_id: str | None,
         style: SubtitleStyle | None,
     ) -> None:
+        if not requested_track_id:
+            return
         subtitle_tracks = [track for track in tracks if track.kind == TrackKind.SUBTITLE and track.enabled]
-        if requested_track_id:
-            subtitle_tracks = [track for track in subtitle_tracks if track.id == requested_track_id]
-            if not subtitle_tracks:
-                raise ValueError("The selected burn-in subtitle track is missing or disabled")
+        subtitle_tracks = [track for track in subtitle_tracks if track.id == requested_track_id]
+        if not subtitle_tracks:
+            raise ValueError("The selected burn-in subtitle track is missing or disabled")
         if not subtitle_tracks:
             return
         track = subtitle_tracks[0]
@@ -753,9 +764,17 @@ class TimelineCompiler:
         if len(roots) != 1:
             raise ValueError("An audio graph must have exactly one master bus")
         master = roots[0]
-        solo_tracks = {track.id for track in tracks if track.solo}
         solo_buses = {bus.id for bus in buses if bus.solo}
         allowed_buses = self._solo_bus_closure(solo_buses, by_id) if solo_buses else set(by_id)
+        audible_track_ids = set(
+            select_audible_sequence_audio(
+                state,
+                assets,
+                buses,
+                start_frame=0,
+                end_frame=duration,
+            ).track_ids
+        )
         bus_tractor_ids: dict[str, str] = {}
         audio_playlists: set[str] = set()
         for bus in sorted(buses, key=lambda item: self._bus_depth(item, by_id), reverse=True):
@@ -763,13 +782,7 @@ class TimelineCompiler:
                 continue
             sources: list[str] = []
             for track in tracks:
-                if track.kind == TrackKind.SUBTITLE or not track.enabled or track.muted:
-                    continue
-                if solo_tracks and track.id not in solo_tracks:
-                    continue
-                if not any(
-                    assets[clip.asset_id].metadata.has_audio for clip in state.clips_for_track(track.id)
-                ):
+                if track.id not in audible_track_ids:
                     continue
                 destination = track.audio_bus_id or master.id
                 if destination == bus.id:

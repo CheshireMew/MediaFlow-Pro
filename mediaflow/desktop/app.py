@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 from PySide6.QtCore import QCoreApplication, QSettings, QTranslator, QUrl
 from PySide6.QtGui import QColorSpace, QFontDatabase, QGuiApplication, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from mediaflow.composition import EditorApplication
@@ -133,6 +134,7 @@ def ensure_runtime_directory() -> bool:
 
 def main() -> int:
     multiprocessing.freeze_support()
+    QtWebEngineQuick.initialize()
     QCoreApplication.setOrganizationName("MediaFlow Pro")
     QCoreApplication.setApplicationName("MediaFlow Pro")
     QCoreApplication.setApplicationVersion("2.0.0")

@@ -52,6 +52,7 @@ from .project_serialization import json_value as _json
 from .project_serialization import model_json as _model_json
 from .subtitle_repository import SubtitleRepository
 from .timeline_repository import TimelineRepository
+from .web_media_repository import WebMediaRepository
 
 
 class ProjectRepository(
@@ -60,6 +61,7 @@ class ProjectRepository(
     AudioRepository,
     SubtitleRepository,
     HighlightRepository,
+    WebMediaRepository,
 ):
     def __init__(
         self,
@@ -76,6 +78,7 @@ class ProjectRepository(
         self._transaction_depth = 0
         self.read_only = read_only
         self._write_lock = write_lock
+        self._known_content_revision: int | None = None
 
     @classmethod
     def create(
@@ -103,21 +106,30 @@ class ProjectRepository(
                 profile=profile or ProjectProfile(),
                 profile_confirmed=profile is not None,
             )
+            repository.acknowledge_content_revision()
             return repository
         except Exception:
             lock.release()
             raise
 
     @classmethod
-    def open(cls, project_dir: str | Path, *, writable: bool = True) -> ProjectRepository:
+    def open(
+        cls,
+        project_dir: str | Path,
+        *,
+        writable: bool = True,
+        cooperative: bool = False,
+    ) -> ProjectRepository:
         root = Path(project_dir).resolve(strict=True)
         database_path = root / PROJECT_FILE_NAME
         if not database_path.is_file():
             raise FileNotFoundError(database_path)
+        if cooperative and not writable:
+            raise ValueError("Cooperative project access is only meaningful for writable opens")
 
         lock: ProjectWriteLock | None = None
         read_only = not writable
-        if writable:
+        if writable and not cooperative:
             candidate = ProjectWriteLock(root / "cache" / "project.lock")
             if candidate.acquire():
                 lock = candidate
@@ -126,10 +138,32 @@ class ProjectRepository(
         connection = cls._connect(database_path, read_only=read_only)
         repository = cls(root, connection, read_only=read_only, write_lock=lock)
         ProjectSchemaMigrator(repository).validate()
+        repository.acknowledge_content_revision()
         if not read_only:
             for directory in MANAGED_DIRECTORIES:
                 (root / directory).mkdir(exist_ok=True)
         return repository
+
+    @property
+    def owns_project_lock(self) -> bool:
+        return self._write_lock is not None
+
+    @property
+    def known_content_revision(self) -> int:
+        if self._known_content_revision is None:
+            return self.acknowledge_content_revision()
+        return self._known_content_revision
+
+    def content_revision(self) -> int:
+        row = self._fetchone("SELECT content_revision FROM project LIMIT 1")
+        if row is None:
+            raise RuntimeError("Project record is missing")
+        return int(row["content_revision"])
+
+    def acknowledge_content_revision(self) -> int:
+        revision = self.content_revision()
+        self._known_content_revision = revision
+        return revision
 
     @staticmethod
     def _connect(database_path: Path, *, read_only: bool) -> sqlite3.Connection:
@@ -255,8 +289,15 @@ class ProjectRepository(
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 self._transaction_depth = 1
+                if self._known_content_revision is not None:
+                    current_revision = self.content_revision()
+                    if current_revision != self._known_content_revision:
+                        raise RuntimeError(
+                            "Project content changed in another process; reload before editing"
+                        )
                 yield self._connection
                 self._connection.commit()
+                self._known_content_revision = self._content_revision_if_available()
             except Exception:
                 self._connection.rollback()
                 raise
@@ -643,6 +684,17 @@ class ProjectRepository(
         with self._connection_lock:
             return self._connection.execute(sql, parameters).fetchall()
 
+    def _content_revision_if_available(self) -> int | None:
+        try:
+            row = self._connection.execute(
+                "SELECT content_revision FROM project LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError as error:
+            if "content_revision" in str(error) or "no such table" in str(error):
+                return None
+            raise
+        return int(row["content_revision"]) if row is not None else None
+
     @staticmethod
     def _delete_missing(
         connection: sqlite3.Connection,
@@ -656,4 +708,7 @@ class ProjectRepository(
 
     @staticmethod
     def _touch_project(connection: sqlite3.Connection) -> None:
-        connection.execute("UPDATE project SET updated_at=?", (now_ms(),))
+        connection.execute(
+            "UPDATE project SET updated_at=?, content_revision=content_revision+1",
+            (now_ms(),),
+        )

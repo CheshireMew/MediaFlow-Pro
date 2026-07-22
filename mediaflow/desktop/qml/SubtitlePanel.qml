@@ -1,0 +1,697 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import QtQuick.Dialogs
+import "."
+import "components"
+
+ScrollView {
+    id: subtitleScroll
+    objectName: "subtitlePanel"
+    clip: true
+    contentWidth: availableWidth
+    property int playheadFrame: 0
+    property bool playbackActive: false
+    signal seekRequested(int frame)
+    signal modeRequested(string mode)
+    signal importRequested
+
+    function formatTimecode(frame) {
+        const numerator = Math.max(1, Number(workspaceController.profileFpsNumerator || 30));
+        const denominator = Math.max(1, Number(workspaceController.profileFpsDenominator || 1));
+        const nominalFps = Math.max(1, Math.round(numerator / denominator));
+        const value = Math.max(0, Number(frame));
+        const totalSeconds = Math.floor(value / nominalFps);
+        const frames = Math.floor(value % nominalFps);
+        const seconds = totalSeconds % 60;
+        const minutes = Math.floor(totalSeconds / 60) % 60;
+        const hours = Math.floor(totalSeconds / 3600);
+        function pad(number) { return String(number).padStart(2, "0"); }
+        return pad(hours) + ":" + pad(minutes) + ":" + pad(seconds) + ":" + pad(frames);
+    }
+
+    onPlayheadFrameChanged: {
+        if (playbackActive)
+            subtitleController.followSubtitleAtFrame(playheadFrame);
+    }
+
+    Connections {
+        target: subtitleController
+        function onSelectionChanged() {
+            const row = subtitleController.subtitleSegmentsModel.findRow(
+                "segmentId", subtitleController.selectedSubtitleSegmentId);
+            if (row >= 0)
+                segmentList.positionViewAtIndex(row, ListView.Contain);
+        }
+    }
+
+    ColumnLayout {
+        id: root
+        width: subtitleScroll.availableWidth
+        spacing: 9
+        property bool showSearch: false
+        property var searchMatches: []
+        property int searchMatchIndex: -1
+
+        function refreshSearch() {
+            root.searchMatches = subtitleController.findSubtitleMatches(findText.text, matchCase.checked);
+            if (root.searchMatches.length === 0)
+                root.searchMatchIndex = -1;
+            else if (root.searchMatchIndex < 0 || root.searchMatchIndex >= root.searchMatches.length)
+                root.searchMatchIndex = 0;
+        }
+
+        function activateSearchMatch(index) {
+            if (root.searchMatches.length === 0)
+                return;
+            const count = root.searchMatches.length;
+            root.searchMatchIndex = ((index % count) + count) % count;
+            subtitleController.selectSubtitleSegment(String(root.searchMatches[root.searchMatchIndex].segmentId), false);
+        }
+
+        function loadSelectedSegment() {
+            const data = subtitleController.selectedSubtitleSegmentData;
+            segmentStart.value = Number(data.startFrame || 0);
+            segmentEnd.value = Number(data.endFrame || 1);
+            segmentText.text = data.text || "";
+        }
+
+        Connections {
+            target: subtitleController
+            function onSelectionChanged() {
+                root.loadSelectedSegment();
+            }
+        }
+
+        FileDialog {
+            id: exportSubtitleDialog
+            title: qsTr("导出字幕文档")
+            fileMode: FileDialog.SaveFile
+            nameFilters: [qsTr("SRT 字幕 (*.srt)")]
+            onAccepted: subtitleController.exportSubtitleDocument(subtitleController.selectedDocumentId, selectedFile.toString())
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: qsTr("字幕编辑")
+                color: Theme.text
+                font.pixelSize: Theme.fontSizeSection
+                font.weight: Font.DemiBold
+            }
+        }
+
+        Text {
+            text: qsTr("字幕文档")
+            color: Theme.text
+            font.pixelSize: Theme.fontSizeBodySmall
+            font.weight: Font.DemiBold
+        }
+        ListView {
+            id: documentList
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(116, Math.max(52, contentHeight))
+            visible: count > 0
+            clip: true
+            spacing: 5
+            model: subtitleController.subtitleDocumentsModel
+            delegate: Rectangle {
+                required property string documentId
+                required property string language
+                required property bool isSource
+                required property int segmentCount
+                width: documentList.width
+                height: 48
+                radius: Theme.radiusSmall
+                color: subtitleController.selectedDocumentId === documentId ? Theme.accentSoft : docMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                border.color: subtitleController.selectedDocumentId === documentId ? Theme.accent : Theme.border
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 7
+                    Text {
+                        text: language
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSizeBodySmall
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        text: isSource ? qsTr("源字幕") : qsTr("翻译")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: segmentCount + qsTr(" 条")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
+                }
+
+                MouseArea {
+                    id: docMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: subtitleController.selectSubtitleDocument(documentId)
+                }
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: documentList.count === 0
+            spacing: 8
+            EmptyState {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 120
+                iconText: "字"
+                title: qsTr("还没有字幕文档")
+                description: qsTr("识别当前时间轴的声音，或导入已有的 SRT、WebVTT、ASS 字幕。")
+            }
+            AppButton {
+                objectName: "subtitleStartTranscriptionButton"
+                Layout.fillWidth: true
+                primary: true
+                text: qsTr("识别时间轴声音")
+                onClicked: subtitleScroll.modeRequested("transcript")
+            }
+            AppButton {
+                objectName: "subtitleImportFileButton"
+                Layout.fillWidth: true
+                text: qsTr("导入字幕文件")
+                onClicked: subtitleScroll.importRequested()
+            }
+        }
+
+        TabBar {
+            id: subtitleTabs
+            Layout.fillWidth: true
+            visible: documentList.count > 0
+            TabButton {
+                text: qsTr("文档编辑")
+            }
+            TabButton {
+                text: qsTr("序列字幕")
+            }
+        }
+
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: currentIndex === 0 ? documentEditor.implicitHeight : sequenceEditor.implicitHeight
+            currentIndex: subtitleTabs.currentIndex
+            visible: documentList.count > 0
+
+            ColumnLayout {
+                id: documentEditor
+                spacing: 7
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    AppButton {
+                        text: qsTr("添加")
+                        enabled: subtitleController.selectedDocumentId.length > 0
+                        onClicked: subtitleController.addSubtitleSegment()
+                    }
+                    AppButton {
+                        text: qsTr("合并")
+                        enabled: subtitleController.selectedSubtitleSegmentIds.length >= 2
+                        onClicked: subtitleController.mergeSelectedSubtitleSegments()
+                    }
+                    AppButton {
+                        text: qsTr("删除")
+                        enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                        onClicked: subtitleController.deleteSelectedSubtitleSegments()
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                    }
+                    AppButton {
+                        id: subtitleMoreButton
+                        text: qsTr("更多") + " ▾"
+                        onClicked: subtitleMoreMenu.open()
+                        Menu {
+                            id: subtitleMoreMenu
+                            y: subtitleMoreButton.height + 4
+                            MenuItem {
+                                text: root.showSearch ? qsTr("关闭查找替换") : qsTr("查找替换")
+                                onTriggered: root.showSearch = !root.showSearch
+                            }
+                            MenuItem {
+                                text: qsTr("导出 SRT")
+                                enabled: subtitleController.selectedDocumentId.length > 0
+                                onTriggered: exportSubtitleDialog.open()
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("翻译所选")
+                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                                onTriggered: subtitleController.translateSelectedSubtitleSegments()
+                            }
+                            MenuItem {
+                                text: qsTr("复制 SRT")
+                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                                onTriggered: subtitleController.copySelectedSubtitleSegments()
+                            }
+                            MenuItem {
+                                text: qsTr("粘贴替换")
+                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                                onTriggered: subtitleController.pasteReplaceSelectedSubtitleSegments()
+                            }
+                            MenuItem {
+                                text: qsTr("打开文件夹")
+                                enabled: subtitleController.selectedDocumentId.length > 0
+                                onTriggered: subtitleController.openSubtitleFolder()
+                            }
+                        }
+                    }
+                }
+
+                Panel {
+                    Layout.fillWidth: true
+                    implicitHeight: root.showSearch ? 152 : 0
+                    visible: root.showSearch
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 6
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppTextField {
+                                id: findText
+                                Layout.fillWidth: true
+                                placeholderText: qsTr("查找")
+                                onTextChanged: root.refreshSearch()
+                            }
+                            AppTextField {
+                                id: replaceText
+                                Layout.fillWidth: true
+                                placeholderText: qsTr("替换为")
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppCheckBox {
+                                id: matchCase
+                                text: qsTr("区分大小写")
+                                onToggled: root.refreshSearch()
+                            }
+                            Text {
+                                text: qsTr("找到 %1 处").arg(root.searchMatches.length)
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                            AppButton {
+                                text: qsTr("全部替换")
+                                primary: true
+                                enabled: findText.text.length > 0 && root.searchMatches.length > 0
+                                onClicked: {
+                                    subtitleController.replaceSubtitleText(findText.text, replaceText.text, matchCase.checked);
+                                    root.searchMatches = subtitleController.findSubtitleMatches(findText.text, matchCase.checked);
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppButton {
+                                text: qsTr("上一个")
+                                enabled: root.searchMatches.length > 0
+                                onClicked: root.activateSearchMatch(root.searchMatchIndex - 1)
+                            }
+                            AppButton {
+                                text: qsTr("下一个")
+                                enabled: root.searchMatches.length > 0
+                                onClicked: root.activateSearchMatch(root.searchMatchIndex + 1)
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.searchMatchIndex >= 0 ? qsTr("当前 %1 / %2").arg(root.searchMatchIndex + 1).arg(root.searchMatches.length) : qsTr("没有当前匹配")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                            AppButton {
+                                text: qsTr("替换当前")
+                                primary: true
+                                enabled: root.searchMatchIndex >= 0
+                                onClicked: {
+                                    const match = root.searchMatches[root.searchMatchIndex];
+                                    subtitleController.replaceSubtitleMatch(String(match.segmentId), Number(match.start), Number(match.end), findText.text, replaceText.text, matchCase.checked);
+                                    Qt.callLater(function () {
+                                        root.refreshSearch();
+                                        root.activateSearchMatch(root.searchMatchIndex);
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: qsTr("字幕段")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSizeBodySmall
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        text: subtitleController.selectedSubtitleSegmentIds.length > 1 ? qsTr("已选 %1 条").arg(subtitleController.selectedSubtitleSegmentIds.length) : ""
+                        color: Theme.accentHover
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: qsTr("长度阈值")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
+                    AppSpinBox {
+                        id: smartSplitLimit
+                        Layout.preferredWidth: 90
+                        from: 1
+                        to: 200
+                        value: 24
+                        editable: true
+                    }
+                    AppButton {
+                        text: qsTr("智能拆分")
+                        enabled: subtitleController.selectedDocumentId.length > 0
+                        onClicked: subtitleController.smartSplitSubtitleDocument(smartSplitLimit.value)
+                    }
+                    AppButton {
+                        text: qsTr("修复重叠")
+                        enabled: subtitleController.selectedDocumentId.length > 0
+                        onClicked: subtitleController.fixSubtitleOverlaps()
+                    }
+                }
+
+                ListView {
+                    id: segmentList
+                    objectName: "subtitleSegmentList"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.max(160, Math.min(360, contentHeight))
+                    clip: true
+                    spacing: 5
+                    model: subtitleController.subtitleSegmentsModel
+                    delegate: Rectangle {
+                        required property string segmentId
+                        required property int startFrame
+                        required property int endFrame
+                        required property string text
+                        required property bool hasOverlap
+                        width: segmentList.width
+                        height: segmentText.implicitHeight + 31
+                        radius: Theme.radiusSmall
+                        color: subtitleController.isSubtitleSegmentSelected(segmentId) ? Theme.accentSoft : segmentMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                        border.color: hasOverlap ? Theme.danger : subtitleController.isSubtitleSegmentSelected(segmentId) ? Theme.accent : Theme.border
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 3
+                            Text {
+                                text: subtitleScroll.formatTimecode(startFrame)
+                                    + " – " + subtitleScroll.formatTimecode(endFrame)
+                                color: hasOverlap ? Theme.danger : Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                                font.family: Theme.monoFontFamily
+                            }
+                            Text {
+                                id: segmentText
+                                Layout.fillWidth: true
+                                text: parent.parent.text
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSizeCaption
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                        MouseArea {
+                            id: segmentMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            onClicked: function (mouse) {
+                                if (mouse.button === Qt.RightButton) {
+                                    if (!subtitleController.isSubtitleSegmentSelected(segmentId))
+                                        subtitleController.selectSubtitleSegment(segmentId, false);
+                                    segmentContextMenu.popup();
+                                    return;
+                                }
+                                subtitleController.selectSubtitleSegment(
+                                    segmentId,
+                                    (mouse.modifiers & Qt.ControlModifier) !== 0
+                                );
+                                subtitleScroll.seekRequested(
+                                    subtitleController.subtitleSegmentTimelineFrame(
+                                        segmentId, startFrame));
+                            }
+                            onDoubleClicked: subtitleController.previewSubtitleSegment(segmentId)
+                        }
+                        Menu {
+                            id: segmentContextMenu
+                            MenuItem {
+                                text: qsTr("播放这一条")
+                                onTriggered: subtitleController.previewSubtitleSegment(segmentId)
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("翻译所选字幕")
+                                onTriggered: subtitleController.translateSelectedSubtitleSegments()
+                            }
+                            MenuItem {
+                                text: qsTr("复制所选字幕")
+                                onTriggered: subtitleController.copySelectedSubtitleSegments()
+                            }
+                            MenuItem {
+                                text: qsTr("合并所选字幕")
+                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 1
+                                onTriggered: subtitleController.mergeSelectedSubtitleSegments()
+                            }
+                            MenuItem {
+                                text: qsTr("按中点拆分")
+                                enabled: subtitleController.selectedSubtitleSegmentIds.length === 1
+                                onTriggered: subtitleController.splitSubtitleSegment(segmentId, -1)
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("删除所选字幕")
+                                onTriggered: subtitleController.deleteSelectedSubtitleSegments()
+                            }
+                        }
+                    }
+                    EmptyState {
+                        anchors.fill: parent
+                        visible: segmentList.count === 0
+                        iconText: "字"
+                        title: qsTr("还没有字幕")
+                        description: qsTr("转录媒体或导入 SRT 后，可以在这里逐条编辑。")
+                    }
+                }
+
+                Panel {
+                    Layout.fillWidth: true
+                    implicitHeight: 214
+                    visible: subtitleController.selectedSubtitleSegmentIds.length === 1
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 6
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text {
+                                text: qsTr("开始帧")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                            AppSpinBox {
+                                id: segmentStart
+                                Layout.fillWidth: true
+                                from: 0
+                                to: 2147483647
+                                editable: true
+                            }
+                            Text {
+                                text: qsTr("结束帧")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                            AppSpinBox {
+                                id: segmentEnd
+                                Layout.fillWidth: true
+                                from: 1
+                                to: 2147483647
+                                editable: true
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppButton {
+                                Layout.fillWidth: true
+                                text: qsTr("播放头设为开始")
+                                onClicked: segmentStart.value = Math.min(
+                                    subtitleScroll.playheadFrame,
+                                    segmentEnd.value - 1
+                                )
+                            }
+                            AppButton {
+                                Layout.fillWidth: true
+                                text: qsTr("播放头设为结束")
+                                onClicked: segmentEnd.value = Math.max(
+                                    subtitleScroll.playheadFrame,
+                                    segmentStart.value + 1
+                                )
+                            }
+                        }
+                        TextArea {
+                            id: segmentText
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            color: Theme.text
+                            wrapMode: TextEdit.Wrap
+                            selectByMouse: true
+                            background: Rectangle {
+                                color: Theme.window
+                                border.color: segmentText.activeFocus ? Theme.accent : Theme.border
+                                radius: Theme.radiusSmall
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppButton {
+                                Layout.fillWidth: true
+                                text: qsTr("按中点拆分")
+                                onClicked: subtitleController.splitSubtitleSegment(subtitleController.selectedSubtitleSegmentId, -1)
+                            }
+                            AppButton {
+                                Layout.fillWidth: true
+                                primary: true
+                                text: qsTr("保存修改")
+                                onClicked: subtitleController.updateSubtitleSegment(subtitleController.selectedSubtitleSegmentId, segmentStart.value, segmentEnd.value, segmentText.text)
+                            }
+                        }
+                    }
+                }
+            }
+
+            ColumnLayout {
+                id: sequenceEditor
+                spacing: 7
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: qsTr("序列字幕")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSizeBodySmall
+                        font.weight: Font.DemiBold
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                    }
+                    AppButton {
+                        text: qsTr("放入当前序列")
+                        primary: true
+                        enabled: subtitleController.selectedDocumentId.length > 0
+                        onClicked: subtitleController.placeSubtitleDocument(subtitleController.selectedDocumentId)
+                    }
+                }
+                ListView {
+                    id: placementList
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.max(160, Math.min(360, contentHeight))
+                    clip: true
+                    spacing: 4
+                    model: subtitleController.subtitlePlacementsModel
+                    delegate: Rectangle {
+                        required property string placementId
+                        required property int startFrame
+                        required property int endFrame
+                        required property string text
+                        required property bool hasOverride
+                        width: placementList.width
+                        height: 48
+                        radius: Theme.radiusSmall
+                        color: subtitleController.selectedSubtitlePlacementId === placementId ? Theme.accentSoft : placementMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                        border.color: hasOverride ? Theme.accent : Theme.border
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            Text {
+                                text: startFrame + "–" + endFrame
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: parent.parent.text
+                                color: Theme.text
+                                elide: Text.ElideRight
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                            Text {
+                                visible: hasOverride
+                                text: qsTr("序列覆盖")
+                                color: Theme.accentHover
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                        }
+                        MouseArea {
+                            id: placementMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: subtitleController.selectSubtitlePlacement(placementId)
+                        }
+                    }
+                    EmptyState {
+                        anchors.fill: parent
+                        visible: placementList.count === 0
+                        iconText: "轨"
+                        title: qsTr("序列中还没有字幕")
+                        description: qsTr("选择字幕文档并放入当前序列。")
+                    }
+                }
+                Panel {
+                    Layout.fillWidth: true
+                    implicitHeight: 152
+                    visible: subtitleController.selectedSubtitlePlacementId.length > 0
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 6
+                        TextArea {
+                            id: placementText
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            text: subtitleController.selectedSubtitlePlacementData.text || ""
+                            color: Theme.text
+                            wrapMode: TextEdit.Wrap
+                            background: Rectangle {
+                                color: Theme.window
+                                border.color: Theme.border
+                                radius: Theme.radiusSmall
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            AppButton {
+                                Layout.fillWidth: true
+                                primary: true
+                                text: qsTr("保存为序列覆盖")
+                                onClicked: subtitleController.updateSubtitlePlacementText(subtitleController.selectedSubtitlePlacementId, placementText.text, false)
+                            }
+                            AppButton {
+                                Layout.fillWidth: true
+                                text: qsTr("应用到文档")
+                                onClicked: subtitleController.updateSubtitlePlacementText(subtitleController.selectedSubtitlePlacementId, placementText.text, true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -7,6 +7,8 @@ ColumnLayout {
 
     property var format
     property bool advancedOpen: false
+    property string lastPreviewSignature: ""
+    signal optionsChanged(var options)
 
     spacing: 10
 
@@ -23,8 +25,6 @@ ColumnLayout {
         const encoderIndex = encoderField.indexOfValue(value.video_codec || "")
         if (encoderIndex >= 0)
             encoderField.currentIndex = encoderIndex
-        qualityValue.value = Number(value.quality_value ?? qualityValue.value)
-        gopFrames.value = Number(value.gop_frames ?? gopFrames.value)
         technical.restore(value)
         subtitles.restore(value)
         watermark.restore(value)
@@ -37,9 +37,9 @@ ColumnLayout {
             container: root.format.container || root.format.suffix,
             videoCodec: root.format.value === "audio" ? "" : String(encoderField.currentValue),
             pixelFormat: technicalOptions.pixelFormat,
-            qualityValue: Number(qualityValue.value),
+            qualityValue: technicalOptions.qualityValue,
             preset: technicalOptions.preset,
-            gopFrames: Number(gopFrames.value),
+            gopFrames: technicalOptions.gopFrames,
             audioCodec: technicalOptions.audioCodec,
             audioBitrate: technicalOptions.audioBitrate,
             burnSubtitleTrackId: root.format.value === "audio"
@@ -48,6 +48,23 @@ ColumnLayout {
             watermark: root.format.value === "audio" ? {enabled: false} : watermark.exportValue(),
             advanced: technicalOptions.advanced
         }
+    }
+
+    function publishPreviewOptions() {
+        const options = root.exportOptions();
+        const signature = JSON.stringify(options);
+        if (signature === root.lastPreviewSignature)
+            return;
+        root.lastPreviewSignature = signature;
+        root.optionsChanged(options);
+    }
+
+    Timer {
+        interval: 180
+        repeat: true
+        running: root.visible
+        triggeredOnStart: true
+        onTriggered: root.publishPreviewOptions()
     }
 
     Panel {
@@ -77,30 +94,6 @@ ColumnLayout {
                 model: root.encoderModel()
                 textRole: "label"
                 valueRole: "value"
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                visible: root.format && root.format.value !== "audio"
-                Text { text: "CRF/CQ"; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
-                AppSpinBox {
-                    id: qualityValue
-                    Layout.fillWidth: true
-                    from: 0
-                    to: 63
-                    value: root.format ? Number(root.format.qualityValue) : 18
-                    editable: true
-                }
-                Text { text: "GOP"; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
-                AppSpinBox {
-                    id: gopFrames
-                    Layout.fillWidth: true
-                    from: 1
-                    to: 600
-                    value: Math.max(1, Math.round(
-                        workspaceController.profileFpsNumerator
-                        / workspaceController.profileFpsDenominator * 2))
-                    editable: true
-                }
             }
             Text {
                 Layout.fillWidth: true

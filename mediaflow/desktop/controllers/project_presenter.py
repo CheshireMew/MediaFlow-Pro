@@ -16,14 +16,17 @@ from mediaflow.desktop.presentation_catalogs import (
     task_title,
 )
 from mediaflow.domain.enums import (
+    AssetKind,
     ColorMode,
     TaskStatus,
     TrackKind,
 )
+from mediaflow.domain.task_commands import RenderWebClipCommand
 from mediaflow.domain.timebase import (
     seconds_to_frames,
 )
 from mediaflow.domain.timeline import compatible_track_kinds
+from mediaflow.infrastructure.web_render_service import WebRenderCache
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +113,12 @@ class ProjectPresentationProjector:
             self._asset_model.set_items([])
             return
         assets = self._documents.list_assets()
+        available_ids = {asset.id for asset in assets}
+        self._asset_thumbnail_paths = {
+            asset_id: path
+            for asset_id, path in self._asset_thumbnail_paths.items()
+            if asset_id in available_ids
+        }
         rows = [
             {
                 "assetId": asset.id,
@@ -121,6 +130,11 @@ class ProjectPresentationProjector:
                 "durationFrames": asset.metadata.duration_frames,
                 "width": asset.metadata.width or 0,
                 "height": asset.metadata.height or 0,
+                "previewUrl": (
+                    QUrl.fromLocalFile(self._asset_thumbnail_paths[asset.id]).toString()
+                    if asset.id in self._asset_thumbnail_paths
+                    else ""
+                ),
                 "proxyReady": bool(asset.proxy_path),
                 "waveformReady": bool(asset.waveform_path),
             }
@@ -129,10 +143,51 @@ class ProjectPresentationProjector:
         self._asset_model.set_items(rows)
         for asset in assets:
             self.request_waveform_data(asset.id, asset.waveform_path)
-        available_ids = {item["assetId"] for item in rows}
         self._selected_asset_ids = [
             asset_id for asset_id in self._selected_asset_ids if asset_id in available_ids
         ]
+        self.request_asset_thumbnails(assets)
+
+    def request_asset_thumbnails(self, assets) -> None:
+        if not self._project or not any(
+            asset.status.value == "online" and asset.kind.value in {"video", "image"}
+            for asset in assets
+        ):
+            return
+        if self._asset_thumbnail_pending_request is not None:
+            self._asset_thumbnail_refresh_requested = True
+            return
+        self._asset_thumbnail_request_id += 1
+        request_id = (
+            self._session_generation,
+            self._asset_thumbnail_request_id,
+            str(self._project.project_dir),
+        )
+        project_dir = self._project.project_dir
+        self._asset_thumbnail_pending_request = request_id
+        self._submit_background(
+            "asset_thumbnails",
+            request_id,
+            lambda: self._api.asset_thumbnail_paths(project_dir),
+        )
+
+    def apply_asset_thumbnails(self, paths: dict[str, str]) -> None:
+        self._asset_thumbnail_paths = dict(paths)
+        if not self._documents:
+            return
+        assets = self._documents.list_assets()
+        rows = []
+        for asset in assets:
+            current = self._asset_model.get(self._asset_model.findRow("assetId", asset.id))
+            if not current:
+                continue
+            current["previewUrl"] = (
+                QUrl.fromLocalFile(self._asset_thumbnail_paths[asset.id]).toString()
+                if asset.id in self._asset_thumbnail_paths
+                else ""
+            )
+            rows.append(current)
+        self._asset_model.set_items(rows)
 
     def request_waveform_data(self, asset_id: str, waveform_path: str | None) -> None:
         if not waveform_path or not self._documents:
@@ -328,6 +383,7 @@ class ProjectPresentationProjector:
                 {
                     "taskId": task.id,
                     "displayName": task_title(task),
+                    "commandType": task.command.command_type,
                     "kind": task.kind.value,
                     "status": task.status.value,
                     "statusLabel": task_status_label(task.status.value),
@@ -335,6 +391,8 @@ class ProjectPresentationProjector:
                     "messageCode": task.message_code,
                     "messageLabel": task_message_label(task.message_code),
                     "queuePosition": queue_positions.get(task.id, 0),
+                    "inputAssetIds": list(task.input_asset_ids),
+                    "contextId": self._task_context_id(task.command),
                     "error": task.error or "",
                     "artifacts": task.artifacts,
                     "executionTrace": [
@@ -346,6 +404,7 @@ class ProjectPresentationProjector:
                         }
                         for item in task.execution_trace
                     ],
+                    "createdAt": task.created_at,
                 }
                 for task in reversed(tasks)
             ]
@@ -357,13 +416,14 @@ class ProjectPresentationProjector:
             self._document_model.set_items([])
             self._segment_model.set_items([])
             return
-        documents = self._documents.list_subtitle_documents(self.selectedAssetId or None)
+        documents = self._documents.list_subtitle_documents()
         self._document_model.set_items(
             [
                 {
                     "documentId": document.id,
                     "assetId": document.asset_id,
                     "mediaAssetId": document.media_asset_id or document.asset_id,
+                    "sequenceId": document.sequence_id or "",
                     "language": document.language,
                     "isSource": document.is_source,
                     "sourceDocumentId": document.source_document_id or "",
@@ -417,6 +477,10 @@ class ProjectPresentationProjector:
             self._highlight_model.set_items([])
             return
         candidates = self._documents.list_highlights(self.selectedAssetId or None)
+        documents = {
+            document.id: document
+            for document in self._documents.list_subtitle_documents()
+        }
         self._highlight_model.set_items(
             [
                 {
@@ -424,6 +488,11 @@ class ProjectPresentationProjector:
                     "assetId": item.asset_id,
                     "documentId": item.document_id or "",
                     "sequenceId": item.sequence_id or "",
+                    "sourceSequenceId": (
+                        documents[item.document_id].sequence_id or ""
+                        if item.document_id in documents
+                        else ""
+                    ),
                     "startFrame": item.start_frame,
                     "endFrame": item.end_frame,
                     "title": item.title,
@@ -538,6 +607,27 @@ class ProjectPresentationProjector:
         state = self._editor.state
         if not state.clips:
             return
+        assets = {asset.id: asset for asset in self._documents.list_assets()}
+        missing_web_clips = [
+            clip
+            for clip in state.clips
+            if assets[clip.asset_id].kind == AssetKind.WEB
+            and not WebRenderCache(self._documents).target(state, clip, assets[clip.asset_id]).path.is_file()
+        ]
+        if missing_web_clips:
+            active_clip_ids = {
+                task.command.clip_id
+                for task in self._task_view.values()
+                if isinstance(task.command, RenderWebClipCommand) and task.status.is_active
+            }
+            for clip in missing_web_clips:
+                if clip.id not in active_clip_ids:
+                    self._create_task(
+                        RenderWebClipCommand(sequence_id=state.sequence.id, clip_id=clip.id),
+                        [clip.asset_id],
+                        sequence_id=state.sequence.id,
+                    )
+            return
         self._preview_request_id += 1
         request_id = self._preview_request_id
         generation = self._session_generation
@@ -560,8 +650,9 @@ class ProjectPresentationProjector:
 
     def refresh_preview_subtitles(self) -> None:
         self._preview_subtitles = []
-        self._subtitle_placement_model.set_items([])
+        self._preview_subtitles_by_track = {}
         if not self._documents or not self._active_sequence_id:
+            self._subtitle_placement_model.set_items([])
             return
         state = self._documents.load_timeline(self._active_sequence_id)
         tracks = [
@@ -570,6 +661,7 @@ class ProjectPresentationProjector:
             if track.kind == TrackKind.SUBTITLE and track.enabled
         ]
         if not tracks:
+            self._subtitle_placement_model.set_items([])
             return
         segments = {
             segment.id: segment
@@ -580,6 +672,7 @@ class ProjectPresentationProjector:
         audio_lane_positions, default_audio_position = self._audio_lane_projection(state, assets)
         placement_rows = []
         for track in tracks:
+            track_subtitles: list[tuple[int, int, str]] = []
             for placement in self._documents.list_subtitle_placements(track.id):
                 segment = segments.get(placement.segment_id)
                 if segment:
@@ -588,6 +681,7 @@ class ProjectPresentationProjector:
                         {
                             "placementId": placement.id,
                             "trackId": placement.track_id,
+                            "documentId": segment.document_id,
                             "segmentId": placement.segment_id,
                             "clipId": placement.clip_id or "",
                             "audioTrackPosition": audio_lane_positions.get(
@@ -599,15 +693,27 @@ class ProjectPresentationProjector:
                             "text": text,
                             "sourceText": segment.text,
                             "hasOverride": placement.text_override is not None,
+                            "timingOverridden": placement.timing_overridden,
                         }
                     )
                     if track.id == tracks[0].id:
                         self._preview_subtitles.append((placement.start_frame, placement.end_frame, text))
+                    track_subtitles.append((placement.start_frame, placement.end_frame, text))
+            track_subtitles.sort(key=lambda item: (item[0], item[1]))
+            self._preview_subtitles_by_track[track.id] = track_subtitles
         self._preview_subtitles.sort(key=lambda item: (item[0], item[1]))
         self._subtitle_placement_model.set_items(placement_rows)
         placement_ids = {item["placementId"] for item in placement_rows}
         if self._selected_subtitle_placement_id not in placement_ids:
             self._selected_subtitle_placement_id = ""
+
+    @staticmethod
+    def _task_context_id(command: object) -> str:
+        for attribute in ("document_id", "sequence_id", "asset_id"):
+            value = getattr(command, attribute, None)
+            if value:
+                return str(value)
+        return ""
 
     def refresh_settings_models(self) -> None:
         active_id = self.settings.active_llm_provider_id

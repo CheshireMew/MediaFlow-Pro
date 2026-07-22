@@ -30,7 +30,6 @@ class TimelineController(ControllerFacet):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -149,6 +148,22 @@ class TimelineController(ControllerFacet):
     @Slot(str, result=bool)
     def isClipSelected(self, clip_id: str) -> bool:
         return clip_id in self._selected_clip_ids
+
+    @Slot()
+    def selectAllClips(self) -> None:
+        self._selected_clip_ids = [clip.id for clip in self._editor.state.clips] if self._editor else []
+        self._selected_transition_id = ""
+        self._selected_marker_id = ""
+        self._selected_range_id = ""
+        self.selectionChanged.emit()
+
+    @Slot()
+    def clearSelection(self) -> None:
+        self._selected_clip_ids = []
+        self._selected_transition_id = ""
+        self._selected_marker_id = ""
+        self._selected_range_id = ""
+        self.selectionChanged.emit()
 
     @Slot(str)
     def addTrack(self, kind: str) -> None:
@@ -292,7 +307,7 @@ class TimelineController(ControllerFacet):
             self.errorOccurred.emit(str(error))
 
     @Slot(str, float, int)
-    def copyClip(self, clip_id: str, pixels_per_frame: float, playhead_frame: int) -> None:
+    def duplicateClip(self, clip_id: str, pixels_per_frame: float, playhead_frame: int) -> None:
         try:
             self._require_writable()
             source = next(item for item in self._editor.state.clips if item.id == clip_id)

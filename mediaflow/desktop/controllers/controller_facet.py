@@ -13,7 +13,6 @@ CONTROLLER_SIGNALS = (
     "selectionChanged",
     "historyChanged",
     "statusChanged",
-    "taskDrawerChanged",
     "tasksChanged",
     "previewGraphChanged",
     "profileConfirmationChanged",

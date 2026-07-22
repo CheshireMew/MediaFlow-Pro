@@ -192,11 +192,9 @@ class ProxyService:
             )
             if sdr_result.returncode != 0 or not sdr_preview_output.is_file():
                 raise RuntimeError(f"SDR preview proxy generation failed: {sdr_result.stderr.strip()}")
-        return self.repository.update_asset(
-            asset.model_copy(
-                update={
-                    "proxy_path": str(output),
-                    "sdr_preview_proxy_path": (str(sdr_preview_output) if sdr_preview_output else None),
-                }
-            )
+        return self.repository.set_asset_proxy_paths(
+            asset.id,
+            expected_fingerprint=asset.fingerprint,
+            proxy_path=output,
+            sdr_preview_proxy_path=sdr_preview_output,
         )

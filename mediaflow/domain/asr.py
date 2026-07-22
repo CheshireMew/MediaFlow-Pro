@@ -31,15 +31,3 @@ class AsrEngine(Protocol):
         language: str | None = None,
         progress: AsrProgress | None = None,
     ) -> AsrResult: ...
-
-
-class AudioRegionExtractor(Protocol):
-    def extract(
-        self,
-        media_path: str | Path,
-        output_path: str | Path,
-        *,
-        start_seconds: float,
-        duration_seconds: float,
-        check_cancelled: Callable[[], None] | None = None,
-    ) -> Path: ...

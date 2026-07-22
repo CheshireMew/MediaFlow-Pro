@@ -9,6 +9,7 @@ from mediaflow.domain.enums import ExportFormat, TaskKind, WorkflowStage
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.translation import TranslationMode
+from mediaflow.domain.web_media import WebExportFormat
 
 
 class WorkflowTaskLink(DomainModel):
@@ -89,24 +90,34 @@ class ExportHighlightsCommand(CommandModel):
         return TaskKind.EXPORT
 
 
-class TranscribeAssetCommand(CommandModel):
-    command_type: Literal["transcribe_asset"] = "transcribe_asset"
-    asset_id: str
+class RenderWebClipCommand(CommandModel):
+    command_type: Literal["render_web_clip"] = "render_web_clip"
+    sequence_id: str
+    clip_id: str
 
     @property
     def task_kind(self) -> TaskKind:
-        return TaskKind.TRANSCRIBE
+        return TaskKind.WEB_RENDER
 
 
-class TranscribeRegionCommand(CommandModel):
-    command_type: Literal["transcribe_region"] = "transcribe_region"
-    asset_id: str
-    start_frame: int
-    end_frame: int
-    document_id: str | None = None
-    translate_after: bool = False
-    mode: TranslationMode = "standard"
-    target_language: str = ""
+class ExportWebClipCommand(CommandModel):
+    command_type: Literal["export_web_clip"] = "export_web_clip"
+    sequence_id: str
+    clip_id: str
+    output_path: str
+    format: WebExportFormat
+    time_ms: int = Field(default=0, ge=0)
+    background: str = "#000000"
+    overwrite: bool = False
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.WEB_RENDER
+
+
+class TranscribeSequenceCommand(CommandModel):
+    command_type: Literal["transcribe_sequence"] = "transcribe_sequence"
+    sequence_id: str
 
     @property
     def task_kind(self) -> TaskKind:
@@ -128,6 +139,7 @@ class TranslateSegmentsCommand(CommandModel):
     command_type: Literal["translate_segments"] = "translate_segments"
     document_id: str
     segment_ids: list[str]
+    target_document_id: str | None = None
     target_language: str
     mode: TranslationMode = "standard"
 
@@ -180,8 +192,9 @@ type TaskCommand = Annotated[
     | DownloadMediaCommand
     | ExportSequenceCommand
     | ExportHighlightsCommand
-    | TranscribeAssetCommand
-    | TranscribeRegionCommand
+    | RenderWebClipCommand
+    | ExportWebClipCommand
+    | TranscribeSequenceCommand
     | TranslateDocumentCommand
     | TranslateSegmentsCommand
     | AnalyzeHighlightsCommand

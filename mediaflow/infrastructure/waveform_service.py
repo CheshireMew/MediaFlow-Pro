@@ -68,7 +68,11 @@ class WaveformService:
             encoding="utf-8",
         )
         temporary.replace(output)
-        return self.repository.update_asset(asset.model_copy(update={"waveform_path": str(output)}))
+        return self.repository.set_asset_waveform_path(
+            asset.id,
+            expected_fingerprint=asset.fingerprint,
+            waveform_path=output,
+        )
 
     @staticmethod
     def _peaks(samples: array, block_size: int) -> list[list[float]]:

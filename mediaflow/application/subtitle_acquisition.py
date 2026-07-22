@@ -1,30 +1,21 @@
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mediaflow.application.ports import SubtitleAcquisitionDocuments
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
-from mediaflow.domain.asr import AsrEngine, AudioRegionExtractor
+from mediaflow.domain.asr import AsrEngine
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.media_association import related_media_paths
 from mediaflow.domain.project import Asset
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
+from mediaflow.domain.timebase import seconds_to_frames
 
 if TYPE_CHECKING:
     from mediaflow.application.asset_service import AssetService
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedRegionTranscription:
-    document: SubtitleDocument
-    segments: tuple[SubtitleSegment, ...]
-    creates_document: bool
 
 
 class SubtitleAcquisitionService:
@@ -34,137 +25,68 @@ class SubtitleAcquisitionService:
         self,
         repository: SubtitleAcquisitionDocuments,
         publication: SubtitlePublicationService,
-        region_audio_extractor: AudioRegionExtractor | None = None,
     ):
         self.repository = repository
         self.publication = publication
-        self.region_audio_extractor = region_audio_extractor
 
-    def transcribe_asset(
+    def transcribe_sequence_audio(
         self,
-        asset_id: str,
-        engine: AsrEngine,
-        *,
-        language: str | None = None,
-        progress=None,
-    ) -> SubtitleDocument:
-        asset = self.repository.get_asset(asset_id)
-        source = self.repository.resolve_asset_path(asset)
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
-        result = engine.transcribe(source, language=language, progress=progress)
-        document = SubtitleDocument(
-            project_id=project.id,
-            asset_id=asset.id,
-            language=result.language,
-            is_source=True,
-        )
-        segments = [
-            SubtitleSegment(
-                document_id=document.id,
-                start_frame=seconds_to_frames(
-                    segment.start_seconds,
-                    profile.fps_numerator,
-                    profile.fps_denominator,
-                ),
-                end_frame=max(
-                    1,
-                    seconds_to_frames(
-                        segment.end_seconds,
-                        profile.fps_numerator,
-                        profile.fps_denominator,
-                    ),
-                ),
-                text=segment.text,
-                confidence=segment.confidence,
-            )
-            for segment in result.segments
-        ]
-        if not segments:
-            raise RuntimeError("ASR completed without subtitle segments")
-        self.repository.create_subtitle_document(document, segments)
-        self.publication.write_document_srt(document.id)
-        return document
-
-    def prepare_region_transcription(
-        self,
-        asset_id: str,
+        sequence_id: str,
+        audio_asset_id: str,
+        source: str | Path,
         engine: AsrEngine,
         *,
         start_frame: int,
         end_frame: int,
-        document_id: str | None = None,
         language: str | None = None,
         check_cancelled: Callable[[], None] | None = None,
         progress: Callable[[float, str], None] | None = None,
-    ) -> PreparedRegionTranscription:
-        asset = self.repository.get_asset(asset_id)
-        if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
-            raise ValueError("只有视频或音频素材可以转录")
+    ) -> SubtitleDocument:
+        audio_source = Path(source).resolve(strict=True)
+        audio_asset = self.repository.get_asset(audio_asset_id)
+        if audio_asset.kind != AssetKind.AUDIO:
+            raise ValueError("时间轴转录源必须是生成的音频素材")
+        sequence = self.repository.get_sequence(sequence_id)
         start = max(0, int(start_frame))
         end = int(end_frame)
         if end <= start:
-            raise ValueError("转录选区的结束帧必须晚于开始帧")
-        if asset.metadata.duration_frames > 0 and end > asset.metadata.duration_frames:
-            raise ValueError("转录选区超出了素材时长")
-
+            raise ValueError("当前时间轴没有可转录的范围")
         project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
-        creates_document = not document_id
-        if document_id:
-            document = self.repository.get_subtitle_document(document_id)
-            if (document.media_asset_id or document.asset_id) != asset.id:
-                raise ValueError("字幕文档与所选转录素材不匹配")
+        existing = [
+            document
+            for document in self.repository.list_subtitle_documents(sequence_id=sequence_id)
+            if document.is_source and document.source_document_id is None
+        ]
+        if existing:
+            document = existing[-1].model_copy(update={"asset_id": audio_asset_id})
         else:
             document = SubtitleDocument(
                 project_id=project.id,
-                asset_id=asset.id,
+                asset_id=audio_asset_id,
+                sequence_id=sequence_id,
                 language=language or "und",
                 is_source=True,
             )
 
-        if self.region_audio_extractor is None:
-            raise RuntimeError("Region transcription requires an audio region extractor")
-        output = self.repository.project_dir / "cache" / "asr-regions" / f"{uuid.uuid4()}.wav"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        start_seconds = frames_to_seconds(
-            start,
-            profile.fps_numerator,
-            profile.fps_denominator,
-        )
-        duration_seconds = frames_to_seconds(
-            end - start,
-            profile.fps_numerator,
-            profile.fps_denominator,
-        )
-        if progress:
-            progress(2.0, "extracting_asr_region")
-        self.region_audio_extractor.extract(
-            self.repository.resolve_asset_path(asset),
-            output,
-            start_seconds=float(start_seconds),
-            duration_seconds=float(duration_seconds),
-            check_cancelled=check_cancelled,
-        )
-
         def report(value: float, code: str) -> None:
             if progress:
-                progress(10.0 + min(100.0, max(0.0, value)) * 0.85, code)
+                progress(15.0 + min(100.0, max(0.0, value)) * 0.8, code)
 
-        asr_result = engine.transcribe(output, language=language, progress=report)
-        if creates_document:
-            document = document.model_copy(update={"language": asr_result.language})
+        if check_cancelled:
+            check_cancelled()
+        asr_result = engine.transcribe(audio_source, language=language, progress=report)
+        document = document.model_copy(update={"language": asr_result.language})
         segments: list[SubtitleSegment] = []
         for recognized in asr_result.segments:
             recognized_start = start + seconds_to_frames(
                 recognized.start_seconds,
-                profile.fps_numerator,
-                profile.fps_denominator,
+                sequence.profile.fps_numerator,
+                sequence.profile.fps_denominator,
             )
             recognized_end = start + seconds_to_frames(
                 recognized.end_seconds,
-                profile.fps_numerator,
-                profile.fps_denominator,
+                sequence.profile.fps_numerator,
+                sequence.profile.fps_denominator,
             )
             recognized_start = max(start, min(end - 1, recognized_start))
             recognized_end = max(recognized_start + 1, min(end, recognized_end))
@@ -180,30 +102,14 @@ class SubtitleAcquisitionService:
                     )
                 )
         if not segments:
-            raise RuntimeError("所选区间没有识别出可用语音")
-        return PreparedRegionTranscription(
-            document=document,
-            segments=tuple(segments),
-            creates_document=creates_document,
-        )
-
-    def commit_region_transcription(
-        self,
-        prepared: PreparedRegionTranscription,
-        segments: list[SubtitleSegment] | tuple[SubtitleSegment, ...] | None = None,
-    ) -> list[SubtitleSegment]:
-        inserted = list(segments if segments is not None else prepared.segments)
-        if not inserted:
-            raise ValueError("转录结果不能为空")
-        if any(item.document_id != prepared.document.id for item in inserted):
-            raise ValueError("转录结果不属于目标字幕文档")
-        if prepared.creates_document:
-            self.repository.create_subtitle_document(prepared.document, inserted)
-            self.publication.write_document_srt(prepared.document.id)
+            raise RuntimeError("当前时间轴范围内没有识别出可用语音")
+        if existing:
+            self.repository.save_subtitle_document(document)
+            self.repository.save_subtitle_segments(document.id, segments)
         else:
-            existing = self.repository.list_subtitle_segments(prepared.document.id)
-            self._save_segments(prepared.document.id, [*existing, *inserted])
-        return inserted
+            self.repository.create_subtitle_document(document, segments)
+        self.publication.write_document_srt(document.id)
+        return document
 
     def import_subtitle_file(
         self,

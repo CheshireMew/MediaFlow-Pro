@@ -31,7 +31,6 @@ class ExportController(ControllerFacet):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -158,7 +157,9 @@ class ExportController(ControllerFacet):
                 updates["subtitle_style"] = SubtitleStyle.model_validate(options["subtitleStyle"])
             if isinstance(options.get("watermark"), dict):
                 updates["watermark"] = WatermarkOverlay.model_validate(options["watermark"])
-            preset = preset.model_copy(update=updates)
+            preset = type(preset).model_validate(
+                {**preset.model_dump(mode="python"), **updates}
+            )
             self._documents.save_sequence_export_preset(self._active_sequence_id, preset)
             self.projectStateChanged.emit()
             workflow = self._active_workflow_run()

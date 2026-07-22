@@ -104,6 +104,7 @@ ColumnLayout {
     }
     AppComboBox {
         id: burnSubtitle
+        objectName: "exportBurnSubtitleTrack"
         Layout.fillWidth: true
         model: exportController.subtitleTrackOptions
         textRole: "label"
@@ -153,6 +154,7 @@ ColumnLayout {
         Layout.fillWidth: true
         AppTextField {
             id: subtitleFont
+            objectName: "exportSubtitleFont"
             Layout.fillWidth: true
             text: "Microsoft YaHei UI"
             placeholderText: qsTr("字体名称")
@@ -177,7 +179,7 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Text { text: qsTr("字号"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
-        AppSpinBox { id: subtitleFontSize; Layout.fillWidth: true; from: 8; to: 240; value: 24; editable: true }
+        AppSpinBox { id: subtitleFontSize; objectName: "exportSubtitleFontSize"; Layout.fillWidth: true; from: 8; to: 240; value: 24; editable: true }
         Text { text: qsTr("描边"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
         AppSpinBox { id: subtitleOutlineSize; Layout.fillWidth: true; from: 0; to: 30; value: 2; editable: true }
         Text { text: qsTr("阴影"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
@@ -185,7 +187,7 @@ ColumnLayout {
     }
     RowLayout {
         Layout.fillWidth: true
-        AppTextField { id: subtitleColor; Layout.fillWidth: true; text: "#FFFFFF"; placeholderText: qsTr("文字颜色 #RRGGBB") }
+        AppTextField { id: subtitleColor; objectName: "exportSubtitleColor"; Layout.fillWidth: true; text: "#FFFFFF"; placeholderText: qsTr("文字颜色 #RRGGBB") }
         AppTextField { id: subtitleOutlineColor; Layout.fillWidth: true; text: "#000000"; placeholderText: qsTr("描边颜色 #RRGGBB") }
     }
     RowLayout {

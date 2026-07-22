@@ -8,7 +8,7 @@ RowLayout {
     property string label: ""
     property alias text: editor.text
     property string placeholderText: ""
-    signal valueAccepted()
+    signal valueAccepted
     spacing: 8
 
     Text {
@@ -26,7 +26,9 @@ RowLayout {
         placeholderTextColor: Theme.textMuted
         selectByMouse: true
         font.pixelSize: Theme.fontSizeCaption
-        validator: DoubleValidator { notation: DoubleValidator.StandardNotation }
+        validator: DoubleValidator {
+            notation: DoubleValidator.StandardNotation
+        }
         background: Rectangle {
             radius: Theme.radiusSmall
             color: Theme.surfaceRaised

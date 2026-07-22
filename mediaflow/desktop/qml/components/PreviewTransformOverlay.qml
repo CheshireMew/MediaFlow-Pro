@@ -13,12 +13,13 @@ Item {
     property real draftRotation: 0
     property bool snapVertical: false
     property bool snapHorizontal: false
+    property bool interactionVisible: true
     readonly property var clipData: timelineController.selectedClipData
     readonly property bool clipIsVisible: timelineController.selectedClipId.length > 0
         && previewPosition >= Number(clipData.startFrame ?? 0)
         && previewPosition < Number(clipData.endFrame ?? 0)
 
-    visible: clipIsVisible
+    visible: interactionVisible && clipIsVisible
     enabled: visible && !workspaceController.readOnly
 
     function reload() {

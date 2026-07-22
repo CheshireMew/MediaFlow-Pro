@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, QObject, Qt, Slot
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QByteArray,
+    QModelIndex,
+    QObject,
+    QSortFilterProxyModel,
+    Qt,
+    Slot,
+)
 
 
 class DictListModel(QAbstractListModel):
@@ -131,11 +139,37 @@ class AssetListModel(DictListModel):
                 "durationFrames",
                 "width",
                 "height",
+                "previewUrl",
                 "proxyReady",
                 "waveformReady",
             ],
             parent,
         )
+
+
+class AssetFilterModel(QSortFilterProxyModel):
+    def __init__(self, source_model: AssetListModel, parent: QObject | None = None):
+        super().__init__(parent)
+        self._search_text = ""
+        self.setDynamicSortFilter(True)
+        self.setSourceModel(source_model)
+
+    @Slot(str)
+    def setSearchText(self, value: str) -> None:
+        normalized = value.strip().casefold()
+        if normalized == self._search_text:
+            return
+        self.beginFilterChange()
+        self._search_text = normalized
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not self._search_text:
+            return True
+        source = self.sourceModel()
+        if not isinstance(source, AssetListModel):
+            return False
+        return self._search_text in str(source.get(source_row).get("name") or "").casefold()
 
 
 class SequenceListModel(DictListModel):
@@ -238,6 +272,40 @@ class ClipListModel(DictListModel):
         )
 
 
+class WebLayerListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            [
+                "layerId",
+                "name",
+                "kind",
+                "parentId",
+                "editable",
+                "content",
+                "color",
+                "fontFamily",
+                "fontSize",
+                "image",
+                "x",
+                "y",
+                "width",
+                "height",
+                "rotation",
+                "opacity",
+                "zIndex",
+                "layerVisible",
+                "lockedFields",
+                "allFieldsLocked",
+                "keyframeCount",
+                "enterMs",
+                "exitMs",
+                "delayMs",
+                "durationMs",
+            ],
+            parent,
+        )
+
+
 class TransitionListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
@@ -271,6 +339,7 @@ class TaskListModel(DictListModel):
             [
                 "taskId",
                 "displayName",
+                "commandType",
                 "kind",
                 "status",
                 "statusLabel",
@@ -278,9 +347,12 @@ class TaskListModel(DictListModel):
                 "messageCode",
                 "messageLabel",
                 "queuePosition",
+                "inputAssetIds",
+                "contextId",
                 "error",
                 "artifacts",
                 "executionTrace",
+                "createdAt",
             ],
             parent,
         )
@@ -293,6 +365,7 @@ class SubtitleDocumentListModel(DictListModel):
                 "documentId",
                 "assetId",
                 "mediaAssetId",
+                "sequenceId",
                 "language",
                 "isSource",
                 "sourceDocumentId",
@@ -324,6 +397,7 @@ class SubtitlePlacementListModel(DictListModel):
             [
                 "placementId",
                 "trackId",
+                "documentId",
                 "segmentId",
                 "clipId",
                 "audioTrackPosition",
@@ -332,6 +406,7 @@ class SubtitlePlacementListModel(DictListModel):
                 "text",
                 "sourceText",
                 "hasOverride",
+                "timingOverridden",
             ],
             parent,
         )
@@ -358,6 +433,7 @@ class HighlightListModel(DictListModel):
                 "assetId",
                 "documentId",
                 "sequenceId",
+                "sourceSequenceId",
                 "startFrame",
                 "endFrame",
                 "title",

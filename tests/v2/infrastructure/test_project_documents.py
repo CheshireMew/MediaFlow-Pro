@@ -6,7 +6,9 @@ from mediaflow.application.highlight_service import HighlightService
 from mediaflow.domain.audio import AudioEffect
 from mediaflow.domain.enums import AssetKind, AudioEffectKind, TrackKind
 from mediaflow.domain.highlights import HighlightCandidate
+from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
+from mediaflow.domain.timeline import Clip
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
 
@@ -236,3 +238,131 @@ def test_manual_highlight_selection_edit_and_short_draft_share_one_persisted_can
         )
         synced = repository.load_timeline(first.id)
         assert [(clip.source_in, clip.duration) for clip in synced.clips] == [(180, 180)]
+
+
+def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timeline(
+    tmp_path: Path,
+) -> None:
+    first_video = tmp_path / "first.mp4"
+    second_video = tmp_path / "second.mp4"
+    mixed_audio = tmp_path / "timeline-mix.wav"
+    for source in (first_video, second_video, mixed_audio):
+        source.write_bytes(b"media")
+
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        first_asset = repository.import_external_asset(first_video, AssetKind.VIDEO)
+        second_asset = repository.import_external_asset(second_video, AssetKind.VIDEO)
+        audio_asset = repository.import_external_asset(mixed_audio, AssetKind.AUDIO)
+        project = repository.get_project()
+        sequence_id = project.main_sequence_id
+        state = repository.load_timeline(sequence_id)
+        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
+        audio_track = next(track for track in state.tracks if track.kind == TrackKind.AUDIO)
+        subtitle_track = next(track for track in state.tracks if track.kind == TrackKind.SUBTITLE)
+        state.clips = [
+            Clip(
+                track_id=video_track.id,
+                asset_id=first_asset.id,
+                timeline_start=0,
+                source_in=10,
+                duration=60,
+            ),
+            Clip(
+                track_id=video_track.id,
+                asset_id=second_asset.id,
+                timeline_start=60,
+                source_in=5,
+                duration=40,
+            ),
+            Clip(
+                track_id=audio_track.id,
+                asset_id=audio_asset.id,
+                timeline_start=0,
+                source_in=0,
+                duration=100,
+            ),
+        ]
+        repository.save_timeline(state)
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=audio_asset.id,
+            sequence_id=sequence_id,
+            language="zh_CN",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=20,
+            end_frame=80,
+            text="来自整个时间轴的字幕",
+        )
+        repository.create_subtitle_document(document, [segment])
+        repository.place_subtitle_document(
+            document.id,
+            subtitle_track.id,
+            follow_clips=False,
+        )
+
+        class TimelineHighlightClient:
+            def __init__(self, _settings) -> None:
+                pass
+
+            def complete_json(self, **_kwargs):
+                return {
+                    "candidates": [
+                        {
+                            "start_id": segment.id,
+                            "end_id": segment.id,
+                            "title": "时间轴高光",
+                            "reason": "覆盖多轨内容",
+                            "score": 0.9,
+                        }
+                    ]
+                }
+
+        service = HighlightService(repository, TimelineHighlightClient)
+        candidate = service.analyze_document(
+            document.id,
+            provider=LlmProviderSettings(
+                name="Test",
+                base_url="http://127.0.0.1",
+                api_key="test",
+                model="test",
+                enabled=True,
+            ),
+        )
+        assert [item.asset_id for item in candidate] == [first_asset.id]
+        short = service.create_short_sequence(candidate[0].id)
+        short_state = repository.load_timeline(short.id)
+        short_subtitle_track = next(
+            track for track in short_state.tracks if track.kind == TrackKind.SUBTITLE
+        )
+
+        assert len(repository.list_sequences()) == 2
+        assert {
+            clip.asset_id: (clip.timeline_start, clip.source_in, clip.duration)
+            for clip in short_state.clips
+        } == {
+            first_asset.id: (0, 30, 40),
+            second_asset.id: (40, 5, 20),
+            audio_asset.id: (0, 20, 60),
+        }
+        assert [
+            (placement.start_frame, placement.end_frame)
+            for placement in repository.list_subtitle_placements(short_subtitle_track.id)
+        ] == [(0, 60)]
+
+        service.update_candidate(
+            candidate[0].id,
+            start_frame=30,
+            end_frame=70,
+            title="更新后的时间轴高光",
+        )
+        synced = repository.load_timeline(short.id)
+        assert {
+            clip.asset_id: (clip.timeline_start, clip.source_in, clip.duration)
+            for clip in synced.clips
+        } == {
+            first_asset.id: (0, 40, 30),
+            second_asset.id: (30, 5, 10),
+            audio_asset.id: (0, 30, 40),
+        }

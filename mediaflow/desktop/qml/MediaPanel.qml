@@ -7,27 +7,199 @@ import "components"
 
 Item {
     id: root
+    objectName: "mediaPanel"
+    required property Item dragPreview
+    property int playheadFrame: 0
+    property real pixelsPerFrame: 3.0
+    property bool snapEnabled: true
+    property string relinkAssetId: ""
+    property string contextAssetId: ""
+    property var taskData: ({})
+    readonly property string viewMode: String(
+        settingsController.settingsData.assetViewMode || "list")
+    readonly property var contextAssetData: mediaController.selectedAssetId === contextAssetId
+        ? mediaController.selectedAssetData : ({})
+    readonly property int filteredAssetCount: assetViewLoader.item
+        ? assetViewLoader.item.count : 0
+
+    function openImportDialog() {
+        importDialog.open();
+    }
+
+    function addAssetAtPlayhead(assetId) {
+        timelineController.dropAssets(
+            [assetId],
+            "",
+            playheadFrame,
+            pixelsPerFrame,
+            playheadFrame,
+            snapEnabled,
+            false);
+    }
+
+    function openAssetContextMenu(assetId) {
+        contextAssetId = assetId;
+        if (!mediaController.isAssetSelected(assetId))
+            mediaController.selectAsset(assetId);
+        assetContextMenu.popup();
+    }
+
+    function refreshTask() {
+        taskData = taskController.latestMediaTask(mediaController.selectedAssetId);
+    }
+
+    function viewModeLabel(mode) {
+        if (mode === "thumbnails")
+            return qsTr("缩略图");
+        if (mode === "large_thumbnails")
+            return qsTr("大缩略图");
+        return qsTr("列表");
+    }
+
+    function cycleViewMode() {
+        const nextMode = viewMode === "list" ? "thumbnails"
+            : viewMode === "thumbnails" ? "large_thumbnails" : "list";
+        settingsController.setAssetViewMode(nextMode);
+    }
+
+    Component.onCompleted: refreshTask()
+
+    Connections {
+        target: taskController
+        function onTasksChanged() { root.refreshTask(); }
+    }
+    Connections {
+        target: mediaController
+        function onSelectionChanged() { root.refreshTask(); }
+        function onProjectStateChanged() { root.refreshTask(); }
+    }
+
+    Menu {
+        id: assetContextMenu
+        objectName: "mediaAssetContextMenu"
+        MenuItem {
+            objectName: "assetAddAtPlayheadMenuItem"
+            text: qsTr("添加到播放头")
+            enabled: root.contextAssetData.status === "online"
+            onTriggered: root.addAssetAtPlayhead(root.contextAssetId)
+        }
+        MenuItem {
+            text: qsTr("重新定位")
+            visible: root.contextAssetData.status === "offline"
+            onTriggered: {
+                root.relinkAssetId = root.contextAssetId;
+                selectedRelinkDialog.open();
+            }
+        }
+    }
+
+    Component {
+        id: assetListComponent
+        ListView {
+            objectName: "mediaAssetListView"
+            clip: true
+            spacing: 2
+            model: mediaController.filteredAssetsModel
+            ScrollBar.vertical: ScrollBar {}
+
+            delegate: MediaAssetDelegate {
+                width: ListView.view ? ListView.view.width : 0
+                height: 30
+                viewMode: "list"
+                dragPreview: root.dragPreview
+                onContextRequested: function (assetId) {
+                    root.openAssetContextMenu(assetId);
+                }
+                onAddRequested: function (assetId) {
+                    root.addAssetAtPlayhead(assetId);
+                }
+            }
+        }
+    }
+
+    Component {
+        id: assetGridComponent
+        GridView {
+            objectName: "mediaAssetGridView"
+            clip: true
+            model: mediaController.filteredAssetsModel
+            cellWidth: root.viewMode === "large_thumbnails" ? 172 : 112
+            cellHeight: root.viewMode === "large_thumbnails" ? 140 : 92
+            ScrollBar.vertical: ScrollBar {}
+
+            delegate: MediaAssetDelegate {
+                width: (GridView.view ? GridView.view.cellWidth : 112) - 8
+                height: root.viewMode === "large_thumbnails" ? 132 : 84
+                viewMode: root.viewMode
+                dragPreview: root.dragPreview
+                onContextRequested: function (assetId) {
+                    root.openAssetContextMenu(assetId);
+                }
+                onAddRequested: function (assetId) {
+                    root.addAssetAtPlayhead(assetId);
+                }
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 10
         FileDialog {
             id: importDialog
             title: qsTr("导入媒体")
-            fileMode: FileDialog.OpenFile
+            fileMode: FileDialog.OpenFiles
             currentFolder: workspaceController.defaultImportDirectoryUrl
             nameFilters: [qsTr("媒体文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa)"), qsTr("所有文件 (*)")]
-            onAccepted: mediaController.importMedia(selectedFile.toString())
+            onAccepted: mediaController.importFiles(selectedFiles)
         }
         FolderDialog {
             id: batchRelinkDialog
             title: qsTr("选择离线素材所在目录")
             onAccepted: mediaController.relinkOfflineMedia(selectedFolder.toString())
         }
+        FolderDialog {
+            id: webPackageDialog
+            title: qsTr("选择包含 editable-media.json 的网页包")
+            onAccepted: mediaController.importWebPackage(selectedFolder.toString())
+        }
+        FileDialog {
+            id: selectedRelinkDialog
+            title: qsTr("重新定位离线素材")
+            fileMode: FileDialog.OpenFile
+            onAccepted: mediaController.relinkMedia(root.relinkAssetId, selectedFile.toString())
+        }
+        Dialog {
+            id: replaceDialog
+            anchors.centerIn: parent
+            implicitWidth: 400
+            width: 400
+            modal: true
+            title: qsTr("替换为不同内容？")
+            standardButtons: Dialog.Yes | Dialog.No
+            onAccepted: mediaController.resolveRelinkReplacement(true)
+            onRejected: mediaController.resolveRelinkReplacement(false)
+            contentItem: Text {
+                width: 360
+                text: qsTr("所选文件的内容指纹与原素材不同：\n%1\n\n确认后会更新关联，并重新生成预览缓存和音频波形。").arg(workspaceController.pendingRelinkPath)
+                color: Theme.text
+                wrapMode: Text.WordWrap
+            }
+        }
+        Connections {
+            target: workspaceController
+            function onRelinkConfirmationChanged() {
+                if (workspaceController.relinkConfirmationPending)
+                    replaceDialog.open();
+                else
+                    replaceDialog.close();
+            }
+        }
 
         RowLayout {
             Layout.fillWidth: true
             Text {
-                text: qsTr("媒体")
+                text: qsTr("素材")
                 color: Theme.text
                 font.pixelSize: Theme.fontSizeSection
                 font.weight: Font.DemiBold
@@ -36,14 +208,13 @@ Item {
                 Layout.fillWidth: true
             }
             AppButton {
-                visible: mediaController.selectedAssetIds.length > 1
-                text: qsTr("添加所选 (%1)").arg(mediaController.selectedAssetIds.length)
-                onClicked: mediaController.addSelectedAssetsToTimeline()
-            }
-            AppButton {
                 visible: workspaceController.offlineAssetCount > 0
                 text: qsTr("批量重新定位 (%1)").arg(workspaceController.offlineAssetCount)
                 onClicked: batchRelinkDialog.open()
+            }
+            AppButton {
+                text: qsTr("网页包")
+                onClicked: webPackageDialog.open()
             }
             AppButton {
                 text: qsTr("导入")
@@ -52,154 +223,73 @@ Item {
             }
         }
 
-        AppTextField {
-            id: search
+        RowLayout {
             Layout.fillWidth: true
-            implicitHeight: 34
-            placeholderText: qsTr("搜索素材")
-            color: Theme.text
-            placeholderTextColor: Theme.textMuted
-            leftPadding: 12
-            background: Rectangle {
-                radius: Theme.radiusSmall
-                color: Theme.surfaceRaised
-                border.color: search.activeFocus ? Theme.accent : Theme.border
+            spacing: 6
+            AppTextField {
+                id: search
+                objectName: "mediaSearchField"
+                Layout.fillWidth: true
+                implicitHeight: 34
+                placeholderText: qsTr("搜索素材")
+                color: Theme.text
+                placeholderTextColor: Theme.textMuted
+                leftPadding: 12
+                onTextChanged: mediaController.setAssetSearchText(text)
+                background: Rectangle {
+                    radius: Theme.radiusSmall
+                    color: Theme.surfaceRaised
+                    border.color: search.activeFocus ? Theme.accent : Theme.border
+                }
+            }
+            MediaViewModeButton {
+                objectName: "mediaViewModeButton"
+                iconKind: root.viewMode
+                toolTipText: root.viewModeLabel(root.viewMode)
+                    + " · " + qsTr("点击切换视图")
+                onClicked: root.cycleViewMode()
             }
         }
 
-        ListView {
-            id: assetList
+        Text {
+            objectName: "mediaDragHint"
+            Layout.fillWidth: true
+            text: qsTr("将素材拖到下方时间轴；同一素材可以重复拖入")
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
+
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            spacing: 8
-            model: mediaController.assetsModel
-
-            delegate: Rectangle {
-                id: assetDelegate
-                objectName: "mediaAssetDelegate"
-                required property string assetId
-                required property string name
-                required property string kind
-                required property string status
-                required property bool proxyReady
-                required property bool waveformReady
-                property var draggedAssetIds: mediaController.isAssetSelected(assetId) ? mediaController.selectedAssetIds : [assetId]
-                width: assetList.width
-                height: visible ? 76 : 0
-                visible: search.text.length === 0 || name.toLowerCase().includes(search.text.toLowerCase())
-                radius: Theme.radiusSmall
-                color: mediaController.isAssetSelected(assetId) ? Theme.accentSoft : assetMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-                border.color: mediaController.isAssetSelected(assetId) ? Theme.accent : Theme.border
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 9
-                    spacing: 10
-                    Rectangle {
-                        width: 54
-                        height: 54
-                        radius: 7
-                        color: kind === "audio" ? "#382d54" : kind === "image" ? "#493b27" : "#173754"
-                        Text {
-                            anchors.centerIn: parent
-                            text: kind === "audio" ? "♫" : kind === "image" ? "▧" : "▶"
-                            color: Theme.text
-                            font.pixelSize: Theme.fontSizeTitle
-                        }
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 5
-                        Text {
-                            Layout.fillWidth: true
-                            text: name
-                            color: Theme.text
-                            font.pixelSize: Theme.fontSizeBodySmall
-                            font.weight: Font.Medium
-                            elide: Text.ElideRight
-                        }
-                        RowLayout {
-                            spacing: 6
-                            Text {
-                                text: status === "online" ? qsTr("可用") : qsTr("离线")
-                                color: status === "online" ? Theme.success : Theme.danger
-                                font.pixelSize: Theme.fontSizeCaption
-                            }
-                            Text {
-                                text: proxyReady ? qsTr("代理") : ""
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontSizeCaption
-                            }
-                            Text {
-                                text: waveformReady ? qsTr("波形") : ""
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontSizeCaption
-                            }
-                        }
-                    }
-                    AppButton {
-                        text: "+"
-                        width: 34
-                        enabled: status === "online"
-                        onClicked: mediaController.addAssetToTimeline(assetId)
-                    }
-                }
-                MouseArea {
-                    id: assetMouse
-                    anchors.fill: parent
-                    anchors.rightMargin: 42
-                    hoverEnabled: true
-                    drag.target: assetDragProxy
-                    drag.axis: Drag.XAndYAxis
-                    onClicked: function (mouse) {
-                        mediaController.selectAsset(assetId, (mouse.modifiers & Qt.ControlModifier) !== 0);
-                    }
-                    onDoubleClicked: mediaController.addAssetToTimeline(assetId)
-                    onReleased: {
-                        assetDragProxy.Drag.drop();
-                        assetDragProxy.x = 0;
-                        assetDragProxy.y = 0;
-                    }
-                    onCanceled: {
-                        assetDragProxy.x = 0;
-                        assetDragProxy.y = 0;
-                    }
-                }
-                Rectangle {
-                    id: assetDragProxy
-                    width: assetDelegate.width
-                    height: assetDelegate.height
-                    radius: Theme.radiusSmall
-                    color: Theme.accentSoft
-                    border.color: Theme.accent
-                    opacity: Drag.active ? 0.88 : 0
-                    visible: Drag.active
-                    z: 100
-                    Drag.active: assetMouse.drag.active && assetDelegate.status === "online"
-                    Drag.source: assetDelegate
-                    Drag.keys: ["mediaflowAsset"]
-                    Drag.hotSpot.x: width / 2
-                    Drag.hotSpot.y: height / 2
-                    Text {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        text: assetDelegate.draggedAssetIds.length > 1 ? qsTr("%1 个素材").arg(assetDelegate.draggedAssetIds.length) : assetDelegate.name
-                        color: Theme.text
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
+            Loader {
+                id: assetViewLoader
+                anchors.fill: parent
+                sourceComponent: root.viewMode === "list"
+                    ? assetListComponent : assetGridComponent
             }
 
             EmptyState {
                 anchors.fill: parent
-                visible: assetList.count === 0
+                visible: root.filteredAssetCount === 0
                 iconText: "＋"
-                title: qsTr("导入第一个素材")
-                description: qsTr("支持视频、音频和图片。下载的视频也会自动出现在这里。")
+                title: search.text.length === 0
+                    ? qsTr("导入第一个素材") : qsTr("没有匹配的素材")
+                description: search.text.length === 0
+                    ? qsTr("支持视频、音频和图片。下载的视频也会自动出现在这里。")
+                    : qsTr("换个关键词，或清空搜索框查看全部素材。")
             }
         }
+
+        ContextTaskCard {
+            objectName: "mediaTaskPanel"
+            Layout.fillWidth: true
+            taskData: root.taskData
+            fallbackTitle: qsTr("媒体处理任务")
+            showArtifact: false
+        }
+
     }
 
     DropArea {

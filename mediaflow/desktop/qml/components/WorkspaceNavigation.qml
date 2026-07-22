@@ -8,11 +8,8 @@ Rectangle {
     objectName: "workspaceNavigation"
 
     property string activeMode: "media"
-    property bool compactInspectorAvailable: false
-    property bool inspectorDrawerOpen: false
     signal modeRequested(string mode)
     signal settingsRequested
-    signal inspectorDrawerToggled
 
     implicitHeight: 50
     color: Theme.surfaceRaised
@@ -30,23 +27,27 @@ Rectangle {
             model: [
                 {
                     key: "media",
-                    label: qsTr("媒体")
+                    label: qsTr("素材")
                 },
                 {
                     key: "transcript",
-                    label: qsTr("转录")
+                    label: qsTr("自动字幕")
+                },
+                {
+                    key: "subtitle",
+                    label: qsTr("字幕编辑")
                 },
                 {
                     key: "translate",
-                    label: qsTr("翻译")
+                    label: qsTr("字幕翻译")
                 },
                 {
                     key: "highlight",
-                    label: qsTr("高光")
+                    label: qsTr("AI 高光")
                 },
                 {
                     key: "edit",
-                    label: qsTr("编辑")
+                    label: qsTr("片段属性")
                 },
                 {
                     key: "audio",
@@ -55,12 +56,19 @@ Rectangle {
                 {
                     key: "export",
                     label: qsTr("导出")
+                },
+                {
+                    key: "tasks",
+                    label: qsTr("任务")
                 }
             ]
             Rectangle {
                 id: navigationItem
                 required property var modelData
                 objectName: "navigationItem_" + modelData.key
+                function click() {
+                    root.modeRequested(modelData.key);
+                }
                 Layout.preferredWidth: 84
                 Layout.fillHeight: true
                 radius: Theme.radiusSmall
@@ -86,8 +94,8 @@ Rectangle {
                 Accessible.name: modelData.label
                 Accessible.role: Accessible.Button
                 activeFocusOnTab: true
-                Keys.onReturnPressed: root.modeRequested(modelData.key)
-                Keys.onSpacePressed: root.modeRequested(modelData.key)
+                Keys.onReturnPressed: navigationItem.click()
+                Keys.onSpacePressed: navigationItem.click()
                 ToolTip.visible: navMouse.containsMouse
                 ToolTip.text: modelData.label
                 MouseArea {
@@ -96,22 +104,13 @@ Rectangle {
                     hoverEnabled: true
                     onClicked: {
                         navigationItem.forceActiveFocus();
-                        root.modeRequested(modelData.key);
+                        navigationItem.click();
                     }
                 }
             }
         }
         Item {
             Layout.fillWidth: true
-        }
-        AppButton {
-            objectName: "compactInspectorButton"
-            Layout.fillHeight: true
-            visible: root.compactInspectorAvailable
-            checkable: true
-            checked: root.inspectorDrawerOpen
-            text: qsTr("检查器")
-            onClicked: root.inspectorDrawerToggled()
         }
         Rectangle {
             Layout.preferredWidth: 1

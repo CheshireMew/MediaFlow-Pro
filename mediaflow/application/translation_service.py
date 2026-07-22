@@ -66,6 +66,7 @@ class TranslationService:
             project_id=project.id,
             asset_id=source_document.asset_id,
             media_asset_id=source_document.media_asset_id,
+            sequence_id=source_document.sequence_id,
             language=output_language,
             source_document_id=source_document.id,
             is_source=False,
@@ -197,6 +198,92 @@ class TranslationService:
         )
         self.write_document_srt(document_id)
         return translated
+
+    def translate_selected_to_document(
+        self,
+        source_document_id: str,
+        target_document_id: str,
+        segment_ids: list[str],
+        *,
+        target_language: str,
+        provider: LlmProviderSettings,
+        mode: TranslationMode = "standard",
+        glossary: list[GlossaryTermSettings] | None = None,
+        progress: TranslationProgress | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> list[SubtitleSegment]:
+        source_document = self.repository.get_subtitle_document(source_document_id)
+        target_document = self.repository.get_subtitle_document(target_document_id)
+        if target_document.source_document_id != source_document.id:
+            raise ValueError("目标字幕文档不属于当前源文档")
+        wanted = set(segment_ids)
+        source_segments = self.repository.list_subtitle_segments(source_document_id)
+        selected = [segment for segment in source_segments if segment.id in wanted]
+        if not selected or len(selected) != len(wanted):
+            raise KeyError("包含不属于当前源字幕文档的字幕段")
+        translated = self.translate_segments_preserving_timing(
+            selected,
+            target_language=target_language,
+            provider=provider,
+            mode=mode,
+            glossary=glossary,
+            progress=progress,
+            check_cancelled=check_cancelled,
+        )
+        existing = self.repository.list_subtitle_segments(target_document_id)
+        selected_ranges = [
+            (segment.start_frame, segment.end_frame) for segment in selected
+        ]
+        by_source = {
+            segment.source_segment_id: segment
+            for segment in existing
+            if segment.source_segment_id is not None
+        }
+        replacements: dict[str, SubtitleSegment] = {}
+        additions: list[SubtitleSegment] = []
+        for translated_segment in translated:
+            current = by_source.get(translated_segment.id)
+            if current is None:
+                additions.append(
+                    SubtitleSegment(
+                        document_id=target_document_id,
+                        source_segment_id=translated_segment.id,
+                        start_frame=translated_segment.start_frame,
+                        end_frame=translated_segment.end_frame,
+                        text=translated_segment.text,
+                        speaker=translated_segment.speaker,
+                        confidence=None,
+                    )
+                )
+            else:
+                replacements[current.id] = current.model_copy(
+                    update={
+                        "start_frame": translated_segment.start_frame,
+                        "end_frame": translated_segment.end_frame,
+                        "text": translated_segment.text,
+                        "confidence": None,
+                    }
+                )
+        def keep_existing(segment: SubtitleSegment) -> bool:
+            if segment.id in replacements:
+                return True
+            if segment.source_segment_id is not None:
+                return True
+            return not any(
+                segment.end_frame > start_frame
+                and segment.start_frame < end_frame
+                for start_frame, end_frame in selected_ranges
+            )
+
+        updated = [
+            replacements.get(segment.id, segment)
+            for segment in existing
+            if keep_existing(segment)
+        ] + additions
+        updated.sort(key=lambda segment: (segment.start_frame, segment.end_frame, segment.id))
+        self.repository.save_subtitle_segments(target_document_id, updated)
+        self.write_document_srt(target_document_id)
+        return [*replacements.values(), *additions]
 
     def _translate_strict_batch(
         self,

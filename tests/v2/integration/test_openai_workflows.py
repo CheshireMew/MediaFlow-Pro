@@ -210,6 +210,46 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
             ]
             assert intelligent_segments[0].source_segment_id is None
 
+            repository.save_subtitle_segments(
+                translated.id,
+                [
+                    translated_segments[0].model_copy(update={"text": "用户旧译文"}),
+                    translated_segments[1],
+                ],
+            )
+            _translation_service(repository).translate_selected_to_document(
+                source.id,
+                translated.id,
+                [segments[0].id],
+                target_language="fr",
+                provider=provider,
+            )
+            assert [item.text for item in repository.list_subtitle_segments(source.id)] == [
+                "Hello",
+                "World",
+            ]
+            assert [
+                item.text for item in repository.list_subtitle_segments(translated.id)
+            ] == ["译文：Hello", "译文：World"]
+
+            _translation_service(repository).translate_selected_to_document(
+                source.id,
+                intelligent.id,
+                [segment.id for segment in segments],
+                target_language="zh_CN",
+                provider=provider,
+                mode="standard",
+            )
+            intelligent_retranslated = repository.list_subtitle_segments(intelligent.id)
+            assert [item.text for item in intelligent_retranslated] == [
+                "译文：Hello",
+                "译文：World",
+            ]
+            assert [item.source_segment_id for item in intelligent_retranslated] == [
+                segments[0].id,
+                segments[1].id,
+            ]
+
             highlight_service = HighlightService(repository, OpenAIJsonClient)
             candidates = highlight_service.analyze_document(
                 translated.id,

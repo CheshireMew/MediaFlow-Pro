@@ -256,10 +256,10 @@ Dialog {
                             onEditingFinished: root.scheduleSettingsSave()
                         }
                     }
-                    Text { text: qsTr("预览与代理"); color: Theme.text; font.pixelSize: Theme.fontSizeBodyLarge; font.weight: Font.DemiBold }
+                    Text { text: qsTr("预览性能"); color: Theme.text; font.pixelSize: Theme.fontSizeBodyLarge; font.weight: Font.DemiBold }
                     AppCheckBox {
                         id: automaticProxy
-                        text: qsTr("自动为高分辨率、高码率、VFR、10-bit/HDR 或持续掉帧素材生成代理")
+                        text: qsTr("需要时自动创建轻量预览文件（不会修改原视频）")
                         onToggled: root.scheduleSettingsSave()
                     }
                     RowLayout {
@@ -269,7 +269,7 @@ Dialog {
                             id: previewQuality
                             Layout.fillWidth: true
                             textRole: "text"; valueRole: "value"
-                            model: [{text: qsTr("自动"), value: "auto"}, {text: qsTr("原始素材"), value: "source"}, {text: qsTr("代理"), value: "proxy"}]
+                            model: [{text: qsTr("自动"), value: "auto"}, {text: qsTr("原始素材"), value: "source"}, {text: qsTr("轻量预览"), value: "proxy"}]
                             onActivated: root.scheduleSettingsSave()
                         }
                     }
@@ -665,7 +665,6 @@ Dialog {
                             required property string name
                             required property string baseUrl
                             required property string model
-                            required property bool enabled
                             required property bool active
                             width: providerList.width
                             height: 56
@@ -684,7 +683,7 @@ Dialog {
                                     Text { Layout.fillWidth: true; text: model + " · " + baseUrl; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption; elide: Text.ElideMiddle }
                                 }
                                 Text { visible: active; text: qsTr("当前"); color: Theme.accentHover; font.pixelSize: Theme.fontSizeCaption }
-                                Text { visible: !enabled; text: qsTr("已停用"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+                                Text { visible: !model.enabled; text: qsTr("已停用"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
                             }
                             MouseArea {
                                 id: providerMouse

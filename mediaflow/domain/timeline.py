@@ -8,6 +8,7 @@ from pydantic import Field, computed_field, field_validator, model_validator
 from .enums import AssetKind, TrackKind, TransitionKind
 from .model_base import DomainModel, new_id
 from .project import Sequence
+from .web_media import WebClipState
 
 
 def compatible_track_kinds(asset_kind: AssetKind) -> tuple[TrackKind, ...]:
@@ -15,6 +16,7 @@ def compatible_track_kinds(asset_kind: AssetKind) -> tuple[TrackKind, ...]:
         AssetKind.VIDEO: (TrackKind.VIDEO, TrackKind.AUDIO),
         AssetKind.AUDIO: (TrackKind.AUDIO,),
         AssetKind.IMAGE: (TrackKind.VIDEO,),
+        AssetKind.WEB: (TrackKind.VIDEO,),
         AssetKind.SUBTITLE: (),
     }[asset_kind]
 
@@ -159,6 +161,7 @@ class TimelineState(DomainModel):
     transitions: list[Transition] = Field(default_factory=list)
     markers: list[TimelineMarker] = Field(default_factory=list)
     ranges: list[TimelineRange] = Field(default_factory=list)
+    web_states: dict[str, WebClipState] = Field(default_factory=dict)
 
     @property
     def duration_frames(self) -> int:

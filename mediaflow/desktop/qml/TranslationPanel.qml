@@ -8,39 +8,114 @@ ColumnLayout {
     id: root
     objectName: "translationPanel"
     spacing: 10
+    property var comparisonData: ({})
+    property var taskData: ({})
+    property var selectedRowIds: []
+    readonly property bool hasDocuments: sourceDocument.count > 0
+    readonly property bool taskActive: taskData.status === "pending"
+        || taskData.status === "running" || taskData.status === "paused"
+    signal modeRequested(string mode)
+    signal importRequested
 
     function selectValue(control, value) {
         for (var index = 0; index < control.model.length; ++index) {
             if (control.model[index].value === value) {
-                control.currentIndex = index
-                return
+                control.currentIndex = index;
+                return;
             }
         }
-        control.currentIndex = 0
+        control.currentIndex = 0;
     }
 
     function syncDefaults() {
-        root.selectValue(targetLanguage, settingsController.defaultTranslationLanguage)
-        root.selectValue(translationMode, settingsController.settingsData.translationMode || "standard")
+        root.selectValue(targetLanguage, settingsController.defaultTranslationLanguage);
+        root.selectValue(translationMode, settingsController.settingsData.translationMode || "standard");
+        root.syncDocumentSelector();
+        root.refreshComparison();
+    }
+
+    function syncDocumentSelector() {
+        const row = subtitleController.subtitleDocumentsModel.findRow(
+            "documentId", subtitleController.selectedDocumentId);
+        if (row >= 0)
+            sourceDocument.currentIndex = row;
+    }
+
+    function refreshComparison() {
+        const documentId = String(subtitleController.selectedDocumentId || "");
+        comparisonData = subtitleController.translationComparison(
+            documentId, String(targetLanguage.currentValue || ""));
+        const contextId = String(comparisonData.sourceDocumentId || documentId);
+        taskData = taskController.latestTask("translate", contextId);
+    }
+
+    function rowSelected(rowId) {
+        return selectedRowIds.indexOf(String(rowId)) >= 0;
+    }
+
+    function toggleRow(rowId) {
+        const key = String(rowId);
+        const next = selectedRowIds.slice();
+        const index = next.indexOf(key);
+        if (index >= 0)
+            next.splice(index, 1);
+        else
+            next.push(key);
+        selectedRowIds = next;
+    }
+
+    function selectedSourceSegmentIds() {
+        const wantedRows = selectedRowIds;
+        const rows = comparisonData.rows || [];
+        const ids = [];
+        for (let rowIndex = 0; rowIndex < rows.length; ++rowIndex) {
+            const row = rows[rowIndex];
+            if (wantedRows.indexOf(String(row.rowId)) < 0)
+                continue;
+            const sourceIds = row.sourceSegmentIds || [];
+            for (let idIndex = 0; idIndex < sourceIds.length; ++idIndex) {
+                const id = String(sourceIds[idIndex]);
+                if (ids.indexOf(id) < 0)
+                    ids.push(id);
+            }
+        }
+        return ids;
     }
 
     function loadGlossaryTerm() {
-        const data = settingsController.selectedGlossaryTermData
-        termSource.text = data.source || ""
-        termTarget.text = data.target || ""
-        termNote.text = data.note || ""
-        termCategory.text = data.category || "general"
+        const data = settingsController.selectedGlossaryTermData;
+        termSource.text = data.source || "";
+        termTarget.text = data.target || "";
+        termNote.text = data.note || "";
+        termCategory.text = data.category || "general";
     }
 
     Component.onCompleted: syncDefaults()
     Connections {
         target: settingsController
-        function onSettingsChanged() { root.syncDefaults() }
-        function onSelectionChanged() { root.loadGlossaryTerm() }
+        function onSettingsChanged() {
+            root.syncDefaults();
+        }
+        function onSelectionChanged() {
+            root.loadGlossaryTerm();
+        }
+    }
+    Connections {
+        target: subtitleController
+        function onSelectionChanged() {
+            root.selectedRowIds = [];
+            root.syncDocumentSelector();
+            root.refreshComparison();
+        }
+        function onProjectStateChanged() { root.refreshComparison(); }
+    }
+    Connections {
+        target: taskController
+        function onTasksChanged() { root.refreshComparison(); }
     }
 
     Text {
-        text: qsTr("翻译与校对")
+        text: qsTr("字幕翻译")
         color: Theme.text
         font.pixelSize: Theme.fontSizeSection
         font.weight: Font.DemiBold
@@ -49,8 +124,12 @@ ColumnLayout {
     TabBar {
         id: translationTabs
         Layout.fillWidth: true
-        TabButton { text: qsTr("翻译") }
-        TabButton { text: qsTr("术语库") }
+        TabButton {
+            text: qsTr("翻译")
+        }
+        TabButton {
+            text: qsTr("术语库")
+        }
     }
 
     StackLayout {
@@ -60,107 +139,246 @@ ColumnLayout {
 
         ColumnLayout {
             spacing: 9
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("标准模式严格保持分段；智能模式可按语义重分段；校对模式保留原语言并修正 ASR 文本。")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-                wrapMode: Text.WordWrap
-            }
-            ListView {
-                id: translationDocuments
+
+            ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-                spacing: 6
+                visible: !root.hasDocuments
+                spacing: 8
+                EmptyState {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 68
+                    iconVisible: false
+                    iconText: "译"
+                    title: qsTr("还没有可翻译的字幕")
+                    description: qsTr("先识别时间轴声音，或导入已有字幕，再生成译文。")
+                }
+                AppButton {
+                    objectName: "translationStartTranscriptionButton"
+                    Layout.fillWidth: true
+                    primary: true
+                    text: qsTr("识别时间轴声音")
+                    onClicked: root.modeRequested("transcript")
+                }
+                AppButton {
+                    objectName: "translationImportFileButton"
+                    Layout.fillWidth: true
+                    text: qsTr("导入字幕文件")
+                    onClicked: root.importRequested()
+                }
+                Item { Layout.fillHeight: true }
+            }
+
+            AppComboBox {
+                id: sourceDocument
+                objectName: "translationDocumentSelector"
+                Layout.fillWidth: true
+                visible: root.hasDocuments
                 model: subtitleController.subtitleDocumentsModel
+                textRole: "language"
+                valueRole: "documentId"
+                onActivated: subtitleController.selectSubtitleDocument(String(currentValue))
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: root.hasDocuments
+                AppComboBox {
+                    id: translationMode
+                    Layout.fillWidth: true
+                    model: subtitleController.translationModeOptions
+                    textRole: "label"
+                    valueRole: "value"
+                }
+                AppComboBox {
+                    id: targetLanguage
+                    objectName: "translationTargetLanguage"
+                    Layout.fillWidth: true
+                    enabled: translationMode.currentValue !== "proofread"
+                    model: subtitleController.translationLanguageOptions
+                    textRole: "label"
+                    valueRole: "value"
+                    onCurrentValueChanged: root.refreshComparison()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: root.hasDocuments
+                AppButton {
+                    objectName: "translateWholeDocumentButton"
+                    Layout.fillWidth: true
+                    primary: true
+                    text: translationMode.currentValue === "proofread"
+                        ? qsTr("校对整篇") : qsTr("翻译整篇")
+                    enabled: Boolean(root.comparisonData.sourceDocumentId)
+                        && !root.taskActive
+                        && (translationMode.currentValue === "proofread"
+                            || targetLanguage.currentValue.length > 0)
+                    onClicked: subtitleController.translateDocument(
+                        root.comparisonData.sourceDocumentId,
+                        targetLanguage.currentValue,
+                        translationMode.currentValue)
+                }
+                AppButton {
+                    objectName: "translateSelectedRowsButton"
+                    text: qsTr("重译所选 %1").arg(root.selectedRowIds.length)
+                    enabled: root.selectedRowIds.length > 0
+                        && Boolean(root.comparisonData.targetDocumentId)
+                        && !root.taskActive
+                    onClicked: subtitleController.translateComparisonSegments(
+                        root.comparisonData.sourceDocumentId,
+                        root.comparisonData.targetDocumentId,
+                        root.selectedSourceSegmentIds(),
+                        targetLanguage.currentValue,
+                        translationMode.currentValue)
+                }
+            }
+
+            ContextTaskCard {
+                objectName: "translationTaskPanel"
+                Layout.fillWidth: true
+                taskData: root.taskData
+                fallbackTitle: qsTr("翻译任务")
+                visible: root.hasDocuments && Boolean(taskData.taskId)
+            }
+
+            Panel {
+                objectName: "translationComparisonSummary"
+                Layout.fillWidth: true
+                implicitHeight: 70
+                visible: Boolean(root.comparisonData.sourceDocumentId)
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 3
+                        Text {
+                            text: qsTr("%1 → %2").arg(
+                                root.comparisonData.sourceLanguage || "—").arg(
+                                root.comparisonData.targetLanguage || targetLanguage.currentValue)
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSizeBodySmall
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            text: root.comparisonData.targetDocumentId
+                                ? qsTr("双语对照 · %1 行 · 命中 %2 个术语").arg(
+                                    (root.comparisonData.rows || []).length).arg(
+                                    root.comparisonData.glossaryHitCount || 0)
+                                : qsTr("还没有这个语言的译文，先翻译整篇。")
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSizeCaption
+                        }
+                    }
+                    AppButton {
+                        visible: Boolean(root.comparisonData.targetDocumentId)
+                        text: qsTr("放入序列")
+                        onClicked: subtitleController.placeSubtitleDocument(
+                            root.comparisonData.targetDocumentId)
+                    }
+                }
+            }
+
+            ListView {
+                id: comparisonList
+                objectName: "translationComparisonList"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.hasDocuments
+                clip: true
+                spacing: 7
+                model: root.comparisonData.rows || []
                 delegate: Rectangle {
-                    required property string documentId
-                    required property string language
-                    required property bool isSource
-                    required property int segmentCount
-                    width: translationDocuments.width
-                    height: 52
+                    id: comparisonRow
+                    required property var modelData
+                    width: comparisonList.width
+                    height: Math.max(142, comparisonContent.implicitHeight + 18)
                     radius: Theme.radiusSmall
-                    color: subtitleController.selectedDocumentId === documentId
-                           ? Theme.accentSoft : translationMouse.containsMouse
-                           ? Theme.surfaceHover : Theme.surfaceRaised
-                    border.color: subtitleController.selectedDocumentId === documentId
-                                  ? Theme.accent : Theme.border
-                    RowLayout {
-                        anchors.fill: parent
+                    color: root.rowSelected(modelData.rowId)
+                        ? Theme.accentSoft : Theme.surfaceRaised
+                    border.color: modelData.status === "missing"
+                        ? Theme.warning : root.rowSelected(modelData.rowId)
+                        ? Theme.accent : Theme.border
+
+                    ColumnLayout {
+                        id: comparisonContent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
                         anchors.margins: 9
-                        ColumnLayout {
+                        spacing: 6
+                        RowLayout {
                             Layout.fillWidth: true
-                            spacing: 2
-                            Text {
-                                text: language
-                                color: Theme.text
-                                font.pixelSize: Theme.fontSizeBodySmall
-                                font.weight: Font.DemiBold
+                            CheckBox {
+                                checked: root.rowSelected(comparisonRow.modelData.rowId)
+                                onClicked: root.toggleRow(comparisonRow.modelData.rowId)
                             }
                             Text {
-                                text: (isSource ? qsTr("源文档") : qsTr("译文"))
-                                      + " · " + segmentCount + qsTr(" 条")
+                                Layout.fillWidth: true
+                                text: qsTr("%1–%2 帧").arg(
+                                    comparisonRow.modelData.startFrame).arg(
+                                    comparisonRow.modelData.endFrame)
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSizeCaption
                             }
+                            Text {
+                                text: comparisonRow.modelData.status === "missing"
+                                    ? qsTr("待翻译") : qsTr("已翻译")
+                                color: comparisonRow.modelData.status === "missing"
+                                    ? Theme.warning : Theme.success
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
                         }
-                    }
-                    MouseArea {
-                        id: translationMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: subtitleController.selectSubtitleDocument(documentId)
+                        Text {
+                            Layout.fillWidth: true
+                            text: comparisonRow.modelData.sourceText || qsTr("（空白源文本）")
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSizeBodySmall
+                            wrapMode: Text.WordWrap
+                        }
+                        TextArea {
+                            id: targetEditor
+                            objectName: "translationTargetEditor"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.max(48, implicitHeight)
+                            text: comparisonRow.modelData.targetText || ""
+                            placeholderText: qsTr("尚未生成译文")
+                            enabled: Boolean(comparisonRow.modelData.targetSegmentId)
+                            color: Theme.text
+                            wrapMode: TextEdit.Wrap
+                            background: Rectangle {
+                                color: Theme.window
+                                border.color: targetEditor.activeFocus
+                                    ? Theme.accent : Theme.border
+                                radius: Theme.radiusSmall
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Item { Layout.fillWidth: true }
+                            AppButton {
+                                objectName: "translationSaveSegmentButton"
+                                visible: Boolean(comparisonRow.modelData.targetSegmentId)
+                                text: qsTr("保存译文")
+                                enabled: targetEditor.text !== comparisonRow.modelData.targetText
+                                onClicked: subtitleController.updateTranslationSegment(
+                                    root.comparisonData.targetDocumentId,
+                                    comparisonRow.modelData.targetSegmentId,
+                                    targetEditor.text)
+                            }
+                        }
                     }
                 }
                 EmptyState {
                     anchors.fill: parent
-                    visible: translationDocuments.count === 0
+                    visible: comparisonList.count === 0
                     iconText: "译"
-                    title: qsTr("还没有字幕文档")
-                    description: qsTr("先转录媒体或导入 SRT。")
+                    title: subtitleController.selectedDocumentId.length > 0
+                        ? qsTr("没有可对照的字幕段") : qsTr("还没有字幕文档")
+                    description: qsTr("先转录媒体或导入 SRT，再从这里生成译文。")
                 }
-            }
-            Text {
-                text: qsTr("处理模式")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-            }
-            AppComboBox {
-                id: translationMode
-                Layout.fillWidth: true
-                model: subtitleController.translationModeOptions
-                textRole: "label"
-                valueRole: "value"
-            }
-            Text {
-                text: translationMode.currentValue === "proofread"
-                      ? qsTr("校对保持源文档语言") : qsTr("目标语言")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-            }
-            AppComboBox {
-                id: targetLanguage
-                objectName: "translationTargetLanguage"
-                Layout.fillWidth: true
-                enabled: translationMode.currentValue !== "proofread"
-                model: subtitleController.translationLanguageOptions
-                textRole: "label"
-                valueRole: "value"
-            }
-            AppButton {
-                Layout.fillWidth: true
-                primary: true
-                text: translationMode.currentValue === "proofread"
-                      ? qsTr("校对所选文档") : qsTr("翻译所选文档")
-                enabled: subtitleController.selectedDocumentId.length > 0
-                    && (translationMode.currentValue === "proofread"
-                        || targetLanguage.currentValue.length > 0)
-                onClicked: subtitleController.translateDocument(
-                    subtitleController.selectedDocumentId,
-                    targetLanguage.currentValue,
-                    translationMode.currentValue)
             }
         }
 
@@ -174,7 +392,9 @@ ColumnLayout {
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.DemiBold
                 }
-                Item { Layout.fillWidth: true }
+                Item {
+                    Layout.fillWidth: true
+                }
                 AppButton {
                     text: qsTr("新建术语")
                     onClicked: settingsController.selectGlossaryTerm("")
@@ -202,11 +422,8 @@ ColumnLayout {
                     width: glossaryList.width
                     height: 52
                     radius: Theme.radiusSmall
-                    color: settingsController.selectedGlossaryTermId === termId
-                           ? Theme.accentSoft : termMouse.containsMouse
-                           ? Theme.surfaceHover : Theme.surfaceRaised
-                    border.color: settingsController.selectedGlossaryTermId === termId
-                                  ? Theme.accent : Theme.border
+                    color: settingsController.selectedGlossaryTermId === termId ? Theme.accentSoft : termMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                    border.color: settingsController.selectedGlossaryTermId === termId ? Theme.accent : Theme.border
                     RowLayout {
                         anchors.fill: parent
                         anchors.margins: 8
@@ -274,21 +491,16 @@ ColumnLayout {
                         AppButton {
                             text: qsTr("移除")
                             enabled: settingsController.selectedGlossaryTermId.length > 0
-                            onClicked: settingsController.removeGlossaryTerm(
-                                settingsController.selectedGlossaryTermId)
+                            onClicked: settingsController.removeGlossaryTerm(settingsController.selectedGlossaryTermId)
                         }
-                        Item { Layout.fillWidth: true }
+                        Item {
+                            Layout.fillWidth: true
+                        }
                         AppButton {
                             primary: true
                             text: qsTr("保存术语")
-                            enabled: termSource.text.trim().length > 0
-                                && termTarget.text.trim().length > 0
-                            onClicked: settingsController.saveGlossaryTerm(
-                                settingsController.selectedGlossaryTermId,
-                                termSource.text,
-                                termTarget.text,
-                                termNote.text,
-                                termCategory.text)
+                            enabled: termSource.text.trim().length > 0 && termTarget.text.trim().length > 0
+                            onClicked: settingsController.saveGlossaryTerm(settingsController.selectedGlossaryTermId, termSource.text, termTarget.text, termNote.text, termCategory.text)
                         }
                     }
                 }

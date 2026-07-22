@@ -7,7 +7,7 @@ from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHi
 from mediaflow.application.ports import SubtitleEditingDocuments
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
-from mediaflow.domain.subtitles import SubtitleSegment
+from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment
 from mediaflow.domain.timebase import seconds_to_frames
 
 
@@ -47,6 +47,78 @@ class SubtitleEditingService:
         self.repository = repository
         self.publication = publication
         self.history = history
+
+    def update_placement_range(
+        self,
+        placement_id: str,
+        *,
+        start_frame: int,
+        end_frame: int,
+    ) -> SubtitlePlacement:
+        before = self.repository.get_subtitle_placement(placement_id)
+        after = self.repository.update_subtitle_placement_range(
+            placement_id,
+            start_frame,
+            end_frame,
+            timing_overridden=True,
+        )
+        if self.history is not None and before != after:
+            self.history.push(
+                ProjectEditCommand(
+                    label="调整序列字幕时间",
+                    undo_action=lambda: self._restore_placement_range(
+                        before.id,
+                        before.start_frame,
+                        before.end_frame,
+                        timing_overridden=before.timing_overridden,
+                    ),
+                    redo_action=lambda: self._restore_placement_range(
+                        after.id,
+                        after.start_frame,
+                        after.end_frame,
+                        timing_overridden=after.timing_overridden,
+                    ),
+                )
+            )
+        return after
+
+    def reset_placement_range(self, placement_id: str) -> SubtitlePlacement:
+        before = self.repository.get_subtitle_placement(placement_id)
+        after = self.repository.reset_subtitle_placement_range(placement_id)
+        if self.history is not None and before != after:
+            self.history.push(
+                ProjectEditCommand(
+                    label="恢复序列字幕时间",
+                    undo_action=lambda: self._restore_placement_range(
+                        before.id,
+                        before.start_frame,
+                        before.end_frame,
+                        timing_overridden=before.timing_overridden,
+                    ),
+                    redo_action=lambda: self._restore_placement_range(
+                        after.id,
+                        after.start_frame,
+                        after.end_frame,
+                        timing_overridden=after.timing_overridden,
+                    ),
+                )
+            )
+        return after
+
+    def _restore_placement_range(
+        self,
+        placement_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        timing_overridden: bool,
+    ) -> None:
+        self.repository.update_subtitle_placement_range(
+            placement_id,
+            start_frame,
+            end_frame,
+            timing_overridden=timing_overridden,
+        )
 
     @recorded_subtitle_edit("修改字幕")
     def update_segment(

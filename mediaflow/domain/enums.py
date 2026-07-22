@@ -15,6 +15,7 @@ class AssetKind(DomainEnum):
     VIDEO = "video"
     AUDIO = "audio"
     IMAGE = "image"
+    WEB = "web"
     SUBTITLE = "subtitle"
 
 
@@ -84,6 +85,7 @@ class TaskKind(DomainEnum):
     TRANSLATE = "translate"
     HIGHLIGHT = "highlight"
     EXPORT = "export"
+    WEB_RENDER = "web_render"
 
 
 class TaskStatus(DomainEnum):

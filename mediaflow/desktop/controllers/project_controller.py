@@ -24,6 +24,7 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.composition import EditorApplication, EditorProject
 from mediaflow.desktop.models import (
+    AssetFilterModel,
     AssetListModel,
     AudioBusListModel,
     AudioEffectListModel,
@@ -43,6 +44,7 @@ from mediaflow.desktop.models import (
     TimelineRangeListModel,
     TrackListModel,
     TransitionListModel,
+    WebLayerListModel,
 )
 from mediaflow.domain.downloads import DownloadPlan, DownloadRequest
 from mediaflow.domain.enums import (
@@ -60,6 +62,7 @@ from mediaflow.domain.task_commands import (
     GenerateProxyCommand,
     GenerateWaveformCommand,
     TaskCommand,
+    TranscribeSequenceCommand,
 )
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timebase import (
@@ -116,7 +119,6 @@ class ProjectSession(QObject):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -174,7 +176,6 @@ class ProjectSession(QObject):
         self._range_in_frame: int | None = None
         self._status_message = ""
         self._last_error_id = ""
-        self._task_drawer_open = False
         self._preview_graph_path = ""
         self._hdr_preview_active = False
         self._pending_profile_asset_id = ""
@@ -187,8 +188,13 @@ class ProjectSession(QObject):
         self._pending_relink_asset_id = ""
         self._pending_relink_path = ""
         self._preview_subtitles: list[tuple[int, int, str]] = []
+        self._preview_subtitles_by_track: dict[str, list[tuple[int, int, str]]] = {}
         self._waveform_cache: dict[str, tuple[str, int, dict]] = {}
         self._waveform_pending: set[tuple[int, str, str]] = set()
+        self._asset_thumbnail_paths: dict[str, str] = {}
+        self._asset_thumbnail_request_id = 0
+        self._asset_thumbnail_pending_request: tuple[int, int, str] | None = None
+        self._asset_thumbnail_refresh_requested = False
         self._audio_metrics: dict = {}
         self._audio_metrics_request_id = 0
         self._video_encoder_options: list[dict] = []
@@ -232,6 +238,9 @@ class ProjectSession(QObject):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(180)
         self._preview_timer.timeout.connect(self._projector.compile_preview_graph)
+        self._project_revision_timer = QTimer(self)
+        self._project_revision_timer.setInterval(500)
+        self._project_revision_timer.timeout.connect(self._poll_external_project_changes)
         self._task_bridge = _TaskSignalBridge(self)
         self._task_bridge.eventReceived.connect(self._on_task_event)
         self.errorOccurred.connect(self._log_ui_error)
@@ -239,6 +248,7 @@ class ProjectSession(QObject):
         self._runtime_tool_bridge.eventReceived.connect(self._on_runtime_tool_event)
 
         self._asset_model = AssetListModel(self)
+        self._filtered_asset_model = AssetFilterModel(self._asset_model, self)
         self._sequence_model = SequenceListModel(self)
         self._recent_project_model = RecentProjectListModel(self)
         self._download_entry_model = DownloadEntryListModel(self)
@@ -247,6 +257,7 @@ class ProjectSession(QObject):
         self._transition_model = TransitionListModel(self)
         self._marker_model = TimelineMarkerListModel(self)
         self._range_model = TimelineRangeListModel(self)
+        self._web_layer_model = WebLayerListModel(self)
         self._task_model = TaskListModel(self)
         self._document_model = SubtitleDocumentListModel(self)
         self._segment_model = SubtitleSegmentListModel(self)
@@ -490,6 +501,7 @@ class ProjectSession(QObject):
         target_kind = {
             AssetKind.VIDEO: TrackKind.VIDEO,
             AssetKind.IMAGE: TrackKind.VIDEO,
+            AssetKind.WEB: TrackKind.VIDEO,
             AssetKind.AUDIO: TrackKind.AUDIO,
         }[asset.kind]
         duration = asset.metadata.duration_frames or 150
@@ -651,8 +663,6 @@ class ProjectSession(QObject):
             self._pending_import_drop_batches[batch_id] = batch
             for index, task in enumerate(tasks):
                 self._pending_import_drop_tasks[task.id] = (batch_id, index)
-        self._task_drawer_open = True
-        self.taskDrawerChanged.emit()
         self._projector.refresh_tasks()
         label = sources[0].name if len(sources) == 1 else f"{len(sources)} 个文件"
         self._set_status(f"正在导入 {label}")
@@ -687,11 +697,10 @@ class ProjectSession(QObject):
     def _schedule_asset_background(self, asset, *, dropped_frames: int) -> None:
         if not self._tasks:
             return
-        if dropped_frames <= 0 and self._documents and any(
+        prepare_media_managed = dropped_frames <= 0 and self._documents and any(
             run.stage == WorkflowStage.PREPARE_MEDIA and asset.id in run.asset_ids
             for run in self._documents.list_workflow_runs(active_only=True)
-        ):
-            return
+        )
         active = {
             (task.kind, tuple(task.input_asset_ids))
             for task in self._tasks.list()
@@ -701,6 +710,7 @@ class ProjectSession(QObject):
         decision = self._project.proxy_decision(asset, dropped_frames=dropped_frames)
         if (
             self.settings.preview.automatic_proxy
+            and not prepare_media_managed
             and not asset.proxy_path
             and decision.required
             and proxy_key not in active
@@ -812,6 +822,7 @@ class ProjectSession(QObject):
         self._editor = project.timeline(self._active_sequence_id)
         self._tasks = project.tasks
         self._workflows = project.workflows
+        self._project_revision_timer.start()
         initial_tasks = self._tasks.list()
         self._task_view = {task.id: task for task in initial_tasks}
         self._task_revisions = {task.id: task.revision for task in initial_tasks}
@@ -820,6 +831,26 @@ class ProjectSession(QObject):
             include_snapshot=False,
         )
         self._projector.refresh_all()
+
+    @Slot()
+    def _poll_external_project_changes(self) -> None:
+        if not self._project or not self._documents or self._shutting_down:
+            return
+        try:
+            revision = self._documents.content_revision()
+            if revision == self._documents.known_content_revision:
+                return
+            self._project.reload_external_changes()
+            available_sequences = {item.id for item in self._documents.list_sequences()}
+            if self._active_sequence_id not in available_sequences:
+                self._active_sequence_id = self._documents.get_project().main_sequence_id
+            self._editor = self._project.timeline(self._active_sequence_id)
+            self._projector.refresh_all()
+            self.selectionChanged.emit()
+            self._projector.schedule_preview_graph()
+            self._set_status("已同步 CLI 或其它进程提交的项目修改")
+        except Exception as error:
+            self.errorOccurred.emit(f"无法同步外部项目修改：{error}")
 
     @staticmethod
     def _project_selection_fields() -> tuple[str, ...]:
@@ -953,8 +984,6 @@ class ProjectSession(QObject):
             sequence_id=sequence_id or self._active_sequence_id,
         )
         self._task_view[task.id] = task
-        self._task_drawer_open = True
-        self.taskDrawerChanged.emit()
         self._projector.refresh_tasks()
         return task
 
@@ -1043,8 +1072,8 @@ class ProjectSession(QObject):
             self._task_view.pop(event.task_id, None)
         elif task is not None:
             self._task_view[task.id] = task
-        self._projector.refresh_tasks()
         if task is None or not task.status.is_consumable:
+            self._projector.refresh_tasks()
             return
         if task.kind in {
             TaskKind.IMPORT,
@@ -1056,14 +1085,31 @@ class ProjectSession(QObject):
                 for asset_id in task.input_asset_ids:
                     self._waveform_cache.pop(asset_id, None)
             self._projector.refresh_assets()
+            if task.kind == TaskKind.WAVEFORM:
+                self._projector.refresh_timeline()
         if task.kind in {TaskKind.TRANSCRIBE, TaskKind.TRANSLATE}:
+            if isinstance(task.command, TranscribeSequenceCommand):
+                documents = [
+                    document
+                    for document in self._documents.list_subtitle_documents(
+                        sequence_id=task.command.sequence_id
+                    )
+                    if document.is_source and document.source_document_id is None
+                ]
+                if documents:
+                    self._selected_document_id = documents[-1].id
+                    self._selected_subtitle_segment_ids = []
+                self._projector.refresh_assets()
             self._projector.refresh_documents()
             self._projector.refresh_preview_subtitles()
         if task.kind == TaskKind.HIGHLIGHT:
             self._projector.refresh_highlights()
         if task.kind in {TaskKind.PROXY, TaskKind.ANALYZE}:
             self._projector.schedule_preview_graph()
+        if task.kind == TaskKind.WEB_RENDER:
+            self._projector.schedule_preview_graph()
         self._projector.refresh_recent_projects()
+        self._projector.refresh_tasks()
         self.workflowChanged.emit()
 
     def _active_workflow_run(self):
@@ -1071,6 +1117,7 @@ class ProjectSession(QObject):
 
     def _close_current(self, *, close_in_background: bool = True) -> None:
         self._session_generation += 1
+        self._project_revision_timer.stop()
         if self._tasks and self._task_subscription_token is not None:
             self._tasks.events.unsubscribe(self._task_subscription_token)
         self._task_subscription_token = None
@@ -1107,8 +1154,12 @@ class ProjectSession(QObject):
         self._preview_graph_path = ""
         self._hdr_preview_active = False
         self._preview_subtitles = []
+        self._preview_subtitles_by_track = {}
         self._waveform_cache.clear()
         self._waveform_pending.clear()
+        self._asset_thumbnail_paths.clear()
+        self._asset_thumbnail_pending_request = None
+        self._asset_thumbnail_refresh_requested = False
         self._audio_metrics = {}
         if self._pending_profile_asset_id:
             self._pending_profile_asset_id = ""
@@ -1254,6 +1305,22 @@ class ProjectSession(QObject):
             self._waveform_cache[asset_id] = (path_value, modified, waveform)
             self.waveformDataChanged.emit(asset_id)
             return
+        if kind == "asset_thumbnails":
+            if request_id != self._asset_thumbnail_pending_request:
+                return
+            self._asset_thumbnail_pending_request = None
+            generation, _thumbnail_request_id, _project_path = request_id
+            if generation != self._session_generation:
+                return
+            if error:
+                logger.warning("Failed to prepare asset thumbnails: %s", error)
+            else:
+                self._projector.apply_asset_thumbnails(result)
+            if self._asset_thumbnail_refresh_requested:
+                self._asset_thumbnail_refresh_requested = False
+                assets = self._documents.list_assets() if self._documents else []
+                self._projector.request_asset_thumbnails(assets)
+            return
         if kind == "audio_metrics":
             generation, metrics_request_id, sequence_id = request_id
             if (
@@ -1368,11 +1435,14 @@ class ProjectSession(QObject):
         self,
         excluded_clip_ids: Iterable[str],
         playhead_frame: int,
+        *,
+        excluded_subtitle_placement_ids: Iterable[str] = (),
     ) -> list[int]:
         targets = [0, max(0, playhead_frame)]
         if not self._editor:
             return targets
         excluded = set(excluded_clip_ids)
+        excluded_placements = set(excluded_subtitle_placement_ids)
         state = self._editor.state
         for clip in state.clips:
             if clip.id not in excluded:
@@ -1381,7 +1451,8 @@ class ProjectSession(QObject):
             if track.kind != TrackKind.SUBTITLE:
                 continue
             for placement in self._documents.list_subtitle_placements(track.id):
-                targets.extend([placement.start_frame, placement.end_frame])
+                if placement.id not in excluded_placements:
+                    targets.extend([placement.start_frame, placement.end_frame])
         targets.extend(marker.frame for marker in state.markers)
         for item in state.ranges:
             targets.extend([item.start_frame, item.end_frame])

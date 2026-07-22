@@ -7,6 +7,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from PySide6.QtGui import QImage
+
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
@@ -16,6 +18,7 @@ from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.task_commands import DownloadMediaCommand
 from mediaflow.infrastructure.media_probe import MediaProbe
+from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -48,6 +51,39 @@ def generate_real_media(path: Path, paths: RuntimePaths, *, width: int = 640, he
             "-c:a",
             "aac",
             "-shortest",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert path.is_file() and path.stat().st_size > 0
+
+
+def generate_black_intro_video(path: Path, paths: RuntimePaths) -> None:
+    result = subprocess.run(
+        [
+            str(paths.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:size=160x90:rate=25:duration=0.4",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=0xd33f32:size=160x90:rate=25:duration=0.6",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p[out]",
+            "-map",
+            "[out]",
+            "-c:v",
+            "libx264",
             str(path),
         ],
         capture_output=True,
@@ -102,6 +138,37 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         assert payload["sample_rate"] == 8000
         assert payload["sample_count"] > 7000
         assert len(payload["levels"]["128"]) > 0
+
+
+def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(tmp_path: Path) -> None:
+    paths = RuntimePaths.discover()
+    video_source = tmp_path / "black-intro.mp4"
+    generate_black_intro_video(video_source, paths)
+    image_source = tmp_path / "portrait.png"
+    portrait = QImage(40, 100, QImage.Format.Format_RGB32)
+    portrait.fill(0xFF3A7DC4)
+    assert portrait.save(str(image_source))
+
+    with ProjectRepository.create(tmp_path / "Thumbnail Project", "Thumbnail Project") as repository:
+        assets = AssetService(repository, MediaProbe(paths))
+        video = assets.import_external(video_source)
+        image = assets.import_external(image_source)
+        thumbnails = MediaThumbnailService(paths)
+
+        video_thumbnail = thumbnails.thumbnail_for(repository, video, width=160, height=90)
+        image_thumbnail = thumbnails.thumbnail_for(repository, image, width=160, height=90)
+
+        assert video_thumbnail is not None and video_thumbnail.is_file()
+        assert image_thumbnail is not None and image_thumbnail.is_file()
+        rendered_video = QImage(str(video_thumbnail))
+        rendered_image = QImage(str(image_thumbnail))
+        assert (rendered_video.width(), rendered_video.height()) == (160, 90)
+        assert (rendered_image.width(), rendered_image.height()) == (160, 90)
+        video_center = rendered_video.pixelColor(80, 45)
+        assert video_center.red() > 150 and video_center.red() > video_center.green() * 2
+        assert rendered_image.pixelColor(80, 45).blue() > 120
+        assert rendered_image.pixelColor(10, 45).lightness() < 60
+        assert thumbnails.thumbnail_for(repository, video, width=160, height=90) == video_thumbnail
 
 
 def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp_path: Path) -> None:

@@ -116,7 +116,8 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
     acquisition_methods = {node.name for node in acquisition.body if isinstance(node, ast.FunctionDef)}
     editing_methods = {node.name for node in editing.body if isinstance(node, ast.FunctionDef)}
     publication_methods = {node.name for node in publication.body if isinstance(node, ast.FunctionDef)}
-    assert "transcribe_asset" in acquisition_methods
+    assert "transcribe_sequence_audio" in acquisition_methods
+    assert "transcribe_asset" not in acquisition_methods
     assert "update_segment" in editing_methods
     assert publication_methods == {"__init__", "write_document_srt"}
     assert "write_document_srt" not in acquisition_methods | editing_methods
@@ -137,12 +138,57 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     export_panel = (qml_root / "ExportPanel.qml").read_text(encoding="utf-8")
     assert len(workspace.splitlines()) <= 700
     assert len(export_panel.splitlines()) <= 140
-    for component in ("PreviewViewport", "WorkflowBanner", "WorkspaceNavigation"):
+    for component in ("PreviewViewport", "WorkspaceNavigation"):
         assert component in workspace
         assert (qml_root / "components" / f"{component}.qml").is_file()
+    assert "WorkflowBanner" not in workspace
+    assert "InspectorPanel" not in workspace
+    assert not (qml_root / "components" / "WorkflowBanner.qml").exists()
+    assert not (qml_root / "InspectorPanel.qml").exists()
+    assert "SubtitlePanel" in workspace
+    assert (qml_root / "SubtitlePanel.qml").is_file()
+    assert "TaskCenterPanel" in workspace
+    assert (qml_root / "TaskCenterPanel.qml").is_file()
+    assert "TaskDrawer" not in workspace
+    assert not (qml_root / "TaskDrawer.qml").exists()
+    transcript_panel = (qml_root / "TranscriptPanel.qml").read_text(encoding="utf-8")
+    assert "transcribeTimelineButton" in transcript_panel
+    assert "transcribeCurrentSequence" in transcript_panel
+    assert "transcribeSelectedAsset" not in transcript_panel
+    assert "transcribeRegion" not in transcript_panel
+    task_commands = (
+        ROOT / "mediaflow" / "domain" / "task_commands.py"
+    ).read_text(encoding="utf-8")
+    assert "TranscribeSequenceCommand" in task_commands
+    assert "TranscribeAssetCommand" not in task_commands
+    assert "TranscribeRegionCommand" not in task_commands
+    assert not (
+        ROOT / "mediaflow" / "infrastructure" / "audio_region_extractor.py"
+    ).exists()
     timeline = (qml_root / "TimelineView.qml").read_text(encoding="utf-8")
     assert "SequenceToolbar" in timeline
+    assert 'objectName: "timelineRuler"' in timeline
+    assert "rulerMajorStepFrames" in timeline
+    assert "rulerSeconds" not in timeline
+    assert 'index + "s"' not in timeline
+    assert 'objectName: "trackControlsButton"' not in timeline
+    assert 'visible: timelineController.tracksModel.rowCount() > 0' in timeline
+    media_panel = (qml_root / "MediaPanel.qml").read_text(encoding="utf-8")
+    assert "FileDialog.OpenFiles" in media_panel
+    assert "selectedFiles" in media_panel
+    assert "addAssetAtPlayhead" in media_panel
+    assert "生成代理" not in media_panel
+    assert "生成波形" not in media_panel
+    assert "添加到时间线" not in media_panel
     assert (qml_root / "components" / "SequenceToolbar.qml").is_file()
+    preview_viewport = (qml_root / "components" / "PreviewViewport.qml").read_text(
+        encoding="utf-8"
+    )
+    assert "playPreviewFrom" in preview_viewport
+    assert "pendingPlaybackMode" in preview_viewport
+    assert "property int sequenceIn" not in preview_viewport
+    assert "property int sequenceOut" not in preview_viewport
+    assert "previewGraphRevision" not in workspace
     window_title_bar = (
         qml_root / "components" / "WindowTitleBar.qml"
     ).read_text(encoding="utf-8")
@@ -151,11 +197,26 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     ).read_text(encoding="utf-8")
     assert "WorkspaceHeader" in window_title_bar
     assert "workspaceController.projectName" not in workspace_header
+    assert "toggleTaskDrawer" not in workspace_header
+    task_controller = (
+        ROOT / "mediaflow" / "desktop" / "controllers" / "task_controller.py"
+    ).read_text(encoding="utf-8")
+    assert "taskDrawer" not in task_controller
+    assert "openTaskCenter" in task_controller
     assert "ExportSettings" in export_panel
+    assert "ExportTargetBar" in export_panel
     for component in (
         "ExportSettings",
+        "ExportTargetBar",
         "ExportTechnicalSettings",
         "ExportSubtitleSettings",
         "ExportWatermarkSettings",
     ):
         assert (qml_root / "components" / f"{component}.qml").is_file()
+    presentation = (
+        ROOT / "mediaflow" / "desktop" / "presentation_catalogs.py"
+    ).read_text(encoding="utf-8")
+    assert "准备流畅预览" in presentation
+    assert "准备音频波形" in presentation
+    assert '"生成代理"' not in presentation
+    assert '"生成波形"' not in presentation

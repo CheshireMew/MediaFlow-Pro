@@ -5,23 +5,66 @@ import QtQuick.Dialogs
 import "."
 import "components"
 
-ColumnLayout {
+ScrollView {
     id: root
-    spacing: 10
+    objectName: "highlightPanel"
+    clip: true
+    contentWidth: availableWidth
+    property int playheadFrame: 0
+    property var taskData: ({})
+    property bool manualCandidateOpen: false
+    readonly property bool taskActive: taskData.status === "pending"
+        || taskData.status === "running" || taskData.status === "paused"
 
-    FolderDialog {
-        id: batchExportFolder
-        title: qsTr("选择批量导出文件夹")
-        onAccepted: highlightController.exportSelectedHighlights(selectedFolder.toString())
+    function refreshTask() {
+        const analysis = taskController.latestCommandTask(
+            "analyze_highlights", subtitleController.selectedDocumentId);
+        const exporting = taskController.latestCommandTask(
+            "export_highlights", workspaceController.activeSequenceId);
+        const analysisActive = analysis.status === "pending" || analysis.status === "running"
+            || analysis.status === "paused";
+        const exportActive = exporting.status === "pending" || exporting.status === "running"
+            || exporting.status === "paused";
+        taskData = analysisActive ? analysis : exportActive ? exporting
+            : Number(analysis.createdAt || 0) >= Number(exporting.createdAt || 0)
+            ? analysis : exporting;
     }
+
+    Connections {
+        target: taskController
+        function onTasksChanged() { root.refreshTask(); }
+    }
+    Connections {
+        target: subtitleController
+        function onSelectionChanged() { root.refreshTask(); }
+    }
+    Component.onCompleted: refreshTask()
+
+    ColumnLayout {
+        width: root.availableWidth
+        spacing: 10
+
+        FolderDialog {
+            id: batchExportFolder
+            title: qsTr("选择批量导出文件夹")
+            onAccepted: highlightController.exportSelectedHighlights(selectedFolder.toString())
+        }
     RowLayout {
         Layout.fillWidth: true
-        Text { text: qsTr("AI 高光"); color: Theme.text; font.pixelSize: Theme.fontSizeSection; font.weight: Font.DemiBold }
-        Item { Layout.fillWidth: true }
+        Text {
+            text: qsTr("AI 高光")
+            color: Theme.text
+            font.pixelSize: Theme.fontSizeSection
+            font.weight: Font.DemiBold
+        }
+        Item {
+            Layout.fillWidth: true
+        }
         AppButton {
+            objectName: "analyzeHighlightsButton"
             text: qsTr("分析")
             primary: true
-            enabled: subtitleController.selectedDocumentId.length > 0
+            enabled: subtitleController.selectedDocumentId.length > 0 && !root.taskActive
             onClicked: highlightController.analyzeHighlights(subtitleController.selectedDocumentId)
         }
     }
@@ -31,17 +74,43 @@ ColumnLayout {
         model: subtitleController.subtitleDocumentsModel
         textRole: "language"
         valueRole: "documentId"
+        displayText: count > 0 ? currentText : qsTr("需要先生成字幕")
         onActivated: subtitleController.selectSubtitleDocument(currentValue)
-        Component.onCompleted: if (count > 0) subtitleController.selectSubtitleDocument(currentValue)
+        Component.onCompleted: if (count > 0)
+            subtitleController.selectSubtitleDocument(currentValue)
+    }
+    Text {
+        visible: sourceDocument.count === 0
+        Layout.fillWidth: true
+        text: qsTr("AI 分析需要字幕；没有字幕时仍可手动添加候选。")
+        color: Theme.warning
+        font.pixelSize: Theme.fontSizeCaption
+        wrapMode: Text.WordWrap
     }
     Text {
         Layout.fillWidth: true
         text: qsTr("候选区间保存在项目中，可直接生成独立的 9:16 短视频序列。")
-        color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption; wrapMode: Text.WordWrap
+        color: Theme.textMuted
+        font.pixelSize: Theme.fontSizeCaption
+        wrapMode: Text.WordWrap
+    }
+    ContextTaskCard {
+        objectName: "highlightTaskPanel"
+        Layout.fillWidth: true
+        taskData: root.taskData
+        fallbackTitle: qsTr("高光任务")
+    }
+    AppButton {
+        Layout.fillWidth: true
+        checkable: true
+        checked: root.manualCandidateOpen
+        text: root.manualCandidateOpen ? qsTr("收起手动添加") : qsTr("手动添加候选")
+        onClicked: root.manualCandidateOpen = checked
     }
     Panel {
         Layout.fillWidth: true
-        implicitHeight: 116
+        implicitHeight: 154
+        visible: root.manualCandidateOpen
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
@@ -56,6 +125,21 @@ ColumnLayout {
                 id: manualTitle
                 Layout.fillWidth: true
                 placeholderText: qsTr("片段标题（可选）")
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                AppButton {
+                    Layout.fillWidth: true
+                    text: qsTr("播放头→开始")
+                    onClicked: manualStart.value = Math.min(
+                        root.playheadFrame, manualEnd.value - 1)
+                }
+                AppButton {
+                    Layout.fillWidth: true
+                    text: qsTr("播放头→结束")
+                    onClicked: manualEnd.value = Math.max(
+                        root.playheadFrame, manualStart.value + 1)
+                }
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -87,35 +171,36 @@ ColumnLayout {
                 AppButton {
                     text: qsTr("添加候选")
                     enabled: mediaController.selectedAssetId.length > 0 && manualEnd.value > manualStart.value
-                    onClicked: highlightController.addManualHighlight(
-                        manualStart.value, manualEnd.value, manualTitle.text)
+                    onClicked: highlightController.addManualHighlight(manualStart.value, manualEnd.value, manualTitle.text)
                 }
             }
         }
     }
     RowLayout {
         Layout.fillWidth: true
+        visible: highlightList.count > 0
         AppButton {
             Layout.fillWidth: true
-            text: qsTr("创建所选短视频草稿")
+            text: qsTr("生成短视频")
             enabled: highlightList.count > 0
             onClicked: highlightController.createAllHighlightShorts()
         }
         AppButton {
             Layout.fillWidth: true
             primary: true
-            text: qsTr("快速导出所选")
-            enabled: highlightList.count > 0
+            text: qsTr("快速导出")
+            enabled: highlightList.count > 0 && !root.taskActive
             onClicked: highlightController.exportSelectedHighlightsToDefaultLocation()
         }
         AppButton {
             text: qsTr("另存为…")
-            enabled: highlightList.count > 0
+            enabled: highlightList.count > 0 && !root.taskActive
             onClicked: batchExportFolder.open()
         }
     }
     Text {
         Layout.fillWidth: true
+        visible: highlightList.count > 0
         text: qsTr("快速导出沿用当前序列已保存的编码、分辨率、字幕样式、水印和音频设置；每个候选片段单独输出。")
         color: Theme.textMuted
         font.pixelSize: Theme.fontSizeCaption
@@ -124,13 +209,14 @@ ColumnLayout {
     ListView {
         id: highlightList
         Layout.fillWidth: true
-        Layout.fillHeight: true
+        Layout.preferredHeight: Math.max(240, Math.min(520, contentHeight))
         clip: true
         spacing: 8
         model: highlightController.highlightsModel
         delegate: Rectangle {
             required property string highlightId
             required property string sequenceId
+            required property string sourceSequenceId
             required property int startFrame
             required property int endFrame
             required property string title
@@ -145,19 +231,53 @@ ColumnLayout {
             border.color: highlightController.selectedHighlightId === highlightId ? Theme.accent : Theme.border
             ColumnLayout {
                 id: highlightBody
-                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                anchors.margins: 11; spacing: 6
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 11
+                spacing: 6
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { Layout.fillWidth: true; text: title; color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                    Text { text: Math.round(score * 100) + "%"; color: Theme.accentHover; font.pixelSize: Theme.fontSizeCaption }
+                    Text {
+                        Layout.fillWidth: true
+                        text: title
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSizeBodySmall
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        text: Math.round(score * 100) + "%"
+                        color: Theme.accentHover
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
                 }
-                Text { text: startFrame + " – " + endFrame; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption; font.family: Theme.monoFontFamily }
-                Text { Layout.fillWidth: true; text: reason; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption; wrapMode: Text.WordWrap }
+                Text {
+                    text: startFrame + " – " + endFrame
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    font.family: Theme.monoFontFamily
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: reason
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
                 RowLayout {
                     Layout.fillWidth: true
-                    AppButton { Layout.fillWidth: true; text: qsTr("预览"); onClicked: highlightController.previewHighlight(highlightId) }
-                    AppButton { Layout.fillWidth: true; text: qsTr("添加到主序列"); onClicked: highlightController.addHighlightToMainSequence(highlightId) }
+                    AppButton {
+                        Layout.fillWidth: true
+                        text: qsTr("预览")
+                        onClicked: highlightController.previewHighlight(highlightId)
+                    }
+                    AppButton {
+                        Layout.fillWidth: true
+                        visible: sourceSequenceId.length === 0
+                        text: qsTr("添加到主序列")
+                        onClicked: highlightController.addHighlightToMainSequence(highlightId)
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -178,7 +298,17 @@ ColumnLayout {
                     onClicked: highlightController.createShortFromHighlight(highlightId)
                 }
             }
-            MouseArea { id: highlightMouse; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.LeftButton; propagateComposedEvents: true; onClicked: { highlightController.selectHighlight(highlightId); mouse.accepted = false } }
+            MouseArea {
+                id: highlightMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton
+                propagateComposedEvents: true
+                onClicked: {
+                    highlightController.selectHighlight(highlightId);
+                    mouse.accepted = false;
+                }
+            }
         }
         EmptyState {
             anchors.fill: parent
@@ -238,13 +368,10 @@ ColumnLayout {
                 AppButton {
                     text: qsTr("保存候选")
                     primary: true
-                    onClicked: highlightController.updateHighlight(
-                        highlightController.selectedHighlightId,
-                        editStart.value,
-                        editEnd.value,
-                        editTitle.text)
+                    onClicked: highlightController.updateHighlight(highlightController.selectedHighlightId, editStart.value, editEnd.value, editTitle.text)
                 }
             }
         }
+    }
     }
 }

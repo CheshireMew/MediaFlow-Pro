@@ -4,12 +4,12 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, Request, build_opener
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadPlan
+from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 
 
 @dataclass(frozen=True)
@@ -25,13 +25,6 @@ class PlatformMediaResolver:
 
     _BILIBILI_ID = re.compile(r"(BV[a-zA-Z0-9]{10}|av\d+)")
     _MEDIA_MARKERS = (".mp4", ".m3u8", "aweme/v1/play", "video_id=")
-    _CHROMIUM_EXECUTABLES = (
-        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
-        Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
-        Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
-        Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
-    )
-
     def analyze(self, url: str, *, proxy: str | None = None) -> DownloadPlan | None:
         if "bilibili.com/video/" in url:
             result = self._analyze_bilibili(url, proxy=proxy)
@@ -176,8 +169,9 @@ class PlatformMediaResolver:
 
     @classmethod
     def _sniff_browser_media(cls, url: str, *, timeout: float = 15.0) -> ResolvedPlatformMedia | None:
-        executable = next((path for path in cls._CHROMIUM_EXECUTABLES if path.is_file()), None)
-        if executable is None:
+        try:
+            executable = find_chromium_executable()
+        except FileNotFoundError:
             return None
         try:
             from playwright.sync_api import Error as PlaywrightError

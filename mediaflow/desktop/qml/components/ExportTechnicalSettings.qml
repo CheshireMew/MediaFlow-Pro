@@ -16,6 +16,8 @@ ColumnLayout {
         const advanced = value.advanced || {}
         pixelFormatField.text = value.pixel_format || root.format.pixelFormat
         presetField.text = value.preset || presetField.text
+        qualityValue.value = Number(value.quality_value ?? qualityValue.value)
+        gopFrames.value = Number(value.gop_frames ?? gopFrames.value)
         audioCodecField.text = value.audio_codec || "aac"
         audioBitrate.value = Math.round(Number(value.audio_bitrate ?? 192000) / 1000)
         widthField.text = String(advanced.width ?? workspaceController.profileWidth)
@@ -63,6 +65,8 @@ ColumnLayout {
         return {
             pixelFormat: root.videoEnabled ? pixelFormatField.text : "",
             preset: presetField.text,
+            qualityValue: Number(qualityValue.value),
+            gopFrames: Number(gopFrames.value),
             audioCodec: root.videoEnabled ? audioCodecField.text : root.format.audioCodec,
             audioBitrate: Number(audioBitrate.value) * 1000,
             advanced: advanced
@@ -92,6 +96,47 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: root.videoEnabled
         text: root.format ? root.format.preset : ""
+    }
+    RowLayout {
+        Layout.fillWidth: true
+        visible: root.videoEnabled
+        spacing: 8
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 4
+            Text {
+                text: qsTr("质量（CRF/CQ，越低越清晰）")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeCaption
+            }
+            AppSpinBox {
+                id: qualityValue
+                Layout.fillWidth: true
+                from: 0
+                to: 63
+                value: root.format ? Number(root.format.qualityValue) : 18
+                editable: true
+            }
+        }
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 4
+            Text {
+                text: qsTr("关键帧间隔（GOP）")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeCaption
+            }
+            AppSpinBox {
+                id: gopFrames
+                Layout.fillWidth: true
+                from: 1
+                to: 600
+                value: Math.max(1, Math.round(
+                    workspaceController.profileFpsNumerator
+                    / workspaceController.profileFpsDenominator * 2))
+                editable: true
+            }
+        }
     }
     RowLayout {
         Layout.fillWidth: true

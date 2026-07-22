@@ -344,12 +344,11 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert _process_until(lambda: controllers.tasks.downloadProgressVisible)
         banner = workspace.findChild(QQuickItem, "downloadProgressBanner")
         progress_bar = workspace.findChild(QQuickItem, "downloadProgressBar")
-        workflow_banner = workspace.findChild(QQuickItem, "workflowBanner")
         assert banner is not None and progress_bar is not None
         assert _process_until(
             lambda: banner.isVisible() and 0 < float(progress_bar.property("value")) < 100
         )
-        assert workflow_banner is not None and not workflow_banner.isVisible()
+        assert workspace.findChild(QQuickItem, "workflowBanner") is None
         rendered = window.grabWindow()
         screenshot = tmp_path / "quick-start-download-progress.png"
         assert not rendered.isNull() and rendered.save(str(screenshot))

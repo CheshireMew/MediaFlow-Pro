@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -26,11 +25,12 @@ from mediaflow.domain.task_commands import (
     DownloadMediaCommand,
     ExportHighlightsCommand,
     ExportSequenceCommand,
+    ExportWebClipCommand,
     GenerateProxyCommand,
     GenerateWaveformCommand,
     ImportAssetCommand,
-    TranscribeAssetCommand,
-    TranscribeRegionCommand,
+    RenderWebClipCommand,
+    TranscribeSequenceCommand,
     TranslateDocumentCommand,
     TranslateSegmentsCommand,
 )
@@ -40,6 +40,7 @@ from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.mlt import (
     LoudnessAnalysisService,
     MltExportService,
+    SequenceAudioRenderService,
     SequenceBoundaryAnalysisService,
     TimelineCompiler,
 )
@@ -47,6 +48,7 @@ from mediaflow.infrastructure.proxy_service import ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.translation_cache import TranslationCache
 from mediaflow.infrastructure.waveform_service import WaveformService
+from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 
 CommandT = TypeVar("CommandT", bound=CommandModel)
@@ -83,6 +85,7 @@ class ProjectTaskHandlers:
             TranslationCache(documents.project_dir),
             self.subtitle_publication.write_document_srt,
         )
+        self.web_renderer = WebRenderService(documents, paths)
 
     def register_with(self, tasks: TaskService) -> None:
         tasks.register(TaskKind.ANALYZE, self.analyze)
@@ -94,6 +97,35 @@ class ProjectTaskHandlers:
         tasks.register(TaskKind.TRANSCRIBE, self.transcribe)
         tasks.register(TaskKind.TRANSLATE, self.translate)
         tasks.register(TaskKind.HIGHLIGHT, self.highlight)
+        tasks.register(TaskKind.WEB_RENDER, self.render_web_clip)
+
+    def render_web_clip(self, context: TaskContext) -> list[str]:
+        command = context.task.command
+        if not isinstance(command, (RenderWebClipCommand, ExportWebClipCommand)):
+            raise TypeError(f"Unexpected web render command: {type(command).__name__}")
+        state = self.documents.load_timeline(command.sequence_id)
+        context.report_progress(5, "web_render_preparing")
+        if isinstance(command, ExportWebClipCommand):
+            output = Path(
+                self.web_renderer.export_clip(
+                    state,
+                    command.clip_id,
+                    command.output_path,
+                    command.format,
+                    time_ms=command.time_ms,
+                    background=command.background,
+                    overwrite=command.overwrite,
+                    check_cancelled=context.cancellation.raise_if_requested,
+                ).output_path
+            )
+        else:
+            output = self.web_renderer.render_clip(
+                state,
+                command.clip_id,
+                check_cancelled=context.cancellation.raise_if_requested,
+            )
+        context.report_progress(98, "web_render_verifying")
+        return [str(output)]
 
     @property
     def project_dir(self) -> Path:
@@ -180,6 +212,12 @@ class ProjectTaskHandlers:
                 state.sequence.profile.color_mode,
                 state.sequence.profile.fps,
             )
+            context.report_progress(2, "web_render_preparing")
+            self.web_renderer.ensure_sequence(
+                state,
+                progress=lambda value: context.report_progress(2 + value * 0.03, "web_rendering"),
+                check_cancelled=context.cancellation.raise_if_requested,
+            )
             context.report_progress(5, "export_compiling")
             result = MltExportService(TimelineCompiler(self.documents), self.paths).export(
                 state,
@@ -209,6 +247,10 @@ class ProjectTaskHandlers:
                 raise KeyError(candidate_id)
             sequence = service.create_short_sequence(candidate.id)
             state = self.documents.load_timeline(sequence.id)
+            self.web_renderer.ensure_sequence(
+                state,
+                check_cancelled=context.cancellation.raise_if_requested,
+            )
             preset = command.preset or default_export_preset(
                 ExportFormat.H264,
                 state.sequence.profile.color_mode,
@@ -246,75 +288,79 @@ class ProjectTaskHandlers:
         return artifacts
 
     def transcribe(self, context: TaskContext) -> list[str]:
-        command = context.task.command
-        acquisition = self.subtitle_acquisition
-        if isinstance(command, TranscribeRegionCommand):
-            return self._transcribe_region(context, command, acquisition)
-        if not isinstance(command, TranscribeAssetCommand):
-            raise TypeError(f"Unexpected transcribe command: {type(command).__name__}")
-        document = acquisition.transcribe_asset(
-            command.asset_id,
-            create_asr_engine(
-                self.settings().asr,
-                self.paths,
-                check_cancelled=context.cancellation.raise_if_requested,
+        command = self._command(context, TranscribeSequenceCommand)
+        state = self.documents.load_timeline(command.sequence_id)
+        duration = state.duration_frames
+        if duration <= 0:
+            raise ValueError("当前时间轴还没有可转录的素材")
+        bounds = state.sequence.in_out
+        start_frame = min(duration, bounds.in_frame) if bounds else 0
+        end_frame = min(duration, bounds.out_frame) if bounds else duration
+        rendered_audio = (
+            self.project_dir
+            / "generated"
+            / "audio"
+            / f"{command.sequence_id}-transcription.wav"
+        )
+        SequenceAudioRenderService(
+            TimelineCompiler(self.documents),
+            self.paths,
+        ).render(
+            state,
+            rendered_audio,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            check_cancelled=context.cancellation.raise_if_requested,
+            report_progress=context.report_progress,
+        )
+        resolved_audio = rendered_audio.resolve()
+        audio_asset = next(
+            (
+                asset
+                for asset in self.documents.list_assets()
+                if self.documents.resolve_asset_path(asset).resolve() == resolved_audio
             ),
-            progress=context.report_progress,
+            None,
         )
-        self.subtitle_editing.smart_split_document(
-            document.id,
-            text_limit=self.settings().asr.smart_split_limit,
-        )
-        output = self.subtitle_publication.write_document_srt(document.id)
-        return [str(output.relative_to(self.project_dir).as_posix())]
-
-    def _transcribe_region(
-        self,
-        context: TaskContext,
-        command: TranscribeRegionCommand,
-        acquisition: SubtitleAcquisitionService,
-    ) -> list[str]:
+        if audio_asset is None:
+            audio_asset = self.assets.register_output(rendered_audio, AssetOrigin.GENERATED)
         settings = self.settings()
-        prepared = acquisition.prepare_region_transcription(
-            command.asset_id,
+        document = self.subtitle_acquisition.transcribe_sequence_audio(
+            command.sequence_id,
+            audio_asset.id,
+            rendered_audio,
             create_asr_engine(
                 settings.asr,
                 self.paths,
                 check_cancelled=context.cancellation.raise_if_requested,
             ),
-            start_frame=command.start_frame,
-            end_frame=command.end_frame,
-            document_id=command.document_id,
+            start_frame=start_frame,
+            end_frame=end_frame,
             language=None if settings.asr.language == "auto" else settings.asr.language,
             check_cancelled=context.cancellation.raise_if_requested,
             progress=context.report_progress,
         )
-        inserted = list(prepared.segments)
-        if command.translate_after:
-            target_language = command.target_language or settings.translation.target_language
-            inserted = self.translations.translate_segments_preserving_timing(
-                inserted,
-                target_language=target_language,
-                provider=self.active_llm_provider(),
-                mode=command.mode,
-                glossary=settings.translation.glossary_terms,
-                progress=lambda value, code: context.report_progress(
-                    95.0 + min(100.0, value) * 0.04,
-                    code,
-                ),
-                check_cancelled=context.cancellation.raise_if_requested,
-            )
-            if prepared.creates_document and command.mode != "proofread":
-                prepared = replace(
-                    prepared,
-                    document=prepared.document.model_copy(update={"language": target_language}),
-                )
-                inserted = [
-                    segment.model_copy(update={"document_id": prepared.document.id}) for segment in inserted
-                ]
-        acquisition.commit_region_transcription(prepared, inserted)
+        self.subtitle_editing.smart_split_document(
+            document.id,
+            text_limit=settings.asr.smart_split_limit,
+        )
+        subtitle_track = next(
+            (
+                track
+                for track in state.tracks
+                if track.kind == TrackKind.SUBTITLE and not track.locked
+            ),
+            None,
+        )
+        if subtitle_track is None:
+            raise RuntimeError("当前序列没有可写入的字幕轨道")
+        self.documents.place_subtitle_document(
+            document.id,
+            subtitle_track.id,
+            follow_clips=False,
+        )
         context.report_progress(100, "transcription_completed")
-        output = self.subtitle_publication.write_document_srt(prepared.document.id)
+        output = self.subtitle_publication.write_document_srt(document.id)
         return [str(output.relative_to(self.project_dir).as_posix())]
 
     def translate(self, context: TaskContext) -> list[str]:
@@ -322,17 +368,31 @@ class ProjectTaskHandlers:
         settings = self.settings()
         service = self.translations
         if isinstance(command, TranslateSegmentsCommand):
-            service.translate_selected_in_document(
-                command.document_id,
-                command.segment_ids,
-                target_language=command.target_language,
-                provider=self.active_llm_provider(),
-                mode=command.mode,
-                glossary=settings.translation.glossary_terms,
-                progress=context.report_progress,
-                check_cancelled=context.cancellation.raise_if_requested,
-            )
-            document_id = command.document_id
+            if command.target_document_id:
+                service.translate_selected_to_document(
+                    command.document_id,
+                    command.target_document_id,
+                    command.segment_ids,
+                    target_language=command.target_language,
+                    provider=self.active_llm_provider(),
+                    mode=command.mode,
+                    glossary=settings.translation.glossary_terms,
+                    progress=context.report_progress,
+                    check_cancelled=context.cancellation.raise_if_requested,
+                )
+                document_id = command.target_document_id
+            else:
+                service.translate_selected_in_document(
+                    command.document_id,
+                    command.segment_ids,
+                    target_language=command.target_language,
+                    provider=self.active_llm_provider(),
+                    mode=command.mode,
+                    glossary=settings.translation.glossary_terms,
+                    progress=context.report_progress,
+                    check_cancelled=context.cancellation.raise_if_requested,
+                )
+                document_id = command.document_id
         elif isinstance(command, TranslateDocumentCommand):
             document = service.translate_document(
                 command.document_id,

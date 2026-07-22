@@ -19,7 +19,6 @@ class WorkspaceController(ControllerFacet):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -201,10 +200,6 @@ class WorkspaceController(ControllerFacet):
     @Property(str, notify=previewGraphChanged)
     def previewGraphPath(self) -> str:
         return self._preview_graph_path
-
-    @Property(int, notify=previewGraphChanged)
-    def previewGraphRevision(self) -> int:
-        return self._preview_request_id
 
     @Property(str, constant=True)
     def mltRuntimeRoot(self) -> str:

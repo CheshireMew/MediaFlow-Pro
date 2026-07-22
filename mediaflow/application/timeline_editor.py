@@ -24,6 +24,7 @@ from mediaflow.domain.timeline import (
     Transition,
     compatible_track_kinds,
 )
+from mediaflow.domain.web_media import WebClipState
 
 
 class TimelineEditor:
@@ -240,6 +241,11 @@ class TimelineEditor:
 
         def mutate(state: TimelineState) -> None:
             state.clips.append(clip)
+            if asset.kind == AssetKind.WEB:
+                state.web_states[clip.id] = WebClipState(
+                    clip_id=clip.id,
+                    source_hash=self.repository.get_web_asset_spec(asset.id).source_hash,
+                )
 
         self._commit("添加片段", mutate)
         return clip
@@ -392,8 +398,12 @@ class TimelineEditor:
 
         def mutate(state: TimelineState) -> None:
             state.clips.append(copied)
+            if clip_id in state.web_states:
+                state.web_states[copied.id] = state.web_states[clip_id].model_copy(
+                    update={"clip_id": copied.id, "revision": 0}
+                )
 
-        self._commit("复制片段", mutate)
+        self._commit("创建片段副本", mutate)
         return self._clip(copied.id)
 
     def trim_clip(
@@ -434,6 +444,26 @@ class TimelineEditor:
 
         self._commit("调整片段音频", mutate)
         return self._clip(clip_id)
+
+    def set_web_clip_state(
+        self,
+        web_state: WebClipState,
+        *,
+        expected_revision: int | None = None,
+    ) -> WebClipState:
+        current = self._state.web_states.get(web_state.clip_id)
+        if current is None:
+            raise KeyError(web_state.clip_id)
+        if expected_revision is not None and current.revision != expected_revision:
+            raise RuntimeError(
+                f"Editable media revision conflict: expected {expected_revision}, current {current.revision}"
+            )
+
+        def mutate(state: TimelineState) -> None:
+            state.web_states[web_state.clip_id] = web_state
+
+        self._commit("编辑网页图层", mutate)
+        return self._state.web_states[web_state.clip_id]
 
     def set_clip_speed(
         self,
@@ -511,6 +541,10 @@ class TimelineEditor:
             index = self._clip_index(state, clip_id)
             state.clips[index] = left
             state.clips.insert(index + 1, right)
+            if clip_id in state.web_states:
+                state.web_states[right.id] = state.web_states[clip_id].model_copy(
+                    update={"clip_id": right.id, "revision": 0}
+                )
             state.transitions = [
                 transition
                 for transition in state.transitions
@@ -532,6 +566,11 @@ class TimelineEditor:
 
         def mutate(state: TimelineState) -> None:
             state.clips = [clip for clip in state.clips if clip.id not in selected_ids]
+            state.web_states = {
+                clip_id: web_state
+                for clip_id, web_state in state.web_states.items()
+                if clip_id not in selected_ids
+            }
             state.transitions = [
                 transition
                 for transition in state.transitions
@@ -798,6 +837,7 @@ class TimelineEditor:
                 "transitions": list(state.transitions),
                 "markers": list(state.markers),
                 "ranges": list(state.ranges),
+                "web_states": dict(state.web_states),
             }
         )
 
@@ -816,7 +856,16 @@ class TimelineEditor:
             changed_clip_ids = {
                 clip_id for clip_id, clip in after_clips.items() if clip != before_clips[clip_id]
             }
+            changed_web_states = [
+                web_state
+                for clip_id, web_state in after.web_states.items()
+                if web_state != before.web_states.get(clip_id)
+            ]
+            if changed_clip_ids and changed_web_states:
+                self.repository.save_timeline(after)
+                return
             self.repository.save_clip_changes(after, changed_clip_ids)
+            self.repository.save_web_clip_states(changed_web_states)
             return
         self.repository.save_timeline(after)
 
@@ -830,6 +879,13 @@ class TimelineEditor:
             raise ValueError("Marker references another sequence")
         if any(item.sequence_id != state.sequence.id for item in state.ranges):
             raise ValueError("Range references another sequence")
+        web_clip_ids = {
+            clip.id
+            for clip in state.clips
+            if self.repository.get_asset(clip.asset_id).kind == AssetKind.WEB
+        }
+        if set(state.web_states) != web_clip_ids:
+            raise ValueError("Every web clip must have exactly one editable media state")
         if len({marker.id for marker in state.markers}) != len(state.markers):
             raise ValueError("Marker identifiers must be unique")
         if len({item.id for item in state.ranges}) != len(state.ranges):

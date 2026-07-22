@@ -18,8 +18,7 @@ from mediaflow.domain.task_commands import (
     GenerateWaveformCommand,
     ImportAssetCommand,
     TaskCommand,
-    TranscribeAssetCommand,
-    TranscribeRegionCommand,
+    TranscribeSequenceCommand,
     TranslateDocumentCommand,
     TranslateSegmentsCommand,
     WorkflowTaskLink,
@@ -27,7 +26,12 @@ from mediaflow.domain.task_commands import (
 from mediaflow.domain.translation import validate_translation_mode
 
 
-def legacy_task_command(kind: str, parameters: dict[str, Any]) -> TaskCommand:
+def legacy_task_command(
+    kind: str,
+    parameters: dict[str, Any],
+    *,
+    sequence_id: str | None = None,
+) -> TaskCommand:
     values = dict(parameters)
     workflow = _workflow_link(values)
     task_kind = TaskKind(kind)
@@ -74,18 +78,13 @@ def legacy_task_command(kind: str, parameters: dict[str, Any]) -> TaskCommand:
             workflow=workflow,
         )
     if task_kind == TaskKind.TRANSCRIBE:
-        if "start_frame" in values:
-            return TranscribeRegionCommand(
-                asset_id=str(values["asset_id"]),
-                start_frame=int(values["start_frame"]),
-                end_frame=int(values["end_frame"]),
-                document_id=values.get("document_id") or None,
-                translate_after=bool(values.get("translate_after", False)),
-                mode=validate_translation_mode(str(values.get("mode") or "standard")),
-                target_language=str(values.get("target_language") or ""),
-                workflow=workflow,
-            )
-        return TranscribeAssetCommand(asset_id=str(values["asset_id"]), workflow=workflow)
+        target_sequence_id = str(sequence_id or values.get("sequence_id") or "")
+        if not target_sequence_id:
+            raise ValueError("Persisted transcription task has no sequence")
+        return TranscribeSequenceCommand(
+            sequence_id=target_sequence_id,
+            workflow=workflow,
+        )
     if task_kind == TaskKind.TRANSLATE:
         common = {
             "document_id": str(values["document_id"]),

@@ -63,6 +63,7 @@ def test_typed_settings_round_trip(tmp_path: Path) -> None:
         )
     ]
     settings.ui.left_panel_width = 340
+    settings.ui.asset_view_mode = "large_thumbnails"
     repository.save(settings)
 
     loaded = repository.load()
@@ -71,6 +72,7 @@ def test_typed_settings_round_trip(tmp_path: Path) -> None:
     assert loaded.download.output_directory == str(tmp_path / "Downloads")
     assert loaded.download.last_url == "https://example.com/remembered-video"
     assert loaded.ui.default_project_directory == str(tmp_path / "Projects")
+    assert loaded.ui.asset_view_mode == "large_thumbnails"
     assert loaded.translation.target_language == "ru"
     assert loaded.translation.mode == "intelligent"
     assert loaded.translation.glossary_terms[0].target == "媒体流"
@@ -90,7 +92,7 @@ def test_version_two_settings_migrate_cli_engine_and_gain_translation(tmp_path: 
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == 13
     assert loaded.translation.target_language == "zh_CN"
     assert loaded.translation.mode == "standard"
     assert loaded.translation.glossary_terms == []
@@ -110,11 +112,11 @@ def test_version_seven_settings_gain_quick_download_memory(tmp_path: Path) -> No
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == 13
     assert loaded.download.last_url == ""
     assert loaded.ui.default_project_directory == default_project_root()
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 12
+    assert persisted["schema_version"] == 13
     assert persisted["download"]["last_url"] == ""
     assert persisted["ui"]["default_project_directory"] == default_project_root()
 
@@ -128,10 +130,10 @@ def test_version_eight_settings_gain_automatic_project_root(tmp_path: Path) -> N
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == 13
     assert loaded.ui.default_project_directory == default_project_root()
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 12
+    assert persisted["schema_version"] == 13
     assert persisted["ui"]["default_project_directory"] == default_project_root()
 
 
@@ -145,7 +147,7 @@ def test_version_nine_settings_gain_translation_default_from_ui_language(tmp_pat
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == 13
     assert loaded.translation.target_language == "en"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["translation"]["target_language"] == "en"
@@ -168,7 +170,7 @@ def test_version_ten_settings_separate_media_and_project_roots(
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == 13
     assert loaded.ui.default_project_directory == default_project_root()
     assert loaded.download.output_directory == default_media_root()
     assert Path(default_project_root()).is_dir()
@@ -187,10 +189,28 @@ def test_version_eleven_settings_default_to_compatible_download_codec(tmp_path: 
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 12
+    assert loaded.schema_version == 13
     assert loaded.download.codec == "avc"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["download"]["codec"] == "avc"
+
+
+def test_version_twelve_settings_remove_inspector_layout(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 12
+    payload["ui"]["left_panel_width"] = 288
+    payload["ui"]["inspector_width"] = 420
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.schema_version == 13
+    assert loaded.ui.left_panel_width == 360
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 13
+    assert persisted["ui"]["left_panel_width"] == 360
+    assert "inspector_width" not in persisted["ui"]
 
 
 def test_concurrent_settings_writer_is_rejected_instead_of_losing_updates(tmp_path: Path) -> None:

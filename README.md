@@ -92,33 +92,43 @@ D:\Tools\MediaFlow\.venv\Scripts\python.exe -m mediaflow.desktop.app
 
 ## 无头 CLI
 
-`mediaflow-cli` 是桌面界面之外的结构化自动化入口，复用同一个 Editor API，不另起服务，也不复制任务实现。命令始终向标准输出写 JSON，失败时返回非零退出码和结构化错误。
+`mediaflow-cli` 是桌面界面之外的结构化自动化入口，复用同一个 Editor API，不另起服务，也不复制任务实现。它使用版本化 JSON 合同，命令始终向标准输出写 JSON，失败时返回非零退出码和稳定错误码。调用方应先读取 `describe`，再按返回的能力和参数 schema 选择操作。
 
 ```powershell
-mediaflow-cli project-create --project D:\Projects\Demo --name Demo
-mediaflow-cli asset-import --project D:\Projects\Demo --source D:\Media\source.mp4
-mediaflow-cli project-inspect --project D:\Projects\Demo
-mediaflow-cli task-list --project D:\Projects\Demo
+mediaflow-cli describe
+Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
 自动化程序也可以通过文件或标准输入发送统一请求：
 
 ```json
 {
-  "command": "task.start",
+  "protocol": "mediaflow-cli",
+  "version": 1,
+  "operation": "task.start",
   "project": "D:\\Projects\\Demo",
-  "kind": "waveform",
-  "parameters": {"asset_id": "素材 ID"},
-  "input_asset_ids": ["素材 ID"]
+  "arguments": {
+    "task_command": {
+      "command_type": "generate_waveform",
+      "asset_id": "素材 ID"
+    },
+    "input_asset_ids": ["素材 ID"]
+  }
 }
 ```
 
 ```powershell
-mediaflow-cli --request request.json
-Get-Content request.json -Raw | mediaflow-cli --request -
+mediaflow-cli execute --request request.json
+Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
 当前自动化边界到 CLI 为止，不需要常驻 MCP 服务。如果以后确实需要让支持 MCP 的外部客户端调用，只应增加转接层，Editor API 仍是唯一实现入口。
+
+### 可编辑网页素材
+
+MediaFlow 可导入带 `editable-media.json` 和 `window.editableMedia` 运行接口的本地网页包。网页包保存结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁；浏览器缓存、PNG、GIF、透明视频和普通视频都是派生结果。桌面界面与 CLI 读写同一状态，模板换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。
+
+相关能力可从 `mediaflow-cli describe` 读取，包括 `web.clip.keyframe.*`、`web.clip.theme.update`、`web.clip.layout.select`、`web.clip.data.*`、`web.clip.diff`、`web.batch.create`、`web.component.*`、`web.asset.rebind` 和 `web.clip.export`。远程网址、登录态网页和任意 DOM/CSS 可视化开发不属于该边界。
 
 ## 测试与真实验收
 

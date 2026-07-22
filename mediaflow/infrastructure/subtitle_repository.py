@@ -21,31 +21,21 @@ class SubtitleRepository:
         document: SubtitleDocument,
         segments: list[SubtitleSegment],
     ) -> SubtitleDocument:
-        project = self.get_project()
-        if document.project_id != project.id:
-            raise ValueError("Subtitle document belongs to another project")
-        self.get_asset(document.asset_id)
-        if document.media_asset_id:
-            media_asset = self.get_asset(document.media_asset_id)
-            if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
-                raise ValueError("Subtitle media must be a video or audio asset")
+        self._validate_subtitle_document(document)
         if any(segment.document_id != document.id for segment in segments):
             raise ValueError("Subtitle segment belongs to another document")
-        if document.source_document_id:
-            source = self.get_subtitle_document(document.source_document_id)
-            if source.asset_id != document.asset_id or source.media_asset_id != document.media_asset_id:
-                raise ValueError("Translation source must keep the same source and media assets")
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO subtitle_document(
-                    id, project_id, asset_id, media_asset_id, language,
+                    id, project_id, asset_id, media_asset_id, sequence_id, language,
                     source_document_id, is_source, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     document.id,
                     document.project_id,
                     document.asset_id,
                     document.media_asset_id,
+                    document.sequence_id,
                     document.language,
                     document.source_document_id,
                     int(document.is_source),
@@ -57,14 +47,72 @@ class SubtitleRepository:
             self._touch_project(connection)
         return document
 
+    def save_subtitle_document(self, document: SubtitleDocument) -> SubtitleDocument:
+        current = self.get_subtitle_document(document.id)
+        if document.project_id != current.project_id:
+            raise ValueError("Subtitle document belongs to another project")
+        self._validate_subtitle_document(document)
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE subtitle_document
+                   SET asset_id=?, media_asset_id=?, sequence_id=?, language=?,
+                       source_document_id=?, is_source=?
+                   WHERE id=?""",
+                (
+                    document.asset_id,
+                    document.media_asset_id,
+                    document.sequence_id,
+                    document.language,
+                    document.source_document_id,
+                    int(document.is_source),
+                    document.id,
+                ),
+            )
+            self._touch_project(connection)
+        return self.get_subtitle_document(document.id)
+
+    def _validate_subtitle_document(self, document: SubtitleDocument) -> None:
+        project = self.get_project()
+        if document.project_id != project.id:
+            raise ValueError("Subtitle document belongs to another project")
+        self.get_asset(document.asset_id)
+        if document.sequence_id:
+            self.get_sequence(document.sequence_id)
+        if document.media_asset_id:
+            media_asset = self.get_asset(document.media_asset_id)
+            if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
+                raise ValueError("Subtitle media must be a video or audio asset")
+        if document.source_document_id:
+            source = self.get_subtitle_document(document.source_document_id)
+            if (
+                source.asset_id != document.asset_id
+                or source.media_asset_id != document.media_asset_id
+                or source.sequence_id != document.sequence_id
+            ):
+                raise ValueError(
+                    "Translation source must keep the same source, media, and sequence"
+                )
+
     def get_subtitle_document(self, document_id: str) -> SubtitleDocument:
         row = self._fetchone("SELECT * FROM subtitle_document WHERE id=?", (document_id,))
         if row is None:
             raise KeyError(document_id)
         return self._subtitle_document_from_row(row)
 
-    def list_subtitle_documents(self, asset_id: str | None = None) -> list[SubtitleDocument]:
-        if asset_id:
+    def list_subtitle_documents(
+        self,
+        asset_id: str | None = None,
+        *,
+        sequence_id: str | None = None,
+    ) -> list[SubtitleDocument]:
+        if sequence_id:
+            rows = self._fetchall(
+                """SELECT * FROM subtitle_document
+                   WHERE sequence_id=?
+                   ORDER BY created_at, id""",
+                (sequence_id,),
+            )
+        elif asset_id:
             rows = self._fetchall(
                 """SELECT * FROM subtitle_document
                    WHERE asset_id=? OR media_asset_id=?
@@ -219,18 +267,13 @@ class SubtitleRepository:
             "SELECT * FROM subtitle_placement WHERE track_id=? ORDER BY start_frame, id",
             (track_id,),
         )
-        return [
-            SubtitlePlacement(
-                id=row["id"],
-                track_id=row["track_id"],
-                segment_id=row["segment_id"],
-                clip_id=row["clip_id"],
-                start_frame=row["start_frame"],
-                end_frame=row["end_frame"],
-                text_override=row["text_override"],
-            )
-            for row in rows
-        ]
+        return [self._subtitle_placement(row) for row in rows]
+
+    def get_subtitle_placement(self, placement_id: str) -> SubtitlePlacement:
+        row = self._fetchone("SELECT * FROM subtitle_placement WHERE id=?", (placement_id,))
+        if row is None:
+            raise KeyError(placement_id)
+        return self._subtitle_placement(row)
 
     def update_subtitle_placement_text(
         self,
@@ -249,9 +292,49 @@ class SubtitleRepository:
                 (normalized, placement_id),
             )
             self._touch_project(connection)
-        return next(
-            item for item in self.list_subtitle_placements(row["track_id"]) if item.id == placement_id
+        return self.get_subtitle_placement(placement_id)
+
+    def update_subtitle_placement_range(
+        self,
+        placement_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        timing_overridden: bool = True,
+    ) -> SubtitlePlacement:
+        if start_frame < 0 or end_frame <= start_frame:
+            raise ValueError("Subtitle placement must have a positive frame range")
+        row = self._fetchone("SELECT * FROM subtitle_placement WHERE id=?", (placement_id,))
+        if row is None:
+            raise KeyError(placement_id)
+        with self.transaction() as connection:
+            connection.execute(
+                """UPDATE subtitle_placement
+                   SET start_frame=?, end_frame=?, timing_overridden=?
+                   WHERE id=?""",
+                (start_frame, end_frame, int(timing_overridden), placement_id),
+            )
+            self._touch_project(connection)
+        return self.get_subtitle_placement(placement_id)
+
+    def reset_subtitle_placement_range(self, placement_id: str) -> SubtitlePlacement:
+        row = self._fetchone(
+            """SELECT placement.*, track.sequence_id
+               FROM subtitle_placement placement
+               JOIN track ON track.id=placement.track_id
+               WHERE placement.id=?""",
+            (placement_id,),
         )
+        if row is None:
+            raise KeyError(placement_id)
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE subtitle_placement SET timing_overridden=0 WHERE id=?",
+                (placement_id,),
+            )
+            self._sync_subtitle_placements(connection, row["sequence_id"])
+            self._touch_project(connection)
+        return self.get_subtitle_placement(placement_id)
 
     def add_subtitle_placements(
         self,
@@ -271,8 +354,8 @@ class SubtitleRepository:
                 connection.execute(
                     """INSERT INTO subtitle_placement(
                            id, track_id, segment_id, clip_id, start_frame, end_frame,
-                           text_override
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                           text_override, timing_overridden
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         item.id,
                         item.track_id,
@@ -281,6 +364,7 @@ class SubtitleRepository:
                         item.start_frame,
                         item.end_frame,
                         item.text_override,
+                        int(item.timing_overridden),
                     ),
                 )
             self._touch_project(connection)
@@ -479,7 +563,10 @@ class SubtitleRepository:
             for key, (start, end) in desired.items():
                 row = existing.get(key)
                 if row is not None:
-                    if row["start_frame"] != start or row["end_frame"] != end:
+                    if (
+                        not bool(row["timing_overridden"])
+                        and (row["start_frame"] != start or row["end_frame"] != end)
+                    ):
                         connection.execute(
                             "UPDATE subtitle_placement SET start_frame=?, end_frame=? WHERE id=?",
                             (start, end, row["id"]),
@@ -488,10 +575,23 @@ class SubtitleRepository:
                     connection.execute(
                         """INSERT INTO subtitle_placement(
                                id, track_id, segment_id, clip_id,
-                               start_frame, end_frame, text_override
-                           ) VALUES (?, ?, ?, ?, ?, ?, NULL)""",
+                               start_frame, end_frame, text_override, timing_overridden
+                           ) VALUES (?, ?, ?, ?, ?, ?, NULL, 0)""",
                         (new_id(), link["track_id"], key[0], key[1], start, end),
                     )
+
+    @staticmethod
+    def _subtitle_placement(row: sqlite3.Row) -> SubtitlePlacement:
+        return SubtitlePlacement(
+            id=row["id"],
+            track_id=row["track_id"],
+            segment_id=row["segment_id"],
+            clip_id=row["clip_id"],
+            start_frame=row["start_frame"],
+            end_frame=row["end_frame"],
+            text_override=row["text_override"],
+            timing_overridden=bool(row["timing_overridden"]),
+        )
 
     @staticmethod
     def _clip_source_range(clip: sqlite3.Row) -> tuple[Fraction, Fraction]:
@@ -564,6 +664,7 @@ class SubtitleRepository:
             project_id=row["project_id"],
             asset_id=row["asset_id"],
             media_asset_id=row["media_asset_id"],
+            sequence_id=row["sequence_id"],
             language=row["language"],
             source_document_id=row["source_document_id"],
             is_source=bool(row["is_source"]),

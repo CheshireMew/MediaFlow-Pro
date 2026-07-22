@@ -27,6 +27,7 @@ class SubtitleDocument(DomainModel):
     project_id: str
     asset_id: str
     media_asset_id: str | None = None
+    sequence_id: str | None = None
     language: str
     source_document_id: str | None = None
     is_source: bool = True
@@ -41,3 +42,10 @@ class SubtitlePlacement(DomainModel):
     start_frame: int
     end_frame: int
     text_override: str | None = None
+    timing_overridden: bool = False
+
+    @model_validator(mode="after")
+    def validate_times(self) -> SubtitlePlacement:
+        if self.start_frame < 0 or self.end_frame <= self.start_frame:
+            raise ValueError("Subtitle placement must have a positive frame range")
+        return self

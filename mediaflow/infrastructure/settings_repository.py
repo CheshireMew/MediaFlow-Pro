@@ -13,7 +13,7 @@ from mediaflow.domain.settings import GlobalSettings, default_media_root, defaul
 
 from .runtime_paths import RuntimePaths
 
-SETTINGS_SCHEMA_VERSION = 12
+SETTINGS_SCHEMA_VERSION = 13
 _SETTINGS_WRITE_LOCK = threading.RLock()
 _UNLOADED = object()
 
@@ -84,6 +84,10 @@ class SettingsRepository:
             payload.setdefault("download", {})["output_directory"] = default_media_root()
         if version < 12:
             payload.setdefault("download", {})["codec"] = "avc"
+        if version < 13:
+            ui = payload.setdefault("ui", {})
+            ui.pop("inspector_width", None)
+            ui["left_panel_width"] = max(360, int(ui.get("left_panel_width") or 360))
         payload["schema_version"] = SETTINGS_SCHEMA_VERSION
         settings = GlobalSettings.model_validate(payload)
         self._ensure_storage_directories(settings)

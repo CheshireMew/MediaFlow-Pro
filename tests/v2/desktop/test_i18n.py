@@ -25,8 +25,8 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
     app = QGuiApplication.instance() or QGuiApplication([])
     i18n = Path(__file__).resolve().parents[3] / "mediaflow" / "resources" / "i18n"
     expected = {
-        "en": ("New Project", "Professional Audio", "Export Sequence"),
-        "ja": ("新規プロジェクト", "プロオーディオ", "シーケンスを書き出す"),
+        "en": ("New Project", "Audio", "Export Sequence"),
+        "ja": ("新規プロジェクト", "音声", "シーケンスを書き出す"),
     }
     catalog_keys: dict[str, set[tuple[str, str]]] = {}
     for language, translations in expected.items():
@@ -47,7 +47,7 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         assert translator.load(str(catalog.with_suffix(".qm")))
         assert app.installTranslator(translator)
         assert QCoreApplication.translate("HomeView", "新建项目") == translations[0]
-        assert QCoreApplication.translate("AudioPanel", "专业音频") == translations[1]
+        assert QCoreApplication.translate("AudioPanel", "音频") == translations[1]
         assert QCoreApplication.translate("ExportPanel", "导出序列") == translations[2]
         expected_system = ("Video 2", "ビデオ 2")[language == "ja"]
         expected_export = ("Export H264", "H264 を書き出し")[language == "ja"]

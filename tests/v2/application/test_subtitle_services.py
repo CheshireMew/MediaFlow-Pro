@@ -86,6 +86,10 @@ def test_srt_import_edit_place_compile_and_export_use_one_document_boundary(tmp_
         )
         assert "Hello MediaFlow Pro" in compiled.xml
         assert "This is a subtitle editing test." in compiled.xml
+        preview_graph = TimelineCompiler(repository).compile(
+            repository.load_timeline(project.main_sequence_id)
+        )
+        assert 'mlt_service">dynamictext' not in preview_graph.xml
 
         exported = publication.write_document_srt(document.id, tmp_path / "exported.srt")
         cues = SubtitleFile.read(exported, fps_numerator=30, fps_denominator=1)
@@ -127,6 +131,84 @@ def test_timeline_and_subtitle_edits_share_one_chronological_undo_history(tmp_pa
         editor.redo()
         assert len(repository.load_timeline(project.main_sequence_id).markers) == 1
         assert repository.list_subtitle_segments(document.id)[0].text == "After"
+
+
+def test_sequence_subtitle_timing_edit_persists_through_document_sync_and_undo(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "timing.srt"
+    source.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nAdjust me\n",
+        encoding="utf-8-sig",
+    )
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        history = ProjectEditHistory()
+        acquisition, editing, _publication = _build_subtitle_components(repository, history)
+        document = acquisition.import_subtitle_file(source, AssetService(repository, MediaProbe()))
+        project = repository.get_project()
+        subtitle_track = next(
+            item
+            for item in repository.load_timeline(project.main_sequence_id).tracks
+            if item.kind == TrackKind.SUBTITLE
+        )
+        placement = repository.place_subtitle_document(
+            document.id,
+            subtitle_track.id,
+            follow_clips=False,
+        )[0]
+
+        adjusted = editing.update_placement_range(
+            placement.id,
+            start_frame=12,
+            end_frame=48,
+        )
+        assert (adjusted.start_frame, adjusted.end_frame, adjusted.timing_overridden) == (
+            12,
+            48,
+            True,
+        )
+
+        segment = repository.list_subtitle_segments(document.id)[0]
+        editing.update_segment(
+            document.id,
+            segment.id,
+            start_frame=3,
+            end_frame=60,
+            text="Document changed",
+        )
+        persisted = repository.get_subtitle_placement(placement.id)
+        assert (persisted.start_frame, persisted.end_frame) == (12, 48)
+
+        history.undo()
+        history.undo()
+        restored = repository.get_subtitle_placement(placement.id)
+        assert (restored.start_frame, restored.end_frame, restored.timing_overridden) == (
+            placement.start_frame,
+            placement.end_frame,
+            False,
+        )
+
+        history.redo()
+        moved_again = repository.get_subtitle_placement(placement.id)
+        assert (moved_again.start_frame, moved_again.end_frame, moved_again.timing_overridden) == (
+            12,
+            48,
+            True,
+        )
+
+        reset = editing.reset_placement_range(placement.id)
+        assert (reset.start_frame, reset.end_frame, reset.timing_overridden) == (
+            placement.start_frame,
+            placement.end_frame,
+            False,
+        )
+        history.undo()
+        restored_override = repository.get_subtitle_placement(placement.id)
+        assert (
+            restored_override.start_frame,
+            restored_override.end_frame,
+            restored_override.timing_overridden,
+        ) == (12, 48, True)
 
 
 def test_imported_subtitle_auto_imports_adjacent_media_and_follows_its_clip(

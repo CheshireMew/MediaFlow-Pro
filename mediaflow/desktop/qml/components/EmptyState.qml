@@ -6,6 +6,7 @@ Item {
     property string iconText: "＋"
     property string title: "暂无内容"
     property string description: ""
+    property bool iconVisible: true
     property int contentMaximumWidth: 240
     property int titleFontSize: Theme.fontSizeTitleSmall
     property int descriptionFontSize: Theme.fontSizeBodySmall
@@ -20,6 +21,7 @@ Item {
         spacing: 10
 
         Rectangle {
+            visible: iconVisible
             Layout.alignment: Qt.AlignHCenter
             width: 48
             height: 48

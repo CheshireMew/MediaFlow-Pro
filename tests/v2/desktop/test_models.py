@@ -6,7 +6,7 @@ import pytest
 
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
-from mediaflow.desktop.models import SequenceListModel
+from mediaflow.desktop.models import AssetFilterModel, AssetListModel, SequenceListModel
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.infrastructure.platform_media import PlatformMediaResolver
@@ -88,6 +88,37 @@ def test_dict_list_model_rejects_rows_that_do_not_match_qml_roles() -> None:
     model = SequenceListModel()
     with pytest.raises(ValueError, match="missing=.*colorMode"):
         model.set_items([{"sequenceId": "main", "name": "Main"}])
+
+
+def test_asset_filter_model_is_the_shared_search_boundary_for_all_views() -> None:
+    assets = AssetListModel()
+    assets.set_items(
+        [
+            {
+                "assetId": asset_id,
+                "name": name,
+                "kind": "video",
+                "path": f"D:/{name}",
+                "status": "online",
+                "managed": False,
+                "durationFrames": 25,
+                "width": 640,
+                "height": 360,
+                "previewUrl": "",
+                "proxyReady": False,
+                "waveformReady": False,
+            }
+            for asset_id, name in (("one", "First Video.mp4"), ("two", "Overlay.png"))
+        ]
+    )
+    filtered = AssetFilterModel(assets)
+
+    assert filtered.rowCount() == 2
+    filtered.setSearchText(" overlay ")
+    assert filtered.rowCount() == 1
+    assert assets.get(filtered.mapToSource(filtered.index(0, 0)).row())["assetId"] == "two"
+    filtered.setSearchText("")
+    assert filtered.rowCount() == 2
 
 
 def test_download_plan_queues_selected_entries_as_typed_requests(

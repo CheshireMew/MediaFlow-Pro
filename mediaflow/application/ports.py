@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -14,6 +15,7 @@ from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitlePlacement, SubtitleSegment
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import TimelineMarker, TimelineRange, TimelineState
+from mediaflow.domain.web_media import EditableMediaManifest, WebAssetSpec, WebClipState
 from mediaflow.domain.workflows import WorkflowRun
 
 
@@ -54,10 +56,10 @@ class TaskStore(Protocol):
     def create(self, task: Task) -> Task: ...
     def save(self, task: Task) -> Task: ...
     def get(self, task_id: str) -> Task: ...
-    def list(self) -> list[Task]: ...
+    def list(self) -> builtins.list[Task]: ...
     def delete(self, task_id: str) -> None: ...
-    def delete_terminal(self) -> list[Task]: ...
-    def recover_interrupted(self) -> list[Task]: ...
+    def delete_terminal(self) -> builtins.list[Task]: ...
+    def recover_interrupted(self) -> builtins.list[Task]: ...
 
 
 class ProjectAccess(Protocol):
@@ -126,6 +128,19 @@ class TimelineDocuments(Protocol):
     ) -> None: ...
 
 
+class WebMediaDocuments(Protocol):
+    def save_web_asset_spec(self, spec: WebAssetSpec) -> WebAssetSpec: ...
+    def get_web_asset_spec(self, asset_id: str) -> WebAssetSpec: ...
+    def list_web_asset_specs(self) -> list[WebAssetSpec]: ...
+    def get_web_clip_state(self, clip_id: str) -> WebClipState: ...
+    def list_web_clip_states(self, sequence_id: str) -> dict[str, WebClipState]: ...
+    def save_web_clip_states(self, states: list[WebClipState]) -> None: ...
+
+
+class WebPackageValidatorPort(Protocol):
+    def validate(self, package_root: Path, manifest: EditableMediaManifest) -> None: ...
+
+
 class AudioDocuments(Protocol):
     def list_audio_buses(self, sequence_id: str) -> list[AudioBus]: ...
     def save_audio_bus(self, bus: AudioBus) -> AudioBus: ...
@@ -145,10 +160,13 @@ class SubtitleDocuments(Protocol):
         document: SubtitleDocument,
         segments: list[SubtitleSegment],
     ) -> SubtitleDocument: ...
+    def save_subtitle_document(self, document: SubtitleDocument) -> SubtitleDocument: ...
     def get_subtitle_document(self, document_id: str) -> SubtitleDocument: ...
     def list_subtitle_documents(
         self,
         asset_id: str | None = None,
+        *,
+        sequence_id: str | None = None,
     ) -> list[SubtitleDocument]: ...
     def list_subtitle_segments(self, document_id: str) -> list[SubtitleSegment]: ...
     def save_subtitle_segments(
@@ -167,11 +185,21 @@ class SubtitleDocuments(Protocol):
         follow_clips: bool | None = None,
     ) -> list[SubtitlePlacement]: ...
     def list_subtitle_placements(self, track_id: str) -> list[SubtitlePlacement]: ...
+    def get_subtitle_placement(self, placement_id: str) -> SubtitlePlacement: ...
     def update_subtitle_placement_text(
         self,
         placement_id: str,
         text_override: str | None,
     ) -> SubtitlePlacement: ...
+    def update_subtitle_placement_range(
+        self,
+        placement_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        timing_overridden: bool = True,
+    ) -> SubtitlePlacement: ...
+    def reset_subtitle_placement_range(self, placement_id: str) -> SubtitlePlacement: ...
     def add_subtitle_placements(
         self,
         placements: list[SubtitlePlacement],
@@ -202,11 +230,26 @@ class AssetServiceDocuments(
     pass
 
 
+class WebMediaServiceDocuments(
+    ProjectAccess,
+    SequenceDocuments,
+    AssetDocuments,
+    TimelineDocuments,
+    AudioDocuments,
+    SubtitleDocuments,
+    WebMediaDocuments,
+    Protocol,
+):
+    pass
+
+
 class HighlightServiceDocuments(
     ProjectAccess,
     SequenceDocuments,
     AssetDocuments,
     TimelineDocuments,
+    WebMediaDocuments,
+    AudioDocuments,
     SubtitleDocuments,
     HighlightDocuments,
     Protocol,
@@ -220,6 +263,7 @@ class SequenceServiceDocuments(
     TimelineDocuments,
     AudioDocuments,
     SubtitleDocuments,
+    WebMediaDocuments,
     Protocol,
 ):
     pass
@@ -276,13 +320,29 @@ class TimelineEditorDocuments(
     AssetDocuments,
     TimelineDocuments,
     AudioDocuments,
+    WebMediaDocuments,
     Protocol,
 ):
     pass
 
 
 class AssetProcessingDocuments(ProjectAccess, AssetDocuments, Protocol):
-    pass
+    def set_asset_proxy_paths(
+        self,
+        asset_id: str,
+        *,
+        expected_fingerprint: AssetFingerprint | None,
+        proxy_path: str | Path,
+        sdr_preview_proxy_path: str | Path | None,
+    ) -> Asset: ...
+
+    def set_asset_waveform_path(
+        self,
+        asset_id: str,
+        *,
+        expected_fingerprint: AssetFingerprint | None,
+        waveform_path: str | Path,
+    ) -> Asset: ...
 
 
 class TimelineCompilationDocuments(
@@ -290,6 +350,7 @@ class TimelineCompilationDocuments(
     AssetDocuments,
     SubtitleDocuments,
     AudioDocuments,
+    WebMediaDocuments,
     Protocol,
 ):
     pass
@@ -301,7 +362,24 @@ class TaskHandlerDocuments(
     AssetDocuments,
     TimelineDocuments,
     SubtitleDocuments,
+    AudioDocuments,
     HighlightDocuments,
+    WebMediaDocuments,
     Protocol,
 ):
-    pass
+    def set_asset_proxy_paths(
+        self,
+        asset_id: str,
+        *,
+        expected_fingerprint: AssetFingerprint | None,
+        proxy_path: str | Path,
+        sdr_preview_proxy_path: str | Path | None,
+    ) -> Asset: ...
+
+    def set_asset_waveform_path(
+        self,
+        asset_id: str,
+        *,
+        expected_fingerprint: AssetFingerprint | None,
+        waveform_path: str | Path,
+    ) -> Asset: ...

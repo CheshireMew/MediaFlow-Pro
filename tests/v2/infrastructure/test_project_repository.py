@@ -9,7 +9,7 @@ from mediaflow.domain.enums import AssetKind, ColorMode, ExportFormat, SequenceK
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.task_commands import DownloadMediaCommand
+from mediaflow.domain.task_commands import DownloadMediaCommand, TranscribeSequenceCommand
 from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -82,6 +82,85 @@ def test_version_thirteen_project_migration_preserves_existing_profile(
         )
 
 
+def test_version_fourteen_project_gains_persistent_subtitle_timing_overrides(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV14"
+    with ProjectRepository.create(root, "MigratedV14"):
+        pass
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("ALTER TABLE subtitle_placement DROP COLUMN timing_overridden")
+        connection.execute("UPDATE schema_info SET version=14")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        columns = {
+            row["name"]
+            for row in repository._fetchall("PRAGMA table_info(subtitle_placement)")
+        }
+        assert "timing_overridden" in columns
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+
+def test_version_fifteen_project_migrates_transcription_to_sequence_boundary(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV15"
+    with ProjectRepository.create(root, "MigratedV15") as repository:
+        project = repository.get_project()
+        sequence_id = project.main_sequence_id
+
+    task_id = "legacy-transcription-task"
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("ALTER TABLE subtitle_document DROP COLUMN sequence_id")
+        connection.execute(
+            """INSERT INTO task(
+                id, project_id, sequence_id, command_json, status, progress,
+                message_code, input_asset_ids_json, artifacts_json,
+                execution_trace_json, error, revision, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task_id,
+                project.id,
+                sequence_id,
+                json.dumps(
+                    {
+                        "command_type": "transcribe_region",
+                        "asset_id": "legacy-asset",
+                        "start_frame": 12,
+                        "end_frame": 48,
+                    }
+                ),
+                "completed",
+                1.0,
+                "completed",
+                "[]",
+                "[]",
+                "[]",
+                None,
+                0,
+                1,
+                1,
+            ),
+        )
+        connection.execute("UPDATE schema_info SET version=15")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        columns = {
+            row["name"]
+            for row in repository._fetchall("PRAGMA table_info(subtitle_document)")
+        }
+        task = TaskRepository(root).get(task_id)
+
+        assert "sequence_id" in columns
+        assert isinstance(task.command, TranscribeSequenceCommand)
+        assert task.command.sequence_id == sequence_id
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+
 def test_second_writer_falls_back_to_read_only(tmp_path: Path) -> None:
     root = tmp_path / "Locked"
     first = ProjectRepository.create(root, "Locked")
@@ -95,6 +174,47 @@ def test_second_writer_falls_back_to_read_only(tmp_path: Path) -> None:
             second.close()
     finally:
         first.close()
+
+
+def test_version_sixteen_project_gains_web_tables_and_content_revision(tmp_path: Path) -> None:
+    root = tmp_path / "MigratedV16"
+    with ProjectRepository.create(root, "MigratedV16"):
+        pass
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("DROP TABLE web_clip_state")
+        connection.execute("DROP TABLE web_asset")
+        connection.execute("ALTER TABLE project DROP COLUMN content_revision")
+        connection.execute("UPDATE schema_info SET version=16")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        project_columns = {
+            row["name"] for row in repository._fetchall("PRAGMA table_info(project)")
+        }
+        tables = {
+            row["name"]
+            for row in repository._fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "content_revision" in project_columns
+        assert {"web_asset", "web_clip_state"} <= tables
+        assert repository.content_revision() == 0
+
+
+def test_cooperative_writer_rejects_stale_owner_edits_until_reload(tmp_path: Path) -> None:
+    root = tmp_path / "Cooperative"
+    owner = ProjectRepository.create(root, "Cooperative")
+    cooperative = ProjectRepository.open(root, writable=True, cooperative=True)
+    try:
+        cooperative.create_short_sequence("From CLI")
+        assert owner.content_revision() != owner.known_content_revision
+        with pytest.raises(RuntimeError, match="changed in another process"):
+            owner.create_short_sequence("Stale desktop edit")
+        owner.acknowledge_content_revision()
+        owner.create_short_sequence("After reload")
+    finally:
+        cooperative.close()
+        owner.close()
 
 
 def test_version_ten_project_gains_recoverable_sequence_archiving(tmp_path: Path) -> None:
@@ -511,6 +631,42 @@ def test_changed_source_invalidates_derived_media(tmp_path: Path) -> None:
         assert refreshed.waveform_path is None
         assert refreshed.fingerprint is not None
         assert refreshed.fingerprint.edge_sha256 != asset.fingerprint.edge_sha256
+
+
+def test_derived_media_updates_merge_and_reject_stale_source_results(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"version-one")
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        imported = repository.import_external_asset(source, AssetKind.VIDEO)
+        proxy = repository.project_dir / "proxies" / "proxy.mp4"
+        waveform = repository.project_dir / "cache" / "waveform.json"
+
+        repository.set_asset_waveform_path(
+            imported.id,
+            expected_fingerprint=imported.fingerprint,
+            waveform_path=waveform,
+        )
+        merged = repository.set_asset_proxy_paths(
+            imported.id,
+            expected_fingerprint=imported.fingerprint,
+            proxy_path=proxy,
+            sdr_preview_proxy_path=None,
+        )
+
+        assert merged.proxy_path
+        assert merged.waveform_path
+
+        source.write_bytes(b"version-two-is-different")
+        repository.refresh_asset_status(imported.id)
+        with pytest.raises(RuntimeError, match="发生了变化"):
+            repository.set_asset_waveform_path(
+                imported.id,
+                expected_fingerprint=imported.fingerprint,
+                waveform_path=waveform,
+            )
+        current = repository.get_asset(imported.id)
+        assert current.proxy_path is None
+        assert current.waveform_path is None
 
 
 def test_relink_requires_matching_content_or_explicit_confirmation(tmp_path: Path) -> None:

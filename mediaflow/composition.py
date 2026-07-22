@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
@@ -17,6 +18,7 @@ from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.application.web_media_service import WebMediaService
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import (
@@ -34,13 +36,13 @@ from mediaflow.domain.task_commands import (
 )
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import TimelineState
-from mediaflow.infrastructure.audio_region_extractor import FfmpegAudioRegionExtractor
 from mediaflow.infrastructure.cookie_store import CookieStore
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.font_assets import subtitle_font_options
 from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.media_probe import MediaProbe
+from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
 from mediaflow.infrastructure.mlt import SequenceBoundaryAnalysisService, TimelineCompiler
 from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -50,6 +52,8 @@ from mediaflow.infrastructure.runtime_tools import RuntimeToolService
 from mediaflow.infrastructure.settings_repository import SettingsRepository
 from mediaflow.infrastructure.task_handlers import ProjectTaskHandlers
 from mediaflow.infrastructure.task_repository import TaskRepository
+from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
+from mediaflow.infrastructure.web_component_library import WebComponentLibrary
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 
 
@@ -106,11 +110,16 @@ class EditorProject:
         self._timelines: dict[str, TimelineEditor] = {}
         self.documents = repository
         self.assets = AssetService(repository, MediaProbe(paths), fingerprint_file)
+        web_validator = BrowserWebPackageValidator()
+        self.web = WebMediaService(repository, self.timeline, web_validator)
+        self.web_components = WebComponentLibrary(
+            paths.runtime_dir / "components" / "web",
+            web_validator,
+        )
         self.subtitle_publication = SubtitlePublicationService(repository)
         self.subtitle_acquisition = SubtitleAcquisitionService(
             repository,
             self.subtitle_publication,
-            region_audio_extractor=FfmpegAudioRegionExtractor(paths),
         )
         self.subtitle_editing = SubtitleEditingService(
             repository,
@@ -121,7 +130,7 @@ class EditorProject:
         self.sequences = SequenceService(repository)
         self.tasks = TaskService(
             TaskRepository(repository.project_dir),
-            recover_interrupted=not repository.read_only,
+            recover_interrupted=repository.owns_project_lock,
         )
         self.workflows = ProjectWorkflowService(
             repository,
@@ -323,6 +332,12 @@ class EditorProject:
         self.tasks.shutdown(wait=True)
         self._repository.close()
 
+    def reload_external_changes(self) -> None:
+        self._repository.acknowledge_content_revision()
+        self.history.clear()
+        for editor in self._timelines.values():
+            editor.reload()
+
     def __enter__(self) -> EditorProject:
         return self
 
@@ -356,6 +371,11 @@ class EditorApplication:
         self._settings_repository = SettingsRepository()
         self.settings = self._settings_repository.load()
         self.cookies = CookieStore(self._paths.runtime_dir / "cookies")
+        self.web_components = WebComponentLibrary(
+            self._paths.runtime_dir / "components" / "web",
+            BrowserWebPackageValidator(),
+        )
+        self._media_thumbnails = MediaThumbnailService(self._paths)
         self._project_covers = ProjectCoverService(self._paths)
 
     @property
@@ -450,14 +470,24 @@ class EditorApplication:
         # project can be switched or closed without sharing its repository
         # connection with a worker thread.
         with ProjectRepository.open(project_dir, writable=False) as repository:
-            destination = Path(project_dir) / "cache" / "mlt" / f"{state.sequence.id}-preview.mlt"
-            TimelineCompiler(repository).write(
+            document = TimelineCompiler(repository).compile(
                 state,
-                destination,
                 use_proxies=use_proxies,
                 native_preview=True,
                 prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
             )
+            digest = hashlib.sha256(document.xml.encode("utf-8")).hexdigest()[:20]
+            destination = (
+                Path(project_dir)
+                / "cache"
+                / "mlt"
+                / f"{state.sequence.id}-preview-{digest}.mlt"
+            )
+            if not destination.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = destination.with_suffix(destination.suffix + ".partial")
+                temporary.write_text(document.xml, encoding="utf-8")
+                temporary.replace(destination)
         return destination
 
     def create_project(
@@ -469,8 +499,14 @@ class EditorApplication:
         repository = ProjectRepository.create(root, name, profile)
         return EditorProject(repository, settings=self.settings, paths=self._paths)
 
-    def open_project(self, root: str | Path, *, writable: bool = True) -> EditorProject:
-        repository = ProjectRepository.open(root, writable=writable)
+    def open_project(
+        self,
+        root: str | Path,
+        *,
+        writable: bool = True,
+        cooperative: bool = False,
+    ) -> EditorProject:
+        repository = ProjectRepository.open(root, writable=writable, cooperative=cooperative)
         return EditorProject(repository, settings=self.settings, paths=self._paths)
 
     def recent_projects(self, paths: list[str]) -> RecentProjectSnapshot:
@@ -535,3 +571,23 @@ class EditorApplication:
                     totals[key] += count
             totals["recentArtifactCount"] += bool(item["recentArtifact"])
         return RecentProjectSnapshot(items=items, totals=totals)
+
+    def asset_thumbnail_paths(
+        self,
+        project_dir: str | Path,
+        *,
+        width: int = 160,
+        height: int = 90,
+    ) -> dict[str, str]:
+        thumbnails: dict[str, str] = {}
+        with ProjectRepository.open(project_dir, writable=False) as repository:
+            for asset in repository.list_assets():
+                thumbnail = self._media_thumbnails.thumbnail_for(
+                    repository,
+                    asset,
+                    width=width,
+                    height=height,
+                )
+                if thumbnail is not None:
+                    thumbnails[asset.id] = str(thumbnail)
+        return thumbnails

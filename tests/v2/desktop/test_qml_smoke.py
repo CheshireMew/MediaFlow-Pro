@@ -11,15 +11,17 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPointF, QUrl
-from PySide6.QtGui import QGuiApplication, QImage, QWindow
+from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPoint, QPointF, Qt, QUrl
+from PySide6.QtGui import QGuiApplication, QImage, QWheelEvent, QWindow
 from PySide6.QtQuick import QQuickItem
+from PySide6.QtTest import QTest
 
 from mediaflow.desktop.app import configure_application_font, create_engine
-from mediaflow.domain.enums import TaskStatus
+from mediaflow.domain.enums import TaskStatus, TrackKind
 from mediaflow.domain.highlights import HighlightCandidate
+from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.task_commands import ExportSequenceCommand
+from mediaflow.domain.task_commands import ExportSequenceCommand, TranscribeSequenceCommand
 from mediaflow.domain.tasks import Task
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.settings_repository import SettingsRepository
@@ -58,6 +60,25 @@ def _process_until(predicate, *, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.01)
     return bool(predicate())
+
+
+def _drag_quick_item(
+    window: QWindow,
+    source: QQuickItem,
+    target: QQuickItem,
+    target_position: QPointF,
+) -> None:
+    source_scene = source.mapToScene(QPointF(source.width() / 2, source.height() / 2))
+    target_scene = target.mapToScene(target_position)
+    origin = QPoint(round(source_scene.x()), round(source_scene.y()))
+    destination = QPoint(round(target_scene.x()), round(target_scene.y()))
+    QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, origin, delay=20)
+    QTest.mouseMove(window, QPoint(origin.x() + 24, origin.y() + 24), delay=50)
+    QCoreApplication.processEvents()
+    QTest.mouseMove(window, destination, delay=100)
+    QCoreApplication.processEvents()
+    QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, destination, delay=20)
+    QCoreApplication.processEvents()
 
 
 def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> None:
@@ -169,10 +190,24 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert controllers.workspace.profileLabel == "等待首个视频"
 
         window = engine.rootObjects()[0]
+        window.setWidth(1920)
+        window.setHeight(1080)
         assert _process_until(lambda: window.findChild(QQuickItem, "timelineDropArea") is not None)
         assert window.findChild(QQuickItem, "mediaFileDropArea") is not None
         snap_button = window.findChild(QQuickItem, "timelineSnapButton")
         assert snap_button is not None and snap_button.property("checked") is True
+        QTest.keyClick(window, Qt.Key_S)
+        assert _process_until(lambda: snap_button.property("checked") is False)
+        QTest.keyClick(window, Qt.Key_S)
+        assert _process_until(lambda: snap_button.property("checked") is True)
+        media_search = window.findChild(QQuickItem, "mediaSearchField")
+        assert media_search is not None
+        media_search.forceActiveFocus()
+        QTest.keyClick(window, Qt.Key_S)
+        assert media_search.property("text") == "s"
+        assert snap_button.property("checked") is True
+        media_search.setProperty("text", "")
+        window.contentItem().forceActiveFocus()
 
         video_track = next(
             controllers.timeline.tracksModel.get(index)
@@ -199,6 +234,149 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert first_clip["trackId"] == video_track["trackId"]
         assert first_clip["startFrame"] == 0
         assert controllers.workspace.profileLabel == "640×360  25 fps"
+        assert _process_until(
+            lambda: controllers.timeline.clipsModel.get(0)["waveformReady"],
+            timeout=20,
+        )
+        assert _process_until(
+            lambda: bool(controllers.media.assetsModel.get(0)["previewUrl"]),
+            timeout=20,
+        )
+        video_thumbnail = Path(
+            QUrl(controllers.media.assetsModel.get(0)["previewUrl"]).toLocalFile()
+        )
+        assert video_thumbnail.is_file() and video_thumbnail.stat().st_size > 0
+        timeline_view = window.findChild(QQuickItem, "timelinePanel")
+        assert timeline_view is not None
+        timeline_view.openClipContextMenu(first_clip["clipId"])
+        clip_context_menu = window.findChild(QObject, "timelineClipContextMenu")
+        assert clip_context_menu is not None
+        assert _process_until(lambda: clip_context_menu.property("visible"))
+        assert controllers.timeline.selectedClipId == first_clip["clipId"]
+        QTest.keyClick(window, Qt.Key_Escape)
+        assert _process_until(lambda: not clip_context_menu.property("visible"))
+        assert _process_until(
+            lambda: any(
+                item.isVisible() and item.property("assetId") == first_clip["assetId"]
+                for item in _visual_items(timeline_view)
+                if item.objectName() == "clipWaveform"
+            )
+        )
+        preview_player = window.findChild(QQuickItem, "previewPlayer")
+        timeline_scroll = window.findChild(QQuickItem, "timelineScroll")
+        timeline_ruler = window.findChild(QQuickItem, "timelineRuler")
+        timeline_toolbar = window.findChild(QQuickItem, "timelineToolbarScroll")
+        timeline_zoom_slider = window.findChild(QQuickItem, "timelineZoomSlider")
+        assert all(
+            item is not None
+            for item in (
+                preview_player,
+                timeline_scroll,
+                timeline_ruler,
+                timeline_toolbar,
+                timeline_zoom_slider,
+            )
+        )
+        assert _process_until(
+            lambda: bool(controllers.workspace.previewGraphPath)
+            and Path(controllers.workspace.previewGraphPath).is_file()
+            and preview_player.property("duration") == controllers.workspace.timelineDurationFrames
+            and not preview_player.property("errorString"),
+            timeout=20,
+        )
+        initial_preview_graph = Path(controllers.workspace.previewGraphPath)
+        assert "-preview-" in initial_preview_graph.name
+
+        timeline_view.setProperty("pixelsPerFrame", 0.5)
+        QCoreApplication.processEvents()
+        wide_tick_step = int(timeline_ruler.property("majorStepFrames"))
+        timeline_view.setProperty("pixelsPerFrame", 12.0)
+        QCoreApplication.processEvents()
+        detailed_tick_step = int(timeline_ruler.property("majorStepFrames"))
+        assert detailed_tick_step < wide_tick_step
+        assert not timeline_ruler.childItems()
+
+        timeline_view.setProperty("pixelsPerFrame", 8.0)
+        QCoreApplication.processEvents()
+        timeline_scroll.setProperty("contentX", 50.0)
+        QCoreApplication.processEvents()
+        anchor_x = 500.0
+        anchor_frame = (timeline_scroll.property("contentX") + anchor_x) / 8.0
+        timeline_view.setTimelineZoom(12.0, anchor_frame, anchor_x)
+        QCoreApplication.processEvents()
+        assert abs(
+            anchor_frame * timeline_view.property("pixelsPerFrame")
+            - timeline_scroll.property("contentX")
+            - anchor_x
+        ) <= 2
+
+        toolbar_end = max(
+            0,
+            timeline_toolbar.property("contentWidth") - timeline_toolbar.width(),
+        )
+        timeline_toolbar.setProperty("contentX", toolbar_end)
+        QCoreApplication.processEvents()
+        slider_scene = timeline_zoom_slider.mapToScene(
+            QPointF(timeline_zoom_slider.width() * 0.35, timeline_zoom_slider.height() / 2)
+        )
+        zoom_before_mouse = float(timeline_view.property("pixelsPerFrame"))
+        QTest.mouseClick(
+            window,
+            Qt.LeftButton,
+            Qt.NoModifier,
+            QPoint(round(slider_scene.x()), round(slider_scene.y())),
+            delay=20,
+        )
+        assert _process_until(
+            lambda: abs(float(timeline_view.property("pixelsPerFrame")) - zoom_before_mouse) > 0.1
+        )
+        timeline_view.setProperty("pixelsPerFrame", 3.0)
+        timeline_scroll.setProperty("contentX", 0.0)
+        QCoreApplication.processEvents()
+        wheel_scene = timeline_scroll.mapToScene(
+            QPointF(timeline_scroll.width() / 2, timeline_scroll.height() / 2)
+        )
+        wheel_global = window.mapToGlobal(
+            QPoint(round(wheel_scene.x()), round(wheel_scene.y()))
+        )
+        wheel_event = QWheelEvent(
+            wheel_scene,
+            QPointF(wheel_global),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.NoButton,
+            Qt.ControlModifier,
+            Qt.ScrollPhase.ScrollUpdate,
+            False,
+        )
+        QGuiApplication.sendEvent(window, wheel_event)
+        assert _process_until(lambda: timeline_view.property("pixelsPerFrame") > 3.1)
+        timeline_view.fitTimeline()
+
+        sequence_last_frame = controllers.workspace.timelineDurationFrames - 1
+        playback_frame = max(3, sequence_last_frame // 2)
+        controllers.timeline.setSequenceInOut(0, 2)
+        timeline_view.seekToFrame(playback_frame)
+        assert _process_until(
+            lambda: preview_player.property("position") == playback_frame
+            and timeline_view.property("visiblePlayheadFrame") == playback_frame
+        )
+        QTest.keyClick(window, Qt.Key_Space)
+        assert _process_until(lambda: preview_player.property("playing") is True)
+        assert preview_player.property("position") >= playback_frame
+        QTest.keyClick(window, Qt.Key_Space)
+        assert _process_until(lambda: preview_player.property("playing") is False)
+        timeline_view.seekToFrame(sequence_last_frame)
+        assert _process_until(lambda: preview_player.property("position") == sequence_last_frame)
+        QTest.keyClick(window, Qt.Key_Space)
+        QCoreApplication.processEvents()
+        assert preview_player.property("playing") is False
+        assert preview_player.property("position") == sequence_last_frame
+        controllers.timeline.clearSequenceInOut()
+        timeline_view.setProperty("pixelsPerFrame", 3.0)
+        timeline_scroll.setProperty("contentX", 0.0)
+        timeline_view.seekToFrame(0)
+        assert _process_until(lambda: preview_player.property("position") == 0)
 
         image_source = tmp_path / "still.png"
         image = QImage(64, 36, QImage.Format.Format_RGB32)
@@ -211,15 +389,102 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
             for index in range(controllers.media.assetsModel.rowCount())
             if controllers.media.assetsModel.get(index)["kind"] == "image"
         )
+        assert _process_until(
+            lambda: bool(
+                controllers.media.assetsModel.get(
+                    controllers.media.assetsModel.findRow("assetId", image_asset["assetId"])
+                )["previewUrl"]
+            ),
+            timeout=20,
+        )
+        image_asset = controllers.media.assetsModel.get(
+            controllers.media.assetsModel.findRow("assetId", image_asset["assetId"])
+        )
 
-        controllers.timeline.dropAssets(
-            [image_asset["assetId"]],
-            video_track["trackId"],
-            first_clip["endFrame"] - 1,
-            3.0,
-            0,
-            True,
-            False,
+        media_panel = window.findChild(QQuickItem, "mediaPanel")
+        assert media_panel is not None
+
+        def asset_delegate(asset_id: str) -> QQuickItem:
+            return next(
+                item
+                for item in _visual_items(media_panel)
+                if item.objectName() == "mediaAssetDelegate"
+                and item.property("assetId") == asset_id
+            )
+
+        assert _process_until(
+            lambda: any(
+                item.objectName() == "mediaAssetDelegate"
+                and item.property("assetId") == image_asset["assetId"]
+                for item in _visual_items(media_panel)
+            )
+        )
+        image_delegate = asset_delegate(image_asset["assetId"])
+        assert media_panel.property("viewMode") == "list"
+        assert image_delegate.height() == 30
+        assert image_delegate.property("viewMode") == "list"
+        image_preview = image_delegate.findChild(QQuickItem, "assetPreviewImage")
+        assert image_preview is not None
+        assert (image_preview.width(), image_preview.height()) == (36, 22)
+        assert QUrl(image_preview.property("source")).toLocalFile() == QUrl(
+            image_asset["previewUrl"]
+        ).toLocalFile()
+
+        view_mode_button = window.findChild(QQuickItem, "mediaViewModeButton")
+        assert view_mode_button is not None
+        assert window.findChild(QObject, "mediaViewModeMenu") is None
+        assert window.findChild(QObject, "mediaListViewModeButton") is None
+        assert window.findChild(QObject, "mediaThumbnailViewModeButton") is None
+        assert window.findChild(QObject, "mediaLargeThumbnailViewModeButton") is None
+        assert view_mode_button.width() == 32
+        assert view_mode_button.property("iconKind") == "list"
+        assert QMetaObject.invokeMethod(view_mode_button, "click")
+        assert _process_until(
+            lambda: media_panel.property("viewMode") == "thumbnails"
+            and view_mode_button.property("iconKind") == "thumbnails"
+        )
+        thumbnail_delegate = asset_delegate(image_asset["assetId"])
+        assert thumbnail_delegate.property("viewMode") == "thumbnails"
+        assert thumbnail_delegate.height() == 84
+        media_search.setProperty("text", "still")
+        media_grid = window.findChild(QQuickItem, "mediaAssetGridView")
+        assert media_grid is not None
+        assert _process_until(lambda: media_grid.property("count") == 1)
+        media_search.setProperty("text", "")
+        assert _process_until(lambda: media_grid.property("count") == 2)
+        thumbnail_render = window.grabWindow()
+        assert not thumbnail_render.isNull()
+        assert thumbnail_render.save(str(tmp_path / "media-thumbnail-view.png"))
+
+        assert QMetaObject.invokeMethod(view_mode_button, "click")
+        assert _process_until(
+            lambda: media_panel.property("viewMode") == "large_thumbnails"
+            and view_mode_button.property("iconKind") == "large_thumbnails"
+        )
+        large_delegate = asset_delegate(image_asset["assetId"])
+        assert large_delegate.property("viewMode") == "large_thumbnails"
+        assert large_delegate.height() == 132
+        assert SettingsRepository().load().ui.asset_view_mode == "large_thumbnails"
+        large_thumbnail_render = window.grabWindow()
+        assert not large_thumbnail_render.isNull()
+        assert large_thumbnail_render.save(str(tmp_path / "media-large-thumbnail-view.png"))
+
+        assert QMetaObject.invokeMethod(view_mode_button, "click")
+        assert _process_until(
+            lambda: media_panel.property("viewMode") == "list"
+            and view_mode_button.property("iconKind") == "list"
+        )
+        image_delegate = asset_delegate(image_asset["assetId"])
+        timeline_drop_area = window.findChild(QQuickItem, "timelineDropArea")
+        assert timeline_drop_area is not None
+        _drag_quick_item(
+            window,
+            image_delegate,
+            timeline_drop_area,
+            QPointF(
+                (first_clip["endFrame"] - 1) * 3.0,
+                video_track["position"] * 73 + 36,
+            ),
         )
         assert controllers.timeline.clipsModel.rowCount() == 2
         snapped_image = next(
@@ -229,16 +494,20 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         )
         assert snapped_image["trackId"] == video_track["trackId"]
         assert snapped_image["startFrame"] == first_clip["endFrame"]
+        assert _process_until(
+            lambda: bool(controllers.workspace.previewGraphPath)
+            and Path(controllers.workspace.previewGraphPath) != initial_preview_graph
+            and Path(controllers.workspace.previewGraphPath).is_file(),
+            timeout=20,
+        )
+        assert initial_preview_graph.is_file()
 
         track_count = controllers.timeline.tracksModel.rowCount()
-        controllers.timeline.dropAssets(
-            [image_asset["assetId"]],
-            video_track["trackId"],
-            0,
-            3.0,
-            0,
-            True,
-            False,
+        _drag_quick_item(
+            window,
+            image_delegate,
+            timeline_drop_area,
+            QPointF(0, video_track["position"] * 73 + 36),
         )
         assert controllers.timeline.tracksModel.rowCount() == track_count + 1
         overlapping_image = next(
@@ -280,15 +549,212 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert controllers.subtitles.subtitlePlacementsModel.rowCount() == 1
         placement = controllers.subtitles.subtitlePlacementsModel.get(0)
         assert placement["audioTrackPosition"] == audio_track["position"]
-        if controllers.tasks.taskDrawerOpen:
-            controllers.tasks.toggleTaskDrawer()
-        window.setWidth(1920)
-        window.setHeight(1080)
         for _ in range(10):
             QCoreApplication.processEvents()
             time.sleep(0.01)
         rendered = window.grabWindow()
         screenshot = tmp_path / "drag-drop-timeline.png"
+        assert not rendered.isNull() and rendered.save(str(screenshot))
+
+        long_timeline_frame = 2 * 60 * 60 * 25
+        controllers.timeline.dropAssets(
+            [image_asset["assetId"]],
+            video_track["trackId"],
+            long_timeline_frame,
+            3.0,
+            0,
+            True,
+            False,
+        )
+        assert controllers.workspace.timelineDurationFrames > long_timeline_frame
+        timeline_view.fitTimeline()
+        QCoreApplication.processEvents()
+        assert abs(timeline_scroll.property("contentWidth") - timeline_scroll.width()) <= 2
+        assert timeline_ruler.property("majorStepFrames") >= 5 * 60 * 25
+        zoom_started = time.monotonic()
+        for index in range(30):
+            timeline_view.setTimelineZoom(
+                0.02 if index % 2 == 0 else 0.04,
+                long_timeline_frame / 2,
+                timeline_scroll.width() / 2,
+            )
+            QCoreApplication.processEvents()
+        assert time.monotonic() - zoom_started < 2.0
+        assert not timeline_ruler.childItems()
+        timeline_view.fitTimeline()
+        QCoreApplication.processEvents()
+        long_render = window.grabWindow()
+        assert not long_render.isNull()
+        assert long_render.save(str(tmp_path / "long-timeline-ruler.png"))
+
+        online_delegate = next(
+            item
+            for item in _visual_items(media_panel)
+            if item.objectName() == "mediaAssetDelegate"
+            and item.property("status") == "online"
+        )
+        context_point = online_delegate.mapToScene(
+            QPointF(online_delegate.width() / 2, online_delegate.height() / 2)
+        )
+        context_position = QPoint(round(context_point.x()), round(context_point.y()))
+        QTest.mouseClick(
+            window,
+            Qt.RightButton,
+            Qt.NoModifier,
+            context_position,
+            delay=20,
+        )
+        asset_context_menu = window.findChild(QObject, "mediaAssetContextMenu")
+        add_at_playhead = window.findChild(QQuickItem, "assetAddAtPlayheadMenuItem")
+        assert asset_context_menu is not None and _process_until(
+            lambda: asset_context_menu.property("visible")
+        )
+        assert add_at_playhead is not None and add_at_playhead.isVisible()
+        clip_count = controllers.timeline.clipsModel.rowCount()
+        assert QMetaObject.invokeMethod(add_at_playhead, "click")
+        assert _process_until(
+            lambda: controllers.timeline.clipsModel.rowCount() == clip_count + 1
+        )
+        assert _process_until(lambda: not asset_context_menu.property("visible"))
+        status_message = window.findChild(QQuickItem, "workspaceStatusMessage")
+        assert status_message is not None
+        assert str(status_message.property("text")).startswith("已将")
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_transcript_button_runs_real_timeline_chain_and_opens_generated_subtitles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(runtime_dir))
+    fake_cli = tmp_path / "timeline_faster_whisper.py"
+    fake_cli.write_text(
+        """from pathlib import Path
+import sys
+
+output = Path(sys.argv[sys.argv.index('-o') + 1])
+output.mkdir(parents=True, exist_ok=True)
+(output / 'timeline.srt').write_text(
+    '1\\n00:00:00,100 --> 00:00:00,800\\nTimeline button output\\n',
+    encoding='utf-8-sig',
+)
+print('100%', flush=True)
+""",
+        encoding="utf-8",
+    )
+    settings_repository = SettingsRepository()
+    settings = settings_repository.load()
+    settings.asr = AsrSettings(
+        engine="faster_whisper_cli",
+        cli_path=str(fake_cli),
+        model="tiny.en",
+        device="cpu",
+        language="en",
+    )
+    settings_repository.save(settings)
+
+    source = tmp_path / "timeline-source.mp4"
+    generate_real_media(source, RuntimePaths.discover())
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Timeline Transcription",
+        )
+        sequence_id = controllers.workspace.activeSequenceId
+        video_track = next(
+            controllers.timeline.tracksModel.get(index)
+            for index in range(controllers.timeline.tracksModel.rowCount())
+            if controllers.timeline.tracksModel.get(index)["kind"] == TrackKind.VIDEO.value
+        )
+        controllers.timeline.importFilesToTimeline(
+            [QUrl.fromLocalFile(str(source))],
+            video_track["trackId"],
+            0,
+            3.0,
+            0,
+            True,
+            False,
+        )
+        assert _process_until(
+            lambda: controllers.timeline.clipsModel.rowCount() == 1,
+            timeout=20,
+        )
+
+        window = engine.rootObjects()[0]
+        page_loader = window.findChild(QQuickItem, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        assert workspace is not None
+        navigation = workspace.findChild(QQuickItem, "workspaceNavigation")
+        assert navigation is not None
+        assert _process_until(
+            lambda: any(
+                item.objectName() == "navigationItem_transcript"
+                for item in _visual_items(navigation)
+            )
+        )
+        transcript_navigation = next(
+            item
+            for item in _visual_items(navigation)
+            if item.objectName() == "navigationItem_transcript"
+        )
+        assert transcript_navigation is not None
+        assert QMetaObject.invokeMethod(transcript_navigation, "click")
+        assert _process_until(lambda: workspace.property("activeMode") == "transcript")
+        transcribe_button = workspace.findChild(QQuickItem, "transcribeTimelineButton")
+        assert transcribe_button is not None
+        assert transcribe_button.isVisible() and transcribe_button.property("enabled") is True
+        assert QMetaObject.invokeMethod(transcribe_button, "click")
+
+        def transcription_completed() -> bool:
+            return any(
+                isinstance(task.command, TranscribeSequenceCommand)
+                and task.status == TaskStatus.COMPLETED
+                for task in TaskRepository(controllers.session._documents.project_dir).list()
+            )
+
+        assert _process_until(transcription_completed, timeout=20)
+        documents = controllers.session._documents.list_subtitle_documents(
+            sequence_id=sequence_id
+        )
+        assert len(documents) == 1
+        segments = controllers.session._documents.list_subtitle_segments(documents[0].id)
+        assert [segment.text for segment in segments] == ["Timeline button output"]
+        subtitle_track = next(
+            track
+            for track in controllers.session._documents.load_timeline(sequence_id).tracks
+            if track.kind == TrackKind.SUBTITLE
+        )
+        assert len(
+            controllers.session._documents.list_subtitle_placements(subtitle_track.id)
+        ) == 1
+
+        result_panel = workspace.findChild(QQuickItem, "transcriptResultPanel")
+        open_subtitles = workspace.findChild(QQuickItem, "transcriptOpenSubtitleButton")
+        assert _process_until(
+            lambda: result_panel is not None
+            and result_panel.isVisible()
+            and open_subtitles is not None
+            and open_subtitles.isVisible()
+        )
+        assert QMetaObject.invokeMethod(open_subtitles, "click")
+        assert _process_until(lambda: workspace.property("activeMode") == "subtitle")
+        subtitle_list = workspace.findChild(QQuickItem, "subtitleSegmentList")
+        assert subtitle_list is not None and subtitle_list.isVisible()
+        rendered = window.grabWindow()
+        screenshot = tmp_path / "timeline-transcription-result.png"
         assert not rendered.isNull() and rendered.save(str(screenshot))
     finally:
         controllers.shutdown()
@@ -386,7 +852,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.workspace.workflowStatus == "awaiting_confirmation"
 
         asset_id = controllers.media.assetsModel.get(0)["assetId"]
-        controllers.media.addAssetToTimeline(asset_id)
+        controllers.timeline.dropAssets([asset_id], "", 0, 3.0, 0, True, False)
         QCoreApplication.processEvents()
 
         assert controllers.timeline.clipsModel.rowCount() == 1
@@ -444,13 +910,20 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         QCoreApplication.processEvents()
         sequence_layer = engine.rootObjects()[0].findChild(QQuickItem, "sequenceInOutLayer")
         assert sequence_layer is not None and sequence_layer.isVisible()
+        timeline_more_button = engine.rootObjects()[0].findChild(
+            QQuickItem, "timelineMoreButton"
+        )
         smart_bounds_button = engine.rootObjects()[0].findChild(QQuickItem, "smartSequenceBoundsButton")
-        assert smart_bounds_button is not None and smart_bounds_button.isVisible()
+        assert timeline_more_button is not None and smart_bounds_button is not None
+        assert QMetaObject.invokeMethod(timeline_more_button, "click")
+        assert _process_until(smart_bounds_button.isVisible)
+        QTest.keyClick(root_window, Qt.Key_Escape)
+        assert _process_until(lambda: not smart_bounds_button.isVisible())
         preview_slider = engine.rootObjects()[0].findChild(QQuickItem, "previewPositionSlider")
         assert preview_slider is not None
         assert (preview_slider.property("from"), preview_slider.property("to")) == (
-            1.0,
-            float(analyzed_clip_before["endFrame"] - 2),
+            0.0,
+            float(analyzed_clip_before["endFrame"] - 1),
         )
         in_out_render = engine.rootObjects()[0].grabWindow()
         assert not in_out_render.isNull()
@@ -464,7 +937,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.workspace.sequenceInFrame == 1
 
         first_clip = controllers.timeline.clipsModel.get(0)
-        controllers.timeline.copyClip(first_clip["clipId"], 3.0, first_clip["endFrame"])
+        controllers.timeline.duplicateClip(first_clip["clipId"], 3.0, first_clip["endFrame"])
         assert controllers.timeline.clipsModel.rowCount() == 2
         second_clip_id = controllers.timeline.clipsModel.get(1)["clipId"]
         controllers.timeline.addTransitionAfter(first_clip["clipId"], "dissolve", 8)
@@ -652,18 +1125,17 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         for _ in range(12):
             QCoreApplication.processEvents()
             time.sleep(0.02)
-        inspector = workspace.findChild(QQuickItem, "inspectorContainer")
-        compact_inspector = workspace.findChild(QQuickItem, "compactInspectorDrawer")
-        compact_inspector_button = workspace.findChild(QQuickItem, "compactInspectorButton")
         navigation = workspace.findChild(QQuickItem, "workspaceNavigation")
         tool_panel = workspace.findChild(QQuickItem, "toolPanelContainer")
-        assert inspector is not None and not inspector.isVisible()
-        assert compact_inspector is not None and compact_inspector.isVisible()
-        assert compact_inspector_button is not None and compact_inspector_button.isVisible()
+        preview_viewport = workspace.findChild(QQuickItem, "previewViewport")
+        timeline_panel = workspace.findChild(QQuickItem, "timelinePanel")
+        assert workspace.findChild(QQuickItem, "inspectorContainer") is None
+        assert workspace.findChild(QQuickItem, "compactInspectorDrawer") is None
+        assert workspace.findChild(QQuickItem, "compactInspectorButton") is None
         assert navigation is not None
         assert abs(navigation.width() - workspace.width()) <= 2
         assert 46 <= navigation.height() <= 54
-        assert tool_panel is not None
+        assert tool_panel is not None and preview_viewport is not None and timeline_panel is not None
         tool_panel_position = tool_panel.mapToItem(workspace, QPointF(0, 0))
         assert abs(tool_panel_position.x()) <= 2
         assert abs(
@@ -674,12 +1146,23 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         navigation_items = {
             item.objectName(): item for item in _visual_items(navigation)
         }
-        for mode in ("media", "transcript", "translate", "highlight", "edit", "audio", "export"):
+        modes = (
+            "media",
+            "transcript",
+            "subtitle",
+            "translate",
+            "highlight",
+            "edit",
+            "audio",
+            "export",
+            "tasks",
+        )
+        for mode in modes:
             navigation_item = navigation_items.get(f"navigationItem_{mode}")
             assert navigation_item is not None and navigation_item.isVisible()
         navigation_positions = [
             navigation_items[f"navigationItem_{mode}"].mapToItem(navigation, QPointF(0, 0))
-            for mode in ("media", "transcript", "translate", "highlight", "edit", "audio", "export")
+            for mode in modes
         ]
         assert all(abs(point.y() - navigation_positions[0].y()) <= 1 for point in navigation_positions)
         assert all(
@@ -691,28 +1174,131 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert settings_navigation_item.mapToItem(navigation, QPointF(0, 0)).x() > (
             navigation_positions[-1].x()
         )
-        assert QMetaObject.invokeMethod(compact_inspector_button, "click")
-        for _ in range(12):
-            QCoreApplication.processEvents()
-            time.sleep(0.02)
-        assert workspace.property("inspectorDrawerOpen") is True
-        assert compact_inspector.isEnabled()
-        assert abs(compact_inspector.x() + compact_inspector.width() - root.width()) <= 2
-        assert QMetaObject.invokeMethod(compact_inspector_button, "click")
+
+        def geometry(item: QQuickItem) -> tuple[float, float, float, float]:
+            origin = item.mapToItem(workspace, QPointF(0, 0))
+            return origin.x(), origin.y(), item.width(), item.height()
+
+        fixed_geometry = {
+            "tool": geometry(tool_panel),
+            "preview": geometry(preview_viewport),
+            "timeline": geometry(timeline_panel),
+        }
+        panel_names = {
+            "media": "mediaPanel",
+            "transcript": "transcriptPanel",
+            "subtitle": "subtitlePanel",
+            "translate": "translationPanel",
+            "highlight": "highlightPanel",
+            "edit": "editPanel",
+            "audio": "audioScroll",
+            "export": "exportPanel",
+            "tasks": "taskCenterPanel",
+        }
+        for mode in modes:
+            assert QMetaObject.invokeMethod(navigation_items[f"navigationItem_{mode}"], "click")
+            assert _process_until(lambda mode=mode: workspace.property("activeMode") == mode)
+            active_panel = workspace.findChild(QQuickItem, panel_names[mode])
+            assert active_panel is not None and active_panel.isVisible()
+            if mode == "media":
+                drag_hint = workspace.findChild(QQuickItem, "mediaDragHint")
+                drag_preview = workspace.findChild(QQuickItem, "mediaDragPreview")
+                assert drag_hint is not None and drag_hint.isVisible()
+                assert "重复拖入" in drag_hint.property("text")
+                assert drag_preview is not None
+                for removed_action in (
+                    "selectedMediaActions",
+                    "mediaGenerateProxyButton",
+                    "mediaGenerateWaveformButton",
+                    "mediaAddSelectedToTimelineButton",
+                ):
+                    assert workspace.findChild(QQuickItem, removed_action) is None
+                media_task_panel = workspace.findChild(QQuickItem, "mediaTaskPanel")
+                assert media_task_panel is not None and not media_task_panel.isVisible()
+            elif mode == "transcript":
+                transcribe_button = workspace.findChild(
+                    QQuickItem, "transcribeTimelineButton"
+                )
+                subtitle_segments = workspace.findChild(QQuickItem, "subtitleSegmentList")
+                assert transcribe_button is not None and transcribe_button.isVisible()
+                assert transcribe_button.property("enabled") is True
+                assert transcribe_button.property("text") == "转录当前时间轴"
+                assert subtitle_segments is not None and not subtitle_segments.isVisible()
+                for removed_parameter in (
+                    "transcriptConfigPanel",
+                    "transcriptModelSelector",
+                    "transcriptUseSequenceRangeButton",
+                    "transcriptRegionStart",
+                    "transcriptRegionEnd",
+                ):
+                    assert workspace.findChild(QQuickItem, removed_parameter) is None
+            elif mode == "subtitle":
+                transcribe_button = workspace.findChild(
+                    QQuickItem, "transcribeTimelineButton"
+                )
+                subtitle_segments = workspace.findChild(QQuickItem, "subtitleSegmentList")
+                start_transcription = workspace.findChild(
+                    QQuickItem, "subtitleStartTranscriptionButton"
+                )
+                import_subtitle = workspace.findChild(QQuickItem, "subtitleImportFileButton")
+                assert transcribe_button is not None and not transcribe_button.isVisible()
+                assert subtitle_segments is not None and not subtitle_segments.isVisible()
+                assert start_transcription is not None and start_transcription.isVisible()
+                assert import_subtitle is not None and import_subtitle.isVisible()
+            elif mode == "translate":
+                start_transcription = workspace.findChild(
+                    QQuickItem, "translationStartTranscriptionButton"
+                )
+                import_subtitle = workspace.findChild(QQuickItem, "translationImportFileButton")
+                assert start_transcription is not None and start_transcription.isVisible()
+                assert import_subtitle is not None and import_subtitle.isVisible()
+                import_origin = import_subtitle.mapToItem(active_panel, QPointF(0, 0))
+                assert import_origin.y() + import_subtitle.height() <= active_panel.height() + 1
+            elif mode == "tasks":
+                activity_summary = workspace.findChild(QQuickItem, "taskActivitySummary")
+                pause_active = workspace.findChild(QQuickItem, "pauseActiveTasksButton")
+                assert activity_summary is not None
+                assert activity_summary.property("text") == "进行中 0"
+                assert pause_active is not None and not pause_active.property("enabled")
+                internal_result_buttons = [
+                    item
+                    for item in _visual_items(active_panel)
+                    if item.objectName() == "taskOpenResultButton"
+                    and item.property("taskCommandType")
+                    in {"generate_proxy", "generate_waveform"}
+                ]
+                assert internal_result_buttons
+                assert all(not button.isVisible() for button in internal_result_buttons)
+            assert preview_viewport.isVisible() and timeline_panel.isVisible()
+            for key, item in (
+                ("tool", tool_panel),
+                ("preview", preview_viewport),
+                ("timeline", timeline_panel),
+            ):
+                assert all(
+                    abs(actual - expected) <= 2
+                    for actual, expected in zip(geometry(item), fixed_geometry[key], strict=True)
+                )
+
+        for mode in modes:
+            assert QMetaObject.invokeMethod(navigation_items[f"navigationItem_{mode}"], "click")
+            assert _process_until(lambda mode=mode: workspace.property("activeMode") == mode)
+            mode_render = root.grabWindow()
+            mode_path = tmp_path / f"fixed-workspace-{mode}.png"
+            assert not mode_render.isNull() and mode_render.save(str(mode_path))
+
         root.setWidth(1440)
         root.setHeight(900)
         for _ in range(12):
             QCoreApplication.processEvents()
             time.sleep(0.02)
-        assert inspector.isVisible()
-        assert not compact_inspector.isVisible()
         preview = workspace.findChild(QQuickItem, "previewPlayer")
         overlay = workspace.findChild(QQuickItem, "previewTransformOverlay")
         assert preview is not None and overlay is not None
         preview.setProperty("volume", 0.35)
         assert abs(float(preview.property("volume")) - 0.35) < 0.001
-        preview.setProperty("position", 0)
-        QCoreApplication.processEvents()
+        preview_viewport.seek(0)
+        assert _process_until(lambda: preview.property("position") == 0)
         assert overlay.isVisible()
         overlay.setProperty("draftX", 12.5)
         overlay.setProperty("draftY", 7.5)
@@ -720,26 +1306,48 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         QCoreApplication.processEvents()
         assert controllers.timeline.selectedClipData["x"] == 12.5
         assert controllers.timeline.selectedClipData["y"] == 7.5
-        preview_viewport = workspace.findChild(QQuickItem, "previewViewport")
-        assert preview_viewport is not None
+
+        assert QMetaObject.invokeMethod(navigation_items["navigationItem_edit"], "click")
+        edit_pos_x = workspace.findChild(QQuickItem, "editClipPosX")
+        edit_pos_y = workspace.findChild(QQuickItem, "editClipPosY")
+        apply_transform = workspace.findChild(QQuickItem, "applyClipTransformButton")
+        assert edit_pos_x is not None and edit_pos_y is not None
+        assert apply_transform is not None and apply_transform.isVisible()
+        edit_pos_x.setProperty("text", "18.5")
+        edit_pos_y.setProperty("text", "9.5")
+        assert QMetaObject.invokeMethod(apply_transform, "click")
+        QCoreApplication.processEvents()
+        assert controllers.timeline.selectedClipData["x"] == 18.5
+        assert controllers.timeline.selectedClipData["y"] == 9.5
+
+        assert QMetaObject.invokeMethod(navigation_items["navigationItem_audio"], "click")
+        clip_gain = workspace.findChild(QQuickItem, "audioClipGain")
+        clip_pan = workspace.findChild(QQuickItem, "audioClipPan")
+        apply_audio = workspace.findChild(QQuickItem, "applyClipAudioButton")
+        assert clip_gain is not None and clip_pan is not None
+        assert apply_audio is not None and apply_audio.isVisible()
+        clip_gain.setProperty("text", "-3.5")
+        clip_pan.setProperty("text", "0.2")
+        assert QMetaObject.invokeMethod(apply_audio, "click")
+        QCoreApplication.processEvents()
+        assert controllers.timeline.selectedClipData["gainDb"] == -3.5
+        assert controllers.timeline.selectedClipData["pan"] == 0.2
+
         preview_viewport.setProperty("viewportZoom", 2.0)
         preview_viewport.setProperty("viewportPanX", 30.0)
         assert QMetaObject.invokeMethod(workspace, "resetPreviewViewport")
         assert preview_viewport.property("viewportZoom") == 1.0
         assert preview_viewport.property("viewportPanX") == 0.0
-        controllers.settings.savePanelLayout(340, 360, 380)
+        controllers.settings.savePanelLayout(400, 380)
         controllers.settings.saveWindowSize(1440, 900)
         persisted_ui = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load().ui
         assert (
             persisted_ui.left_panel_width,
-            persisted_ui.inspector_width,
             persisted_ui.timeline_height,
-        ) == (340, 360, 380)
+        ) == (400, 380)
         assert (persisted_ui.window_width, persisted_ui.window_height) == (1440, 900)
-        workflow_banner = workspace.findChild(QQuickItem, "workflowBanner")
         workflow_mode = workspace.findChild(QQuickItem, "workflowMode")
-        assert workflow_banner is not None
-        assert workflow_banner.isVisible() is controllers.workspace.workflowPending
+        assert workspace.findChild(QQuickItem, "workflowBanner") is None
         assert workflow_mode is None
         controllers.workspace.setProjectWorkflowMode("auto")
         assert controllers.workspace.projectWorkflowMode == "auto"
@@ -758,7 +1366,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             time.sleep(0.02)
         assert controllers.workspace.workflowStage == "transcribe"
         assert controllers.workspace.workflowStatus == "awaiting_confirmation"
-        assert workflow_banner.isVisible()
+        assert workspace.findChild(QQuickItem, "workflowBanner") is None
         assert controllers.media.assetsModel.get(0)["waveformReady"] is True
         duration_frames = controllers.media.assetsModel.get(0)["durationFrames"]
         visible_peaks: list[float] = []
@@ -780,16 +1388,16 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert len(visible_peaks) <= 30
         timeline = workspace.findChild(QQuickItem, "timelinePanel")
         timeline_toolbar = workspace.findChild(QQuickItem, "timelineToolbarScroll")
-        track_controls_button = workspace.findChild(QQuickItem, "trackControlsButton")
         track_controls_panel = workspace.findChild(QQuickItem, "trackControlsPanel")
         assert timeline is not None
         assert timeline_toolbar is not None
-        assert track_controls_button is not None and track_controls_panel is not None
-        assert not track_controls_panel.isVisible()
-        assert QMetaObject.invokeMethod(track_controls_button, "click")
-        assert _process_until(track_controls_panel.isVisible)
-        assert QMetaObject.invokeMethod(track_controls_button, "click")
-        assert _process_until(lambda: not track_controls_panel.isVisible())
+        assert track_controls_panel is not None and track_controls_panel.isVisible()
+        visible_track_headers = [
+            item
+            for item in _visual_items(track_controls_panel)
+            if item.objectName() == "trackControlsOverlay" and item.isVisible()
+        ]
+        assert len(visible_track_headers) == controllers.timeline.tracksModel.rowCount()
         timeline_origin = timeline.mapToItem(workspace, QPointF(0, 0))
         tool_panel_bottom = tool_panel.mapToItem(workspace, QPointF(0, tool_panel.height()))
         assert abs(timeline_origin.x()) <= 2
@@ -833,6 +1441,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             "graph": controllers.workspace.previewGraphPath,
         }
         assert QMetaObject.invokeMethod(workspace, "playPreview")
+        QCoreApplication.processEvents()
+        assert preview_player.property("playing") is False
+        playback_start = max(0, sequence_last_frame - 12)
+        timeline.seekToFrame(playback_start)
+        assert _process_until(lambda: preview_player.property("position") == playback_start)
+        assert QMetaObject.invokeMethod(workspace, "playPreview")
         assert _process_until(lambda: preview_player.property("playing") is True)
         scrub_target = max(
             controllers.workspace.sequenceInFrame,
@@ -840,14 +1454,23 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         timeline.beginPlayheadScrub(scrub_target)
         assert _process_until(lambda: preview_player.property("playing") is False)
+        assert preview_viewport.property("resumeAfterScrub") is True
         for frame in range(scrub_target, min(sequence_last_frame, scrub_target + 6)):
             timeline.updatePlayheadScrub(frame)
         final_scrub_frame = int(timeline.property("interactivePlayheadFrame"))
+        assert preview_viewport.property("scrubFrame") == final_scrub_frame
         timeline.finishPlayheadScrub()
         assert _process_until(
             lambda: preview_player.property("playing") is True
             and preview_player.property("position") >= final_scrub_frame
-        )
+        ), {
+            "position": preview_player.property("position"),
+            "playing": preview_player.property("playing"),
+            "resume": preview_viewport.property("resumeAfterScrub"),
+            "rangeStart": preview_viewport.property("playbackRangeStart"),
+            "rangeEnd": preview_viewport.property("playbackRangeEnd"),
+            "error": preview_player.property("errorString"),
+        }
         preview_player.pause()
         waveforms = [item for item in _visual_items(timeline) if item.objectName() == "clipWaveform"]
         video_clips = [item for item in _visual_items(timeline) if item.objectName() == "timelineClip"]
@@ -915,18 +1538,38 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             project_id=project_id,
             asset_id=asset_id,
             media_asset_id=asset_id,
-            language="zh_CN",
+            sequence_id=controllers.workspace.activeSequenceId,
+            language="en",
+        )
+        subtitle_segment = SubtitleSegment(
+            document_id=subtitle_document.id,
+            start_frame=0,
+            end_frame=max(1, min(duration_frames, 30)),
+            text="Subtitle over the audio waveform",
         )
         controllers.session._documents.create_subtitle_document(
             subtitle_document,
-            [
-                SubtitleSegment(
-                    document_id=subtitle_document.id,
-                    start_frame=0,
-                    end_frame=max(1, min(duration_frames, 30)),
-                    text="叠加在音频波形上的字幕",
-                )
-            ],
+            [subtitle_segment],
+        )
+        translated_document = SubtitleDocument(
+            project_id=project_id,
+            asset_id=asset_id,
+            media_asset_id=asset_id,
+            sequence_id=controllers.workspace.activeSequenceId,
+            language="zh_CN",
+            source_document_id=subtitle_document.id,
+            is_source=False,
+        )
+        translated_segment = SubtitleSegment(
+            document_id=translated_document.id,
+            source_segment_id=subtitle_segment.id,
+            start_frame=subtitle_segment.start_frame,
+            end_frame=subtitle_segment.end_frame,
+            text="叠加在音频波形上的字幕",
+        )
+        controllers.session._documents.create_subtitle_document(
+            translated_document,
+            [translated_segment],
         )
         controllers.session._projector.refresh_documents()
         subtitle_documents = controllers.subtitles.subtitleDocumentsModel
@@ -950,27 +1593,97 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             subtitle_overlays[0].y() + subtitle_overlays[0].height()
             <= embedded_audio[0].y() + embedded_audio[0].height()
         )
+        subtitle_overlay = subtitle_overlays[0]
+        subtitle_handles = {
+            item.objectName()
+            for item in _visual_items(subtitle_overlay)
+            if item.objectName()
+        }
+        assert {"subtitleOverlayBody", "subtitleLeftTrimHandle", "subtitleRightTrimHandle"} <= (
+            subtitle_handles
+        )
+        original_overlay_x = subtitle_overlay.x()
+        original_overlay_width = subtitle_overlay.width()
+        original_start = subtitle_projection["startFrame"]
+        original_end = subtitle_projection["endFrame"]
+        controllers.subtitles.moveSubtitlePlacement(
+            subtitle_projection["placementId"],
+            original_start + 5,
+            50.0,
+            0,
+            False,
+        )
+        assert _process_until(
+            lambda: controllers.subtitles.subtitlePlacementsModel.get(0)["startFrame"]
+            == original_start + 5
+        )
+        moved_projection = controllers.subtitles.subtitlePlacementsModel.get(0)
+        assert moved_projection["timingOverridden"] is True
+        assert subtitle_overlay.x() > original_overlay_x
+        controllers.subtitles.resizeSubtitlePlacement(
+            moved_projection["placementId"],
+            moved_projection["startFrame"],
+            original_end + 15,
+            50.0,
+            0,
+            False,
+        )
+        assert _process_until(
+            lambda: controllers.subtitles.subtitlePlacementsModel.get(0)["endFrame"]
+            == original_end + 15
+        )
+        assert subtitle_overlay.width() > original_overlay_width
+        controllers.subtitles.followSubtitleAtFrame(original_start + 6)
+        assert controllers.subtitles.selectedSubtitlePlacementId == moved_projection["placementId"]
+        assert controllers.subtitles.selectedSubtitleSegmentId == subtitle_projection["segmentId"]
+        persisted_placement = controllers.session._documents.get_subtitle_placement(
+            moved_projection["placementId"]
+        )
+        assert persisted_placement.timing_overridden is True
+        assert (persisted_placement.start_frame, persisted_placement.end_frame) == (
+            original_start + 5,
+            original_end + 15,
+        )
+        workspace.setProperty("activeMode", "transcript")
+        assert _process_until(
+            lambda: (
+                workspace.findChild(QQuickItem, "transcriptResultPanel") is not None
+                and workspace.findChild(QQuickItem, "transcriptResultPanel").isVisible()
+            )
+        )
+        open_subtitle = workspace.findChild(QQuickItem, "transcriptOpenSubtitleButton")
+        assert open_subtitle is not None and open_subtitle.isVisible()
+        assert QMetaObject.invokeMethod(open_subtitle, "click")
+        assert _process_until(lambda: workspace.property("activeMode") == "subtitle")
         timeline_overlay_render = root.grabWindow()
         timeline_overlay_path = tmp_path / "timeline-audio-subtitle-overlay.png"
         assert not timeline_overlay_render.isNull()
         assert timeline_overlay_render.save(str(timeline_overlay_path))
         controllers.workspace.cancelWorkflow(workflow_run_id)
         assert controllers.workspace.workflowPending is False
-        normal_tool_panel_width = float(tool_panel.width())
-        for mode in ("transcript", "translate", "highlight", "edit", "audio", "export", "media"):
+        fixed_tool_panel_width = float(tool_panel.width())
+        fixed_preview_geometry = geometry(preview_viewport)
+        fixed_timeline_geometry = geometry(timeline)
+        for mode in modes:
             workspace.setProperty("activeMode", mode)
             for _ in range(6):
                 QCoreApplication.processEvents()
                 time.sleep(0.01)
             assert workspace.property("activeMode") == mode
-            task_focused = mode in {"transcript", "translate", "highlight", "audio", "export"}
-            assert timeline.isVisible() is (mode not in {"translate", "export"})
-            assert inspector.isVisible() is (not task_focused)
-            assert compact_inspector.isVisible() is task_focused
-            assert compact_inspector_button.isVisible() is task_focused
-            if task_focused:
-                assert tool_panel.width() >= 540
-                assert tool_panel.width() > normal_tool_panel_width
+            assert timeline.isVisible() and preview_viewport.isVisible()
+            assert abs(float(tool_panel.width()) - fixed_tool_panel_width) <= 2
+            assert all(
+                abs(actual - expected) <= 2
+                for actual, expected in zip(
+                    geometry(preview_viewport), fixed_preview_geometry, strict=True
+                )
+            )
+            assert all(
+                abs(actual - expected) <= 2
+                for actual, expected in zip(
+                    geometry(timeline), fixed_timeline_geometry, strict=True
+                )
+            )
 
         settings_dialog = workspace.findChild(QObject, "settingsDialog")
         settings_tabs = workspace.findChild(QQuickItem, "settingsTabs")
@@ -991,6 +1704,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert _process_until(
             lambda: auto_continue_setting.isVisible() and auto_save_notice.isVisible()
         )
+        settings_render = root.grabWindow()
+        assert not settings_render.isNull()
+        assert settings_render.save(str(tmp_path / "settings-dialog.png"))
         persisted_before = SettingsRepository(
             os.environ["MEDIAFLOW_SETTINGS_PATH"]
         ).load().workflow.auto_continue
@@ -1028,11 +1744,78 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         export_as = workspace.findChild(QQuickItem, "exportAsButton")
         assert export_to_project is not None
         assert export_as is not None
-        assert export_to_project.property("text") == "导出到项目"
+        assert export_to_project.property("text") == "开始导出视频"
+        export_default_path = workspace.findChild(QQuickItem, "exportDefaultPath")
+        assert export_default_path is not None and export_default_path.isVisible()
+        assert export_default_path.property("text") == controllers.export.defaultExportDirectory
         assert export_as.property("text") == "另存为…"
+        burn_subtitle = workspace.findChild(QQuickItem, "exportBurnSubtitleTrack")
+        subtitle_color = workspace.findChild(QQuickItem, "exportSubtitleColor")
+        export_subtitle_preview = workspace.findChild(
+            QQuickItem, "exportSubtitlePreview"
+        )
+        export_subtitle_text = workspace.findChild(
+            QQuickItem, "exportSubtitlePreviewText"
+        )
+        assert all(
+            item is not None
+            for item in (
+                burn_subtitle,
+                subtitle_color,
+                export_subtitle_preview,
+                export_subtitle_text,
+            )
+        )
+        preview = workspace.findChild(QQuickItem, "previewPlayer")
+        preview_viewport.seek(moved_projection["startFrame"] + 1)
+        assert _process_until(
+            lambda: preview.property("position")
+            == moved_projection["startFrame"] + 1
+        )
+        burn_subtitle.setProperty("currentIndex", 1)
+        subtitle_color.setProperty("text", "#00FF00")
+
+        def export_preview_matches_options() -> bool:
+            options = workspace.property("exportPreviewOptions").toVariant()
+            return (
+                options.get("burnSubtitleTrackId", "") == subtitle_projection["trackId"]
+                and export_subtitle_preview.isVisible()
+                and export_subtitle_text.property("color").name() == "#00ff00"
+            )
+
+        assert _process_until(export_preview_matches_options, timeout=3)
         export_render = root.grabWindow()
         assert not export_render.isNull()
         assert export_render.save(str(tmp_path / "one-click-project-export.png"))
+        assert QMetaObject.invokeMethod(export_to_project, "click")
+        assert _process_until(
+            lambda: controllers.tasks.latestTask(
+                "export", controllers.workspace.activeSequenceId
+            ).get("status") in {"completed", "failed", "cancelled"},
+            timeout=30,
+        )
+        export_task = controllers.tasks.latestTask(
+            "export", controllers.workspace.activeSequenceId
+        )
+        assert export_task["status"] == "completed", export_task
+        assert export_task["artifacts"]
+        exported_artifact = Path(export_task["artifacts"][0])
+        if not exported_artifact.is_absolute():
+            exported_artifact = Path(controllers.workspace.projectPath) / exported_artifact
+        assert exported_artifact.is_file() and exported_artifact.stat().st_size > 0
+        export_task_panel = workspace.findChild(QQuickItem, "exportTaskPanel")
+        assert export_task_panel is not None and export_task_panel.isVisible()
+        assert workspace.property("activeMode") == "export"
+        task_details_button = export_task_panel.findChild(
+            QQuickItem, "contextTaskDetailsButton"
+        )
+        assert task_details_button is not None and task_details_button.isVisible()
+        assert QMetaObject.invokeMethod(task_details_button, "click")
+        assert _process_until(lambda: workspace.property("activeMode") == "tasks")
+        task_center_panel = workspace.findChild(QQuickItem, "taskCenterPanel")
+        task_center_list = workspace.findChild(QQuickItem, "taskCenterList")
+        assert task_center_panel is not None and task_center_panel.isVisible()
+        assert task_center_list is not None and task_center_list.isVisible()
         workspace.setProperty("activeMode", "translate")
         QCoreApplication.processEvents()
         translation_observation: dict[str, object] = {}
@@ -1066,7 +1849,53 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             )
 
         assert _process_until(translation_target_is_ready), translation_observation
+        translation_summary = workspace.findChild(
+            QQuickItem, "translationComparisonSummary"
+        )
+        translation_list = workspace.findChild(QQuickItem, "translationComparisonList")
+        translation_editor = next(
+            (
+                item
+                for item in _visual_items(translation_list)
+                if item.objectName() == "translationTargetEditor"
+            ),
+            None,
+        )
+        translation_save = next(
+            (
+                item
+                for item in _visual_items(translation_list)
+                if item.objectName() == "translationSaveSegmentButton"
+            ),
+            None,
+        )
+        assert translation_summary is not None and translation_summary.isVisible()
+        assert translation_list is not None and translation_list.property("count") == 1
+        assert translation_editor is not None and translation_editor.isVisible(), {
+            "listHeight": translation_list.height(),
+            "listWidth": translation_list.width(),
+            "contentHeight": translation_list.property("contentHeight"),
+            "visible": translation_list.isVisible(),
+        }
+        assert translation_editor.property("text") == "叠加在音频波形上的字幕"
+        translation_editor.setProperty("text", "用户校对后的译文")
+        assert translation_save is not None and translation_save.isVisible()
+        assert QMetaObject.invokeMethod(translation_save, "click")
+        assert _process_until(
+            lambda: controllers.session._documents.list_subtitle_segments(
+                translated_document.id
+            )[0].text
+            == "用户校对后的译文"
+        )
+        assert controllers.session._documents.list_subtitle_segments(
+            subtitle_document.id
+        )[0].text == "Subtitle over the audio waveform"
+        translation_render = root.grabWindow()
+        assert not translation_render.isNull()
+        assert translation_render.save(str(tmp_path / "translation-bilingual-review.png"))
         workspace.setProperty("activeMode", "media")
+        media_task_panel = workspace.findChild(QQuickItem, "mediaTaskPanel")
+        assert media_task_panel is not None and not media_task_panel.isVisible()
 
         master_bus = next(
             controllers.audio.audioBusesModel.get(index)
@@ -1135,6 +1964,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         integrated_texts = workspace.findChildren(QQuickItem, "audioMetricValue3")
         visible_values = [str(item.property("text")) for item in integrated_texts if item.isVisible()]
         assert any(value.endswith("LUFS") and not value.startswith("—") for value in visible_values)
+        audio_task = controllers.tasks.latestCommandTask(
+            "analyze_loudness", controllers.workspace.activeSequenceId
+        )
+        assert audio_task["status"] == "completed"
+        audio_task_panel = workspace.findChild(QQuickItem, "audioAnalysisTaskPanel")
+        assert audio_task_panel is not None and audio_task_panel.isVisible()
         parameter_list = workspace.findChild(QQuickItem, "audioParameterList")
         audio_scroll = workspace.findChild(QQuickItem, "audioScroll")
         audio_content = workspace.findChild(QQuickItem, "audioContent")
@@ -1162,7 +1997,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         controllers.media.selectAsset(asset_id, True)
         assert controllers.media.selectedAssetIds == [second_asset_id, asset_id]
         clip_count = controllers.timeline.clipsModel.rowCount()
-        controllers.media.addSelectedAssetsToTimeline()
+        controllers.timeline.dropAssets(
+            controllers.media.selectedAssetIds,
+            "",
+            controllers.workspace.timelineDurationFrames,
+            3.0,
+            0,
+            True,
+            False,
+        )
         assert controllers.timeline.clipsModel.rowCount() == clip_count + 2
 
         video_track = next(
@@ -1366,6 +2209,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             for item in _visual_items(home)
             if item.objectName() == "removeRecentProjectButton" and item.isVisible()
         )
+        assert recent_remove.property("text") == "从列表移除"
+        assert recent_remove.property("danger") is False
         removed_project_path = Path(recent_remove.property("projectPath"))
         assert QMetaObject.invokeMethod(recent_remove, "click")
         assert _process_until(lambda: controllers.workspace.recentProjectsModel.rowCount() == 9)

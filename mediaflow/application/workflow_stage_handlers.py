@@ -14,9 +14,8 @@ from mediaflow.domain.task_commands import (
     AnalyzeHighlightsCommand,
     DownloadMediaCommand,
     GenerateProxyCommand,
-    GenerateWaveformCommand,
     TaskCommand,
-    TranscribeAssetCommand,
+    TranscribeSequenceCommand,
     TranslateDocumentCommand,
 )
 from mediaflow.domain.tasks import Task
@@ -184,8 +183,6 @@ class PrepareMediaStageHandler(AdvancingStageHandler):
                         [asset.id],
                     )
                 )
-            if asset.metadata.has_audio and not asset.waveform_path:
-                specs.append((GenerateWaveformCommand(asset_id=asset.id), [asset.id]))
         return context.run_or_advance(run, specs)
 
 
@@ -207,15 +204,9 @@ class TranscribeStageHandler(AdvancingStageHandler):
         ]
         if not transcribable:
             return context.block(run, "workflow_no_transcribable_assets")
-        before = [
-            document.id
-            for asset_id in run.asset_ids
-            for document in context.documents.list_subtitle_documents(asset_id)
-        ]
         return context.run_tasks(
             run,
-            [(TranscribeAssetCommand(asset_id=asset_id), [asset_id]) for asset_id in transcribable],
-            payload=WorkflowPayloadPatch(document_ids_before_transcribe=before),
+            [(TranscribeSequenceCommand(sequence_id=run.sequence_id), transcribable)],
         )
 
     def complete(
@@ -225,12 +216,10 @@ class TranscribeStageHandler(AdvancingStageHandler):
         tasks: list[Task],
     ) -> WorkflowUpdate:
         del tasks
-        before = set(run.payload.document_ids_before_transcribe)
         document_ids = [
             document.id
-            for asset_id in run.asset_ids
-            for document in context.documents.list_subtitle_documents(asset_id)
-            if document.is_source and document.id not in before
+            for document in context.documents.list_subtitle_documents(sequence_id=run.sequence_id)
+            if document.is_source and document.source_document_id is None
         ]
         if not document_ids:
             return context.block(run, "workflow_transcription_artifacts_missing")
@@ -260,16 +249,14 @@ class TranslateStageHandler(AdvancingStageHandler):
         source_ids = set(run.payload.source_document_ids)
         documents = [
             document
-            for asset_id in run.asset_ids
-            for document in context.documents.list_subtitle_documents(asset_id)
+            for document in context.documents.list_subtitle_documents()
             if document.id in source_ids
         ]
         if not documents:
             return context.block(run, "workflow_source_subtitles_required")
         before = [
             document.id
-            for asset_id in run.asset_ids
-            for document in context.documents.list_subtitle_documents(asset_id)
+            for document in context.documents.list_subtitle_documents()
         ]
         return context.run_tasks(
             run,
@@ -300,8 +287,7 @@ class TranslateStageHandler(AdvancingStageHandler):
         before = set(run.payload.document_ids_before_translate)
         document_ids = [
             document.id
-            for asset_id in run.asset_ids
-            for document in context.documents.list_subtitle_documents(asset_id)
+            for document in context.documents.list_subtitle_documents()
             if not document.is_source and document.id not in before
         ]
         if not document_ids:
@@ -328,16 +314,14 @@ class HighlightStageHandler(AdvancingStageHandler):
         selected_ids = set(run.payload.translated_document_ids) or set(run.payload.source_document_ids)
         documents = [
             document
-            for asset_id in run.asset_ids
-            for document in context.documents.list_subtitle_documents(asset_id)
+            for document in context.documents.list_subtitle_documents()
             if document.id in selected_ids
         ]
         if not documents:
             return context.block(run, "workflow_subtitles_required")
         before = [
             candidate.id
-            for asset_id in run.asset_ids
-            for candidate in context.documents.list_highlights(asset_id)
+            for candidate in context.documents.list_highlights()
         ]
         return context.run_tasks(
             run,
@@ -361,8 +345,7 @@ class HighlightStageHandler(AdvancingStageHandler):
         before = set(run.payload.highlight_ids_before)
         candidate_ids = [
             candidate.id
-            for asset_id in run.asset_ids
-            for candidate in context.documents.list_highlights(asset_id)
+            for candidate in context.documents.list_highlights()
             if candidate.id not in before
         ]
         if not candidate_ids:

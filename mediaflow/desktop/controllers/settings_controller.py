@@ -25,7 +25,6 @@ class SettingsController(ControllerFacet):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -101,6 +100,23 @@ class SettingsController(ControllerFacet):
             self._commit_settings(candidate)
             self._projector.refresh_runtime_tool_status()
             self._set_status("设置已保存；界面语言将在下次启动时生效")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str, str, str)
+    def saveAsrQuickSettings(self, model: str, device: str, language: str) -> None:
+        try:
+            normalized_model = model.strip()
+            normalized_language = language.strip() or "auto"
+            if not normalized_model:
+                raise ValueError("转录模型不能为空")
+            if device not in {"auto", "cuda", "cpu"}:
+                raise ValueError("转录计算设备无效")
+            candidate = self.settings.model_copy(deep=True)
+            candidate.asr.model = normalized_model
+            candidate.asr.device = device
+            candidate.asr.language = normalized_language
+            self._commit_settings(candidate, "转录设置已更新")
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
@@ -401,13 +417,24 @@ class SettingsController(ControllerFacet):
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
-    @Slot(int, int, int)
-    def savePanelLayout(self, left: int, inspector: int, timeline: int) -> None:
+    @Slot(int, int)
+    def savePanelLayout(self, left: int, timeline: int) -> None:
         try:
             candidate = self.settings.model_copy(deep=True)
-            candidate.ui.left_panel_width = max(220, min(520, int(left)))
-            candidate.ui.inspector_width = max(250, min(520, int(inspector)))
+            candidate.ui.left_panel_width = max(340, min(640, int(left)))
             candidate.ui.timeline_height = max(210, min(640, int(timeline)))
+            self._commit_settings(candidate)
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str)
+    def setAssetViewMode(self, mode: str) -> None:
+        if mode not in {"list", "thumbnails", "large_thumbnails"}:
+            self.errorOccurred.emit(f"未知素材视图模式：{mode}")
+            return
+        try:
+            candidate = self.settings.model_copy(deep=True)
+            candidate.ui.asset_view_mode = mode
             self._commit_settings(candidate)
         except Exception as error:
             self.errorOccurred.emit(str(error))

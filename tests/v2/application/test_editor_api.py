@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mediaflow.cli import execute_request, main
 from mediaflow.composition import EditorApplication
+from mediaflow.domain.enums import TrackKind
 
 
 def _write_wave(path: Path) -> None:
@@ -34,9 +35,11 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
 
     created = execute_request(
         {
-            "command": "project.create",
+            "protocol": "mediaflow-cli",
+            "version": 1,
+            "operation": "project.create",
             "project": str(project_path),
-            "name": "Headless Project",
+            "arguments": {"name": "Headless Project"},
         },
         application=application,
     )
@@ -47,9 +50,11 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     _write_wave(source)
     imported = execute_request(
         {
-            "command": "asset.import",
+            "protocol": "mediaflow-cli",
+            "version": 1,
+            "operation": "asset.import",
             "project": str(project_path),
-            "source": str(source),
+            "arguments": {"source": str(source)},
         },
         application=application,
     )
@@ -57,14 +62,18 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
 
     completed = execute_request(
         {
-            "command": "task.start",
+            "protocol": "mediaflow-cli",
+            "version": 1,
+            "operation": "task.start",
             "project": str(project_path),
-            "task_command": {
-                "command_type": "generate_waveform",
-                "asset_id": asset_id,
+            "arguments": {
+                "task_command": {
+                    "command_type": "generate_waveform",
+                    "asset_id": asset_id,
+                },
+                "input_asset_ids": [asset_id],
+                "timeout": 60,
             },
-            "input_asset_ids": [asset_id],
-            "timeout": 60,
         },
         application=application,
     )["task"]
@@ -72,7 +81,12 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     assert completed["artifacts"]
 
     inspected = execute_request(
-        {"command": "project.inspect", "project": str(project_path)},
+        {
+            "protocol": "mediaflow-cli",
+            "version": 1,
+            "operation": "project.inspect",
+            "project": str(project_path),
+        },
         application=application,
     )
     asset = next(item for item in inspected["assets"] if item["id"] == asset_id)
@@ -80,7 +94,19 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     assert (project_path / asset["waveform_path"]).is_file()
     assert inspected["tasks"][-1]["id"] == completed["id"]
 
-    assert main(["project-inspect", "--project", str(project_path)]) == 0
+    request_path = tmp_path / "inspect-request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "protocol": "mediaflow-cli",
+                "version": 1,
+                "operation": "project.inspect",
+                "project": str(project_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["execute", "--request", str(request_path)]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["ok"] is True
     assert output["result"]["assets"][0]["id"] == asset_id
@@ -103,6 +129,59 @@ def test_timeline_navigation_preserves_one_project_history(tmp_path: Path, monke
         assert project.history.can_undo is True
         project.history.undo()
         assert project.documents.load_timeline(main).markers == []
+
+
+def test_preview_snapshots_are_content_addressed_and_never_overwrite_active_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    application = EditorApplication()
+    source = tmp_path / "preview-tone.wav"
+    _write_wave(source)
+
+    with application.create_project(tmp_path / "Preview Project", "Preview Project") as project:
+        asset = project.assets.import_external(source)
+        editor = project.timeline(project.documents.get_project().main_sequence_id)
+        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        clip = editor.add_clip(
+            track_id=audio_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=min(25, asset.metadata.duration_frames),
+        )
+
+        first = application.write_preview_snapshot(
+            project.project_dir,
+            editor.state,
+            use_proxies=False,
+            prefer_sdr_preview_proxy=False,
+        )
+        first_xml = first.read_text(encoding="utf-8")
+        editor.move_clip(clip.id, timeline_start=8)
+        second = application.write_preview_snapshot(
+            project.project_dir,
+            editor.state,
+            use_proxies=False,
+            prefer_sdr_preview_proxy=False,
+        )
+        repeated = application.write_preview_snapshot(
+            project.project_dir,
+            editor.state,
+            use_proxies=False,
+            prefer_sdr_preview_proxy=False,
+        )
+
+        assert first != second
+        assert repeated == second
+        assert first.is_file() and second.is_file()
+        assert first.read_text(encoding="utf-8") == first_xml
+        assert "-preview-" in first.name and "-preview-" in second.name
+        assert not (
+            project.project_dir / "cache" / "mlt" / f"{editor.state.sequence.id}-preview.mlt"
+        ).exists()
+        assert not list((project.project_dir / "cache" / "mlt").glob("*.partial"))
 
 
 def test_short_sequence_archive_is_recoverable_through_project_history(

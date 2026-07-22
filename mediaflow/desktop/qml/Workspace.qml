@@ -9,36 +9,25 @@ Rectangle {
     objectName: "workspace"
     color: Theme.window
     property string activeMode: "media"
+    property var exportPreviewOptions: ({})
     readonly property int workspaceNavigationHeight: 50
-    readonly property int workspaceBannerHeight: (taskController.downloadProgressVisible ? 64 : 0)
-        + (workflowBanner.visible ? 58 : 0)
-    property real toolPanelWidth: Math.max(220, settingsController.settingsData.leftPanelWidth || 286)
-    property real inspectorPanelWidth: Math.max(250, settingsController.settingsData.inspectorWidth || 310)
-    property bool inspectorDrawerOpen: false
+    readonly property int workspaceBannerHeight: taskController.downloadProgressVisible ? 64 : 0
+    readonly property Item focusedItem: root.Window.window
+        ? root.Window.window.activeFocusItem : null
+    readonly property bool textInputActive: focusedItem instanceof TextInput
+        || focusedItem instanceof TextEdit
+    property real toolPanelWidth: Math.max(340, settingsController.settingsData.leftPanelWidth || 360)
     property real timelinePanelHeight: Math.max(210, settingsController.settingsData.timelineHeight || 330)
-    readonly property bool taskFocusedMode: activeMode === "transcript" || activeMode === "translate" || activeMode === "highlight" || activeMode === "audio" || activeMode === "export"
-    readonly property bool timelineVisible: activeMode !== "translate" && activeMode !== "export"
-    readonly property bool dockedInspectorVisible: !taskFocusedMode && width >= 1320
-    readonly property bool compactInspectorAvailable: taskFocusedMode || width < 1320
-    readonly property real focusedTaskPanelWidth: Math.max(540, Math.min(1040, Math.round((width - 96) * 0.52)))
-    readonly property int sequencePreviewIn: workspaceController.hasSequenceInOut ? workspaceController.sequenceInFrame : 0
-    readonly property int sequencePreviewOut: workspaceController.hasSequenceInOut ? workspaceController.sequenceOutFrame : Math.max(1, previewViewport.duration)
-
-    onWidthChanged: {
-        if (!compactInspectorAvailable)
-            inspectorDrawerOpen = false;
-    }
-
     function toggleFullscreen() {
         previewViewport.toggleFullscreen();
     }
 
     function playPreview() {
-        previewViewport.playPreview();
+        previewViewport.playPreviewFrom(timeline.visiblePlayheadFrame);
     }
 
     function playReversePreview() {
-        previewViewport.playReversePreview();
+        previewViewport.playReversePreviewFrom(timeline.visiblePlayheadFrame);
     }
 
     function stopPreview() {
@@ -53,23 +42,25 @@ Rectangle {
         previewViewport.endScrub();
     }
 
-    Component {
-        id: inspectorPanelComponent
-        InspectorPanel {}
-    }
-
     function resetPreviewViewport() {
         previewViewport.resetViewport();
     }
 
     function persistPanelLayout() {
-        settingsController.savePanelLayout(Math.round(toolPanelWidth), Math.round(inspectorPanelWidth), Math.round(timelinePanelHeight));
+        settingsController.savePanelLayout(Math.round(toolPanelWidth), Math.round(timelinePanelHeight));
     }
 
     Connections {
         target: workspaceController
         function onPreviewRangeRequested(startFrame, endFrame) {
             previewViewport.playRequestedRange(startFrame, endFrame);
+        }
+    }
+
+    Connections {
+        target: taskController
+        function onTaskCenterRequested() {
+            root.activeMode = "tasks";
         }
     }
 
@@ -81,26 +72,15 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: root.workspaceNavigationHeight
             activeMode: root.activeMode
-            compactInspectorAvailable: root.compactInspectorAvailable
-            inspectorDrawerOpen: root.inspectorDrawerOpen
             onModeRequested: function (mode) {
                 root.activeMode = mode;
             }
             onSettingsRequested: settingsDialog.open()
-            onInspectorDrawerToggled: root.inspectorDrawerOpen = !root.inspectorDrawerOpen
         }
 
         DownloadProgressBanner {
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? 64 : 0
-        }
-
-        WorkflowBanner {
-            id: workflowBanner
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 58 : 0
-            onOpenSettingsRequested: settingsDialog.open()
-            onOpenExportRequested: root.activeMode = "export"
         }
 
         ColumnLayout {
@@ -116,30 +96,76 @@ Rectangle {
                 Rectangle {
                     id: toolPanelContainer
                     objectName: "toolPanelContainer"
-                    Layout.preferredWidth: root.taskFocusedMode ? root.focusedTaskPanelWidth : root.toolPanelWidth
+                    Layout.preferredWidth: root.toolPanelWidth
                     Layout.fillHeight: true
                     color: Theme.surface
                     border.color: Theme.border
                     StackLayout {
                         anchors.fill: parent
                         anchors.margins: 14
-                        currentIndex: root.activeMode === "media" ? 0 : root.activeMode === "transcript" ? 1 : root.activeMode === "translate" ? 2 : root.activeMode === "highlight" ? 3 : root.activeMode === "audio" ? 4 : root.activeMode === "export" ? 5 : 6
+                        currentIndex: root.activeMode === "media" ? 0
+                            : root.activeMode === "transcript" ? 1
+                            : root.activeMode === "subtitle" ? 2
+                            : root.activeMode === "translate" ? 3
+                            : root.activeMode === "highlight" ? 4
+                            : root.activeMode === "edit" ? 5
+                            : root.activeMode === "audio" ? 6
+                            : root.activeMode === "export" ? 7 : 8
 
-                        MediaPanel {}
-                        TranscriptPanel {}
-                        TranslationPanel {}
-                        HighlightPanel {}
+                        MediaPanel {
+                            id: mediaPanel
+                            dragPreview: mediaDragPreview
+                            playheadFrame: timeline.visiblePlayheadFrame
+                            pixelsPerFrame: timeline.pixelsPerFrame
+                            snapEnabled: timeline.snapEnabled
+                        }
+                        TranscriptPanel {
+                            onModeRequested: function (mode) {
+                                root.activeMode = mode;
+                            }
+                        }
+                        SubtitlePanel {
+                            playheadFrame: previewViewport.position
+                            playbackActive: previewViewport.playing
+                            onModeRequested: function (mode) {
+                                root.activeMode = mode;
+                            }
+                            onImportRequested: {
+                                root.activeMode = "media";
+                                mediaPanel.openImportDialog();
+                            }
+                            onSeekRequested: function (frame) {
+                                previewViewport.seek(frame);
+                            }
+                        }
+                        TranslationPanel {
+                            onModeRequested: function (mode) {
+                                root.activeMode = mode;
+                            }
+                            onImportRequested: {
+                                root.activeMode = "media";
+                                mediaPanel.openImportDialog();
+                            }
+                        }
+                        HighlightPanel {
+                            playheadFrame: previewViewport.position
+                        }
+                        EditPanel { playheadFrame: previewViewport.position }
                         AudioPanel {}
-                        ExportPanel {}
-                        EditPanel {}
+                        ExportPanel {
+                            id: exportPanel
+                            onPreviewConfigurationChanged: function (options) {
+                                root.exportPreviewOptions = options;
+                            }
+                        }
+                        TaskCenterPanel {}
                     }
                 }
 
                 Rectangle {
                     id: leftResizeHandle
-                    Layout.preferredWidth: root.taskFocusedMode ? 0 : 6
+                    Layout.preferredWidth: 6
                     Layout.fillHeight: true
-                    visible: !root.taskFocusedMode
                     color: leftDrag.active ? Theme.accent : Theme.border
                     property real startWidth: 0
                     DragHandler {
@@ -153,7 +179,7 @@ Rectangle {
                             else
                                 root.persistPanelLayout();
                         }
-                        onTranslationChanged: root.toolPanelWidth = Math.max(220, Math.min(520, leftResizeHandle.startWidth + translation.x))
+                        onTranslationChanged: root.toolPanelWidth = Math.max(340, Math.min(640, leftResizeHandle.startWidth + translation.x))
                     }
                 }
 
@@ -162,63 +188,46 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: 260
-                    sequenceIn: root.sequencePreviewIn
-                    sequenceOut: root.sequencePreviewOut
+                    visible: !(root.activeMode === "edit" && webController.isWebClip && webController.editMode)
                     source: workspaceController.previewGraphPath
                     runtimeRoot: workspaceController.mltRuntimeRoot
-                    reloadToken: workspaceController.previewGraphRevision
                     hdrEnabled: workspaceController.colorMode === "hdr10_bt2020_pq"
                     profileWidth: workspaceController.profileWidth
                     profileHeight: workspaceController.profileHeight
-                    subtitleText: subtitleController.subtitleTextAtFrame(position)
-                    onDroppedFramesReported: function (count) { workspaceController.reportPreviewDroppedFrames(count) }
-                    onHdrActiveReported: function (active) { workspaceController.reportHdrPreviewActive(active) }
-                }
-
-                Rectangle {
-                    id: inspectorResizeHandle
-                    Layout.preferredWidth: root.dockedInspectorVisible ? 6 : 0
-                    Layout.fillHeight: true
-                    visible: root.dockedInspectorVisible
-                    color: inspectorDrag.active ? Theme.accent : Theme.border
-                    property real startWidth: 0
-                    DragHandler {
-                        id: inspectorDrag
-                        target: null
-                        xAxis.enabled: true
-                        yAxis.enabled: false
-                        onActiveChanged: {
-                            if (active)
-                                inspectorResizeHandle.startWidth = root.inspectorPanelWidth;
-                            else
-                                root.persistPanelLayout();
-                        }
-                        onTranslationChanged: root.inspectorPanelWidth = Math.max(250, Math.min(520, inspectorResizeHandle.startWidth - translation.x))
+                    exportPreviewActive: root.activeMode === "export"
+                    exportPreviewOptions: root.exportPreviewOptions
+                    subtitleText: root.activeMode === "export"
+                        ? subtitleController.subtitleTextForTrackAtFrame(
+                            String(root.exportPreviewOptions.burnSubtitleTrackId || ""),
+                            position)
+                        : subtitleController.subtitleTextAtFrame(position)
+                    watermarkSource: root.activeMode === "export"
+                        && root.exportPreviewOptions.watermark
+                        && root.exportPreviewOptions.watermark.enabled
+                        ? mediaController.assetUrl(
+                            String(root.exportPreviewOptions.watermark.asset_id || ""))
+                        : ""
+                    onDroppedFramesReported: function (count) {
+                        workspaceController.reportPreviewDroppedFrames(count);
+                    }
+                    onHdrActiveReported: function (active) {
+                        workspaceController.reportHdrPreviewActive(active);
                     }
                 }
 
-                Rectangle {
-                    id: inspectorContainer
-                    objectName: "inspectorContainer"
-                    Layout.preferredWidth: root.dockedInspectorVisible ? root.inspectorPanelWidth : 0
+                WebEditorCanvas {
+                    Layout.fillWidth: true
                     Layout.fillHeight: true
-                    visible: root.dockedInspectorVisible
-                    color: Theme.surface
-                    border.color: Theme.border
-                    Loader {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        active: root.dockedInspectorVisible
-                        sourceComponent: inspectorPanelComponent
-                    }
+                    Layout.minimumHeight: 260
+                    visible: root.activeMode === "edit" && webController.isWebClip && webController.editMode
+                    playheadFrame: previewViewport.position
                 }
             }
 
             Rectangle {
                 id: timelineResizeHandle
                 Layout.fillWidth: true
-                Layout.preferredHeight: root.timelineVisible ? 6 : 0
-                visible: root.timelineVisible
+                Layout.preferredHeight: 6
                 color: timelineDrag.active ? Theme.accent : Theme.border
                 property real startHeight: 0
                 DragHandler {
@@ -240,12 +249,11 @@ Rectangle {
                 id: timeline
                 objectName: "timelinePanel"
                 Layout.fillWidth: true
-                Layout.preferredHeight: root.timelineVisible ? root.timelinePanelHeight : 0
-                Layout.minimumHeight: root.timelineVisible ? 210 : 0
-                visible: root.timelineVisible
+                Layout.preferredHeight: root.timelinePanelHeight
+                Layout.minimumHeight: 210
                 playheadFrame: previewViewport.position
                 onPlayheadScrubbingChanged: {
-                    if (playheadScrubbing)
+                    if (timeline.playheadScrubbing)
                         root.beginPreviewScrub();
                     else
                         root.endPreviewScrub();
@@ -259,43 +267,37 @@ Rectangle {
     }
 
     Rectangle {
-        id: compactInspectorDrawer
-        objectName: "compactInspectorDrawer"
-        width: Math.min(360, Math.max(280, root.width - 80))
-        y: root.workspaceNavigationHeight + root.workspaceBannerHeight
-        height: Math.max(0, root.height - y)
-        x: root.inspectorDrawerOpen && root.compactInspectorAvailable ? root.width - width : root.width + 8
-        visible: root.compactInspectorAvailable
-        enabled: visible && root.inspectorDrawerOpen
-        z: 40
-        color: Theme.surfaceFloating
-        border.color: Theme.borderStrong
-        border.width: 1
-        radius: Theme.radiusLarge
+        id: mediaDragPreview
+        objectName: "mediaDragPreview"
+        property bool dragActive: false
+        property var draggedAssetIds: []
+        property string assetName: ""
+        width: Math.min(320, root.toolPanelWidth - 28)
+        height: 64
+        radius: Theme.radiusSmall
+        color: Theme.accentSoft
+        border.width: 2
+        border.color: Theme.accent
+        opacity: Drag.active ? 0.92 : 0
+        visible: Drag.active
+        z: 500
+        Drag.active: dragActive
+        Drag.source: mediaDragPreview
+        Drag.keys: ["mediaflowAsset"]
+        Drag.hotSpot.x: width / 2
+        Drag.hotSpot.y: height / 2
 
-        Behavior on x {
-            NumberAnimation {
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-        }
-
-        Loader {
+        Text {
             anchors.fill: parent
-            anchors.margins: 14
-            active: root.compactInspectorAvailable
-            sourceComponent: inspectorPanelComponent
-        }
-
-        AppButton {
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.topMargin: 9
-            anchors.rightMargin: 10
-            z: 1
-            text: "×"
-            Accessible.name: qsTr("关闭检查器")
-            onClicked: root.inspectorDrawerOpen = false
+            anchors.margins: 10
+            text: mediaDragPreview.draggedAssetIds.length > 1
+                ? qsTr("%1 个素材").arg(mediaDragPreview.draggedAssetIds.length)
+                : mediaDragPreview.assetName
+            color: Theme.text
+            font.pixelSize: Theme.fontSizeBodySmall
+            font.weight: Font.Medium
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
         }
     }
 
@@ -515,21 +517,12 @@ Rectangle {
             }
             Text {
                 Layout.fillWidth: true
-                text: qsTr("修改帧率会按实际时长重新换算片段、转场和字幕；主序列的代理会自动失效并按需重建。")
+                text: qsTr("修改帧率会按实际时长重新换算片段、转场和字幕；预览缓存会按需重建。")
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
                 wrapMode: Text.WordWrap
             }
         }
-    }
-
-    TaskDrawer {
-        anchors.top: parent.top
-        anchors.topMargin: root.workspaceNavigationHeight + root.workspaceBannerHeight
-        anchors.bottom: parent.bottom
-        anchors.right: parent.right
-        visible: taskController.taskDrawerOpen
-        z: 50
     }
 
     Connections {
@@ -543,8 +536,24 @@ Rectangle {
     }
 
     Shortcut {
+        sequence: "Ctrl+I"
+        enabled: !root.textInputActive && !workspaceController.readOnly
+        onActivated: {
+            root.activeMode = "media";
+            mediaPanel.openImportDialog();
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+M"
+        enabled: !root.textInputActive
+        onActivated: root.activeMode = "export"
+    }
+    Shortcut {
         sequence: "Space"
-        onActivated: previewViewport.playing ? previewViewport.pause() : root.playPreview()
+        enabled: !root.textInputActive
+        autoRepeat: false
+        onActivated: previewViewport.playing || previewViewport.playbackRequested
+            ? previewViewport.pause() : root.playPreview()
     }
     Shortcut {
         sequence: "F11"
@@ -552,51 +561,121 @@ Rectangle {
     }
     Shortcut {
         sequence: "J"
+        enabled: !root.textInputActive
         onActivated: {
-            previewViewport.playbackRate = -1.0;
+            previewViewport.playbackRate = previewViewport.playing && previewViewport.playbackRate < 0
+                ? Math.max(-4, previewViewport.playbackRate * 2) : -1.0;
             root.playReversePreview();
         }
     }
     Shortcut {
         sequence: "K"
+        enabled: !root.textInputActive
         onActivated: previewViewport.pause()
     }
     Shortcut {
         sequence: "L"
+        enabled: !root.textInputActive
         onActivated: {
-            previewViewport.playbackRate = previewViewport.playbackRate > 0 ? Math.min(4, previewViewport.playbackRate * 2) : 1.0;
+            previewViewport.playbackRate = previewViewport.playing && previewViewport.playbackRate > 0
+                ? Math.min(4, previewViewport.playbackRate * 2) : 1.0;
             root.playPreview();
         }
     }
     Shortcut {
         sequence: "S"
-        enabled: timelineController.selectedClipId.length > 0
-        onActivated: timelineController.splitClip(timelineController.selectedClipId, previewViewport.position)
+        enabled: !root.textInputActive
+        onActivated: timeline.snapEnabled = !timeline.snapEnabled
+    }
+    Shortcut {
+        sequence: "Ctrl+K"
+        enabled: !root.textInputActive && timelineController.selectedClipId.length > 0
+        onActivated: timelineController.splitClip(
+            timelineController.selectedClipId, previewViewport.position)
+    }
+    Shortcut {
+        sequence: "Ctrl+B"
+        enabled: !root.textInputActive && timelineController.selectedClipId.length > 0
+        onActivated: timelineController.splitClip(
+            timelineController.selectedClipId, previewViewport.position)
     }
     Shortcut {
         sequence: "Delete"
-        enabled: timelineController.selectedClipIds.length > 0
+        enabled: !root.textInputActive && timelineController.selectedClipIds.length > 0
         onActivated: timelineController.deleteSelectedClips(false)
     }
     Shortcut {
         sequence: "Shift+Delete"
-        enabled: timelineController.selectedClipIds.length > 0
+        enabled: !root.textInputActive && timelineController.selectedClipIds.length > 0
         onActivated: timelineController.deleteSelectedClips(true)
     }
     Shortcut {
         sequence: "Ctrl+Z"
-        enabled: timelineController.canUndo
+        enabled: !root.textInputActive && timelineController.canUndo
         onActivated: timelineController.undo()
     }
     Shortcut {
-        sequence: "Ctrl+Y"
-        enabled: timelineController.canRedo
+        sequences: ["Ctrl+Y", "Ctrl+Shift+Z"]
+        enabled: !root.textInputActive && timelineController.canRedo
         onActivated: timelineController.redo()
     }
     Shortcut {
         sequence: "Ctrl+D"
-        enabled: timelineController.selectedClipId.length > 0
-        onActivated: timelineController.copyClip(timelineController.selectedClipId, timeline.pixelsPerFrame, previewViewport.position)
+        enabled: !root.textInputActive && timelineController.selectedClipId.length > 0
+        onActivated: timelineController.duplicateClip(
+            timelineController.selectedClipId,
+            timeline.pixelsPerFrame,
+            previewViewport.position)
+    }
+    Shortcut {
+        sequence: "Ctrl+A"
+        enabled: !root.textInputActive && timelineController.clipsModel.rowCount() > 0
+        onActivated: timelineController.selectAllClips()
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+A"
+        enabled: !root.textInputActive
+        onActivated: timelineController.clearSelection()
+    }
+    Shortcut {
+        sequence: "I"
+        enabled: !root.textInputActive && workspaceController.timelineDurationFrames > 0
+        onActivated: timelineController.setSequenceInPoint(previewViewport.position)
+    }
+    Shortcut {
+        sequence: "O"
+        enabled: !root.textInputActive && workspaceController.timelineDurationFrames > 0
+        onActivated: timelineController.setSequenceOutPoint(previewViewport.position)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+X"
+        enabled: !root.textInputActive && workspaceController.hasSequenceInOut
+        onActivated: timelineController.clearSequenceInOut()
+    }
+    Shortcut {
+        sequence: "Left"
+        enabled: !root.textInputActive
+        onActivated: previewViewport.seek(previewViewport.position - 1)
+    }
+    Shortcut {
+        sequence: "Right"
+        enabled: !root.textInputActive
+        onActivated: previewViewport.seek(previewViewport.position + 1)
+    }
+    Shortcut {
+        sequence: "Home"
+        enabled: !root.textInputActive
+        onActivated: previewViewport.seek(0)
+    }
+    Shortcut {
+        sequence: "End"
+        enabled: !root.textInputActive && workspaceController.timelineDurationFrames > 0
+        onActivated: previewViewport.seek(workspaceController.timelineDurationFrames - 1)
+    }
+    Shortcut {
+        sequence: "\\"
+        enabled: !root.textInputActive
+        onActivated: timeline.fitTimeline()
     }
     Shortcut {
         sequence: "Ctrl+S"
@@ -604,6 +683,7 @@ Rectangle {
     }
     Shortcut {
         sequence: "M"
+        enabled: !root.textInputActive
         onActivated: timelineController.addTimelineMarker(previewViewport.position)
     }
 }

@@ -20,7 +20,6 @@ class HighlightController(ControllerFacet):
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
-    taskDrawerChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
     profileConfirmationChanged = Signal()
@@ -144,8 +143,9 @@ class HighlightController(ControllerFacet):
         try:
             candidate = next(item for item in self._documents.list_highlights() if item.id == highlight_id)
             project = self._documents.get_project()
-            if self._active_sequence_id != project.main_sequence_id:
-                self._active_sequence_id = project.main_sequence_id
+            source_sequence_id = self._highlight_source_sequence_id(candidate) or project.main_sequence_id
+            if self._active_sequence_id != source_sequence_id:
+                self._active_sequence_id = source_sequence_id
                 self._editor = self._project.timeline(self._active_sequence_id)
                 self._projector.refresh_all()
             self._pending_preview_range = (candidate.start_frame, candidate.end_frame)
@@ -159,6 +159,17 @@ class HighlightController(ControllerFacet):
             self._require_writable()
             candidate = next(item for item in self._documents.list_highlights() if item.id == highlight_id)
             main_sequence_id = self._documents.get_project().main_sequence_id
+            source_sequence_id = self._highlight_source_sequence_id(candidate)
+            if source_sequence_id:
+                if source_sequence_id != main_sequence_id:
+                    raise ValueError("时间轴高光请创建短视频序列后再加入主序列")
+                self._active_sequence_id = main_sequence_id
+                self._editor = self._project.timeline(main_sequence_id)
+                self._pending_preview_range = (candidate.start_frame, candidate.end_frame)
+                self._projector.refresh_all()
+                self._projector.schedule_preview_graph()
+                self._set_status("该高光区间已经位于主序列中")
+                return
             editor = self._project.timeline(main_sequence_id)
             video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
             timeline_start = editor.state.duration_frames
@@ -178,6 +189,12 @@ class HighlightController(ControllerFacet):
             self._set_status("高光区间已添加到主序列")
         except Exception as error:
             self.errorOccurred.emit(str(error))
+
+    def _highlight_source_sequence_id(self, candidate) -> str:
+        if not candidate.document_id:
+            return ""
+        document = self._documents.get_subtitle_document(candidate.document_id)
+        return document.sequence_id or ""
 
     @Slot()
     def createAllHighlightShorts(self) -> None:

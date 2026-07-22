@@ -55,10 +55,7 @@ Rectangle {
         }
         AppButton {
             text: qsTr("任务详情")
-            onClicked: {
-                if (!taskController.taskDrawerOpen)
-                    taskController.toggleTaskDrawer()
-            }
+            onClicked: taskController.openTaskCenter()
         }
         AppButton {
             text: qsTr("取消下载")

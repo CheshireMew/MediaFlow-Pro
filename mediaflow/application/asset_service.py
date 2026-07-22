@@ -20,6 +20,12 @@ class AssetService:
         self.probe = probe
         self.fingerprint_file = fingerprint_file
 
+    @property
+    def _media_probe(self) -> MediaProbePort:
+        if self.probe is None:
+            raise RuntimeError("This operation requires a media probe")
+        return self.probe
+
     def import_external(
         self,
         path: str | Path,
@@ -27,11 +33,9 @@ class AssetService:
         expected_kind: AssetKind | None = None,
     ) -> Asset:
         source = Path(path).resolve(strict=True)
-        if self.probe is None:
-            raise RuntimeError("Asset import requires a media probe")
         project = self.repository.get_project()
         main_sequence = self.repository.get_sequence(project.main_sequence_id)
-        probe = self.probe.probe(source, timeline_profile=main_sequence.profile)
+        probe = self._media_probe.probe(source, timeline_profile=main_sequence.profile)
         if expected_kind is not None and probe.kind != expected_kind:
             raise ValueError(f"素材类型必须是 {expected_kind.value}，实际识别为 {probe.kind.value}")
         asset = self.repository.import_external_asset(source, probe.kind)
@@ -39,8 +43,6 @@ class AssetService:
 
     def register_output(self, path: str | Path, origin: AssetOrigin) -> Asset:
         source = Path(path).resolve(strict=True)
-        if self.probe is None:
-            raise RuntimeError("Asset registration requires a media probe")
         try:
             source.relative_to(self.repository.project_dir)
         except ValueError:
@@ -49,7 +51,7 @@ class AssetService:
             managed = True
         project = self.repository.get_project()
         main_sequence = self.repository.get_sequence(project.main_sequence_id)
-        probe = self.probe.probe(source, timeline_profile=main_sequence.profile)
+        probe = self._media_probe.probe(source, timeline_profile=main_sequence.profile)
         asset = self.repository.import_external_asset(source, probe.kind)
         return self.repository.update_asset(
             asset.model_copy(
@@ -73,7 +75,7 @@ class AssetService:
                 or (current.kind == AssetKind.VIDEO and not current.metadata.width)
             ):
                 try:
-                    metadata = self.probe.probe(source, timeline_profile=profile).metadata
+                    metadata = self._media_probe.probe(source, timeline_profile=profile).metadata
                 except Exception:
                     current = self.repository.update_asset(
                         current.model_copy(update={"status": AssetStatus.ERROR})
@@ -99,7 +101,7 @@ class AssetService:
         )
         project = self.repository.get_project()
         profile = self.repository.get_sequence(project.main_sequence_id).profile
-        metadata = self.probe.probe(
+        metadata = self._media_probe.probe(
             self.repository.resolve_asset_path(asset),
             timeline_profile=profile,
         ).metadata
@@ -155,7 +157,7 @@ class AssetService:
         if asset.kind != AssetKind.VIDEO:
             return None
         source = self.repository.resolve_asset_path(asset)
-        return self.probe.probe(source).suggested_profile
+        return self._media_probe.probe(source).suggested_profile
 
     def adopt_main_profile_from_video(self, asset_id: str) -> Asset:
         """Adopt a video's profile when it is first placed on the main timeline.
@@ -168,7 +170,7 @@ class AssetService:
         if asset.kind != AssetKind.VIDEO:
             raise ValueError("Only a video can define the main sequence profile")
         source = self.repository.resolve_asset_path(asset)
-        probe = self.probe.probe(source)
+        probe = self._media_probe.probe(source)
         if probe.suggested_profile is None:
             raise ValueError("The video does not provide a usable project profile")
         project = self.repository.get_project()
@@ -221,12 +223,13 @@ class AssetService:
                 )
                 for item in state.ranges
             ],
+            web_states=state.web_states,
         )
         updated_assets: list[Asset] = []
         for item in self.repository.list_assets():
             item_source = self.repository.resolve_asset_path(item)
             if item_source.is_file():
-                metadata = self.probe.probe(item_source, timeline_profile=profile).metadata
+                metadata = self._media_probe.probe(item_source, timeline_profile=profile).metadata
             else:
                 metadata = item.metadata.model_copy(
                     update={

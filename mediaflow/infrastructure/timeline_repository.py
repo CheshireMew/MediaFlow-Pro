@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.project import (
     Asset,
     MediaMetadata,
@@ -30,6 +31,7 @@ class TimelineRepository:
                 sequence=sequence,
                 markers=self.list_timeline_markers(sequence_id),
                 ranges=self.list_timeline_ranges(sequence_id),
+                web_states=self.list_web_clip_states(sequence_id),
             )
         placeholders = ",".join("?" for _ in track_ids)
         clip_rows = self._fetchall(
@@ -47,6 +49,7 @@ class TimelineRepository:
             transitions=[self._transition_from_row(row) for row in transition_rows],
             markers=self.list_timeline_markers(sequence_id),
             ranges=self.list_timeline_ranges(sequence_id),
+            web_states=self.list_web_clip_states(sequence_id),
         )
 
     def list_timeline_markers(self, sequence_id: str) -> list[TimelineMarker]:
@@ -103,6 +106,19 @@ class TimelineRepository:
             raise ValueError("Timeline marker belongs to another sequence")
         if any(item.sequence_id != state.sequence.id for item in state.ranges):
             raise ValueError("Timeline range belongs to another sequence")
+        assets = {asset.id: asset for asset in self.list_assets()}
+        web_clip_ids = {
+            clip.id
+            for clip in state.clips
+            if assets.get(clip.asset_id) is not None and assets[clip.asset_id].kind == AssetKind.WEB
+        }
+        if set(state.web_states) != web_clip_ids:
+            raise ValueError("Every web clip must have exactly one editable media state")
+        if any(
+            state.clip_id != clip_id
+            for clip_id, state in state.web_states.items()
+        ):
+            raise ValueError("Editable media state key must match its clip identifier")
 
         frame_clock_changed = (
             existing.profile.fps_numerator != state.sequence.profile.fps_numerator
@@ -145,6 +161,8 @@ class TimelineRepository:
                 self._upsert_track(connection, track)
             for clip in state.clips:
                 self._upsert_clip(connection, clip)
+            for web_state in state.web_states.values():
+                self._upsert_web_clip_state(connection, web_state)
             for transition in state.transitions:
                 self._upsert_transition(connection, transition)
             self._delete_missing(

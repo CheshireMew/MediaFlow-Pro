@@ -19,8 +19,8 @@ from mediaflow.domain.task_commands import (
     GenerateProxyCommand,
     GenerateWaveformCommand,
     ImportAssetCommand,
-    TranscribeAssetCommand,
-    TranscribeRegionCommand,
+    RenderWebClipCommand,
+    TranscribeSequenceCommand,
     TranslateDocumentCommand,
     TranslateSegmentsCommand,
 )
@@ -93,9 +93,9 @@ def task_title(task: Task) -> str:
         template = QCoreApplication.translate("TaskCatalog", "导入素材 %1")
         return template.replace("%1", command.source_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
     if isinstance(command, GenerateProxyCommand):
-        return QCoreApplication.translate("TaskCatalog", "生成代理")
+        return QCoreApplication.translate("TaskCatalog", "准备流畅预览")
     if isinstance(command, GenerateWaveformCommand):
-        return QCoreApplication.translate("TaskCatalog", "生成波形")
+        return QCoreApplication.translate("TaskCatalog", "准备音频波形")
     if isinstance(command, DownloadMediaCommand):
         template = QCoreApplication.translate("TaskCatalog", "下载 %1 %2")
         return template.replace("%1", f"{command.request.entry.index:03d}").replace(
@@ -106,12 +106,10 @@ def task_title(task: Task) -> str:
         return template.replace("%1", command.format.value.upper())
     if isinstance(command, ExportHighlightsCommand):
         return QCoreApplication.translate("TaskCatalog", "批量导出短视频")
-    if isinstance(command, TranscribeAssetCommand):
-        return QCoreApplication.translate("TaskCatalog", "转录字幕")
-    if isinstance(command, TranscribeRegionCommand):
-        if command.translate_after:
-            return QCoreApplication.translate("TaskCatalog", "选区转录并翻译")
-        return QCoreApplication.translate("TaskCatalog", "选区转录")
+    if isinstance(command, RenderWebClipCommand):
+        return QCoreApplication.translate("TaskCatalog", "渲染网页片段")
+    if isinstance(command, TranscribeSequenceCommand):
+        return QCoreApplication.translate("TaskCatalog", "转录当前时间轴")
     if isinstance(command, TranslateSegmentsCommand):
         return QCoreApplication.translate("TaskCatalog", "翻译所选字幕")
     if isinstance(command, TranslateDocumentCommand):
@@ -153,8 +151,16 @@ def task_message_label(code: str) -> str:
         "postprocessing": QCoreApplication.translate("TaskMessageCatalog", "正在整理下载文件"),
         "loading_asr_model": QCoreApplication.translate("TaskMessageCatalog", "正在加载转录模型"),
         "preparing_asr_audio": QCoreApplication.translate("TaskMessageCatalog", "正在准备转录音频"),
+        "transcription_compiling_timeline": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在编译时间轴音频"
+        ),
+        "transcription_rendering_timeline": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在生成时间轴混音"
+        ),
+        "transcription_timeline_audio_ready": QCoreApplication.translate(
+            "TaskMessageCatalog", "时间轴音频已就绪"
+        ),
         "transcribing": QCoreApplication.translate("TaskMessageCatalog", "正在转录"),
-        "extracting_asr_region": QCoreApplication.translate("TaskMessageCatalog", "正在提取转录选区"),
         "asr_audio_splitting": QCoreApplication.translate("TaskMessageCatalog", "正在按静音位置切分长音频"),
         "asr_chunks_progress": QCoreApplication.translate("TaskMessageCatalog", "正在转录长音频分块"),
         "asr_cuda_cpu_fallback": QCoreApplication.translate(
@@ -167,14 +173,17 @@ def task_message_label(code: str) -> str:
         "translation_completed": QCoreApplication.translate("TaskMessageCatalog", "翻译完成"),
         "highlight_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在分析高光"),
         "highlight_completed": QCoreApplication.translate("TaskMessageCatalog", "高光分析完成"),
-        "proxy_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在准备代理"),
-        "proxy_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在验证代理"),
-        "waveform_decoding": QCoreApplication.translate("TaskMessageCatalog", "正在生成波形"),
-        "waveform_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在验证波形"),
+        "proxy_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在创建轻量预览文件"),
+        "proxy_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在检查轻量预览文件"),
+        "waveform_decoding": QCoreApplication.translate("TaskMessageCatalog", "正在准备音频波形"),
+        "waveform_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在检查音频波形"),
         "import_probing": QCoreApplication.translate("TaskMessageCatalog", "正在读取素材信息"),
         "import_registering": QCoreApplication.translate("TaskMessageCatalog", "正在登记素材"),
         "export_compiling": QCoreApplication.translate("TaskMessageCatalog", "正在编译时间线"),
         "export_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在验证导出文件"),
+        "web_render_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在准备网页画面"),
+        "web_rendering": QCoreApplication.translate("TaskMessageCatalog", "正在渲染网页画面"),
+        "web_render_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在检查网页画面"),
         "clip_exporting": QCoreApplication.translate("TaskMessageCatalog", "正在导出短视频"),
         "clip_export_completed": QCoreApplication.translate("TaskMessageCatalog", "短视频批量导出完成"),
         "download_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在分析下载链接"),

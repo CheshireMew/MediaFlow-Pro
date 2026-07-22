@@ -17,7 +17,14 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import now_ms
-from mediaflow.domain.project import Asset, MediaMetadata, Project, ProjectProfile, Sequence
+from mediaflow.domain.project import (
+    Asset,
+    AssetFingerprint,
+    MediaMetadata,
+    Project,
+    ProjectProfile,
+    Sequence,
+)
 from mediaflow.domain.timeline import Track
 from mediaflow.domain.workflows import WorkflowRun
 
@@ -47,9 +54,10 @@ class ProjectCatalogRepository:
         stored = -1 if value is None else int(value)
         with self.transaction() as connection:
             connection.execute(
-                "UPDATE project SET workflow_auto_continue=?, updated_at=?",
-                (stored, now_ms()),
+                "UPDATE project SET workflow_auto_continue=?",
+                (stored,),
             )
+            self._touch_project(connection)
         return self.get_project()
 
     def save_workflow_run(self, run: WorkflowRun) -> WorkflowRun:
@@ -356,6 +364,60 @@ class ProjectCatalogRepository:
             )
             self._touch_project(connection)
         return self.get_asset(asset.id)
+
+    def set_asset_proxy_paths(
+        self,
+        asset_id: str,
+        *,
+        expected_fingerprint: AssetFingerprint | None,
+        proxy_path: str | Path,
+        sdr_preview_proxy_path: str | Path | None,
+    ) -> Asset:
+        expected_fingerprint_json = (
+            _model_json(expected_fingerprint) if expected_fingerprint is not None else None
+        )
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE asset
+                SET proxy_path=?, sdr_preview_proxy_path=?
+                WHERE id=? AND fingerprint_json IS ?""",
+                (
+                    self._stored_optional_path(proxy_path),
+                    self._stored_optional_path(sdr_preview_proxy_path),
+                    asset_id,
+                    expected_fingerprint_json,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("素材在代理生成期间发生了变化，已忽略旧代理")
+            self._touch_project(connection)
+        return self.get_asset(asset_id)
+
+    def set_asset_waveform_path(
+        self,
+        asset_id: str,
+        *,
+        expected_fingerprint: AssetFingerprint | None,
+        waveform_path: str | Path,
+    ) -> Asset:
+        expected_fingerprint_json = (
+            _model_json(expected_fingerprint) if expected_fingerprint is not None else None
+        )
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """UPDATE asset
+                SET waveform_path=?
+                WHERE id=? AND fingerprint_json IS ?""",
+                (
+                    self._stored_optional_path(waveform_path),
+                    asset_id,
+                    expected_fingerprint_json,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("素材在波形生成期间发生了变化，已忽略旧波形")
+            self._touch_project(connection)
+        return self.get_asset(asset_id)
 
     def refresh_asset_status(self, asset_id: str) -> Asset:
         asset = self.get_asset(asset_id)

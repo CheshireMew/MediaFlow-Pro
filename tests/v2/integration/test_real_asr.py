@@ -4,10 +4,10 @@ import subprocess
 from pathlib import Path
 
 from mediaflow.application.asset_service import AssetService
-from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
-from mediaflow.application.subtitle_publication import SubtitlePublicationService
-from mediaflow.domain.settings import AsrSettings
-from mediaflow.infrastructure.asr_engine import FasterWhisperProcessEngine
+from mediaflow.composition import EditorProject
+from mediaflow.domain.enums import TaskStatus, TrackKind
+from mediaflow.domain.settings import AsrSettings, GlobalSettings
+from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -37,20 +37,39 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
     speech = tmp_path / "speech.wav"
     synthesize_real_speech(speech)
     paths = RuntimePaths.discover()
-    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = AssetService(repository, MediaProbe(paths)).import_external(speech)
-        settings = AsrSettings(
+    repository = ProjectRepository.create(tmp_path / "Project", "Project")
+    asset = AssetService(repository, MediaProbe(paths)).import_external(speech)
+    settings = GlobalSettings(
+        asr=AsrSettings(
             model="tiny.en",
             device="cpu",
             compute_type="int8",
             language="en",
         )
-        publication = SubtitlePublicationService(repository)
-        document = SubtitleAcquisitionService(repository, publication).transcribe_asset(
-            asset.id,
-            FasterWhisperProcessEngine(settings, paths),
-            language="en",
+    )
+    project = EditorProject(repository, settings=settings, paths=paths)
+    try:
+        sequence_id = repository.get_project().main_sequence_id
+        editor = project.timeline(sequence_id)
+        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        editor.add_clip(
+            track_id=audio_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
         )
+        task = project.start_task(
+            TranscribeSequenceCommand(sequence_id=sequence_id),
+            [asset.id],
+            sequence_id=sequence_id,
+        )
+        completed = project.tasks.wait(task.id, timeout=180)
+        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+
+        assert completed.status == TaskStatus.COMPLETED
+        assert len(documents) == 1
+        document = documents[0]
         segments = repository.list_subtitle_segments(document.id)
         srt_files = list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
 
@@ -58,3 +77,5 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
         assert any("hello" in segment.text.lower() for segment in segments)
         assert srt_files
         assert "Hello" in srt_files[0].read_text(encoding="utf-8-sig")
+    finally:
+        project.close()

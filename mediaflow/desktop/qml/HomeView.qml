@@ -25,6 +25,15 @@ Rectangle {
         }
     }
 
+    Shortcut {
+        sequence: StandardKey.New
+        onActivated: createProjectDialog.open()
+    }
+    Shortcut {
+        sequence: StandardKey.Open
+        onActivated: openFolderDialog.open()
+    }
+
     FolderDialog {
         id: openFolderDialog
         title: qsTr("选择包含 project.mfp 的项目目录")
@@ -104,7 +113,7 @@ Rectangle {
                     hoverEnabled: true
                     focusPolicy: Qt.StrongFocus
                     Accessible.name: qsTr("新建项目")
-                    Accessible.description: qsTr("从下载、转录和翻译，到多轨编辑与专业导出。所有工作都保存在一个可移动的项目目录中。")
+                    Accessible.description: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
                     scale: down ? 0.997 : 1.0
                     Behavior on scale { NumberAnimation { duration: 80 } }
                     onClicked: createProjectDialog.open()
@@ -180,7 +189,7 @@ Rectangle {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("从下载、转录和翻译，到多轨编辑与专业导出。所有工作都保存在一个可移动的项目目录中。")
+                                text: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
                                 color: "#c5d1dc"
                                 font.pixelSize: Theme.fontSizeBodyLarge
                                 horizontalAlignment: Text.AlignHCenter
@@ -630,9 +639,8 @@ Rectangle {
                                 AppButton {
                                     objectName: "removeRecentProjectButton"
                                     property string projectPath: path
-                                    text: qsTr("移除")
+                                    text: qsTr("从列表移除")
                                     Accessible.name: text + " " + name
-                                    danger: true
                                     implicitHeight: 28
                                     leftPadding: 8
                                     rightPadding: 8

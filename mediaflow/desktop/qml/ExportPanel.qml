@@ -8,13 +8,16 @@ import "components"
 ColumnLayout {
     id: root
     objectName: "exportPanel"
-
     property var formats: exportController.exportFormatOptions
-
+    property var previewOptions: ({})
+    property var taskData: ({})
+    readonly property bool taskActive: taskData.status === "pending"
+        || taskData.status === "running" || taskData.status === "paused"
+    signal previewConfigurationChanged(var options)
     spacing: 10
 
     function selectedFormat() {
-        return root.formats[Math.max(0, format.currentIndex)]
+        return exportTarget.selectedFormat
     }
 
     function restorePreset() {
@@ -31,17 +34,29 @@ ColumnLayout {
             if (candidate.value === "prores"
                     && Number(candidate.profile) !== Number(advanced.profile ?? 3))
                 continue
-            format.currentIndex = index
+            exportTarget.currentIndex = index
             break
         }
         Qt.callLater(function() { exportSettings.restore(value) })
     }
 
-    Component.onCompleted: Qt.callLater(root.restorePreset)
+    function refreshTask() {
+        taskData = taskController.latestTask(
+            "export", workspaceController.activeSequenceId);
+    }
+
+    Component.onCompleted: {
+        Qt.callLater(root.restorePreset);
+        refreshTask();
+    }
 
     Connections {
         target: exportController
         function onProjectStateChanged() { Qt.callLater(root.restorePreset) }
+    }
+    Connections {
+        target: taskController
+        function onTasksChanged() { root.refreshTask(); }
     }
 
     FileDialog {
@@ -62,74 +77,44 @@ ColumnLayout {
         font.pixelSize: Theme.fontSizeSection
         font.weight: Font.DemiBold
     }
-    Panel {
+    ExportSequenceSummary {
         Layout.fillWidth: true
-        implicitHeight: 94
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 11
-            spacing: 5
-            Text { text: qsTr("当前序列"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
-            Text {
-                Layout.fillWidth: true
-                text: workspaceController.profileLabel
-                color: Theme.text
-                font.pixelSize: Theme.fontSizeBody
-                font.weight: Font.DemiBold
-            }
-            Text {
-                visible: workspaceController.profileConfirmed
-                text: workspaceController.colorMode === "hdr10_bt2020_pq"
-                    ? qsTr("HDR10 · BT.2020 · PQ") : qsTr("SDR · BT.709")
-                color: workspaceController.colorMode === "hdr10_bt2020_pq"
-                    ? Theme.warning : Theme.accentHover
-                font.pixelSize: Theme.fontSizeCaption
-            }
-        }
     }
-    Text { text: qsTr("格式"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
-    AppComboBox {
-        id: format
+    ExportTargetBar {
+        id: exportTarget
         Layout.fillWidth: true
-        model: root.formats
-        textRole: "label"
-        valueRole: "value"
+        formats: root.formats
+        taskActive: root.taskActive
+        defaultDirectory: exportController.defaultExportDirectory
+        onExportRequested: exportController.exportSequenceToDefaultLocation(
+            root.selectedFormat().value,
+            root.selectedFormat().suffix,
+            exportSettings.exportOptions())
+        onSaveAsRequested: saveDialog.open()
     }
     ScrollView {
         id: settingsScroll
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
-        ExportSettings {
-            id: exportSettings
+        ColumnLayout {
             width: settingsScroll.availableWidth
-            format: root.selectedFormat()
+            spacing: 10
+            ContextTaskCard {
+                objectName: "exportTaskPanel"
+                Layout.fillWidth: true
+                taskData: root.taskData
+                fallbackTitle: qsTr("导出任务")
+            }
+            ExportSettings {
+                id: exportSettings
+                Layout.fillWidth: true
+                format: root.selectedFormat()
+                onOptionsChanged: function (options) {
+                    root.previewOptions = options;
+                    root.previewConfigurationChanged(options);
+                }
+            }
         }
-    }
-    RowLayout {
-        Layout.fillWidth: true
-        AppButton {
-            objectName: "exportToProjectButton"
-            Layout.fillWidth: true
-            primary: true
-            text: qsTr("导出到项目")
-            onClicked: exportController.exportSequenceToDefaultLocation(
-                root.selectedFormat().value,
-                root.selectedFormat().suffix,
-                exportSettings.exportOptions())
-        }
-        AppButton {
-            objectName: "exportAsButton"
-            text: qsTr("另存为…")
-            onClicked: saveDialog.open()
-        }
-    }
-    Text {
-        Layout.fillWidth: true
-        text: qsTr("默认保存到 %1，文件名会自动避开已有结果。也可以使用“另存为”指定其他位置。").arg(
-            exportController.defaultExportDirectory)
-        color: Theme.textMuted
-        font.pixelSize: Theme.fontSizeCaption
-        wrapMode: Text.WordWrap
     }
 }
