@@ -1,6 +1,6 @@
 # MediaFlow Pro
 
-MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2 使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出；所有内部通信都在桌面进程内完成，不启动本地网络服务。仅在解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
+MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2 使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出；所有内部控制通信都在桌面进程内完成，不启动常驻 API 服务。解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
 
 项目采用 GPLv3，下载能力以随运行环境提供的 yt-dlp 为准。
 
@@ -8,11 +8,15 @@ MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2
 
 - 可移动项目目录，`project.mfp` SQLite 文件是项目唯一数据来源。
 - 主序列与任意数量的短视频序列，共享素材、字幕、翻译和高光候选。
-- 多轨视频、音频和字幕时间线；支持多选、成组移动、Shift 临时关闭吸附、裁剪、分割、复制、普通删除、跨轨波纹删除、转场、变速、反向、画面变换，以及时间线与字幕文档共用的撤销/重做历史。
+- 多轨视频、音频和字幕时间线；轨道随素材的拖放位置按需创建，片段可在同类轨道间移动，带音频的视频可解除视音频绑定后分别编辑；支持可见的多选模式、复合片段、成组移动、裁剪、分割、复制、普通删除、跨轨波纹删除、显式添加转场、变速、反向、画面变换，以及时间线与字幕文档共用的撤销/重做历史。拖动片段不会通过重叠自动创建转场。
 - 时间线可一键分析最终合成画面的首尾黑屏，并以启用字幕中的首句、末句对白为准设置序列入点和出点；正常画面、音乐或环境声本身不会被视为对白。入出点只限定预览与导出范围，不移动或缩短素材，可继续拖动调整、清除或撤销。
 - 预览画布支持滚轮缩放、中键平移、直接拖动画面、缩放和旋转，并提供定位、倍速、音量、静音和全屏控制；长片段波形只读取并绘制当前视口覆盖的部分。
 - MLT 驱动的同源预览与导出，C++ Qt Quick 插件负责帧纹理、音频主时钟、定位和掉帧报告。
 - 自动代理、波形、素材指纹、离线检测和单个/批量重新定位。
+- 统一的转写工作区包含自动字幕、字幕编辑、翻译和术语表；转录前可确认实际源音频时长并选择 Whisper 模型、设备、语言和长音频并行度。任务只提取时间轴真实使用的源区间，内置 faster-whisper 与 Faster-Whisper XXL 都会对超过 15 分钟的音频按静音位置分块，并在资源允许时并行识别。桌面端不加载或展示全量词卡；词级时间作为项目数据保留，供 AI 通过 CLI 生成、预检和应用转录剪辑计划。
+- 可编辑网页素材与视觉资源转场中心；网页包和普通视频、图片、音频通过同一素材入口导入，并通过真实浏览器渲染进入时间线，转场悬停通过临时 MLT 图预览。
+- 场景切点检测、自动构图与主体跟踪会写入时间线标记或画面关键帧；素材搜索同时检索文件元数据、关联转写内容和中英文概念。
+- 导出后对实际成片执行画面、冻结、静音、True Peak、时长和安全区检查，保留报告、证明帧与导出历史；命名版本保存完整 SQLite 快照并可恢复。支持向 Final Cut Pro / DaVinci Resolve 导出 FCPXML。
 - yt-dlp 下载；首页可先读取视频标题、分辨率、帧率与可用画质，再按视频信息创建并打开项目，项目界面显示真实下载进度。YouTube 合集使用扁平分析并保留失效条目位置，X/Twitter 同时识别当前推文和引用推文中的视频，B 站支持合集/分 P，抖音和快手提供浏览器监听回退；faster-whisper 转录；OpenAI 兼容接口翻译与高光分析。
 - SDR BT.709 与 HDR10 BT.2020/PQ 工程，支持 H.264、HEVC、AV1、ProRes 和独立字幕导出。
 - 多音频总线、内置效果链、ducking、LUFS 和 True Peak 测量。
@@ -64,6 +68,7 @@ MediaFlow Pro/
 - MLT 7.40
 - yt-dlp 2026.3.17
 - Playwright 1.61.0（复用本机 Chrome/Edge，不下载单独浏览器）
+- OpenCV 5.0.0（场景与主体运动分析）
 - FFmpeg（GPL 构建）
 
 依赖、模型和构建缓存默认位于 `D:\Tools\MediaFlow`。若没有 D 盘，首次启动会要求用户明确选择运行环境目录，不会静默占用 C 盘；也可以预先设置 `MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`MEDIAFLOW_FFMPEG` 和 `MEDIAFLOW_FFPROBE`。
@@ -122,13 +127,15 @@ mediaflow-cli execute --request request.json
 Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
+AI 文字剪辑使用 `transcript.get`、`transcript.edit.preview`、`transcript.edit.apply` 三步合同。AI 必须先读取带项目修订号的源转录，再提交包含删除理由和词或字幕段 ID 的计划；应用命令只接受原样返回的预检计划，并在修改前自动创建命名恢复版本。只有识别器提供的真实词级时间可以按词删除，估算词时间只能通过完整字幕段删除。预检发现锁定轨道可能失去同步时，应用方必须在审阅警告后显式传入 `accept_warnings: true`。`project.version.list` 和 `project.version.restore` 可用于检查和恢复自动保存的版本。
+
 当前自动化边界到 CLI 为止，不需要常驻 MCP 服务。如果以后确实需要让支持 MCP 的外部客户端调用，只应增加转接层，Editor API 仍是唯一实现入口。
 
 ### 可编辑网页素材
 
-MediaFlow 可导入带 `editable-media.json` 和 `window.editableMedia` 运行接口的本地网页包。网页包保存结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁；浏览器缓存、PNG、GIF、透明视频和普通视频都是派生结果。桌面界面与 CLI 读写同一状态，模板换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。
+MediaFlow 可导入带 `editable-media.json` 和 `window.editableMedia` 运行接口的本地网页包。网页包保存结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁；浏览器缓存、PNG、GIF、透明视频和普通视频都是派生结果。桌面界面与 CLI 读写同一状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。
 
-相关能力可从 `mediaflow-cli describe` 读取，包括 `web.clip.keyframe.*`、`web.clip.theme.update`、`web.clip.layout.select`、`web.clip.data.*`、`web.clip.diff`、`web.batch.create`、`web.component.*`、`web.asset.rebind` 和 `web.clip.export`。远程网址、登录态网页和任意 DOM/CSS 可视化开发不属于该边界。
+相关能力可从 `mediaflow-cli describe` 读取，包括 `web.import`、`web.clip.keyframe.*`、`web.clip.theme.update`、`web.clip.layout.select`、`web.clip.data.*`、`web.clip.diff`、`web.batch.create`、`web.asset.rebind` 和 `web.clip.export`。远程网址、登录态网页和任意 DOM/CSS 可视化开发不属于该边界。
 
 ## 测试与真实验收
 

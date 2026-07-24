@@ -20,7 +20,7 @@ from mediaflow.domain.enums import TaskStatus, TrackKind, WorkflowStage, Workflo
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
 TEST_ROOT = Path("D:/Tools/MediaFlow/test-runs")
-WEB_STARTER = Path(
+WEB_MEDIA_STARTER = Path(
     "E:/Work/BaiduSyncdisk/Code/Cheshire-skill/visual-multimedia/assets/web-media-starter"
 )
 
@@ -299,13 +299,8 @@ def main() -> None:
             timeout=180,
         )
         video_asset_id = controller.media.selectedAssetId
-        main_video_track = next(
-            track
-            for track in controller.session._editor.state.tracks
-            if track.kind == TrackKind.VIDEO
-        )
         controller.timeline.dropAssets(
-            [video_asset_id], main_video_track.id, 0, 3.0, 0, True, False
+            [video_asset_id], "", -1, 0, 3.0, 0, True, False
         )
         main_sequence_id = controller.workspace.activeSequenceId
 
@@ -366,16 +361,34 @@ def main() -> None:
         video_clip = next(
             clip for clip in controller.session._editor.state.clips if clip.asset_id == video_asset_id
         )
+        video_track_position = next(
+            track.position
+            for track in controller.session._editor.state.tracks
+            if track.id == video_clip.track_id
+        )
         controller.timeline.dropAssets(
-            [image_asset_id], video_clip.track_id, video_clip.timeline_end, 3.0, 0, True, False
+            [image_asset_id],
+            video_clip.track_id,
+            video_track_position,
+            video_clip.timeline_end,
+            3.0,
+            0,
+            True,
+            False,
         )
         controller.timeline.addTransitionAfter(video_clip.id, "dissolve", 15)
         first_image_clip = next(
             clip for clip in controller.session._editor.state.clips if clip.asset_id == image_asset_id
         )
+        image_track_position = next(
+            track.position
+            for track in controller.session._editor.state.tracks
+            if track.id == first_image_clip.track_id
+        )
         controller.timeline.dropAssets(
             [image_asset_id],
             first_image_clip.track_id,
+            image_track_position,
             first_image_clip.timeline_end,
             3.0,
             0,
@@ -389,14 +402,16 @@ def main() -> None:
         ][-1]
         controller.timeline.moveClip(overlay_clip, 0, overlay_track.id)
         controller.timeline.setClipTransform(overlay_clip, 0.68, 0.08, 0.28, 0.28, 0, 0, 0, 0, 0, 0.9)
-        controller.media.importWebPackage(QUrl.fromLocalFile(str(WEB_STARTER)).toString())
+        controller.media.importFiles(
+            [QUrl.fromLocalFile(str(WEB_MEDIA_STARTER / "editable-media.json"))]
+        )
         web_asset_id = controller.media.selectedAssetId
         controller.timeline.addTrack("video")
         web_track = [
             track for track in controller.session._editor.state.tracks if track.kind == TrackKind.VIDEO
         ][-1]
         controller.timeline.dropAssets(
-            [web_asset_id], web_track.id, 0, 3.0, 0, True, False
+            [web_asset_id], web_track.id, web_track.position, 0, 3.0, 0, True, False
         )
         web_clip_id = controller.timeline.selectedClipId
         controller.web.selectLayer("title")
@@ -414,7 +429,14 @@ def main() -> None:
             if track.kind == TrackKind.AUDIO
         )
         controller.timeline.dropAssets(
-            [music_asset_id], main_audio_track.id, 0, 3.0, 0, True, False
+            [music_asset_id],
+            main_audio_track.id,
+            main_audio_track.position,
+            0,
+            3.0,
+            0,
+            True,
+            False,
         )
         controller.timeline.setClipAudio(controller.timeline.selectedClipId, -8.0, 0.0, 12, 24)
         master = next(
@@ -449,7 +471,14 @@ def main() -> None:
             if track.kind == TrackKind.AUDIO
         )
         controller.timeline.dropAssets(
-            [music_asset_id], short_audio_track.id, 0, 3.0, 0, True, False
+            [music_asset_id],
+            short_audio_track.id,
+            short_audio_track.position,
+            0,
+            3.0,
+            0,
+            True,
+            False,
         )
         short_video = next(
             clip for clip in controller.session._editor.state.clips if clip.asset_id == video_asset_id

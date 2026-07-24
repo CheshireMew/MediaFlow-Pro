@@ -10,14 +10,20 @@ from PySide6.QtCore import QCoreApplication, QTranslator
 from PySide6.QtGui import QGuiApplication
 
 from mediaflow.desktop.presentation_catalogs import (
+    asr_language_options,
+    asr_model_options,
+    asr_parallel_options,
     encoder_label,
     no_subtitle_burn_label,
     system_name,
     task_message_label,
     task_status_label,
     task_title,
+    transcription_configuration_label,
 )
-from mediaflow.domain.task_commands import ExportSequenceCommand
+from mediaflow.domain.asr import TranscriptionPlan
+from mediaflow.domain.settings import AsrSettings
+from mediaflow.domain.task_commands import ExportSequenceCommand, TranscribeSequenceCommand
 from mediaflow.domain.tasks import Task
 
 
@@ -47,7 +53,7 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         assert translator.load(str(catalog.with_suffix(".qm")))
         assert app.installTranslator(translator)
         assert QCoreApplication.translate("HomeView", "新建项目") == translations[0]
-        assert QCoreApplication.translate("AudioPanel", "音频") == translations[1]
+        assert QCoreApplication.translate("WorkspaceNavigation", "音频") == translations[1]
         assert QCoreApplication.translate("ExportPanel", "导出序列") == translations[2]
         expected_system = ("Video 2", "ビデオ 2")[language == "ja"]
         expected_export = ("Export H264", "H264 を書き出し")[language == "ja"]
@@ -59,6 +65,51 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         assert task_status_label("failed") == ("Failed" if language == "en" else "失敗")
         assert task_message_label("export_verifying") == (
             "Verifying export" if language == "en" else "書き出しを検証中"
+        )
+        model_options = asr_model_options(
+            "tiny.en",
+            installed_models=frozenset({"tiny.en"}),
+        )
+        tiny_english = next(item for item in model_options if item["value"] == "tiny.en")
+        assert tiny_english["installed"] is True
+        assert tiny_english["text"].endswith(
+            "Downloaded" if language == "en" else "ダウンロード済み"
+        )
+        custom_language = asr_language_options("it")[-1]
+        assert custom_language["value"] == "it"
+        assert custom_language["text"] == (
+            "Language: Current code it" if language == "en" else "言語：現在のコード it"
+        )
+        assert asr_parallel_options()[2]["text"] == (
+            "Long-audio chunks: 2 at once"
+            if language == "en"
+            else "長時間音声チャンク：2 個を同時処理"
+        )
+        transcription_config = transcription_configuration_label(
+            TranscribeSequenceCommand(
+                plan=TranscriptionPlan(
+                    sequence_id="sequence",
+                    timeline_signature="signature",
+                    dialogue_track_id="dialogue",
+                    timeline_start_frame=0,
+                    timeline_end_frame=0,
+                    fps_numerator=25,
+                    fps_denominator=1,
+                    sources=[],
+                    asr=AsrSettings(
+                        engine="builtin",
+                        model="tiny.en",
+                        device="cpu",
+                        language="en",
+                        parallel_chunks=2,
+                    ),
+                )
+            )
+        )
+        assert transcription_config == (
+            "Built-in faster-whisper · tiny.en · CPU · en · 2 chunks in parallel"
+            if language == "en"
+            else "内蔵 faster-whisper · tiny.en · CPU · en · 2 チャンク並列"
         )
         assert (
             task_title(

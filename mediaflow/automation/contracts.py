@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from mediaflow.domain.model_base import DomainModel
+from mediaflow.domain.transcript_edits import TranscriptEditPlan, TranscriptEditRequest
 
 AUTOMATION_PROTOCOL: Literal["mediaflow-cli"] = "mediaflow-cli"
 AUTOMATION_VERSION: Literal[1] = 1
@@ -39,9 +40,37 @@ ARRAY_OF_OBJECTS = {"type": "array", "items": OBJECT}
 ANY: dict[str, Any] = {}
 
 
+def _inline_model_schema(model: type[DomainModel]) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    definitions = schema.pop("$defs", {})
+
+    def resolve(value):
+        if isinstance(value, list):
+            return [resolve(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        reference = value.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#/$defs/"):
+            name = reference.rsplit("/", 1)[-1]
+            merged = {
+                **definitions[name],
+                **{key: item for key, item in value.items() if key != "$ref"},
+            }
+            return resolve(merged)
+        return {key: resolve(item) for key, item in value.items()}
+
+    return resolve(schema)
+
+
+TRANSCRIPT_EDIT_REQUEST = _inline_model_schema(TranscriptEditRequest)
+TRANSCRIPT_EDIT_PLAN = _inline_model_schema(TranscriptEditPlan)
+
+
 OPERATION_SCHEMAS: dict[str, dict[str, Any]] = {
     "project.create": _schema(["name"], name=STRING),
     "project.inspect": _schema(),
+    "project.version.list": _schema(),
+    "project.version.restore": _schema(["version_id"], version_id=STRING),
     "asset.list": _schema(),
     "asset.import": _schema(["source"], source=STRING, timeout=NUMBER),
     "sequence.short.create": _schema(
@@ -105,6 +134,13 @@ OPERATION_SCHEMAS: dict[str, dict[str, Any]] = {
         start_frame=INTEGER,
         end_frame=INTEGER,
         text=STRING,
+    ),
+    "transcript.get": _schema(sequence_id=STRING, document_id=STRING),
+    "transcript.edit.preview": _schema(["edit"], edit=TRANSCRIPT_EDIT_REQUEST),
+    "transcript.edit.apply": _schema(
+        ["plan"],
+        plan=TRANSCRIPT_EDIT_PLAN,
+        accept_warnings=BOOLEAN,
     ),
     "audio.inspect": _schema(sequence_id=STRING),
     "audio.bus.update": _schema(["bus_id", "changes"], bus_id=STRING, changes=OBJECT),
@@ -244,11 +280,6 @@ OPERATION_SCHEMAS: dict[str, dict[str, Any]] = {
         dry_run=BOOLEAN,
         allow_conflicts=BOOLEAN,
     ),
-    "web.component.list": _schema(),
-    "web.component.install": _schema(["source"], source=STRING),
-    "web.component.import": _schema(
-        ["component_id"], component_id=STRING, version_hash=STRING
-    ),
 }
 
 
@@ -258,16 +289,18 @@ MUTATING_OPERATIONS = {
     if name
     not in {
         "project.inspect",
+        "project.version.list",
         "asset.list",
         "timeline.get",
         "subtitle.list",
+        "transcript.get",
+        "transcript.edit.preview",
         "audio.inspect",
         "task.list",
         "task.status",
         "web.inspect",
         "web.clip.get",
         "web.clip.diff",
-        "web.component.list",
     }
 }
 
@@ -295,6 +328,7 @@ def describe_contract() -> dict[str, Any]:
             "web_field_locks_and_diff": True,
             "web_template_rebinding": True,
             "web_multi_format_export": True,
+            "ai_transcript_edit_plans": True,
         },
         "operations": [
             {

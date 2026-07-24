@@ -28,6 +28,27 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
     connect(this, &MltPreviewItem::playbackRateRequested, m_runtime, &MltRuntime::setPlaybackRate, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::volumeRequested, m_runtime, &MltRuntime::setVolume, Qt::QueuedConnection);
     connect(this, &MltPreviewItem::previewSizeRequested, m_runtime, &MltRuntime::setPreviewSize, Qt::QueuedConnection);
+    m_seekRetryTimer.setInterval(50);
+    m_seekRetryTimer.setSingleShot(true);
+    connect(&m_seekRetryTimer, &QTimer::timeout, this, [this]() {
+        if (!m_seekPending)
+            return;
+        if (m_duration <= 0) {
+            m_seekRetryTimer.start();
+            return;
+        }
+        const int expectedFrame = qBound(0, m_requestedPosition, m_duration - 1);
+        if (m_position == expectedFrame) {
+            m_seekPending = false;
+            m_seekRetryAttempts = 0;
+            return;
+        }
+        if (m_seekRetryAttempts >= 80)
+            return;
+        ++m_seekRetryAttempts;
+        emit seekRequested(expectedFrame, m_requestId.load(std::memory_order_acquire));
+        m_seekRetryTimer.start();
+    });
     connect(m_runtime, &MltRuntime::frameReady, this, &MltPreviewItem::queueFrame, Qt::DirectConnection);
     connect(m_runtime, &MltRuntime::positionChanged, this, [this](int value, quint64 requestId) {
         if (requestId != m_requestId.load(std::memory_order_acquire))
@@ -112,7 +133,7 @@ void MltPreviewItem::setSource(const QString &value)
         emit closeRequested(requestId);
         return;
     }
-    scheduleOpen(false);
+    scheduleOpen();
 }
 
 void MltPreviewItem::setRuntimeRoot(const QString &value)
@@ -194,7 +215,9 @@ void MltPreviewItem::seek(int frame)
     clearError();
     m_requestedPosition = qMax(0, frame);
     m_seekPending = true;
+    m_seekRetryAttempts = 0;
     emit seekRequested(frame, m_requestId.load(std::memory_order_acquire));
+    m_seekRetryTimer.start();
 }
 
 void MltPreviewItem::reload()
@@ -302,6 +325,8 @@ void MltPreviewItem::deliverLatestFrame()
     if (!m_seekPending || frame == expectedFrame) {
         m_requestedPosition = frame;
         m_seekPending = false;
+        m_seekRetryAttempts = 0;
+        m_seekRetryTimer.stop();
     }
     if (m_duration != duration) {
         m_duration = duration;
@@ -327,6 +352,8 @@ quint64 MltPreviewItem::beginRequest(bool preservePosition)
     else if (!preservePosition) {
         m_requestedPosition = 0;
         m_seekPending = false;
+        m_seekRetryAttempts = 0;
+        m_seekRetryTimer.stop();
     }
     const quint64 requestId = m_requestId.fetch_add(1, std::memory_order_acq_rel) + 1;
     resetPresentationState(preservePosition);

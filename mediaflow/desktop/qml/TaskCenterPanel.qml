@@ -29,25 +29,16 @@ Item {
         anchors.fill: parent
         spacing: 10
 
-        RowLayout {
+        Text {
+            objectName: "taskActivitySummary"
             Layout.fillWidth: true
-            Text {
-                text: qsTr("任务中心")
-                color: Theme.text
-                font.pixelSize: Theme.fontSizeSection
-                font.weight: Font.DemiBold
-            }
-            Text {
-                objectName: "taskActivitySummary"
-                text: taskController.pausedTaskCount > 0
-                    ? qsTr("进行中 %1 · 已暂停 %2")
-                        .arg(taskController.inFlightTaskCount)
-                        .arg(taskController.pausedTaskCount)
-                    : qsTr("进行中 %1").arg(taskController.inFlightTaskCount)
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-            }
-            Item { Layout.fillWidth: true }
+            text: taskController.pausedTaskCount > 0
+                ? qsTr("进行中 %1 · 已暂停 %2")
+                    .arg(taskController.inFlightTaskCount)
+                    .arg(taskController.pausedTaskCount)
+                : qsTr("进行中 %1").arg(taskController.inFlightTaskCount)
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontSizeCaption
         }
 
         RowLayout {
@@ -85,11 +76,18 @@ Item {
             model: taskController.tasksModel
             delegate: Panel {
                 required property string displayName
+                required property string configurationLabel
                 required property string commandType
                 required property string kind
                 required property string status
                 required property string statusLabel
-                required property real progress
+                required property string progressMode
+                required property real progressValue
+                required property bool hasOverallProgress
+                required property real overallProgressValue
+                required property int progressItemIndex
+                required property int progressItemTotal
+                required property string progressItemLabel
                 required property string messageCode
                 required property string messageLabel
                 required property int queuePosition
@@ -104,6 +102,7 @@ Item {
                     && commandType !== "generate_waveform"
                 width: taskList.width
                 height: (compactCompleted ? 94 : error.length > 0 ? 166 : 142)
+                    + (!compactCompleted && configurationLabel.length > 0 ? 24 : 0)
                     + (traceExpanded ? 30 + executionTrace.length * 25 : 0)
 
                 ColumnLayout {
@@ -131,13 +130,33 @@ Item {
                         visible: !compactCompleted
                         from: 0
                         to: 100
-                        value: progress
+                        indeterminate: status === "running" && !hasOverallProgress
+                            && progressMode !== "determinate"
+                        value: hasOverallProgress ? overallProgressValue : progressValue
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: !compactCompleted && configurationLabel.length > 0
+                        text: configurationLabel
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSizeCaption
+                        elide: Text.ElideRight
                     }
                     Text {
                         visible: !compactCompleted
                         text: queuePosition > 0
                             ? qsTr("等待执行 · 队列第 %1 位").arg(queuePosition)
-                            : messageLabel
+                            : (progressItemTotal > 0
+                                ? qsTr("第 %1/%2 段 · ").arg(
+                                    progressItemIndex).arg(progressItemTotal)
+                                    + (progressItemLabel.length > 0
+                                        ? progressItemLabel + " · " : "")
+                                : "")
+                                + messageLabel
+                                + (hasOverallProgress
+                                    ? qsTr(" · 识别 %1%").arg(
+                                        Math.round(overallProgressValue))
+                                    : "")
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSizeCaption
                     }

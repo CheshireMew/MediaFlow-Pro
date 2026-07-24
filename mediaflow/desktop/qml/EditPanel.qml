@@ -17,14 +17,52 @@ ScrollView {
         spacing: 10
         property var transitionOptions: timelineController.transitionOptions
 
-        Text {
-            text: qsTr("片段属性")
-            color: Theme.text
-            font.pixelSize: Theme.fontSizeSection
-            font.weight: Font.DemiBold
-        }
-
         WebLayerPanel { playheadFrame: editScroll.playheadFrame }
+
+        Panel {
+            objectName: "editCompoundClipPanel"
+            Layout.fillWidth: true
+            implicitHeight: compoundContent.implicitHeight + 22
+            visible: timelineController.selectedCompoundId.length > 0
+            ColumnLayout {
+                id: compoundContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 11
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: timelineController.selectedCompoundData.name || qsTr("复合片段")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontSizeBodySmall
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("包含 %1 个片段，共 %2 帧。它会作为一个整体移动和删除，预览与导出仍使用原始素材。")
+                        .arg(timelineController.selectedCompoundData.memberCount || 0)
+                        .arg(timelineController.selectedCompoundData.durationFrames || 0)
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    AppButton {
+                        Layout.fillWidth: true
+                        text: qsTr("解除复合")
+                        onClicked: timelineController.dissolveSelectedCompoundClip()
+                    }
+                    AppButton {
+                        Layout.fillWidth: true
+                        danger: true
+                        text: qsTr("删除复合片段")
+                        onClicked: timelineController.deleteSelectedClips(false)
+                    }
+                }
+            }
+        }
 
         Panel {
             objectName: "editClipTimingPanel"
@@ -89,6 +127,13 @@ ScrollView {
                         text: qsTr("应用速度")
                         onClicked: timelineController.setClipSpeed(timelineController.selectedClipId, Number(speed.currentValue), pitch.checked)
                     }
+                }
+                AppButton {
+                    objectName: "detachClipAudioButton"
+                    Layout.fillWidth: true
+                    visible: timelineController.selectedClipData.canDetachAudio === true
+                    text: qsTr("解除视音频绑定")
+                    onClicked: timelineController.detachClipAudio(timelineController.selectedClipId)
                 }
             }
         }
@@ -197,6 +242,36 @@ ScrollView {
                     text: qsTr("应用画面参数")
                     onClicked: timelineController.setClipTransform(timelineController.selectedClipId, Number(posX.text), Number(posY.text), Number(scaleX.text), Number(scaleY.text), Number(rotation.text), Number(cropLeft.text), Number(cropTop.text), Number(cropRight.text), Number(cropBottom.text), Number(opacity.text))
                 }
+                Text {
+                    Layout.fillWidth: true
+                    text: Number(timelineController.selectedClipData.transformKeyframeCount || 0) > 0
+                          ? qsTr("已有 %1 个画面关键帧").arg(timelineController.selectedClipData.transformKeyframeCount)
+                          : qsTr("可对视频分析场景、自动构图或跟踪主体")
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    AppButton {
+                        objectName: "detectScenesButton"
+                        Layout.fillWidth: true
+                        text: qsTr("检测场景")
+                        onClicked: timelineController.detectScenesSelected(0.35)
+                    }
+                    AppButton {
+                        objectName: "autoReframeButton"
+                        Layout.fillWidth: true
+                        text: qsTr("自动构图")
+                        onClicked: timelineController.autoReframeSelected()
+                    }
+                    AppButton {
+                        objectName: "trackSubjectButton"
+                        Layout.fillWidth: true
+                        text: qsTr("主体跟踪")
+                        onClicked: timelineController.trackSubjectSelected()
+                    }
+                }
                 RowLayout {
                     Layout.fillWidth: true
                     AppButton {
@@ -215,7 +290,7 @@ ScrollView {
         }
 
         Text {
-            text: qsTr("转场")
+            text: qsTr("视觉资源 · 转场")
             color: Theme.text
             font.pixelSize: Theme.fontSizeBodySmall
             font.weight: Font.DemiBold
@@ -234,12 +309,79 @@ ScrollView {
             rowSpacing: 7
             Repeater {
                 model: root.transitionOptions
-                AppButton {
+                Rectangle {
                     required property var modelData
                     Layout.fillWidth: true
-                    text: modelData.label
-                    enabled: timelineController.selectedClipId.length > 0
-                    onClicked: timelineController.addTransitionAfter(timelineController.selectedClipId, modelData.value, 15)
+                    Layout.preferredHeight: 104
+                    radius: Theme.radiusSmall
+                    color: resourceMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                    border.color: resourceMouse.containsMouse ? Theme.accent : Theme.border
+                    opacity: timelineController.selectedClipId.length > 0 ? 1 : 0.55
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 9
+                        spacing: 5
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 31
+                            radius: 4
+                            color: Theme.surface
+                            clip: true
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: resourceMouse.containsMouse
+                                    ? parent.width * 0.64 : parent.width * 0.38
+                                x: modelData.previewDirection === "right"
+                                    ? parent.width - width : 0
+                                color: Theme.accentSoft
+                                Behavior on width { NumberAnimation { duration: 220 } }
+                            }
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.previewDirection === "zoom" ? "◎"
+                                    : modelData.previewDirection === "black" ? "■" : "A  →  B"
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: modelData.label
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSizeBodySmall
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: modelData.description
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSizeCaption
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                    Accessible.name: modelData.label
+                    Accessible.description: modelData.description
+                    Accessible.role: Accessible.Button
+                    MouseArea {
+                        id: resourceMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: timelineController.selectedClipId.length > 0
+                        onEntered: timelineController.previewTransitionAfter(
+                            timelineController.selectedClipId,
+                            modelData.value,
+                            Number(modelData.defaultDurationFrames))
+                        onExited: timelineController.clearTransitionPreview()
+                        onClicked: timelineController.addTransitionAfter(
+                            timelineController.selectedClipId,
+                            modelData.value,
+                            Number(modelData.defaultDurationFrames))
+                    }
                 }
             }
         }
@@ -293,7 +435,9 @@ ScrollView {
         EmptyState {
             Layout.fillWidth: true
             Layout.preferredHeight: 260
-            visible: timelineController.selectedClipId.length === 0 && timelineController.selectedTransitionId.length === 0
+            visible: timelineController.selectedClipId.length === 0
+                && timelineController.selectedCompoundId.length === 0
+                && timelineController.selectedTransitionId.length === 0
             iconText: "剪"
             title: qsTr("选择时间线片段")
             description: qsTr("选择后可以编辑画面、裁剪速度并添加转场。")

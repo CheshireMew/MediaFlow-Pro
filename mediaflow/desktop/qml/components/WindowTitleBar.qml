@@ -49,7 +49,9 @@ Rectangle {
         }
         Text {
             objectName: "windowProjectName"
-            Layout.maximumWidth: Math.max(240, root.width - 260)
+            Layout.minimumWidth: 80
+            Layout.preferredWidth: Math.min(implicitWidth, 320)
+            Layout.maximumWidth: 320
             text: root.hostWindow.title
             color: Theme.text
             font.pixelSize: Theme.fontSizeBody
@@ -60,6 +62,9 @@ Rectangle {
         WorkspaceHeader {
             visible: workspaceController.hasProject
             Layout.fillHeight: true
+            Layout.minimumWidth: implicitWidth
+            Layout.preferredWidth: implicitWidth
+            Layout.maximumWidth: implicitWidth
         }
         RowLayout {
             id: windowControls

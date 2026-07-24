@@ -18,12 +18,14 @@ from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.application.transcript_editing import TranscriptEditingService
 from mediaflow.application.web_media_service import WebMediaService
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import (
     TaskStatus,
 )
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
 from mediaflow.domain.settings import GlobalSettings, LlmProviderSettings
@@ -38,6 +40,7 @@ from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.cookie_store import CookieStore
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
+from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.font_assets import subtitle_font_options
 from mediaflow.infrastructure.llm_client import OpenAIJsonClient
@@ -53,7 +56,6 @@ from mediaflow.infrastructure.settings_repository import SettingsRepository
 from mediaflow.infrastructure.task_handlers import ProjectTaskHandlers
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
-from mediaflow.infrastructure.web_component_library import WebComponentLibrary
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 
 
@@ -112,10 +114,6 @@ class EditorProject:
         self.assets = AssetService(repository, MediaProbe(paths), fingerprint_file)
         web_validator = BrowserWebPackageValidator()
         self.web = WebMediaService(repository, self.timeline, web_validator)
-        self.web_components = WebComponentLibrary(
-            paths.runtime_dir / "components" / "web",
-            web_validator,
-        )
         self.subtitle_publication = SubtitlePublicationService(repository)
         self.subtitle_acquisition = SubtitleAcquisitionService(
             repository,
@@ -125,6 +123,11 @@ class EditorProject:
             repository,
             self.subtitle_publication,
             history=self.history,
+        )
+        self.transcript_editing = TranscriptEditingService(
+            repository,
+            self.subtitle_publication,
+            self.history,
         )
         self.highlights = HighlightService(repository, OpenAIJsonClient)
         self.sequences = SequenceService(repository)
@@ -167,6 +170,33 @@ class EditorProject:
             editor = TimelineEditor(self._repository, sequence_id, self.history)
             self._timelines[sequence_id] = editor
         return editor
+
+    def create_version(self, name: str):
+        return self._repository.create_project_version(name)
+
+    def list_versions(self):
+        return self._repository.list_project_versions()
+
+    def restore_version(self, version_id: str):
+        record = self._repository.restore_project_version(version_id)
+        sequence_ids = {
+            sequence.id for sequence in self._repository.list_sequences(include_archived=True)
+        }
+        for sequence_id, editor in list(self._timelines.items()):
+            if sequence_id in sequence_ids:
+                editor.reload()
+            else:
+                self._timelines.pop(sequence_id)
+        for document in self._repository.list_subtitle_documents():
+            self.subtitle_publication.write_document_srt(document.id)
+        self.history.clear()
+        return record
+
+    def export_fcpxml(self, sequence_id: str, destination: str | Path) -> Path:
+        return FcpxmlExportService(self._repository).export(
+            self._repository.load_timeline(sequence_id),
+            destination,
+        )
 
     def proxy_decision(self, asset, *, dropped_frames: int = 0, manual: bool = False):
         return ProxyService.decision(asset, dropped_frames=dropped_frames, manual=manual)
@@ -241,10 +271,7 @@ class EditorProject:
                     if self._repository.resolve_asset_path(item).resolve() == artifact
                 )
                 imported_asset_id = asset.id
-                command = task.command
-                if not isinstance(command, ImportAssetCommand):
-                    raise TypeError(f"Unexpected import command: {type(command).__name__}")
-                imported_purpose = command.purpose
+                imported_purpose = task.command.purpose
                 if imported_purpose == "subtitle":
                     documents = self._repository.list_subtitle_documents(asset.id)
                     if not documents:
@@ -371,10 +398,6 @@ class EditorApplication:
         self._settings_repository = SettingsRepository()
         self.settings = self._settings_repository.load()
         self.cookies = CookieStore(self._paths.runtime_dir / "cookies")
-        self.web_components = WebComponentLibrary(
-            self._paths.runtime_dir / "components" / "web",
-            BrowserWebPackageValidator(),
-        )
         self._media_thumbnails = MediaThumbnailService(self._paths)
         self._project_covers = ProjectCoverService(self._paths)
 
@@ -424,7 +447,7 @@ class EditorApplication:
         self,
         operation: str,
         *,
-        progress: Callable[[float, str], None],
+        progress: Callable[[OperationProgress], None],
         check_cancelled: Callable[[], None],
     ) -> object:
         tools = RuntimeToolService(self.settings.asr, self._paths)

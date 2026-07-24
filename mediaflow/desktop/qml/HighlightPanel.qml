@@ -49,36 +49,31 @@ ScrollView {
             title: qsTr("选择批量导出文件夹")
             onAccepted: highlightController.exportSelectedHighlights(selectedFolder.toString())
         }
-    RowLayout {
-        Layout.fillWidth: true
-        Text {
-            text: qsTr("AI 高光")
-            color: Theme.text
-            font.pixelSize: Theme.fontSizeSection
-            font.weight: Font.DemiBold
-        }
-        Item {
+        RowLayout {
+            objectName: "highlightToolbar"
             Layout.fillWidth: true
+            spacing: 6
+            AppComboBox {
+                id: sourceDocument
+                objectName: "highlightSourceDocument"
+                Layout.fillWidth: true
+                model: subtitleController.subtitleDocumentsModel
+                textRole: "language"
+                valueRole: "documentId"
+                displayText: count > 0 ? currentText : qsTr("需要先生成字幕")
+                onActivated: subtitleController.selectSubtitleDocument(currentValue)
+                Component.onCompleted: if (count > 0)
+                    subtitleController.selectSubtitleDocument(currentValue)
+            }
+            AppButton {
+                objectName: "analyzeHighlightsButton"
+                text: qsTr("分析")
+                primary: true
+                enabled: subtitleController.selectedDocumentId.length > 0 && !root.taskActive
+                onClicked: highlightController.analyzeHighlights(
+                    subtitleController.selectedDocumentId)
+            }
         }
-        AppButton {
-            objectName: "analyzeHighlightsButton"
-            text: qsTr("分析")
-            primary: true
-            enabled: subtitleController.selectedDocumentId.length > 0 && !root.taskActive
-            onClicked: highlightController.analyzeHighlights(subtitleController.selectedDocumentId)
-        }
-    }
-    AppComboBox {
-        id: sourceDocument
-        Layout.fillWidth: true
-        model: subtitleController.subtitleDocumentsModel
-        textRole: "language"
-        valueRole: "documentId"
-        displayText: count > 0 ? currentText : qsTr("需要先生成字幕")
-        onActivated: subtitleController.selectSubtitleDocument(currentValue)
-        Component.onCompleted: if (count > 0)
-            subtitleController.selectSubtitleDocument(currentValue)
-    }
     Text {
         visible: sourceDocument.count === 0
         Layout.fillWidth: true

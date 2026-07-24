@@ -7,8 +7,13 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from mediaflow.domain.progress import OperationProgress
+from mediaflow.infrastructure.process_observers import (
+    FfmpegProgressObserver,
+    ffmpeg_progress_command,
+)
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable
+from mediaflow.infrastructure.subprocess_runner import run_cancellable, run_cancellable_streaming
 
 
 class AudioPreparationService:
@@ -22,16 +27,32 @@ class AudioPreparationService:
         self,
         media_path: str | Path,
         *,
+        start_seconds: float = 0.0,
+        end_seconds: float | None = None,
         check_cancelled: Callable[[], None] | None = None,
+        progress: Callable[[OperationProgress], None] | None = None,
     ) -> Path:
         source = Path(media_path).resolve(strict=True)
-        channels, duration = self._probe_audio(source)
+        if progress:
+            progress(OperationProgress.indeterminate("preparing_asr_audio_probe"))
+        channels, source_duration = self._probe_audio(source)
+        start = max(0.0, float(start_seconds))
+        end = (
+            source_duration
+            if end_seconds is None
+            else min(source_duration, float(end_seconds))
+        )
+        if end <= start:
+            raise ValueError("准备转录音频的源区间无效")
+        duration = end - start
         audio_filter = None
         if channels == 2:
             phase_values = self._measure_stereo_phase(
                 source,
                 duration,
+                source_start=start,
                 check_cancelled=check_cancelled,
+                progress=progress,
             )
             audio_filter = (
                 "pan=mono|c0=0.5*c0-0.5*c1"
@@ -48,6 +69,10 @@ class AudioPreparationService:
             "error",
             "-i",
             str(source),
+            "-ss",
+            f"{start:.6f}",
+            "-t",
+            f"{duration:.6f}",
             "-map",
             "0:a:0",
             "-vn",
@@ -57,10 +82,29 @@ class AudioPreparationService:
         else:
             command.extend(["-ac", "1"])
         command.extend(["-ar", "16000", "-c:a", "pcm_s16le", str(output)])
-        result = run_cancellable(
-            command,
+        observer = (
+            FfmpegProgressObserver(
+                duration,
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        "preparing_asr_audio",
+                        completed=position,
+                        total=duration,
+                        unit="media_seconds",
+                    )
+                )
+                if progress
+                else None,
+            )
+            if duration > 0
+            else None
+        )
+        if observer is None and progress:
+            progress(OperationProgress.indeterminate("preparing_asr_audio"))
+        result = run_cancellable_streaming(
+            ffmpeg_progress_command(command),
+            on_stderr_line=observer,
             check_cancelled=check_cancelled,
-            text=True,
             encoding="utf-8",
             errors="replace",
         )
@@ -103,7 +147,9 @@ class AudioPreparationService:
         source: Path,
         duration: float,
         *,
+        source_start: float,
         check_cancelled: Callable[[], None] | None,
+        progress: Callable[[OperationProgress], None] | None,
     ) -> list[float]:
         windows = (
             [(0.0, None)]
@@ -115,7 +161,13 @@ class AudioPreparationService:
             ]
         )
         values: list[float] = []
-        for start, window_duration in windows:
+        analysis_total = sum(
+            duration if window_duration is None else window_duration
+            for _relative_start, window_duration in windows
+        )
+        analysis_completed = 0.0
+        for relative_start, window_duration in windows:
+            start = source_start + relative_start
             command = [str(self.paths.ffmpeg), "-hide_banner", "-v", "error"]
             if start > 0:
                 command.extend(["-ss", f"{start:.3f}"])
@@ -134,10 +186,36 @@ class AudioPreparationService:
                     "-",
                 ]
             )
-            result = run_cancellable(
-                command,
+            measured_duration = duration if window_duration is None else window_duration
+            if measured_duration > 0 and progress is not None:
+
+                def report_channel_analysis(
+                    position: float,
+                    measured_total: float = measured_duration,
+                    completed_before: float = analysis_completed,
+                ) -> None:
+                    progress(
+                        OperationProgress.determinate(
+                            "preparing_asr_channel_analysis",
+                            completed=min(
+                                analysis_total,
+                                completed_before + min(position, measured_total),
+                            ),
+                            total=analysis_total,
+                            unit="media_seconds",
+                        )
+                    )
+
+                observer = FfmpegProgressObserver(
+                    measured_duration,
+                    report_channel_analysis,
+                )
+            else:
+                observer = None
+            result = run_cancellable_streaming(
+                ffmpeg_progress_command(command),
+                on_stderr_line=observer,
                 check_cancelled=check_cancelled,
-                text=True,
                 encoding="utf-8",
                 errors="replace",
             )
@@ -150,6 +228,7 @@ class AudioPreparationService:
                     str(result.stdout or ""),
                 )
             )
+            analysis_completed += measured_duration
         return values
 
     @classmethod
@@ -196,11 +275,12 @@ class AudioChunkingService:
         *,
         threshold_db: float = -30.0,
         minimum_duration: float = 0.5,
+        duration_seconds: float,
         check_cancelled: Callable[[], None] | None = None,
+        progress: Callable[[OperationProgress], None] | None = None,
     ) -> list[tuple[float, float]]:
         source = Path(media_path).resolve(strict=True)
-        result = run_cancellable(
-            [
+        command = [
                 str(self.paths.ffmpeg),
                 "-hide_banner",
                 "-v",
@@ -212,9 +292,24 @@ class AudioChunkingService:
                 "-f",
                 "null",
                 "-",
-            ],
+            ]
+        observer = FfmpegProgressObserver(
+            duration_seconds,
+            lambda position: progress(
+                OperationProgress.determinate(
+                    "asr_silence_detection",
+                    completed=position,
+                    total=duration_seconds,
+                    unit="media_seconds",
+                )
+            )
+            if progress
+            else None,
+        )
+        result = run_cancellable_streaming(
+            ffmpeg_progress_command(command),
+            on_stderr_line=observer,
             check_cancelled=check_cancelled,
-            text=True,
             encoding="utf-8",
             errors="replace",
         )
@@ -273,14 +368,16 @@ class AudioChunkingService:
         media_path: str | Path,
         split_points: list[float],
         *,
+        total_duration: float,
         check_cancelled: Callable[[], None] | None = None,
+        progress: Callable[[OperationProgress], None] | None = None,
     ) -> list[tuple[Path, float]]:
         source = Path(media_path).resolve(strict=True)
         output_dir = self.paths.runtime_dir / "cache" / "asr-chunks" / "runs" / str(uuid.uuid4())
         output_dir.mkdir(parents=True, exist_ok=True)
         chunks: list[tuple[Path, float]] = []
         starts = [0.0, *split_points]
-        ends: list[float | None] = [*split_points, None]
+        ends = [*split_points, total_duration]
         for index, (start, end) in enumerate(zip(starts, ends, strict=True)):
             output = output_dir / f"chunk-{index:03d}.wav"
             command = [
@@ -294,8 +391,8 @@ class AudioChunkingService:
                 "-i",
                 str(source),
             ]
-            if end is not None:
-                command.extend(["-t", f"{end - start:.6f}"])
+            chunk_duration = end - start
+            command.extend(["-t", f"{chunk_duration:.6f}"])
             command.extend(
                 [
                     "-vn",
@@ -308,10 +405,35 @@ class AudioChunkingService:
                     str(output),
                 ]
             )
-            result = run_cancellable(
-                command,
+            if progress is not None:
+
+                def report_chunk_extraction(
+                    position: float,
+                    measured_total: float = chunk_duration,
+                    completed_before: float = start,
+                ) -> None:
+                    progress(
+                        OperationProgress.determinate(
+                            "asr_chunk_extracting",
+                            completed=min(
+                                total_duration,
+                                completed_before + min(position, measured_total),
+                            ),
+                            total=total_duration,
+                            unit="media_seconds",
+                        )
+                    )
+
+                observer = FfmpegProgressObserver(
+                    chunk_duration,
+                    report_chunk_extraction,
+                )
+            else:
+                observer = None
+            result = run_cancellable_streaming(
+                ffmpeg_progress_command(command),
+                on_stderr_line=observer,
                 check_cancelled=check_cancelled,
-                text=True,
                 encoding="utf-8",
                 errors="replace",
             )

@@ -14,9 +14,11 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import AssetKind, AssetOrigin, ColorMode, TaskStatus, TrackKind
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import GlobalSettings
-from mediaflow.domain.task_commands import DownloadMediaCommand
+from mediaflow.domain.task_commands import DownloadMediaCommand, GenerateWaveformCommand
+from mediaflow.domain.tasks import Task
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
 from mediaflow.infrastructure.mlt import TimelineCompiler
@@ -126,18 +128,98 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         profile = repository.get_sequence(repository.get_project().main_sequence_id).profile
         assert (profile.width, profile.height, profile.fps_numerator) == (640, 360, 25)
 
-        proxied = ProxyService(repository, paths).generate(asset, profile)
+        proxy_progress = []
+        proxied = ProxyService(repository, paths).generate(
+            asset,
+            profile,
+            progress=proxy_progress.append,
+        )
         proxy_path = repository.project_dir / proxied.proxy_path
         assert proxy_path.is_file()
         proxy_probe = MediaProbe(paths).probe(proxy_path, timeline_profile=profile)
         assert proxy_probe.metadata.has_video is True
+        proxy_encoding = [
+            item for item in proxy_progress if item.message_code == "proxy_encoding"
+        ]
+        assert proxy_encoding
+        assert proxy_encoding[-1].completed == proxy_encoding[-1].total
 
-        waveform_asset = WaveformService(repository, paths).generate(proxied)
+        waveform_progress = []
+        waveform_asset = WaveformService(repository, paths).generate(
+            proxied,
+            duration_seconds=proxied.metadata.duration_frames / profile.fps,
+            progress=waveform_progress.append,
+        )
         waveform_path = repository.project_dir / waveform_asset.waveform_path
         payload = json.loads(waveform_path.read_text(encoding="utf-8"))
         assert payload["sample_rate"] == 8000
         assert payload["sample_count"] > 7000
         assert len(payload["levels"]["128"]) > 0
+        calculating = [
+            item for item in waveform_progress if item.message_code == "waveform_calculating"
+        ]
+        assert calculating
+        assert all(item.mode == "determinate" and item.unit == "samples" for item in calculating)
+        assert calculating[-1].completed == calculating[-1].total
+        assert waveform_progress[-1].message_code == "waveform_saving"
+
+
+def test_waveform_task_progress_survives_events_storage_and_artifact_consumption(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "task-waveform.mp4"
+    generate_real_media(source, paths)
+    repository = ProjectRepository.create(tmp_path / "Task Waveform", "Task Waveform")
+    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    progress_events: list[OperationProgress] = []
+    transported_tasks: list[Task] = []
+
+    def capture(event) -> None:
+        transported = Task.model_validate(event.payload)
+        transported_tasks.append(transported)
+        if event.event_type == "progress":
+            progress_events.append(transported.progress)
+
+    project.tasks.events.subscribe(capture, include_snapshot=False)
+    try:
+        asset = project.assets.import_external(source)
+        task = project.start_task(
+            GenerateWaveformCommand(asset_id=asset.id),
+            [asset.id],
+        )
+        completed = project.tasks.wait(task.id, timeout=30)
+        persisted = project.tasks.get(task.id)
+        updated_asset = repository.get_asset(asset.id)
+        assert updated_asset.waveform_path
+        waveform_path = repository.project_dir / updated_asset.waveform_path
+        waveform_payload = json.loads(waveform_path.read_text(encoding="utf-8"))
+
+        decoding = [
+            item for item in progress_events if item.message_code == "waveform_decoding"
+        ]
+        calculating = [
+            item for item in progress_events if item.message_code == "waveform_calculating"
+        ]
+        assert decoding
+        assert decoding[-1].mode == "determinate"
+        assert decoding[-1].unit == "media_seconds"
+        assert decoding[-1].completed == decoding[-1].total
+        assert calculating
+        assert calculating[-1].unit == "samples"
+        assert calculating[-1].completed == calculating[-1].total
+        assert any(item.message_code == "waveform_saving" for item in progress_events)
+        assert completed.status == TaskStatus.COMPLETED
+        assert persisted == completed
+        assert persisted.progress.mode == "determinate"
+        assert persisted.progress.completed == persisted.progress.total == 1
+        assert persisted.progress.unit == "task"
+        assert transported_tasks[-1] == persisted
+        assert completed.artifacts == [updated_asset.waveform_path]
+        assert waveform_payload["sample_count"] > 0
+        assert waveform_payload["levels"]["128"]
+    finally:
+        project.close()
 
 
 def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(tmp_path: Path) -> None:
@@ -296,7 +378,7 @@ def test_hdr_project_generates_hdr_and_sdr_display_proxies(tmp_path: Path) -> No
         assert sdr.metadata.pixel_format == "yuv420p"
         assert sdr.metadata.color_primaries == "bt709"
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,

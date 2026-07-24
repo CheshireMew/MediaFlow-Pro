@@ -61,6 +61,7 @@ Rectangle {
         clip: true
         color: root.kind === "audio" ? "#382d54"
             : root.kind === "image" ? "#493b27"
+            : root.kind === "subtitle" ? "#3c3155"
             : root.kind === "web" ? "#214b45" : "#173754"
 
         Image {
@@ -76,9 +77,12 @@ Rectangle {
             visible: root.hasVisualPreview
         }
         Text {
+            objectName: "assetKindIcon"
             anchors.centerIn: parent
             text: root.kind === "audio" ? "♫"
-                : root.kind === "image" ? "▧" : root.kind === "web" ? "◇" : "▶"
+                : root.kind === "image" ? "▧"
+                : root.kind === "subtitle" ? "CC"
+                : root.kind === "web" ? "◇" : "▶"
             color: Theme.text
             font.pixelSize: root.listMode ? Theme.fontSizeBodySmall
                 : root.largeThumbnailMode ? 28 : 22

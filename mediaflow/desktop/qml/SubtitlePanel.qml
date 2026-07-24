@@ -91,16 +91,6 @@ ScrollView {
             onAccepted: subtitleController.exportSubtitleDocument(subtitleController.selectedDocumentId, selectedFile.toString())
         }
 
-        RowLayout {
-            Layout.fillWidth: true
-            Text {
-                text: qsTr("字幕编辑")
-                color: Theme.text
-                font.pixelSize: Theme.fontSizeSection
-                font.weight: Font.DemiBold
-            }
-        }
-
         Text {
             text: qsTr("字幕文档")
             color: Theme.text
@@ -231,35 +221,35 @@ ScrollView {
                         id: subtitleMoreButton
                         text: qsTr("更多") + " ▾"
                         onClicked: subtitleMoreMenu.open()
-                        Menu {
+                        AppMenu {
                             id: subtitleMoreMenu
                             y: subtitleMoreButton.height + 4
-                            MenuItem {
+                            AppMenuItem {
                                 text: root.showSearch ? qsTr("关闭查找替换") : qsTr("查找替换")
                                 onTriggered: root.showSearch = !root.showSearch
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("导出 SRT")
                                 enabled: subtitleController.selectedDocumentId.length > 0
                                 onTriggered: exportSubtitleDialog.open()
                             }
-                            MenuSeparator {}
-                            MenuItem {
+                            AppMenuSeparator {}
+                            AppMenuItem {
                                 text: qsTr("翻译所选")
                                 enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
                                 onTriggered: subtitleController.translateSelectedSubtitleSegments()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("复制 SRT")
                                 enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
                                 onTriggered: subtitleController.copySelectedSubtitleSegments()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("粘贴替换")
                                 enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
                                 onTriggered: subtitleController.pasteReplaceSelectedSubtitleSegments()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("打开文件夹")
                                 enabled: subtitleController.selectedDocumentId.length > 0
                                 onTriggered: subtitleController.openSubtitleFolder()
@@ -452,33 +442,33 @@ ScrollView {
                             }
                             onDoubleClicked: subtitleController.previewSubtitleSegment(segmentId)
                         }
-                        Menu {
+                        AppMenu {
                             id: segmentContextMenu
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("播放这一条")
                                 onTriggered: subtitleController.previewSubtitleSegment(segmentId)
                             }
-                            MenuSeparator {}
-                            MenuItem {
+                            AppMenuSeparator {}
+                            AppMenuItem {
                                 text: qsTr("翻译所选字幕")
                                 onTriggered: subtitleController.translateSelectedSubtitleSegments()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("复制所选字幕")
                                 onTriggered: subtitleController.copySelectedSubtitleSegments()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("合并所选字幕")
                                 enabled: subtitleController.selectedSubtitleSegmentIds.length > 1
                                 onTriggered: subtitleController.mergeSelectedSubtitleSegments()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("按中点拆分")
                                 enabled: subtitleController.selectedSubtitleSegmentIds.length === 1
                                 onTriggered: subtitleController.splitSubtitleSegment(segmentId, -1)
                             }
-                            MenuSeparator {}
-                            MenuItem {
+                            AppMenuSeparator {}
+                            AppMenuItem {
                                 text: qsTr("删除所选字幕")
                                 onTriggered: subtitleController.deleteSelectedSubtitleSegments()
                             }

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from bisect import bisect_left, bisect_right
 from fractions import Fraction
 from typing import Any
 
+from mediaflow.domain.asr import AsrResult, AsrSegment, AsrWord
 from mediaflow.domain.enums import AssetKind, TrackKind
-from mediaflow.domain.model_base import new_id
+from mediaflow.domain.model_base import new_id, now_ms
 from mediaflow.domain.subtitles import (
     SubtitleDocument,
     SubtitlePlacement,
     SubtitleSegment,
+    SubtitleWord,
 )
 from mediaflow.domain.timebase import reframe_rate
 
@@ -20,16 +23,20 @@ class SubtitleRepository:
         self,
         document: SubtitleDocument,
         segments: list[SubtitleSegment],
+        words: list[SubtitleWord] | None = None,
     ) -> SubtitleDocument:
         self._validate_subtitle_document(document)
         if any(segment.document_id != document.id for segment in segments):
             raise ValueError("Subtitle segment belongs to another document")
+        segment_ids = {segment.id for segment in segments}
+        if any(word.segment_id not in segment_ids for word in words or []):
+            raise ValueError("Subtitle word belongs to another document")
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO subtitle_document(
                     id, project_id, asset_id, media_asset_id, sequence_id, language,
-                    source_document_id, is_source, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    source_document_id, is_source, purpose, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     document.id,
                     document.project_id,
@@ -39,11 +46,14 @@ class SubtitleRepository:
                     document.language,
                     document.source_document_id,
                     int(document.is_source),
+                    document.purpose,
                     document.created_at,
                 ),
             )
             for segment in segments:
                 self._insert_subtitle_segment(connection, segment)
+            for word in words or []:
+                self._insert_subtitle_word(connection, word)
             self._touch_project(connection)
         return document
 
@@ -56,7 +66,7 @@ class SubtitleRepository:
             connection.execute(
                 """UPDATE subtitle_document
                    SET asset_id=?, media_asset_id=?, sequence_id=?, language=?,
-                       source_document_id=?, is_source=?
+                       source_document_id=?, is_source=?, purpose=?
                    WHERE id=?""",
                 (
                     document.asset_id,
@@ -65,6 +75,7 @@ class SubtitleRepository:
                     document.language,
                     document.source_document_id,
                     int(document.is_source),
+                    document.purpose,
                     document.id,
                 ),
             )
@@ -123,12 +134,163 @@ class SubtitleRepository:
             rows = self._fetchall("SELECT * FROM subtitle_document ORDER BY created_at, id")
         return [self._subtitle_document_from_row(row) for row in rows]
 
+    def get_asset_transcript(
+        self,
+        asset_id: str,
+        signature: str,
+    ) -> AsrResult | None:
+        row = self._fetchone(
+            """SELECT language, duration_seconds, result_json
+               FROM asset_transcript
+               WHERE asset_id=? AND signature=?""",
+            (asset_id, signature),
+        )
+        if row is None:
+            return None
+        payload = json.loads(str(row["result_json"]))
+        return AsrResult(
+            language=str(row["language"]),
+            duration_seconds=float(row["duration_seconds"]),
+            segments=tuple(
+                AsrSegment(
+                    start_seconds=float(segment["start_seconds"]),
+                    end_seconds=float(segment["end_seconds"]),
+                    text=str(segment["text"]),
+                    confidence=segment.get("confidence"),
+                    words=tuple(
+                        AsrWord(
+                            start_seconds=float(word["start_seconds"]),
+                            end_seconds=float(word["end_seconds"]),
+                            text=str(word["text"]),
+                            confidence=word.get("confidence"),
+                        )
+                        for word in segment.get("words", [])
+                    ),
+                )
+                for segment in payload
+            ),
+        )
+
+    def save_asset_transcript(
+        self,
+        asset_id: str,
+        signature: str,
+        result: AsrResult,
+    ) -> AsrResult:
+        self.get_asset(asset_id)
+        payload = [
+            {
+                "start_seconds": segment.start_seconds,
+                "end_seconds": segment.end_seconds,
+                "text": segment.text,
+                "confidence": segment.confidence,
+                "words": [
+                    {
+                        "start_seconds": word.start_seconds,
+                        "end_seconds": word.end_seconds,
+                        "text": word.text,
+                        "confidence": word.confidence,
+                    }
+                    for word in segment.words
+                ],
+            }
+            for segment in result.segments
+        ]
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO asset_transcript(
+                       asset_id, signature, language, duration_seconds,
+                       result_json, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(asset_id, signature) DO UPDATE SET
+                       language=excluded.language,
+                       duration_seconds=excluded.duration_seconds,
+                       result_json=excluded.result_json,
+                       updated_at=excluded.updated_at""",
+                (
+                    asset_id,
+                    signature,
+                    result.language,
+                    result.duration_seconds,
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    now_ms(),
+                ),
+            )
+        return result
+
     def list_subtitle_segments(self, document_id: str) -> list[SubtitleSegment]:
         rows = self._fetchall(
             "SELECT * FROM subtitle_segment WHERE document_id=? ORDER BY start_frame, id",
             (document_id,),
         )
         return [self._subtitle_segment_from_row(row) for row in rows]
+
+    def subtitle_segment_summary(self, document_id: str) -> tuple[int, int, int]:
+        self.get_subtitle_document(document_id)
+        row = self._fetchone(
+            """SELECT COUNT(*) AS segment_count,
+                      COALESCE(MIN(start_frame), 0) AS start_frame,
+                      COALESCE(MAX(end_frame), 0) AS end_frame
+               FROM subtitle_segment
+               WHERE document_id=?""",
+            (document_id,),
+        )
+        if row is None:
+            return (0, 0, 0)
+        return (
+            int(row["segment_count"]),
+            int(row["start_frame"]),
+            int(row["end_frame"]),
+        )
+
+    def list_subtitle_words(
+        self,
+        document_id: str,
+        *,
+        include_excluded: bool = True,
+    ) -> list[SubtitleWord]:
+        self.get_subtitle_document(document_id)
+        exclusion = "" if include_excluded else " AND word.excluded=0"
+        rows = self._fetchall(
+            """SELECT word.* FROM subtitle_word AS word
+               JOIN subtitle_segment AS segment ON segment.id=word.segment_id
+               WHERE segment.document_id=?"""
+            + exclusion
+            + " ORDER BY word.start_frame, word.position, word.id",
+            (document_id,),
+        )
+        return [self._subtitle_word_from_row(row) for row in rows]
+
+    def save_subtitle_words(
+        self,
+        document_id: str,
+        words: list[SubtitleWord],
+    ) -> None:
+        segment_ids = {segment.id for segment in self.list_subtitle_segments(document_id)}
+        if any(word.segment_id not in segment_ids for word in words):
+            raise ValueError("Subtitle word belongs to another document")
+        word_ids = [word.id for word in words]
+        if len(word_ids) != len(set(word_ids)):
+            raise ValueError("Subtitle word ids must be unique")
+        positions = [(word.segment_id, word.position) for word in words]
+        if len(positions) != len(set(positions)):
+            raise ValueError("Subtitle word positions must be unique within a segment")
+        with self.transaction() as connection:
+            existing_ids = {
+                row["id"]
+                for row in connection.execute(
+                    """SELECT word.id FROM subtitle_word AS word
+                       JOIN subtitle_segment AS segment ON segment.id=word.segment_id
+                       WHERE segment.document_id=?""",
+                    (document_id,),
+                ).fetchall()
+            }
+            retained_ids = set(word_ids)
+            for word_id in existing_ids - retained_ids:
+                connection.execute("DELETE FROM subtitle_word WHERE id=?", (word_id,))
+            for word in words:
+                self._insert_subtitle_word(connection, word, replace=True)
+            self._touch_project(connection)
 
     def save_subtitle_segments(
         self,
@@ -658,6 +820,41 @@ class SubtitleRepository:
         )
 
     @staticmethod
+    def _insert_subtitle_word(
+        connection: sqlite3.Connection,
+        word: SubtitleWord,
+        *,
+        replace: bool = False,
+    ) -> None:
+        conflict = (
+            " ON CONFLICT(id) DO UPDATE SET "
+            "segment_id=excluded.segment_id, position=excluded.position, "
+            "start_frame=excluded.start_frame, end_frame=excluded.end_frame, "
+            "text=excluded.text, confidence=excluded.confidence, "
+            "timing_source=excluded.timing_source, excluded=excluded.excluded"
+            if replace
+            else ""
+        )
+        connection.execute(
+            """INSERT INTO subtitle_word(
+                   id, segment_id, position, start_frame, end_frame, text,
+                   confidence, timing_source, excluded
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+            + conflict,
+            (
+                word.id,
+                word.segment_id,
+                word.position,
+                word.start_frame,
+                word.end_frame,
+                word.text,
+                word.confidence,
+                word.timing_source,
+                int(word.excluded),
+            ),
+        )
+
+    @staticmethod
     def _subtitle_document_from_row(row: sqlite3.Row) -> SubtitleDocument:
         return SubtitleDocument(
             id=row["id"],
@@ -668,6 +865,7 @@ class SubtitleRepository:
             language=row["language"],
             source_document_id=row["source_document_id"],
             is_source=bool(row["is_source"]),
+            purpose=row["purpose"],
             created_at=row["created_at"],
         )
 
@@ -682,4 +880,18 @@ class SubtitleRepository:
             text=row["text"],
             speaker=row["speaker"],
             confidence=row["confidence"],
+        )
+
+    @staticmethod
+    def _subtitle_word_from_row(row: sqlite3.Row) -> SubtitleWord:
+        return SubtitleWord(
+            id=row["id"],
+            segment_id=row["segment_id"],
+            position=row["position"],
+            start_frame=row["start_frame"],
+            end_frame=row["end_frame"],
+            text=row["text"],
+            confidence=row["confidence"],
+            timing_source=row["timing_source"],
+            excluded=bool(row["excluded"]),
         )

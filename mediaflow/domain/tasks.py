@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, computed_field
 
 from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.model_base import DomainModel, new_id, now_ms
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.task_commands import TaskCommand
 
 
@@ -23,8 +24,9 @@ class Task(DomainModel):
     sequence_id: str | None = None
     command: TaskCommand
     status: TaskStatus = TaskStatus.PENDING
-    progress: float = 0.0
-    message_code: str = "queued"
+    progress: OperationProgress = Field(
+        default_factory=lambda: OperationProgress.indeterminate("queued")
+    )
     input_asset_ids: list[str] = Field(default_factory=list)
     artifacts: list[str] = Field(default_factory=list)
     execution_trace: list[TaskExecutionTraceItem] = Field(default_factory=list)
@@ -37,10 +39,3 @@ class Task(DomainModel):
     @property
     def kind(self) -> TaskKind:
         return self.command.task_kind
-
-    @field_validator("progress")
-    @classmethod
-    def bounded_progress(cls, value: float) -> float:
-        if not 0.0 <= value <= 100.0:
-            raise ValueError("Task progress must be between 0 and 100")
-        return value

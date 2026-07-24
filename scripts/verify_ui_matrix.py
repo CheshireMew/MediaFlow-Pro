@@ -13,9 +13,7 @@ LANGUAGES = ("zh_CN", "en", "ja")
 SCALES = ("1", "1.5", "2")
 HOME_SIZES = ((1280, 720), (1600, 980))
 SIZES = ((1280, 720), (1920, 1080), (3840, 2160))
-WORK_MODES = ("media", "transcript", "translate", "highlight", "edit", "audio", "export")
-TASK_FOCUSED_MODES = {"transcript", "translate", "highlight", "audio", "export"}
-TIMELINE_MODES = {"media", "transcript", "highlight", "edit", "audio"}
+WORK_MODES = ("media", "transcript", "highlight", "edit", "audio", "export", "tasks")
 SETTINGS_TABS = ("general", "download", "ai")
 
 
@@ -51,10 +49,20 @@ def probe(root: Path, language: str, scale: str) -> dict:
         quick_window = wrapInstance(getCppPointer(window)[0], QQuickWindow)
         loader = window.findChild(QObject, "pageLoader")
         title_bar = window.findChild(QObject, "appTitleBar")
+        project_name = window.findChild(QObject, "windowProjectName")
         minimize_button = window.findChild(QObject, "minimizeWindowButton")
         maximize_button = window.findChild(QObject, "maximizeWindowButton")
         close_button = window.findChild(QObject, "closeWindowButton")
-        if any(item is None for item in (title_bar, minimize_button, maximize_button, close_button)):
+        if any(
+            item is None
+            for item in (
+                title_bar,
+                project_name,
+                minimize_button,
+                maximize_button,
+                close_button,
+            )
+        ):
             raise RuntimeError("Custom window title bar controls were not created")
 
         workspace_controller.createProject(
@@ -107,30 +115,24 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 QCoreApplication.processEvents()
                 time.sleep(0.02)
             workspace = loader.property("item")
-            inspector = workspace.findChild(QObject, "inspectorContainer")
-            compact_inspector = workspace.findChild(QObject, "compactInspectorDrawer")
-            compact_inspector_button = workspace.findChild(QObject, "compactInspectorButton")
             navigation = workspace.findChild(QObject, "workspaceNavigation")
             tool_panel = workspace.findChild(QObject, "toolPanelContainer")
             timeline = workspace.findChild(QObject, "timelinePanel")
             timeline_toolbar = workspace.findChild(QObject, "timelineToolbarScroll")
-            workflow_mode = workspace.findChild(QObject, "workflowMode")
-            if (
-                compact_inspector is None
-                or compact_inspector_button is None
-                or navigation is None
+            if navigation is None or tool_panel is None or timeline is None:
+                raise RuntimeError("Primary workspace controls were not created")
+            for retired_name in (
+                "inspectorContainer",
+                "compactInspectorDrawer",
+                "compactInspectorButton",
             ):
-                raise RuntimeError("Compact inspector controls were not created")
+                if workspace.findChild(QObject, retired_name) is not None:
+                    raise RuntimeError(f"Retired inspector control still exists: {retired_name}")
             tool_panel_visible = bool(tool_panel.property("visible"))
             timeline_visible = bool(timeline.property("visible"))
-            workflow_mode_visible = bool(workflow_mode.property("visible"))
-            inspector_visible = bool(inspector.property("visible"))
-            compact_inspector_visible = bool(compact_inspector.property("visible"))
-            compact_button_visible = bool(compact_inspector_button.property("visible"))
             if (
                 not tool_panel_visible
                 or not timeline_visible
-                or not workflow_mode_visible
                 or timeline_toolbar is None
             ):
                 raise RuntimeError(f"A primary workspace control is hidden at {width}x{height}")
@@ -147,19 +149,14 @@ def probe(root: Path, language: str, scale: str) -> dict:
                         f"Timeline overflow controls are unreachable at {width}x{height}"
                     )
                 timeline_toolbar.setProperty("contentX", 0)
-            workspace_width = float(workspace.property("width"))
-            expected_inspector = workspace_width >= 1320
-            if inspector_visible != expected_inspector:
-                raise RuntimeError(
-                    "Inspector responsive state is wrong at "
-                    f"{width}x{height} (workspace width {workspace_width})"
-                )
-            if compact_inspector_visible != (not expected_inspector):
-                raise RuntimeError(f"Compact inspector responsive state is wrong at {width}x{height}")
-            if compact_button_visible != (not expected_inspector):
-                raise RuntimeError(f"Compact inspector button state is wrong at {width}x{height}")
-            if float(navigation.property("width")) < 90:
-                raise RuntimeError(f"Workspace navigation is too narrow at {width}x{height}")
+            if abs(float(navigation.property("width")) - float(workspace.property("width"))) > 2:
+                raise RuntimeError(f"Workspace navigation is not full width at {width}x{height}")
+            if (
+                not bool(project_name.property("visible"))
+                or float(project_name.property("width")) < 80
+                or project_name.property("text") != "UI Matrix"
+            ):
+                raise RuntimeError(f"Project name is not visible at {width}x{height}")
             navigation_items = {
                 item.objectName(): item for item in visual_items(navigation)
             }
@@ -167,23 +164,6 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 navigation_item = navigation_items.get(f"navigationItem_{mode}")
                 if navigation_item is None or not navigation_item.isVisible():
                     raise RuntimeError(f"Persistent navigation label is missing for {mode}")
-            compact_inspector_open = False
-            if not expected_inspector:
-                if not QMetaObject.invokeMethod(compact_inspector_button, "click"):
-                    raise RuntimeError("Compact inspector button could not be activated")
-                for _ in range(12):
-                    QCoreApplication.processEvents()
-                    time.sleep(0.02)
-                compact_inspector_open = bool(workspace.property("inspectorDrawerOpen"))
-                drawer_right = float(compact_inspector.property("x")) + float(
-                    compact_inspector.property("width")
-                )
-                if (
-                    not compact_inspector_open
-                    or not bool(compact_inspector.property("enabled"))
-                    or abs(drawer_right - width) > 2
-                ):
-                    raise RuntimeError(f"Compact inspector did not open at {width}x{height}")
             # QQuickWindow.grabWindow() captures the entire scene at device-pixel
             # resolution. QScreen.grabWindow() only returned the top-left physical
             # portion of a high-DPI offscreen window and could hide real clipping.
@@ -196,35 +176,19 @@ def probe(root: Path, language: str, scale: str) -> dict:
                     "size": [width, height],
                     "rendered": [image.width(), image.height()],
                     "device_pixel_ratio": image.devicePixelRatio(),
-                    "inspector_visible": inspector_visible,
-                    "compact_inspector_visible": compact_inspector_visible,
-                    "compact_inspector_open": compact_inspector_open,
                     "screenshot": str(screenshot),
                 }
             )
-            if compact_inspector_open:
-                if not QMetaObject.invokeMethod(compact_inspector_button, "click"):
-                    raise RuntimeError("Compact inspector button could not close the drawer")
-                for _ in range(12):
-                    QCoreApplication.processEvents()
-                    time.sleep(0.02)
-            for mode in TASK_FOCUSED_MODES:
+            base_panel_width = float(tool_panel.property("width"))
+            for mode in WORK_MODES:
                 workspace.setProperty("activeMode", mode)
                 for _ in range(4):
                     QCoreApplication.processEvents()
                     time.sleep(0.01)
-                if float(tool_panel.property("width")) < 540:
-                    raise RuntimeError(
-                        f"Task panel is too narrow in {mode} mode at {width}x{height}"
-                    )
-                if bool(inspector.property("visible")):
-                    raise RuntimeError(
-                        f"Docked inspector consumes task space in {mode} mode at {width}x{height}"
-                    )
-                if bool(timeline.property("visible")) != (mode in TIMELINE_MODES):
-                    raise RuntimeError(
-                        f"Timeline relevance is wrong in {mode} mode at {width}x{height}"
-                    )
+                if abs(float(tool_panel.property("width")) - base_panel_width) > 2:
+                    raise RuntimeError(f"Tool panel geometry changed in {mode} mode")
+                if not bool(timeline.property("visible")):
+                    raise RuntimeError(f"Timeline is hidden in {mode} mode at {width}x{height}")
             workspace.setProperty("activeMode", "media")
             for _ in range(4):
                 QCoreApplication.processEvents()
@@ -232,12 +196,18 @@ def probe(root: Path, language: str, scale: str) -> dict:
         window.setWidth(1920)
         window.setHeight(1080)
         mode_results = []
-        normal_tool_panel_width = 0.0
+        normal_tool_panel_width = float(tool_panel.property("width"))
         for mode in WORK_MODES:
             workspace.setProperty("activeMode", mode)
             for _ in range(6):
                 QCoreApplication.processEvents()
                 time.sleep(0.02)
+            if (
+                not bool(project_name.property("visible"))
+                or float(project_name.property("width")) < 80
+                or project_name.property("text") != "UI Matrix"
+            ):
+                raise RuntimeError(f"Project name is not visible in {mode} mode")
             advanced_open = False
             if mode == "export":
                 advanced_toggle = workspace.findChild(QObject, "exportAdvancedToggle")
@@ -260,31 +230,16 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 raise RuntimeError(f"Unable to render {screenshot}")
             if workspace.property("activeMode") != mode or not tool_panel.property("visible"):
                 raise RuntimeError(f"Workspace mode did not render: {mode}")
-            task_focused = mode in TASK_FOCUSED_MODES
-            expected_timeline = mode in TIMELINE_MODES
-            expected_docked_inspector = not task_focused
-            if bool(timeline.property("visible")) != expected_timeline:
-                raise RuntimeError(f"Timeline relevance is wrong in {mode} mode")
-            if bool(inspector.property("visible")) != expected_docked_inspector:
-                raise RuntimeError(f"Docked inspector relevance is wrong in {mode} mode")
-            if bool(compact_inspector.property("visible")) != task_focused:
-                raise RuntimeError(f"Inspector drawer availability is wrong in {mode} mode")
-            if bool(compact_inspector_button.property("visible")) != task_focused:
-                raise RuntimeError(f"Inspector button availability is wrong in {mode} mode")
+            if not bool(timeline.property("visible")):
+                raise RuntimeError(f"Timeline is hidden in {mode} mode")
             panel_width = float(tool_panel.property("width"))
-            if not task_focused:
-                normal_tool_panel_width = max(normal_tool_panel_width, panel_width)
-            elif panel_width < 540 or panel_width <= normal_tool_panel_width:
-                raise RuntimeError(
-                    f"Task panel did not receive primary space in {mode} mode: {panel_width}"
-                )
+            if abs(panel_width - normal_tool_panel_width) > 2:
+                raise RuntimeError(f"Tool panel geometry changed in {mode} mode")
             mode_results.append(
                 {
                     "mode": mode,
-                    "task_focused": task_focused,
                     "tool_panel_width": panel_width,
                     "timeline_visible": bool(timeline.property("visible")),
-                    "inspector_visible": bool(inspector.property("visible")),
                     "advanced_open": advanced_open,
                     "screenshot": str(screenshot),
                 }

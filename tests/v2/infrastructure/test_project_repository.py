@@ -5,19 +5,32 @@ from pathlib import Path
 import pytest
 
 from mediaflow.application.asset_service import AssetService
-from mediaflow.domain.enums import AssetKind, ColorMode, ExportFormat, SequenceKind, TrackKind
+from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.domain.enums import (
+    AssetKind,
+    ClipMediaKind,
+    ColorMode,
+    ExportFormat,
+    SequenceKind,
+    TaskStatus,
+    TrackKind,
+)
 from mediaflow.domain.exports import ExportPreset
-from mediaflow.domain.project import ProjectProfile, SequenceInOut
+from mediaflow.domain.project import MediaMetadata, ProjectProfile, SequenceInOut
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.task_commands import DownloadMediaCommand, TranscribeSequenceCommand
-from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange
+from mediaflow.domain.task_commands import (
+    DownloadMediaCommand,
+    GenerateWaveformCommand,
+    TranscribeSequenceCommand,
+)
+from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, Track
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.project_schema import PROJECT_SCHEMA_VERSION
 from mediaflow.infrastructure.task_repository import TaskRepository
 
 
-def test_create_project_builds_final_directory_and_default_graph(tmp_path: Path) -> None:
+def test_create_project_starts_with_dynamic_empty_timeline(tmp_path: Path) -> None:
     root = tmp_path / "Demo"
     profile = ProjectProfile(
         width=3840,
@@ -37,11 +50,7 @@ def test_create_project_builds_final_directory_and_default_graph(tmp_path: Path)
         assert sequences[0].kind == SequenceKind.MAIN
         assert sequences[0].profile == profile
         assert sequences[0].profile_confirmed is True
-        assert [track.kind for track in timeline.tracks] == [
-            TrackKind.VIDEO,
-            TrackKind.AUDIO,
-            TrackKind.SUBTITLE,
-        ]
+        assert timeline.tracks == []
         assert [bus.name for bus in buses] == ["主总线", "对白", "音乐", "效果"]
 
     assert (root / "project.mfp").is_file()
@@ -62,6 +71,338 @@ def test_blank_project_profile_stays_provisional_until_media_or_manual_choice(
     with ProjectRepository.open(root) as repository:
         project = repository.get_project()
         assert repository.get_sequence(project.main_sequence_id).profile_confirmed is False
+
+
+def test_version_eighteen_project_gains_compound_clip_storage(tmp_path: Path) -> None:
+    root = tmp_path / "MigratedV18"
+    with ProjectRepository.create(root, "MigratedV18"):
+        pass
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("DROP TABLE compound_clip")
+        connection.execute("UPDATE schema_info SET version=18")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        tables = {
+            row["name"]
+            for row in repository._fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "compound_clip" in tables
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+
+def test_version_twenty_project_gains_canonical_subtitle_word_storage(tmp_path: Path) -> None:
+    root = tmp_path / "MigratedV20"
+    with ProjectRepository.create(root, "MigratedV20"):
+        pass
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("DROP TABLE subtitle_word")
+        connection.execute("UPDATE schema_info SET version=20")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        columns = {
+            row["name"] for row in repository._fetchall("PRAGMA table_info(subtitle_word)")
+        }
+        assert {
+            "id",
+            "segment_id",
+            "position",
+            "start_frame",
+            "end_frame",
+            "text",
+            "confidence",
+            "timing_source",
+            "excluded",
+        } <= columns
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+
+def test_version_twenty_one_project_gains_export_history_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV21"
+    with ProjectRepository.create(root, "MigratedV21"):
+        pass
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("DROP TABLE export_history")
+        connection.execute("DROP TABLE project_version")
+        connection.execute("UPDATE schema_info SET version=21")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        tables = {
+            row["name"]
+            for row in repository._fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert {"export_history", "project_version"} <= tables
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+
+def test_version_twenty_four_tasks_migrate_to_structured_progress(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV24Progress"
+    with ProjectRepository.create(root, "MigratedV24Progress") as repository:
+        project = repository.get_project()
+        sequence_id = project.main_sequence_id
+
+    command_json = json.dumps(
+        GenerateWaveformCommand(asset_id="legacy-asset").model_dump(mode="json"),
+        ensure_ascii=False,
+    )
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("DROP INDEX idx_task_project_time")
+        connection.execute("DROP TABLE task")
+        connection.execute(
+            """CREATE TABLE task (
+                   id TEXT PRIMARY KEY,
+                   project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+                   sequence_id TEXT REFERENCES sequence(id) ON DELETE SET NULL,
+                   command_json TEXT NOT NULL,
+                   status TEXT NOT NULL,
+                   progress REAL NOT NULL,
+                   message_code TEXT NOT NULL,
+                   input_asset_ids_json TEXT NOT NULL,
+                   artifacts_json TEXT NOT NULL,
+                   execution_trace_json TEXT NOT NULL DEFAULT '[]',
+                   error TEXT,
+                   revision INTEGER NOT NULL DEFAULT 0,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+               )"""
+        )
+        connection.executemany(
+            """INSERT INTO task(
+                   id, project_id, sequence_id, command_json, status, progress,
+                   message_code, input_asset_ids_json, artifacts_json,
+                   execution_trace_json, error, revision, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    "legacy-running",
+                    project.id,
+                    sequence_id,
+                    command_json,
+                    TaskStatus.RUNNING.value,
+                    67.0,
+                    "legacy_measuring",
+                    "[]",
+                    "[]",
+                    "[]",
+                    None,
+                    0,
+                    1,
+                    1,
+                ),
+                (
+                    "legacy-completed",
+                    project.id,
+                    sequence_id,
+                    command_json,
+                    TaskStatus.COMPLETED.value,
+                    100.0,
+                    "completed",
+                    "[]",
+                    "[]",
+                    "[]",
+                    None,
+                    0,
+                    2,
+                    2,
+                ),
+            ],
+        )
+        connection.execute("CREATE INDEX idx_task_project_time ON task(project_id, created_at)")
+        connection.execute("UPDATE schema_info SET version=24")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        columns = {
+            row["name"] for row in repository._fetchall("PRAGMA table_info(task)")
+        }
+        tasks = {task.id: task for task in TaskRepository(root).list()}
+
+        assert "progress_json" in columns
+        assert "progress" not in columns
+        assert "message_code" not in columns
+        assert tasks["legacy-running"].progress.mode == "indeterminate"
+        assert tasks["legacy-running"].progress.message_code == "legacy_measuring"
+        assert tasks["legacy-completed"].progress.mode == "determinate"
+        assert tasks["legacy-completed"].progress.completed == 1
+        assert tasks["legacy-completed"].progress.total == 1
+        assert tasks["legacy-completed"].progress.unit == "task"
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+
+def test_version_twenty_five_transcription_tasks_migrate_to_plan_boundary(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV25Transcription"
+    with ProjectRepository.create(root, "MigratedV25Transcription") as repository:
+        project = repository.get_project()
+        sequence_id = project.main_sequence_id
+
+    progress = json.dumps(
+        {
+            "mode": "indeterminate",
+            "message_code": "queued",
+            "completed": None,
+            "total": None,
+            "unit": None,
+        }
+    )
+    with sqlite3.connect(root / "project.mfp") as connection:
+        for task_id, status in (
+            ("historical-transcription", "completed"),
+            ("queued-transcription", "pending"),
+        ):
+            connection.execute(
+                """INSERT INTO task(
+                       id, project_id, sequence_id, command_json, status,
+                       progress_json, input_asset_ids_json, artifacts_json,
+                       execution_trace_json, error, revision, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '[]', NULL, 0, 1, 1)""",
+                (
+                    task_id,
+                    project.id,
+                    sequence_id,
+                    json.dumps(
+                        {
+                            "command_type": "transcribe_sequence",
+                            "sequence_id": sequence_id,
+                        }
+                    ),
+                    status,
+                    progress,
+                ),
+            )
+        connection.execute("UPDATE schema_info SET version=25")
+
+    with ProjectRepository.open(root, writable=True):
+        tasks = {task.id: task for task in TaskRepository(root).list()}
+
+    historical = tasks["historical-transcription"]
+    queued = tasks["queued-transcription"]
+    assert isinstance(historical.command, TranscribeSequenceCommand)
+    assert historical.command.plan.timeline_signature == "legacy"
+    assert historical.command.plan.sources == []
+    assert historical.status == TaskStatus.COMPLETED
+    assert queued.status == TaskStatus.CANCELLED
+    assert queued.error == "旧版转录任务缺少可复现计划，请重新发起转录"
+
+
+def test_named_version_restores_complete_project_and_preserves_version_catalog(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"versioned-source")
+    with ProjectRepository.create(tmp_path / "Versioned", "Versioned") as repository:
+        project = repository.get_project()
+        asset = repository.import_external_asset(source, AssetKind.VIDEO)
+        state = repository.load_timeline(project.main_sequence_id)
+        track = Track(
+            sequence_id=project.main_sequence_id,
+            name="视频 1",
+            kind=TrackKind.VIDEO,
+            position=0,
+        )
+        state.tracks = [track]
+        state.clips = [
+            Clip(
+                track_id=track.id,
+                asset_id=asset.id,
+                timeline_start=0,
+                source_in=0,
+                duration=60,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
+            )
+        ]
+        repository.save_timeline(state)
+        version = repository.create_project_version("客户审阅版")
+        snapshot = repository.project_dir / version.snapshot_path
+        assert snapshot.is_file() and snapshot.stat().st_size > 0
+        assert len(version.sha256) == 64
+
+        changed = repository.load_timeline(project.main_sequence_id)
+        changed.markers = [
+            TimelineMarker(
+                sequence_id=project.main_sequence_id,
+                frame=20,
+                name="After version",
+            )
+        ]
+        changed.clips[0] = changed.clips[0].model_copy(update={"duration": 30})
+        repository.save_timeline(changed)
+        assert repository.load_timeline(project.main_sequence_id).duration_frames == 30
+
+        restored_version = repository.restore_project_version(version.id)
+        restored = repository.load_timeline(project.main_sequence_id)
+        assert restored_version.id == version.id
+        assert restored.duration_frames == 60
+        assert restored.markers == []
+        assert [item.id for item in repository.list_project_versions()] == [version.id]
+        assert snapshot.is_file()
+
+
+def test_version_nineteen_video_audio_is_migrated_to_linked_dynamic_tracks(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV19"
+    source = tmp_path / "linked.mp4"
+    source.write_bytes(b"linked-av")
+    with ProjectRepository.create(root, "MigratedV19") as repository:
+        asset = repository.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=100,
+                        has_video=True,
+                        has_audio=True,
+                    )
+                }
+            )
+        )
+        sequence_id = repository.get_project().main_sequence_id
+        state = repository.load_timeline(sequence_id)
+        video_track = Track(
+            sequence_id=sequence_id,
+            name="视频 1",
+            kind=TrackKind.VIDEO,
+            position=0,
+        )
+        state.tracks = [video_track]
+        state.clips = [
+            Clip(
+                track_id=video_track.id,
+                asset_id=asset.id,
+                timeline_start=0,
+                source_in=0,
+                duration=100,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
+            )
+        ]
+        repository.save_timeline(state)
+
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("UPDATE schema_info SET version=19")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        state = repository.load_timeline(repository.get_project().main_sequence_id)
+        migrated_video = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
+        migrated_audio = next(track for track in state.tracks if track.kind == TrackKind.AUDIO)
+        assert state.clips[0].media_kind == ClipMediaKind.LINKED_AV
+        assert migrated_video.linked_audio_track_id == migrated_audio.id
+        assert [track.position for track in state.tracks] == [0, 1]
 
 
 def test_version_thirteen_project_migration_preserves_existing_profile(
@@ -115,11 +456,11 @@ def test_version_fifteen_project_migrates_transcription_to_sequence_boundary(
     with sqlite3.connect(root / "project.mfp") as connection:
         connection.execute("ALTER TABLE subtitle_document DROP COLUMN sequence_id")
         connection.execute(
-            """INSERT INTO task(
-                id, project_id, sequence_id, command_json, status, progress,
-                message_code, input_asset_ids_json, artifacts_json,
-                execution_trace_json, error, revision, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO task(
+                    id, project_id, sequence_id, command_json, status, progress_json,
+                    input_asset_ids_json, artifacts_json,
+                    execution_trace_json, error, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 project.id,
@@ -131,11 +472,18 @@ def test_version_fifteen_project_migrates_transcription_to_sequence_boundary(
                         "start_frame": 12,
                         "end_frame": 48,
                     }
-                ),
-                "completed",
-                1.0,
-                "completed",
-                "[]",
+                    ),
+                    "completed",
+                    json.dumps(
+                        {
+                            "mode": "determinate",
+                            "message_code": "completed",
+                            "completed": 1,
+                            "total": 1,
+                            "unit": "task",
+                        }
+                    ),
+                    "[]",
                 "[]",
                 "[]",
                 None,
@@ -231,6 +579,74 @@ def test_version_ten_project_gains_recoverable_sequence_archiving(tmp_path: Path
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
 
 
+def test_version_twenty_three_project_gains_primary_dialogue_and_source_transcript_cache(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV23"
+    subtitle_path = tmp_path / "legacy-transcript.srt"
+    subtitle_path.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nLegacy transcript\n",
+        encoding="utf-8",
+    )
+    with ProjectRepository.create(root, "MigratedV23") as repository:
+        project = repository.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        audio_track = editor.add_track(TrackKind.AUDIO)
+        subtitle_asset = repository.import_external_asset(
+            subtitle_path,
+            AssetKind.SUBTITLE,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=subtitle_asset.id,
+            sequence_id=project.main_sequence_id,
+            language="en",
+            purpose="sequence_transcript",
+        )
+        repository.create_subtitle_document(
+            document,
+            [
+                SubtitleSegment(
+                    document_id=document.id,
+                    start_frame=0,
+                    end_frame=30,
+                    text="Legacy transcript",
+                )
+            ],
+        )
+
+    with sqlite3.connect(root / "project.mfp") as connection:
+        connection.execute("DROP INDEX idx_track_primary_dialogue")
+        connection.execute("DROP TABLE asset_transcript")
+        connection.execute("ALTER TABLE track DROP COLUMN primary_dialogue")
+        connection.execute("ALTER TABLE subtitle_document DROP COLUMN purpose")
+        connection.execute("UPDATE schema_info SET version=23")
+
+    with ProjectRepository.open(root, writable=True) as repository:
+        migrated_track = next(
+            track
+            for track in repository.load_timeline(
+                repository.get_project().main_sequence_id
+            ).tracks
+            if track.id == audio_track.id
+        )
+        migrated_document = repository.get_subtitle_document(document.id)
+        tables = {
+            row["name"]
+            for row in repository._fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+
+        assert migrated_track.primary_dialogue is True
+        assert migrated_document.purpose == "sequence_transcript"
+        assert "asset_transcript" in tables
+        assert (
+            repository._fetchone("SELECT version FROM schema_info")["version"]
+            == PROJECT_SCHEMA_VERSION
+        )
+
+
 def test_version_one_project_is_migrated_to_persisted_workflows(tmp_path: Path) -> None:
     root = tmp_path / "Migrated"
     with ProjectRepository.create(root, "Migrated"):
@@ -311,14 +727,26 @@ def test_version_six_project_recovers_subtitle_media_relationship_and_clip_follo
         subtitle = repository.import_external_asset(subtitle_path, AssetKind.SUBTITLE)
         project = repository.get_project()
         state = repository.load_timeline(project.main_sequence_id)
-        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
-        subtitle_track = next(track for track in state.tracks if track.kind == TrackKind.SUBTITLE)
+        video_track = Track(
+            sequence_id=project.main_sequence_id,
+            name="视频 1",
+            kind=TrackKind.VIDEO,
+            position=0,
+        )
+        subtitle_track = Track(
+            sequence_id=project.main_sequence_id,
+            name="字幕 1",
+            kind=TrackKind.SUBTITLE,
+            position=1,
+        )
+        state.tracks = [video_track, subtitle_track]
         clip = Clip(
             track_id=video_track.id,
             asset_id=video.id,
             timeline_start=0,
             source_in=0,
             duration=90,
+            media_kind=ClipMediaKind.VIDEO_ONLY,
         )
         state.clips.append(clip)
         repository.save_timeline(state)
@@ -488,7 +916,13 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
         asset = repository.import_external_asset(source, AssetKind.VIDEO)
         sequence_id = repository.get_project().main_sequence_id
         state = repository.load_timeline(sequence_id)
-        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = Track(
+            sequence_id=sequence_id,
+            name="视频 1",
+            kind=TrackKind.VIDEO,
+            position=0,
+        )
+        state.tracks = [video_track]
         state.clips.append(
             Clip(
                 track_id=video_track.id,
@@ -496,6 +930,7 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
                 timeline_start=0,
                 source_in=0,
                 duration=100,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
             )
         )
         repository.save_timeline(state)
@@ -563,7 +998,13 @@ def test_timeline_round_trip_persists_actual_asset_reference(tmp_path: Path) -> 
         asset = repository.import_external_asset(source, AssetKind.VIDEO)
         project = repository.get_project()
         state = repository.load_timeline(project.main_sequence_id)
-        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = Track(
+            sequence_id=project.main_sequence_id,
+            name="视频 1",
+            kind=TrackKind.VIDEO,
+            position=0,
+        )
+        state.tracks = [video_track]
         state.clips.append(
             Clip(
                 track_id=video_track.id,
@@ -571,6 +1012,7 @@ def test_timeline_round_trip_persists_actual_asset_reference(tmp_path: Path) -> 
                 timeline_start=0,
                 source_in=0,
                 duration=120,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
             )
         )
         repository.save_timeline(state)

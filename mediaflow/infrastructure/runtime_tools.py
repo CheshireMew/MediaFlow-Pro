@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -12,13 +13,14 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import AsrSettings
 
 from .asr_engine import FasterWhisperCliEngine
 from .runtime_paths import RuntimePaths
-from .subprocess_runner import run_cancellable
+from .subprocess_runner import run_cancellable, run_cancellable_streaming
 
-ToolProgress = Callable[[float, str], None]
+ToolProgress = Callable[[OperationProgress], None]
 
 FASTER_WHISPER_CLI_VERSION = "r245.4"
 FASTER_WHISPER_CLI_ARCHIVE = "Faster-Whisper-XXL_r245.4_windows.7z"
@@ -156,7 +158,7 @@ class RuntimeToolService:
         check_cancelled: Callable[[], None] | None = None,
     ) -> dict:
         if progress:
-            progress(2, "ytdlp_update_checking")
+            progress(OperationProgress.indeterminate("ytdlp_update_checking"))
         with urlopen(
             Request(self.ytdlp_metadata_url, headers={"User-Agent": "MediaFlow Pro setup"}),
             timeout=60,
@@ -181,12 +183,10 @@ class RuntimeToolService:
             wheel_path,
             int(wheel.get("size") or 0),
             progress=progress,
-            progress_start=5,
-            progress_end=75,
             check_cancelled=check_cancelled,
         )
         if progress:
-            progress(80, "ytdlp_update_installing")
+            progress(OperationProgress.indeterminate("ytdlp_update_installing"))
         target = self.paths.runtime_dir / "tools" / "python" / f"yt-dlp-{version}"
         target.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(wheel_path) as archive:
@@ -197,8 +197,6 @@ class RuntimeToolService:
                     archive.extract(member, target)
         pointer = self.paths.runtime_dir / "tools" / "yt-dlp-active.json"
         self._write_json(pointer, {"version": version, "path": str(target.resolve())})
-        if progress:
-            progress(100, "ytdlp_update_completed")
         return {"version": version, "path": str(target.resolve())}
 
     def install_faster_whisper_cli(
@@ -209,8 +207,6 @@ class RuntimeToolService:
     ) -> Path:
         existing = self.resolve_cli_path()
         if existing:
-            if progress:
-                progress(100, "asr_cli_installed")
             return existing
         tools_root = self.paths.runtime_dir / "tools"
         downloads = self.paths.runtime_dir / "downloads"
@@ -224,12 +220,10 @@ class RuntimeToolService:
             archive_path,
             self.cli_size,
             progress=progress,
-            progress_start=2,
-            progress_end=86,
             check_cancelled=check_cancelled,
         )
         if progress:
-            progress(90, "asr_cli_extracting")
+            progress(OperationProgress.indeterminate("asr_cli_extracting"))
         tools_root.mkdir(parents=True, exist_ok=True)
         if zipfile.is_zipfile(archive_path):
             with zipfile.ZipFile(archive_path) as archive:
@@ -248,8 +242,6 @@ class RuntimeToolService:
         cli_path = tools_root / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe"
         if not cli_path.is_file():
             raise RuntimeError(f"解压后没有找到 Faster-Whisper CLI：{cli_path}")
-        if progress:
-            progress(100, "asr_cli_installed")
         return cli_path.resolve()
 
     def prewarm_cli(
@@ -280,19 +272,31 @@ class RuntimeToolService:
         settings = self.settings.model_copy(update={"cli_path": str(cli_path)})
         command = FasterWhisperCliEngine(settings, self.paths).build_command(audio, output_dir)
         if progress:
-            progress(5, "asr_cli_prewarming")
-        result = run_cancellable(
+            progress(OperationProgress.indeterminate("asr_cli_prewarming"))
+
+        def observe(line: str) -> None:
+            match = re.search(r"(?<![\d.])(\d{1,3})%", line)
+            if match and progress:
+                progress(
+                    OperationProgress.determinate(
+                        "asr_cli_prewarming",
+                        completed=min(100, int(match.group(1))),
+                        total=100,
+                        unit="percent",
+                    )
+                )
+
+        result = run_cancellable_streaming(
             command,
+            on_stdout_line=observe,
+            on_stderr_line=observe,
             check_cancelled=check_cancelled,
-            text=True,
             encoding="utf-8",
             errors="replace",
             timeout=600,
         )
         if result.returncode != 0:
             raise RuntimeError((result.stdout or result.stderr or "CLI 预热失败").strip())
-        if progress:
-            progress(100, "asr_cli_prewarmed")
         return cli_path
 
     @staticmethod
@@ -309,8 +313,6 @@ class RuntimeToolService:
         expected_size: int,
         *,
         progress: ToolProgress | None,
-        progress_start: float,
-        progress_end: float,
         check_cancelled: Callable[[], None] | None,
     ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -338,12 +340,12 @@ class RuntimeToolService:
                             current_size += len(chunk)
                             if progress and total:
                                 progress(
-                                    min(
-                                        progress_end,
-                                        progress_start
-                                        + (progress_end - progress_start) * current_size / total,
-                                    ),
-                                    "runtime_tool_downloading",
+                                    OperationProgress.determinate(
+                                        "runtime_tool_downloading",
+                                        completed=min(current_size, total),
+                                        total=total,
+                                        unit="bytes",
+                                    )
                                 )
                 break
             except (TimeoutError, URLError, OSError) as error:

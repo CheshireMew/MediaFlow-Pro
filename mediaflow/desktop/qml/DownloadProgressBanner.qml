@@ -39,6 +39,7 @@ Rectangle {
                     elide: Text.ElideRight
                 }
                 Text {
+                    visible: taskController.downloadProgressDeterminate
                     text: Math.round(taskController.downloadProgress) + "%"
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
@@ -50,6 +51,7 @@ Rectangle {
                 Layout.fillWidth: true
                 from: 0
                 to: 100
+                indeterminate: !taskController.downloadProgressDeterminate
                 value: taskController.downloadProgress
             }
         }

@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QUrl
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtQuick import QQuickItem
 from PySide6.QtTest import QTest
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
 
@@ -17,6 +19,83 @@ from mediaflow.domain.enums import TrackKind
 STARTER = Path(
     "E:/Work/BaiduSyncdisk/Code/Cheshire-skill/visual-multimedia/assets/web-media-starter"
 )
+
+
+def _process_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_unified_import_adds_validated_web_media_and_opens_visible_editor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    if QGuiApplication.instance() is None:
+        QtWebEngineQuick.initialize()
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Unified Web Import",
+        )
+        window = engine.rootObjects()[0]
+        loader = window.findChild(QObject, "pageLoader")
+        assert loader is not None
+        assert _process_until(lambda: loader.property("item") is not None)
+        workspace = loader.property("item")
+        assert workspace.findChild(QQuickItem, "openWebTemplateCenterButton") is None
+        controllers.media.importFiles(
+            [QUrl.fromLocalFile(str(STARTER / "editable-media.json"))]
+        )
+        assert _process_until(lambda: controllers.media.assetsModel.rowCount() == 1)
+        manifest_import_id = controllers.media.selectedAssetId
+        controllers.media.importFiles([QUrl.fromLocalFile(str(STARTER))])
+        assert _process_until(lambda: controllers.media.assetsModel.rowCount() == 2)
+        imported = next(
+            controllers.media.assetsModel.get(index)
+            for index in range(controllers.media.assetsModel.rowCount())
+            if controllers.media.assetsModel.get(index)["assetId"]
+            == controllers.media.selectedAssetId
+        )
+        assert imported["kind"] == "web"
+        assert imported["assetId"] != manifest_import_id
+        controllers.timeline.dropAssets(
+            [imported["assetId"]], "", -1, 0, 3.0, 0, True, False
+        )
+        assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 1)
+        state = controllers.session._documents.load_timeline(
+            controllers.workspace.activeSequenceId
+        )
+        assert len(state.clips) == 1
+        clip = state.clips[0]
+        asset = controllers.session._documents.get_asset(clip.asset_id)
+        assert asset.kind.value == "web"
+        assert clip.id in state.web_states
+        assert controllers.web.isWebClip is True
+        workspace.setProperty("activeMode", "edit")
+        controllers.web.setEditMode(True)
+        web_canvas = workspace.findChild(QQuickItem, "webEditorCanvas")
+        assert _process_until(
+            lambda: web_canvas is not None
+            and web_canvas.isVisible()
+            and controllers.web.entryUrl.startswith("file:")
+        )
+        rendered = window.grabWindow()
+        screenshot = tmp_path / "unified-web-import-visible-editor.png"
+        assert not rendered.isNull() and rendered.save(str(screenshot))
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
 
 
 def test_desktop_web_layer_edit_and_browser_commit_share_project_history(
@@ -30,7 +109,7 @@ def test_desktop_web_layer_edit_and_browser_commit_share_project_history(
         asset = project.web.import_package(STARTER)
         sequence_id = project.documents.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
-        track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+        track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
             track_id=track.id,
             asset_id=asset.id,

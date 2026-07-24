@@ -31,15 +31,7 @@ Rectangle {
                 },
                 {
                     key: "transcript",
-                    label: qsTr("自动字幕")
-                },
-                {
-                    key: "subtitle",
-                    label: qsTr("字幕编辑")
-                },
-                {
-                    key: "translate",
-                    label: qsTr("字幕翻译")
+                    label: qsTr("文本与字幕")
                 },
                 {
                     key: "highlight",
@@ -69,13 +61,15 @@ Rectangle {
                 function click() {
                     root.modeRequested(modelData.key);
                 }
-                Layout.preferredWidth: 84
+                Layout.minimumWidth: 84
+                Layout.preferredWidth: Math.max(84, navigationContent.implicitWidth + 24)
                 Layout.fillHeight: true
                 radius: Theme.radiusSmall
                 color: root.activeMode === modelData.key ? Theme.accentSoft : navMouse.containsMouse ? Theme.surfaceHover : "transparent"
                 border.color: activeFocus ? Theme.accentHover : root.activeMode === modelData.key ? Theme.accent : "transparent"
                 border.width: activeFocus ? 2 : 1
                 RowLayout {
+                    id: navigationContent
                     anchors.centerIn: parent
                     spacing: 6
                     NavIcon {
@@ -120,13 +114,15 @@ Rectangle {
         Rectangle {
             id: settingsItem
             objectName: "navigationItem_settings"
-            Layout.preferredWidth: 84
+            Layout.minimumWidth: 84
+            Layout.preferredWidth: Math.max(84, settingsContent.implicitWidth + 24)
             Layout.fillHeight: true
             radius: Theme.radiusSmall
             color: settingsMouse.containsMouse ? Theme.surfaceHover : "transparent"
             border.color: activeFocus ? Theme.accentHover : "transparent"
             border.width: activeFocus ? 2 : 1
             RowLayout {
+                id: settingsContent
                 anchors.centerIn: parent
                 spacing: 6
                 NavIcon {

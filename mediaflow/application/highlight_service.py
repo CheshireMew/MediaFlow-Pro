@@ -4,13 +4,14 @@ from collections.abc import Callable
 
 from mediaflow.application.ports import HighlightServiceDocuments, JsonClientFactory
 from mediaflow.application.sequence_service import SequenceService
+from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.highlights import HighlightCandidate
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.timebase import reframe_frames
-from mediaflow.domain.timeline import Clip
 
-HighlightProgress = Callable[[float, str], None]
+HighlightProgress = Callable[[OperationProgress], None]
 
 
 class HighlightService:
@@ -61,7 +62,7 @@ class HighlightService:
         if not segments:
             raise ValueError("Subtitle document is empty")
         if progress:
-            progress(5.0, "highlight_analyzing")
+            progress(OperationProgress.indeterminate("highlight_analyzing"))
         if self.client_factory is None:
             raise RuntimeError("Highlight analysis requires a JSON client factory")
         response = self.client_factory(provider).complete_json(
@@ -119,9 +120,9 @@ class HighlightService:
             )
         ]
         if additions:
+            if progress:
+                progress(OperationProgress.indeterminate("highlight_saving"))
             self.repository.save_highlights(additions)
-        if progress:
-            progress(100.0, "highlight_completed")
         return [*existing, *additions]
 
     def add_manual_candidate(
@@ -213,25 +214,22 @@ class HighlightService:
         if self.repository.get_asset(candidate.asset_id).kind != AssetKind.VIDEO:
             raise ValueError("只有关联视频的高光候选可以创建短视频")
         sequence = self.repository.create_short_sequence(name or candidate.title)
-        state = self.repository.load_timeline(sequence.id)
-        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
+        editor = TimelineEditor(self.repository, sequence.id)
+        video_track = editor.add_track(TrackKind.VIDEO)
         project = self.repository.get_project()
         main_profile = self.repository.get_sequence(project.main_sequence_id).profile
         short_profile = sequence.profile
         source_in = reframe_frames(candidate.start_frame, main_profile, short_profile)
         source_end = reframe_frames(candidate.end_frame, main_profile, short_profile)
-        state.clips.append(
-            Clip(
-                track_id=video_track.id,
-                asset_id=candidate.asset_id,
-                timeline_start=0,
-                source_in=source_in,
-                duration=max(1, source_end - source_in),
-            )
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=candidate.asset_id,
+            timeline_start=0,
+            source_in=source_in,
+            duration=max(1, source_end - source_in),
         )
-        self.repository.save_timeline(state)
         if candidate.document_id:
-            subtitle_track = next(track for track in state.tracks if track.kind == TrackKind.SUBTITLE)
+            subtitle_track = editor.add_track(TrackKind.SUBTITLE)
             self.repository.place_subtitle_document(
                 candidate.document_id,
                 subtitle_track.id,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from mediaflow.domain.enums import AssetKind
+import json
+
+from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind
 from mediaflow.domain.project import (
     Asset,
     MediaMetadata,
@@ -8,6 +10,7 @@ from mediaflow.domain.project import (
 )
 from mediaflow.domain.timebase import reframe_frames
 from mediaflow.domain.timeline import (
+    CompoundClip,
     TimelineMarker,
     TimelineRange,
     TimelineState,
@@ -46,6 +49,18 @@ class TimelineRepository:
             sequence=sequence,
             tracks=tracks,
             clips=[self._clip_from_row(row) for row in clip_rows],
+            compounds=[
+                CompoundClip(
+                    id=row["id"],
+                    sequence_id=row["sequence_id"],
+                    name=row["name"],
+                    clip_ids=list(json.loads(row["clip_ids_json"])),
+                )
+                for row in self._fetchall(
+                    "SELECT * FROM compound_clip WHERE sequence_id=? ORDER BY id",
+                    (sequence_id,),
+                )
+            ],
             transitions=[self._transition_from_row(row) for row in transition_rows],
             markers=self.list_timeline_markers(sequence_id),
             ranges=self.list_timeline_ranges(sequence_id),
@@ -92,9 +107,59 @@ class TimelineRepository:
         track_ids = {track.id for track in state.tracks}
         if any(track.sequence_id != state.sequence.id for track in state.tracks):
             raise ValueError("Timeline contains a track from another sequence")
+        if [track.position for track in state.tracks] != list(range(len(state.tracks))):
+            raise ValueError("Timeline track positions must match their stored order")
+        tracks_by_id = {track.id: track for track in state.tracks}
+        linked_audio_ids = [
+            track.linked_audio_track_id
+            for track in state.tracks
+            if track.linked_audio_track_id is not None
+        ]
+        if len(set(linked_audio_ids)) != len(linked_audio_ids):
+            raise ValueError("An audio track can only be paired with one video track")
+        primary_dialogue_tracks = [
+            track for track in state.tracks if track.primary_dialogue
+        ]
+        if len(primary_dialogue_tracks) > 1:
+            raise ValueError("A sequence can only have one primary dialogue track")
+        if any(
+            track.kind != TrackKind.AUDIO for track in primary_dialogue_tracks
+        ):
+            raise ValueError("The primary dialogue track must be an audio track")
+        if any(
+            track.kind != TrackKind.VIDEO
+            or track.linked_audio_track_id not in tracks_by_id
+            or tracks_by_id[track.linked_audio_track_id].kind != TrackKind.AUDIO
+            for track in state.tracks
+            if track.linked_audio_track_id is not None
+        ):
+            raise ValueError("Timeline contains an invalid linked audio track")
         if any(clip.track_id not in track_ids for clip in state.clips):
             raise ValueError("Timeline clip references an unknown track")
         clip_ids = {clip.id for clip in state.clips}
+        compound_ids = {compound.id for compound in state.compounds}
+        if any(compound.sequence_id != state.sequence.id for compound in state.compounds):
+            raise ValueError("Compound clip belongs to another sequence")
+        compound_members = [
+            clip_id for compound in state.compounds for clip_id in compound.clip_ids
+        ]
+        if any(clip_id not in clip_ids for clip_id in compound_members):
+            raise ValueError("Compound clip references an unknown clip")
+        if len(set(compound_members)) != len(compound_members):
+            raise ValueError("A clip cannot belong to more than one compound clip")
+        clips_by_id = {clip.id: clip for clip in state.clips}
+        for compound in state.compounds:
+            members = [clips_by_id[clip_id] for clip_id in compound.clip_ids]
+            if len({clip.track_id for clip in members}) != 1:
+                raise ValueError("Compound clip members must be on one track")
+            ordered = sorted(members, key=lambda clip: (clip.timeline_start, clip.id))
+            if [clip.id for clip in ordered] != compound.clip_ids:
+                raise ValueError("Compound clip members must be stored in timeline order")
+            if any(
+                left.timeline_end != right.timeline_start
+                for left, right in zip(ordered, ordered[1:], strict=False)
+            ):
+                raise ValueError("Compound clip members must remain adjacent")
         if any(
             transition.track_id not in track_ids
             or transition.left_clip_id not in clip_ids
@@ -107,6 +172,34 @@ class TimelineRepository:
         if any(item.sequence_id != state.sequence.id for item in state.ranges):
             raise ValueError("Timeline range belongs to another sequence")
         assets = {asset.id: asset for asset in self.list_assets()}
+        for clip in state.clips:
+            asset = assets.get(clip.asset_id)
+            if asset is None:
+                raise ValueError("Timeline clip references an unknown asset")
+            track = tracks_by_id[clip.track_id]
+            if clip.media_kind == ClipMediaKind.AUDIO_ONLY:
+                if (
+                    track.kind != TrackKind.AUDIO
+                    or asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}
+                    or not asset.metadata.has_audio
+                ):
+                    raise ValueError("Audio-only clips require an audio track and audio source")
+            elif clip.media_kind == ClipMediaKind.VIDEO_ONLY:
+                if track.kind != TrackKind.VIDEO or asset.kind not in {
+                    AssetKind.VIDEO,
+                    AssetKind.IMAGE,
+                    AssetKind.WEB,
+                }:
+                    raise ValueError("Video-only clips require a video track and video source")
+            elif (
+                track.kind != TrackKind.VIDEO
+                or (
+                    asset.kind != AssetKind.VIDEO
+                    or not asset.metadata.has_audio
+                    or track.linked_audio_track_id is None
+                )
+            ):
+                raise ValueError("Linked clips require paired video and audio tracks")
         web_clip_ids = {
             clip.id
             for clip in state.clips
@@ -154,13 +247,51 @@ class TimelineRepository:
                 self._ids_for_sequence_transitions(state.sequence.id),
                 {item.id for item in state.transitions},
             )
+            self._delete_missing(
+                connection,
+                "compound_clip",
+                "id",
+                {
+                    row["id"]
+                    for row in connection.execute(
+                        "SELECT id FROM compound_clip WHERE sequence_id=?",
+                        (state.sequence.id,),
+                    ).fetchall()
+                },
+                compound_ids,
+            )
             self._delete_missing(connection, "clip", "id", existing_clip_ids, clip_ids)
             self._delete_missing(connection, "track", "id", existing_track_ids, track_ids)
 
+            connection.execute(
+                "UPDATE track SET primary_dialogue=0 WHERE sequence_id=?",
+                (state.sequence.id,),
+            )
             for track in state.tracks:
-                self._upsert_track(connection, track)
+                self._upsert_track(
+                    connection,
+                    track.model_copy(update={"linked_audio_track_id": None}),
+                )
+            for track in state.tracks:
+                if track.linked_audio_track_id is not None:
+                    self._upsert_track(connection, track)
             for clip in state.clips:
                 self._upsert_clip(connection, clip)
+            for compound in state.compounds:
+                connection.execute(
+                    """INSERT INTO compound_clip(id, sequence_id, name, clip_ids_json)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           sequence_id=excluded.sequence_id,
+                           name=excluded.name,
+                           clip_ids_json=excluded.clip_ids_json""",
+                    (
+                        compound.id,
+                        compound.sequence_id,
+                        compound.name,
+                        _json(compound.clip_ids),
+                    ),
+                )
             for web_state in state.web_states.values():
                 self._upsert_web_clip_state(connection, web_state)
             for transition in state.transitions:
@@ -209,7 +340,11 @@ class TimelineRepository:
                                metadata_json=? WHERE id=?""",
                             (_model_json(metadata), row["id"]),
                         )
-                    for table in ("subtitle_segment", "highlight_candidate"):
+                    for table in (
+                        "subtitle_segment",
+                        "subtitle_word",
+                        "highlight_candidate",
+                    ):
                         rows = connection.execute(
                             f"SELECT id, start_frame, end_frame FROM {table}"
                         ).fetchall()
@@ -279,7 +414,7 @@ class TimelineRepository:
                 connection.execute(
                     """UPDATE clip SET timeline_start=?, source_in=?, duration=?,
                        speed_numerator=?, speed_denominator=?, pitch_compensation=?,
-                       transform_json=?, audio_json=? WHERE id=?""",
+                       transform_json=?, transform_keyframes_json=?, audio_json=? WHERE id=?""",
                     (
                         clip.timeline_start,
                         clip.source_in,
@@ -288,6 +423,10 @@ class TimelineRepository:
                         clip.speed_denominator,
                         int(clip.pitch_compensation),
                         _model_json(clip.transform),
+                        _json([
+                            item.model_dump(mode="json")
+                            for item in clip.transform_keyframes
+                        ]),
                         _model_json(clip.audio),
                         clip.id,
                     ),
@@ -326,6 +465,18 @@ class TimelineRepository:
                 start_frame = reframe(row["start_frame"])
                 connection.execute(
                     "UPDATE subtitle_segment SET start_frame=?, end_frame=? WHERE id=?",
+                    (
+                        start_frame,
+                        max(start_frame + 1, reframe(row["end_frame"])),
+                        row["id"],
+                    ),
+                )
+            for row in connection.execute(
+                "SELECT id, start_frame, end_frame FROM subtitle_word"
+            ).fetchall():
+                start_frame = reframe(row["start_frame"])
+                connection.execute(
+                    "UPDATE subtitle_word SET start_frame=?, end_frame=? WHERE id=?",
                     (
                         start_frame,
                         max(start_frame + 1, reframe(row["end_frame"])),

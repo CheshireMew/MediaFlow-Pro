@@ -10,9 +10,15 @@ from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionServic
 from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.domain.enums import AssetKind, TrackKind
+from mediaflow.application.transcript_editing import TranscriptEditingService
+from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind
 from mediaflow.domain.subtitle_file import SubtitleFile
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timeline import Clip
+from mediaflow.domain.transcript_edits import (
+    TranscriptEditRequest,
+    TranscriptEditSelection,
+)
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt.compiler import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -68,10 +74,8 @@ def test_srt_import_edit_place_compile_and_export_use_one_document_boundary(tmp_
         assert editing.replace_all(document.id, "MediaFlow", "MediaFlow Pro") == 1
 
         project = repository.get_project()
-        subtitle_track = next(
-            track
-            for track in repository.load_timeline(project.main_sequence_id).tracks
-            if track.kind == TrackKind.SUBTITLE
+        subtitle_track = TimelineEditor(repository, project.main_sequence_id).add_track(
+            TrackKind.SUBTITLE
         )
         placements = repository.place_subtitle_document(
             document.id,
@@ -133,6 +137,195 @@ def test_timeline_and_subtitle_edits_share_one_chronological_undo_history(tmp_pa
         assert repository.list_subtitle_segments(document.id)[0].text == "After"
 
 
+def test_word_delete_updates_timeline_transcript_srt_and_shared_undo(tmp_path: Path) -> None:
+    source = tmp_path / "interview.mp4"
+    source.write_bytes(b"timeline-source")
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        history = ProjectEditHistory()
+        project = repository.get_project()
+        asset = repository.import_external_asset(source, AssetKind.VIDEO)
+        editor = TimelineEditor(repository, project.main_sequence_id, history)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=90,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            sequence_id=project.main_sequence_id,
+            language="en",
+            purpose="sequence_transcript",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=0,
+            end_frame=90,
+            text="one two three",
+        )
+        words = [
+            SubtitleWord(
+                segment_id=segment.id,
+                position=position,
+                start_frame=position * 30,
+                end_frame=(position + 1) * 30,
+                text=text,
+                timing_source="estimated" if position == 0 else "recognized",
+            )
+            for position, text in enumerate(("one", "two", "three"))
+        ]
+        repository.create_subtitle_document(document, [segment], words)
+        publication = SubtitlePublicationService(repository)
+        service = TranscriptEditingService(repository, publication, history)
+
+        with pytest.raises(ValueError, match="估算词时间不能用于词级剪辑"):
+            service.preview_plan(
+                TranscriptEditRequest(
+                    sequence_id=project.main_sequence_id,
+                    document_id=document.id,
+                    expected_content_revision=repository.content_revision(),
+                    selections=[
+                        TranscriptEditSelection(
+                            kind="words",
+                            ids=[words[0].id],
+                            reason="Unsafe estimated boundary",
+                        )
+                    ],
+                ),
+                editor,
+            )
+        plan = service.preview_plan(
+            TranscriptEditRequest(
+                sequence_id=project.main_sequence_id,
+                document_id=document.id,
+                expected_content_revision=repository.content_revision(),
+                selections=[
+                    TranscriptEditSelection(
+                        kind="words",
+                        ids=[words[1].id],
+                        reason="Remove repeated filler",
+                    )
+                ],
+            ),
+            editor,
+        )
+        assert plan.impact.removed_duration_frames == 30
+        assert plan.impact.after_duration_frames == 60
+        result = service.apply_plan(plan, editor)
+        assert result.removed_word_count == 1
+        assert result.removed_segment_count == 0
+        recovery = repository.project_dir / result.recovery_version.snapshot_path
+        assert recovery.is_file()
+        persisted = repository.load_timeline(project.main_sequence_id)
+        assert [
+            (clip.timeline_start, clip.source_in, clip.duration)
+            for clip in persisted.clips
+        ] == [(0, 0, 30), (30, 60, 30)]
+        edited_segment = repository.list_subtitle_segments(document.id)[0]
+        assert (edited_segment.start_frame, edited_segment.end_frame, edited_segment.text) == (
+            0,
+            60,
+            "one three",
+        )
+        edited_words = repository.list_subtitle_words(document.id)
+        assert [(word.text, word.start_frame, word.excluded) for word in edited_words] == [
+            ("one", 0, False),
+            ("two", 30, True),
+            ("three", 30, False),
+        ]
+        generated = list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
+        assert generated and "one three" in generated[0].read_text(encoding="utf-8-sig")
+
+        editor.undo()
+        restored = repository.load_timeline(project.main_sequence_id)
+        assert [(clip.timeline_start, clip.source_in, clip.duration) for clip in restored.clips] == [
+            (0, 0, 90)
+        ]
+        assert repository.list_subtitle_segments(document.id)[0].text == "one two three"
+        assert not any(word.excluded for word in repository.list_subtitle_words(document.id))
+
+        editor.redo()
+        assert repository.list_subtitle_segments(document.id)[0].text == "one three"
+        assert repository.list_subtitle_words(document.id)[1].excluded is True
+
+
+def test_estimated_words_can_only_be_removed_as_a_complete_segment(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "estimated.mp4"
+    source.write_bytes(b"timeline-source")
+    with ProjectRepository.create(tmp_path / "Estimated Project", "Estimated") as repository:
+        history = ProjectEditHistory()
+        project = repository.get_project()
+        asset = repository.import_external_asset(source, AssetKind.VIDEO)
+        editor = TimelineEditor(repository, project.main_sequence_id, history)
+        track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=60,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            sequence_id=project.main_sequence_id,
+            language="en",
+            purpose="sequence_transcript",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=0,
+            end_frame=60,
+            text="hello world",
+        )
+        words = [
+            SubtitleWord(
+                segment_id=segment.id,
+                position=position,
+                start_frame=position * 30,
+                end_frame=(position + 1) * 30,
+                text=text,
+                timing_source="estimated",
+            )
+            for position, text in enumerate(("hello", "world"))
+        ]
+        repository.create_subtitle_document(document, [segment], words)
+        service = TranscriptEditingService(
+            repository,
+            SubtitlePublicationService(repository),
+            history,
+        )
+
+        plan = service.preview_plan(
+            TranscriptEditRequest(
+                sequence_id=project.main_sequence_id,
+                document_id=document.id,
+                expected_content_revision=repository.content_revision(),
+                selections=[
+                    TranscriptEditSelection(
+                        kind="segments",
+                        ids=[segment.id],
+                        reason="Remove unusable sentence",
+                    )
+                ],
+            ),
+            editor,
+        )
+        assert plan.resolved_selections[0].timing == "subtitle_segments"
+        assert plan.impact.after_duration_frames == 0
+        result = service.apply_plan(plan, editor)
+        assert result.removed_word_count == 2
+        assert result.removed_segment_count == 1
+        assert repository.load_timeline(project.main_sequence_id).clips == []
+        assert repository.list_subtitle_segments(document.id) == []
+        assert repository.list_subtitle_words(document.id) == []
+
+
 def test_sequence_subtitle_timing_edit_persists_through_document_sync_and_undo(
     tmp_path: Path,
 ) -> None:
@@ -146,10 +339,8 @@ def test_sequence_subtitle_timing_edit_persists_through_document_sync_and_undo(
         acquisition, editing, _publication = _build_subtitle_components(repository, history)
         document = acquisition.import_subtitle_file(source, AssetService(repository, MediaProbe()))
         project = repository.get_project()
-        subtitle_track = next(
-            item
-            for item in repository.load_timeline(project.main_sequence_id).tracks
-            if item.kind == TrackKind.SUBTITLE
+        subtitle_track = TimelineEditor(repository, project.main_sequence_id).add_track(
+            TrackKind.SUBTITLE
         )
         placement = repository.place_subtitle_document(
             document.id,
@@ -235,15 +426,17 @@ def test_imported_subtitle_auto_imports_adjacent_media_and_follows_its_clip(
         assert repository.resolve_asset_path(media) == video_path.resolve()
 
         project = repository.get_project()
-        state = repository.load_timeline(project.main_sequence_id)
-        video_track = next(item for item in state.tracks if item.kind == TrackKind.VIDEO)
-        subtitle_track = next(item for item in state.tracks if item.kind == TrackKind.SUBTITLE)
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        subtitle_track = editor.add_track(TrackKind.SUBTITLE)
+        state = editor.state
         clip = Clip(
             track_id=video_track.id,
             asset_id=media.id,
             timeline_start=45,
             source_in=0,
             duration=60,
+            media_kind=ClipMediaKind.VIDEO_ONLY,
         )
         state.clips.append(clip)
         repository.save_timeline(state)
@@ -266,10 +459,8 @@ def test_smart_split_and_delete_preserve_existing_placement_identity(tmp_path: P
             AssetService(repository, MediaProbe()),
         )
         project = repository.get_project()
-        track = next(
-            item
-            for item in repository.load_timeline(project.main_sequence_id).tracks
-            if item.kind == TrackKind.SUBTITLE
+        track = TimelineEditor(repository, project.main_sequence_id).add_track(
+            TrackKind.SUBTITLE
         )
         original = repository.place_subtitle_document(
             document.id,

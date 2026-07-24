@@ -105,12 +105,10 @@ Rectangle {
                         anchors.margins: 14
                         currentIndex: root.activeMode === "media" ? 0
                             : root.activeMode === "transcript" ? 1
-                            : root.activeMode === "subtitle" ? 2
-                            : root.activeMode === "translate" ? 3
-                            : root.activeMode === "highlight" ? 4
-                            : root.activeMode === "edit" ? 5
-                            : root.activeMode === "audio" ? 6
-                            : root.activeMode === "export" ? 7 : 8
+                            : root.activeMode === "highlight" ? 2
+                            : root.activeMode === "edit" ? 3
+                            : root.activeMode === "audio" ? 4
+                            : root.activeMode === "export" ? 5 : 6
 
                         MediaPanel {
                             id: mediaPanel
@@ -119,32 +117,15 @@ Rectangle {
                             pixelsPerFrame: timeline.pixelsPerFrame
                             snapEnabled: timeline.snapEnabled
                         }
-                        TranscriptPanel {
-                            onModeRequested: function (mode) {
-                                root.activeMode = mode;
-                            }
-                        }
-                        SubtitlePanel {
+                        TranscriptWorkspace {
                             playheadFrame: previewViewport.position
                             playbackActive: previewViewport.playing
-                            onModeRequested: function (mode) {
-                                root.activeMode = mode;
-                            }
                             onImportRequested: {
                                 root.activeMode = "media";
                                 mediaPanel.openImportDialog();
                             }
                             onSeekRequested: function (frame) {
                                 previewViewport.seek(frame);
-                            }
-                        }
-                        TranslationPanel {
-                            onModeRequested: function (mode) {
-                                root.activeMode = mode;
-                            }
-                            onImportRequested: {
-                                root.activeMode = "media";
-                                mediaPanel.openImportDialog();
                             }
                         }
                         HighlightPanel {
@@ -635,7 +616,12 @@ Rectangle {
     Shortcut {
         sequence: "Ctrl+Shift+A"
         enabled: !root.textInputActive
-        onActivated: timelineController.clearSelection()
+        onActivated: timeline.clearTimelineSelection()
+    }
+    Shortcut {
+        sequence: "Escape"
+        enabled: !root.textInputActive && timelineController.selectedClipIds.length > 0
+        onActivated: timeline.clearTimelineSelection()
     }
     Shortcut {
         sequence: "I"

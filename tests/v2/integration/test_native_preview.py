@@ -13,7 +13,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.domain.enums import AssetKind, ColorMode, ExportFormat, TrackKind
+from mediaflow.domain.enums import AssetKind, ClipMediaKind, ColorMode, ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.timeline import Clip
@@ -35,7 +35,7 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(tmp_pat
     with ProjectRepository.create(tmp_path / "Native Project", "Native Project") as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+        track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,
             asset_id=asset.id,
@@ -237,6 +237,19 @@ ApplicationWindow {
         assert 12 not in durations_after_latest_source
 
         preview.seek(17)
+        preview.setProperty("source", str(short_graph))
+        QCoreApplication.processEvents()
+        preview.setProperty("source", str(graph))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (
+            preview.property("position") != 17 or preview.property("duration") != 25
+        ):
+            QCoreApplication.processEvents()
+            time.sleep(0.01)
+        assert preview.property("position") == 17
+        assert preview.property("duration") == 25
+
+        preview.seek(17)
         preview.setProperty("reloadToken", int(preview.property("reloadToken")) + 1)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and (
@@ -338,15 +351,15 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(tmp_path
         assert image_asset.kind == AssetKind.IMAGE
 
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
-        audio_track = next(item for item in editor.state.tracks if item.kind == TrackKind.AUDIO)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        audio_track = editor.add_track(TrackKind.AUDIO)
         specifications = [
-            (silent_asset, video_track.id, 18),
-            (audio_asset, audio_track.id, 19),
-            (image_asset, video_track.id, 20),
+            (silent_asset, video_track.id, 18, ClipMediaKind.VIDEO_ONLY),
+            (audio_asset, audio_track.id, 19, ClipMediaKind.AUDIO_ONLY),
+            (image_asset, video_track.id, 20, ClipMediaKind.VIDEO_ONLY),
         ]
         graphs: list[tuple[Path, int, AssetKind]] = []
-        for asset, track_id, duration in specifications:
+        for asset, track_id, duration, media_kind in specifications:
             state = editor.state.model_copy(
                 update={
                     "clips": [
@@ -356,6 +369,7 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(tmp_path
                             timeline_start=0,
                             source_in=0,
                             duration=duration,
+                            media_kind=media_kind,
                         )
                     ]
                 }
@@ -435,7 +449,7 @@ def test_native_preview_tone_maps_hdr_graph_on_sdr_output(tmp_path: Path) -> Non
     with ProjectRepository.create(tmp_path / "HDR Preview", "HDR Preview", profile) as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+        track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,
             asset_id=asset.id,

@@ -106,7 +106,8 @@ def test_asset_filter_model_is_the_shared_search_boundary_for_all_views() -> Non
                 "height": 360,
                 "previewUrl": "",
                 "proxyReady": False,
-                "waveformReady": False,
+                    "waveformReady": False,
+                    "searchText": f"{name} video".casefold(),
             }
             for asset_id, name in (("one", "First Video.mp4"), ("two", "Overlay.png"))
         ]

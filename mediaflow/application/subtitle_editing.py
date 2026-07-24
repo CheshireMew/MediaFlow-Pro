@@ -7,7 +7,7 @@ from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHi
 from mediaflow.application.ports import SubtitleEditingDocuments
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
-from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment
+from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timebase import seconds_to_frames
 
 
@@ -18,14 +18,20 @@ def recorded_subtitle_edit(label: str):
             if self.history is None:
                 return method(self, document_id, *args, **kwargs)
             before = self.repository.list_subtitle_segments(document_id)
+            before_words = self.repository.list_subtitle_words(document_id)
             result = method(self, document_id, *args, **kwargs)
             after = self.repository.list_subtitle_segments(document_id)
-            if before != after:
+            after_words = self.repository.list_subtitle_words(document_id)
+            if before != after or before_words != after_words:
                 self.history.push(
                     ProjectEditCommand(
                         label=label,
-                        undo_action=lambda: self._save_segments(document_id, list(before)),
-                        redo_action=lambda: self._save_segments(document_id, list(after)),
+                        undo_action=lambda: self._restore_document_state(
+                            document_id, list(before), list(before_words)
+                        ),
+                        redo_action=lambda: self._restore_document_state(
+                            document_id, list(after), list(after_words)
+                        ),
                     )
                 )
             return result
@@ -207,7 +213,23 @@ class SubtitleEditingService:
             }
         )
         updated = [*segments[: indexes[0]], merged, *segments[indexes[-1] + 1 :]]
-        self._save_segments(document_id, updated)
+        selected_words = [
+            word
+            for word in self.repository.list_subtitle_words(document_id)
+            if word.segment_id in wanted
+        ]
+        retained_words = [
+            word
+            for word in self.repository.list_subtitle_words(document_id)
+            if word.segment_id not in wanted
+        ]
+        merged_words = [
+            word.model_copy(update={"segment_id": merged.id, "position": position})
+            for position, word in enumerate(
+                sorted(selected_words, key=lambda item: (item.start_frame, item.position, item.id))
+            )
+        ]
+        self._save_segments(document_id, updated, words=[*retained_words, *merged_words])
         return merged
 
     @recorded_subtitle_edit("拆分字幕")
@@ -226,7 +248,8 @@ class SubtitleEditingService:
             raise KeyError(segment_id) from error
         first, second = self._split(segments[index], split_frame=split_frame, split_index=split_index)
         updated = [*segments[:index], first, second, *segments[index + 1 :]]
-        self._save_segments(document_id, updated)
+        words = self._words_after_split(document_id, segments[index], first, second)
+        self._save_segments(document_id, updated, words=words)
         return first, second
 
     @recorded_subtitle_edit("智能拆分字幕")
@@ -239,7 +262,12 @@ class SubtitleEditingService:
             seconds_to_frames(1.6, profile.fps_numerator, profile.fps_denominator),
         )
         segments = self.repository.list_subtitle_segments(document_id)
+        document_words = self.repository.list_subtitle_words(document_id)
+        words_by_segment: dict[str, list[SubtitleWord]] = {}
+        for word in document_words:
+            words_by_segment.setdefault(word.segment_id, []).append(word)
         updated: list[SubtitleSegment] = []
+        updated_words: list[SubtitleWord] = []
         split_count = 0
         for segment in segments:
             text = segment.text.strip()
@@ -251,16 +279,41 @@ class SubtitleEditingService:
             )
             if segment.end_frame - segment.start_frame < minimum_duration or not long_enough:
                 updated.append(segment)
+                updated_words.extend(words_by_segment.get(segment.id, []))
                 continue
             try:
                 first, second = self._split(segment)
             except ValueError:
                 updated.append(segment)
+                updated_words.extend(words_by_segment.get(segment.id, []))
             else:
                 updated.extend((first, second))
+                source_words = words_by_segment.get(segment.id, [])
+                for target, target_words in (
+                    (
+                        first,
+                        [
+                            word
+                            for word in source_words
+                            if (word.start_frame + word.end_frame) / 2 < first.end_frame
+                        ],
+                    ),
+                    (
+                        second,
+                        [
+                            word
+                            for word in source_words
+                            if (word.start_frame + word.end_frame) / 2 >= first.end_frame
+                        ],
+                    ),
+                ):
+                    updated_words.extend(
+                        word.model_copy(update={"segment_id": target.id, "position": position})
+                        for position, word in enumerate(target_words)
+                    )
                 split_count += 1
         if split_count:
-            self._save_segments(document_id, updated)
+            self._save_segments(document_id, updated, words=updated_words)
         return split_count
 
     @recorded_subtitle_edit("修复字幕重叠")
@@ -426,9 +479,75 @@ class SubtitleEditingService:
             for match in pattern.finditer(segment.text)
         ]
 
-    def _save_segments(self, document_id: str, segments: list[SubtitleSegment]) -> None:
+    def _save_segments(
+        self,
+        document_id: str,
+        segments: list[SubtitleSegment],
+        *,
+        words: list[SubtitleWord] | None = None,
+    ) -> None:
+        if words is None:
+            previous = {
+                segment.id: segment
+                for segment in self.repository.list_subtitle_segments(document_id)
+            }
+            current = {segment.id: segment for segment in segments}
+            words = [
+                word
+                for word in self.repository.list_subtitle_words(document_id)
+                if word.segment_id in current
+                and previous.get(word.segment_id) == current[word.segment_id]
+            ]
         self.repository.save_subtitle_segments(document_id, segments)
+        self.repository.save_subtitle_words(document_id, words)
         self.publication.write_document_srt(document_id)
+
+    def _restore_document_state(
+        self,
+        document_id: str,
+        segments: list[SubtitleSegment],
+        words: list[SubtitleWord],
+    ) -> None:
+        self.repository.save_subtitle_segments(document_id, segments)
+        self.repository.save_subtitle_words(document_id, words)
+        self.publication.write_document_srt(document_id)
+
+    def _words_after_split(
+        self,
+        document_id: str,
+        source: SubtitleSegment,
+        first: SubtitleSegment,
+        second: SubtitleSegment,
+    ) -> list[SubtitleWord]:
+        output = [
+            word
+            for word in self.repository.list_subtitle_words(document_id)
+            if word.segment_id != source.id
+        ]
+        source_words = [
+            word
+            for word in self.repository.list_subtitle_words(document_id)
+            if word.segment_id == source.id
+        ]
+        first_words = [
+            word
+            for word in source_words
+            if (word.start_frame + word.end_frame) / 2 < first.end_frame
+        ]
+        second_words = [
+            word
+            for word in source_words
+            if (word.start_frame + word.end_frame) / 2 >= first.end_frame
+        ]
+        output.extend(
+            word.model_copy(update={"segment_id": first.id, "position": position})
+            for position, word in enumerate(first_words)
+        )
+        output.extend(
+            word.model_copy(update={"segment_id": second.id, "position": position})
+            for position, word in enumerate(second_words)
+        )
+        return output
 
     def _selected_segments(
         self,

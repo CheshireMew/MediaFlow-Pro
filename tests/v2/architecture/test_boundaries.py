@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from mediaflow.application.workflow_stage_handlers import workflow_stage_handlers
@@ -116,8 +117,9 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
     acquisition_methods = {node.name for node in acquisition.body if isinstance(node, ast.FunctionDef)}
     editing_methods = {node.name for node in editing.body if isinstance(node, ast.FunctionDef)}
     publication_methods = {node.name for node in publication.body if isinstance(node, ast.FunctionDef)}
-    assert "transcribe_sequence_audio" in acquisition_methods
-    assert "transcribe_asset" not in acquisition_methods
+    assert "transcribe_asset_region" in acquisition_methods
+    assert "save_sequence_transcript" in acquisition_methods
+    assert "transcribe_sequence_audio" not in acquisition_methods
     assert "update_segment" in editing_methods
     assert publication_methods == {"__init__", "write_document_srt"}
     assert "write_document_srt" not in acquisition_methods | editing_methods
@@ -145,10 +147,24 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert "InspectorPanel" not in workspace
     assert not (qml_root / "components" / "WorkflowBanner.qml").exists()
     assert not (qml_root / "InspectorPanel.qml").exists()
-    assert "SubtitlePanel" in workspace
-    assert (qml_root / "SubtitlePanel.qml").is_file()
+    assert "TranscriptWorkspace" in workspace
+    assert (qml_root / "TranscriptWorkspace.qml").is_file()
     assert "TaskCenterPanel" in workspace
     assert (qml_root / "TaskCenterPanel.qml").is_file()
+    redundant_panel_titles = {
+        "MediaPanel.qml": "素材",
+        "TranscriptPanel.qml": "自动字幕",
+        "SubtitlePanel.qml": "字幕编辑",
+        "TranslationPanel.qml": "字幕翻译",
+        "HighlightPanel.qml": "AI 高光",
+        "EditPanel.qml": "片段属性",
+        "AudioPanel.qml": "音频",
+        "ExportPanel.qml": "导出",
+        "TaskCenterPanel.qml": "任务中心",
+    }
+    for panel_name, redundant_title in redundant_panel_titles.items():
+        panel_source = (qml_root / panel_name).read_text(encoding="utf-8")
+        assert f'text: qsTr("{redundant_title}")' not in panel_source
     assert "TaskDrawer" not in workspace
     assert not (qml_root / "TaskDrawer.qml").exists()
     transcript_panel = (qml_root / "TranscriptPanel.qml").read_text(encoding="utf-8")
@@ -156,6 +172,24 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert "transcribeCurrentSequence" in transcript_panel
     assert "transcribeSelectedAsset" not in transcript_panel
     assert "transcribeRegion" not in transcript_panel
+    assert "transcriptWordEditor" not in transcript_panel
+    assert "transcriptWordSegmentList" not in transcript_panel
+    assert "rippleDeleteTranscriptWordsButton" not in transcript_panel
+    assert "selectedSubtitleWordIds" not in transcript_panel
+    subtitle_controller = (
+        ROOT / "mediaflow" / "desktop" / "controllers" / "subtitle_controller.py"
+    ).read_text(encoding="utf-8")
+    assert "subtitleWordsModel" not in subtitle_controller
+    assert "rippleDeleteSelectedWords" not in subtitle_controller
+    automation_contract = (
+        ROOT / "mediaflow" / "automation" / "contracts.py"
+    ).read_text(encoding="utf-8")
+    for operation in (
+        "transcript.get",
+        "transcript.edit.preview",
+        "transcript.edit.apply",
+    ):
+        assert operation in automation_contract
     task_commands = (
         ROOT / "mediaflow" / "domain" / "task_commands.py"
     ).read_text(encoding="utf-8")
@@ -172,7 +206,7 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert "rulerSeconds" not in timeline
     assert 'index + "s"' not in timeline
     assert 'objectName: "trackControlsButton"' not in timeline
-    assert 'visible: timelineController.tracksModel.rowCount() > 0' in timeline
+    assert "visible: tracksRepeater.count > 0" in timeline
     media_panel = (qml_root / "MediaPanel.qml").read_text(encoding="utf-8")
     assert "FileDialog.OpenFiles" in media_panel
     assert "selectedFiles" in media_panel
@@ -220,3 +254,39 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert "准备音频波形" in presentation
     assert '"生成代理"' not in presentation
     assert '"生成波形"' not in presentation
+
+
+def test_qml_floating_controls_use_the_shared_dark_theme_boundary() -> None:
+    qml_root = ROOT / "mediaflow" / "desktop" / "qml"
+    components_root = qml_root / "components"
+    shared_controls = {
+        "AppMenu.qml": "Menu {",
+        "AppMenuItem.qml": "MenuItem {",
+        "AppMenuSeparator.qml": "MenuSeparator {",
+    }
+    for filename, base_control in shared_controls.items():
+        source = (components_root / filename).read_text(encoding="utf-8")
+        assert base_control in source
+        assert "Theme." in source
+
+    raw_menu_control = re.compile(r"(?<![A-Za-z])Menu(?:Item|Separator)?\s*\{")
+    violations = [
+        str(path.relative_to(ROOT))
+        for path in qml_root.rglob("*.qml")
+        if path.name not in shared_controls
+        and raw_menu_control.search(path.read_text(encoding="utf-8"))
+    ]
+    assert violations == []
+
+    main = (qml_root / "Main.qml").read_text(encoding="utf-8")
+    for palette_role in (
+        "light",
+        "midlight",
+        "mid",
+        "dark",
+        "shadow",
+        "brightText",
+        "link",
+        "linkVisited",
+    ):
+        assert f"palette.{palette_role}:" in main

@@ -3,8 +3,9 @@ from pathlib import Path
 import pytest
 
 from mediaflow.application.highlight_service import HighlightService
+from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.audio import AudioEffect
-from mediaflow.domain.enums import AssetKind, AudioEffectKind, TrackKind
+from mediaflow.domain.enums import AssetKind, AudioEffectKind, ClipMediaKind, TrackKind
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
@@ -58,10 +59,8 @@ def test_source_translation_and_sequence_placement_keep_stable_links(tmp_path: P
         ]
         repository.create_subtitle_document(translation, translated_segments)
 
-        subtitle_track = next(
-            track
-            for track in repository.load_timeline(project.main_sequence_id).tracks
-            if track.kind == TrackKind.SUBTITLE
+        subtitle_track = TimelineEditor(repository, project.main_sequence_id).add_track(
+            TrackKind.SUBTITLE
         )
         placements = repository.place_subtitle_document(translation.id, subtitle_track.id)
 
@@ -100,9 +99,7 @@ def test_subtitle_placement_can_be_clipped_and_offset_for_a_short_sequence(
         ]
         repository.create_subtitle_document(document, segments)
         short = repository.create_short_sequence("Short")
-        subtitle_track = next(
-            track for track in repository.load_timeline(short.id).tracks if track.kind == TrackKind.SUBTITLE
-        )
+        subtitle_track = TimelineEditor(repository, short.id).add_track(TrackKind.SUBTITLE)
 
         placements = repository.place_subtitle_document(
             document.id,
@@ -255,10 +252,11 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
         audio_asset = repository.import_external_asset(mixed_audio, AssetKind.AUDIO)
         project = repository.get_project()
         sequence_id = project.main_sequence_id
-        state = repository.load_timeline(sequence_id)
-        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
-        audio_track = next(track for track in state.tracks if track.kind == TrackKind.AUDIO)
-        subtitle_track = next(track for track in state.tracks if track.kind == TrackKind.SUBTITLE)
+        editor = TimelineEditor(repository, sequence_id)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        audio_track = editor.add_track(TrackKind.AUDIO)
+        subtitle_track = editor.add_track(TrackKind.SUBTITLE)
+        state = editor.state
         state.clips = [
             Clip(
                 track_id=video_track.id,
@@ -266,6 +264,7 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
                 timeline_start=0,
                 source_in=10,
                 duration=60,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
             ),
             Clip(
                 track_id=video_track.id,
@@ -273,6 +272,7 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
                 timeline_start=60,
                 source_in=5,
                 duration=40,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
             ),
             Clip(
                 track_id=audio_track.id,
@@ -280,6 +280,7 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
                 timeline_start=0,
                 source_in=0,
                 duration=100,
+                media_kind=ClipMediaKind.AUDIO_ONLY,
             ),
         ]
         repository.save_timeline(state)

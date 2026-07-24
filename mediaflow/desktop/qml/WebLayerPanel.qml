@@ -36,12 +36,6 @@ Panel {
         onAccepted: webController.importDataSnapshot(selectedFile, root.snapshotFieldId)
     }
     FileDialog {
-        id: componentInstallDialog
-        title: qsTr("安装网页组件包")
-        nameFilters: [qsTr("Editable media manifest (editable-media.json)")]
-        onAccepted: webController.installComponent(selectedFile)
-    }
-    FileDialog {
         id: rebindDialog
         title: qsTr("选择新版网页包")
         nameFilters: [qsTr("Editable media manifest (editable-media.json)")]
@@ -386,36 +380,7 @@ Panel {
 
         Text {
             Layout.fillWidth: true
-            text: qsTr("网页组件库")
-            color: Theme.text
-            font.pixelSize: Theme.fontSizeCaption
-            font.weight: Font.DemiBold
-        }
-        AppComboBox {
-            id: componentSelector
-            Layout.fillWidth: true
-            textRole: "name"
-            valueRole: "component_id"
-            model: webController.componentOptions
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            AppButton {
-                Layout.fillWidth: true
-                text: qsTr("安装当前网页包")
-                onClicked: componentInstallDialog.open()
-            }
-            AppButton {
-                Layout.fillWidth: true
-                text: qsTr("导入为素材")
-                enabled: String(componentSelector.currentValue || "").length > 0
-                onClicked: webController.importComponent(String(componentSelector.currentValue))
-            }
-        }
-
-        Text {
-            Layout.fillWidth: true
-            text: qsTr("模板更新与重新绑定")
+            text: qsTr("网页素材更新")
             color: Theme.text
             font.pixelSize: Theme.fontSizeCaption
             font.weight: Font.DemiBold

@@ -57,6 +57,21 @@ class WorkspaceController(ControllerFacet):
     def projectPath(self) -> str:
         return str(self._documents.project_dir) if self._documents else ""
 
+    @Property("QVariantList", notify=projectStateChanged)
+    def projectVersions(self) -> list[dict]:
+        if not self._project:
+            return []
+        return [
+            {
+                "versionId": item.id,
+                "name": item.name,
+                "snapshotPath": item.snapshot_path,
+                "contentRevision": item.content_revision,
+                "createdAt": item.created_at,
+            }
+            for item in self._project.list_versions()
+        ]
+
     @Property(QUrl, notify=settingsChanged)
     def defaultProjectDirectoryUrl(self) -> QUrl:
         directory = self.settings.ui.default_project_directory
@@ -311,6 +326,41 @@ class WorkspaceController(ControllerFacet):
         self.projectStateChanged.emit()
 
     @Slot(str)
+    def createNamedVersion(self, name: str) -> None:
+        try:
+            self._require_writable()
+            if any(not task.status.is_terminal for task in self._task_view.values()):
+                raise RuntimeError("请等待当前任务完成后再创建命名版本")
+            record = self._project.create_version(name)
+            self.projectStateChanged.emit()
+            self._set_status(f"已创建命名版本“{record.name}”")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str)
+    def restoreNamedVersion(self, version_id: str) -> None:
+        try:
+            self._require_writable()
+            if any(not task.status.is_terminal for task in self._task_view.values()):
+                raise RuntimeError("请等待当前任务完成后再恢复命名版本")
+            record = self._project.restore_version(version_id)
+            sequence_ids = {
+                sequence.id for sequence in self._documents.list_sequences()
+            }
+            if self._active_sequence_id not in sequence_ids:
+                self._active_sequence_id = self._documents.get_project().main_sequence_id
+            self._editor = self._project.timeline(self._active_sequence_id)
+            self._reset_project_selection()
+            self._projector.refresh_all()
+            self._projector.schedule_preview_graph()
+            self.projectStateChanged.emit()
+            self.selectionChanged.emit()
+            self.historyChanged.emit()
+            self._set_status(f"已恢复命名版本“{record.name}”")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str)
     def selectSequence(self, sequence_id: str) -> None:
         if not self._documents:
             return
@@ -319,6 +369,7 @@ class WorkspaceController(ControllerFacet):
             self._active_sequence_id = sequence_id
             self._editor = self._project.timeline(sequence_id)
             self._selected_clip_ids = []
+            self._selected_compound_id = ""
             self._projector.refresh_timeline()
             self._projector.refresh_audio_metrics()
             self._projector.refresh_preview_subtitles()
@@ -360,6 +411,7 @@ class WorkspaceController(ControllerFacet):
             self._active_sequence_id = project.main_sequence_id
             self._editor = self._project.timeline(project.main_sequence_id)
             self._selected_clip_ids = []
+            self._selected_compound_id = ""
             self._projector.refresh_all()
             self._set_status("短视频序列已移除；可使用撤销恢复")
         except Exception as error:

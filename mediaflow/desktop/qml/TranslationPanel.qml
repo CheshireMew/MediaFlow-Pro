@@ -11,6 +11,8 @@ ColumnLayout {
     property var comparisonData: ({})
     property var taskData: ({})
     property var selectedRowIds: []
+    property int sectionIndex: 0
+    property bool showSectionTabs: true
     readonly property bool hasDocuments: sourceDocument.count > 0
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
@@ -114,16 +116,15 @@ ColumnLayout {
         function onTasksChanged() { root.refreshComparison(); }
     }
 
-    Text {
-        text: qsTr("字幕翻译")
-        color: Theme.text
-        font.pixelSize: Theme.fontSizeSection
-        font.weight: Font.DemiBold
-    }
-
     TabBar {
         id: translationTabs
         Layout.fillWidth: true
+        visible: root.showSectionTabs
+        currentIndex: root.sectionIndex
+        onCurrentIndexChanged: {
+            if (root.showSectionTabs)
+                root.sectionIndex = currentIndex;
+        }
         TabButton {
             text: qsTr("翻译")
         }
@@ -135,7 +136,7 @@ ColumnLayout {
     StackLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        currentIndex: translationTabs.currentIndex
+        currentIndex: root.sectionIndex
 
         ColumnLayout {
             spacing: 9
@@ -409,8 +410,10 @@ ColumnLayout {
             }
             ListView {
                 id: glossaryList
+                objectName: "translationGlossaryList"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: 72
                 clip: true
                 spacing: 5
                 model: settingsController.glossaryTermsModel

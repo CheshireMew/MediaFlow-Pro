@@ -81,9 +81,61 @@ class ExportController(ControllerFacet):
     def defaultExportDirectory(self) -> str:
         return str(self._documents.project_dir / "exports") if self._documents else ""
 
+    @Property("QVariantList", notify=tasksChanged)
+    def exportHistory(self) -> list[dict]:
+        if not self._documents or not self._active_sequence_id:
+            return []
+        values: list[dict] = []
+        for record in self._documents.list_export_history(self._active_sequence_id):
+            warnings = sum(
+                check.status == "warning" for check in record.quality.checks
+            )
+            failures = sum(
+                check.status == "failed" for check in record.quality.checks
+            )
+            values.append(
+                {
+                    "recordId": record.id,
+                    "outputPath": record.output_path,
+                    "outputName": Path(record.output_path).name,
+                    "format": record.format.value.upper(),
+                    "qualityPassed": record.quality.passed,
+                    "warningCount": warnings,
+                    "failureCount": failures,
+                    "checks": [
+                        check.model_dump(mode="json")
+                        for check in record.quality.checks
+                    ],
+                    "proofFrames": list(record.quality.proof_frames),
+                    "reportPath": str(
+                        self._documents.project_dir
+                        / "generated"
+                        / "export-qa"
+                        / record.id
+                        / "report.json"
+                    ),
+                    "sha256": record.quality.sha256,
+                    "contentRevision": record.content_revision,
+                    "createdAt": record.created_at,
+                }
+            )
+        return values
+
     @Slot(str)
     def exportH264(self, path_url: str) -> None:
         self.exportSequence("h264", path_url)
+
+    @Slot(str)
+    def exportFcpxml(self, path_url: str) -> None:
+        try:
+            self._require_writable()
+            output = self._project.export_fcpxml(
+                self._active_sequence_id,
+                self._local_path(path_url),
+            )
+            self._set_status(f"已导出 FCPXML：{output.name}")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
 
     @Slot(str, str)
     def exportSequence(self, format_name: str, path_url: str) -> None:

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 
-from mediaflow.domain.enums import (
-    AssetKind,
-)
+from mediaflow.domain.enums import AssetKind
 
 from .controller_facet import ControllerFacet
 
@@ -27,7 +26,6 @@ class MediaController(ControllerFacet):
     previewRangeRequested = Signal(int, int)
     errorOccurred = Signal(str)
     errorReferenceChanged = Signal()
-
     @Property(QObject, constant=True)
     def assetsModel(self) -> QObject:
         return self._asset_model
@@ -72,9 +70,24 @@ class MediaController(ControllerFacet):
         if not asset_id or not self._documents:
             return QUrl()
         try:
-            return QUrl.fromLocalFile(str(self._documents.resolve_asset_path(asset_id)))
+            asset = self._documents.get_asset(asset_id)
+            return QUrl.fromLocalFile(str(self._documents.resolve_asset_path(asset)))
         except (KeyError, OSError, ValueError):
             return QUrl()
+
+    @Slot(str)
+    def openAssetFolder(self, asset_id: str) -> None:
+        try:
+            if not asset_id or not self._documents:
+                raise RuntimeError("当前没有可定位的素材")
+            asset = self._documents.get_asset(asset_id)
+            directory = self._documents.resolve_asset_path(asset).parent
+            if not directory.is_dir():
+                raise FileNotFoundError(f"素材所在文件夹不存在：{directory}")
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
+                raise RuntimeError(f"无法打开素材所在文件夹：{directory}")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
 
     @Slot(str)
     def importMedia(self, path_url: str) -> None:
@@ -87,19 +100,6 @@ class MediaController(ControllerFacet):
     def importFiles(self, path_urls: list[object]) -> None:
         try:
             self._import_media_paths(path_urls)
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
-
-    @Slot(str)
-    def importWebPackage(self, directory_url: str) -> None:
-        try:
-            self._require_writable()
-            source = self._local_path(directory_url)
-            asset = self._project.web.import_package(source)
-            self._selected_asset_ids = [asset.id]
-            self._projector.refresh_all()
-            self.selectionChanged.emit()
-            self._set_status(f"已导入可编辑网页素材 {asset.name}")
         except Exception as error:
             self.errorOccurred.emit(str(error))
 

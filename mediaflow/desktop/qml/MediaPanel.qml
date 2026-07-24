@@ -30,6 +30,7 @@ Item {
         timelineController.dropAssets(
             [assetId],
             "",
+            -1,
             playheadFrame,
             pixelsPerFrame,
             playheadFrame,
@@ -74,16 +75,21 @@ Item {
         function onProjectStateChanged() { root.refreshTask(); }
     }
 
-    Menu {
+    AppMenu {
         id: assetContextMenu
         objectName: "mediaAssetContextMenu"
-        MenuItem {
+        AppMenuItem {
             objectName: "assetAddAtPlayheadMenuItem"
             text: qsTr("添加到播放头")
             enabled: root.contextAssetData.status === "online"
             onTriggered: root.addAssetAtPlayhead(root.contextAssetId)
         }
-        MenuItem {
+        AppMenuItem {
+            objectName: "assetOpenFolderMenuItem"
+            text: qsTr("打开素材所在文件夹")
+            onTriggered: mediaController.openAssetFolder(root.contextAssetId)
+        }
+        AppMenuItem {
             text: qsTr("重新定位")
             visible: root.contextAssetData.status === "offline"
             onTriggered: {
@@ -147,21 +153,16 @@ Item {
         spacing: 10
         FileDialog {
             id: importDialog
-            title: qsTr("导入媒体")
+            title: qsTr("导入素材")
             fileMode: FileDialog.OpenFiles
             currentFolder: workspaceController.defaultImportDirectoryUrl
-            nameFilters: [qsTr("媒体文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa)"), qsTr("所有文件 (*)")]
+            nameFilters: [qsTr("素材文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)"), qsTr("所有文件 (*)")]
             onAccepted: mediaController.importFiles(selectedFiles)
         }
         FolderDialog {
             id: batchRelinkDialog
             title: qsTr("选择离线素材所在目录")
             onAccepted: mediaController.relinkOfflineMedia(selectedFolder.toString())
-        }
-        FolderDialog {
-            id: webPackageDialog
-            title: qsTr("选择包含 editable-media.json 的网页包")
-            onAccepted: mediaController.importWebPackage(selectedFolder.toString())
         }
         FileDialog {
             id: selectedRelinkDialog
@@ -197,41 +198,15 @@ Item {
         }
 
         RowLayout {
-            Layout.fillWidth: true
-            Text {
-                text: qsTr("素材")
-                color: Theme.text
-                font.pixelSize: Theme.fontSizeSection
-                font.weight: Font.DemiBold
-            }
-            Item {
-                Layout.fillWidth: true
-            }
-            AppButton {
-                visible: workspaceController.offlineAssetCount > 0
-                text: qsTr("批量重新定位 (%1)").arg(workspaceController.offlineAssetCount)
-                onClicked: batchRelinkDialog.open()
-            }
-            AppButton {
-                text: qsTr("网页包")
-                onClicked: webPackageDialog.open()
-            }
-            AppButton {
-                text: qsTr("导入")
-                primary: true
-                onClicked: importDialog.open()
-            }
-        }
-
-        RowLayout {
+            objectName: "mediaToolbar"
             Layout.fillWidth: true
             spacing: 6
             AppTextField {
                 id: search
                 objectName: "mediaSearchField"
                 Layout.fillWidth: true
-                implicitHeight: 34
-                placeholderText: qsTr("搜索素材")
+                implicitHeight: 36
+                placeholderText: qsTr("搜索素材、转写内容或概念")
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 leftPadding: 12
@@ -249,6 +224,19 @@ Item {
                     + " · " + qsTr("点击切换视图")
                 onClicked: root.cycleViewMode()
             }
+            AppButton {
+                objectName: "openMediaImportButton"
+                text: qsTr("导入")
+                primary: true
+                onClicked: importDialog.open()
+            }
+        }
+
+        AppButton {
+            visible: workspaceController.offlineAssetCount > 0
+            Layout.fillWidth: true
+            text: qsTr("批量重新定位 (%1)").arg(workspaceController.offlineAssetCount)
+            onClicked: batchRelinkDialog.open()
         }
 
         Text {
@@ -277,7 +265,7 @@ Item {
                 title: search.text.length === 0
                     ? qsTr("导入第一个素材") : qsTr("没有匹配的素材")
                 description: search.text.length === 0
-                    ? qsTr("支持视频、音频和图片。下载的视频也会自动出现在这里。")
+                    ? qsTr("支持视频、音频、图片、字幕和网页素材。下载的视频也会自动出现在这里。")
                     : qsTr("换个关键词，或清空搜索框查看全部素材。")
             }
         }

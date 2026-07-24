@@ -91,6 +91,10 @@ class WebComponentMetadata(DomainModel):
     name: str
     category: str = "general"
     tags: list[str] = Field(default_factory=list)
+    description: str = ""
+    preview_background: str = "#16181d"
+    preview_accent: str = "#5b8cff"
+    aspect_ratios: list[str] = Field(default_factory=lambda: ["16:9"])
 
     @field_validator("id", "name", "category")
     @classmethod
@@ -486,15 +490,6 @@ class WebRebindReport(DomainModel):
     affected_clips: list[str] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
     archive_path: str = ""
-
-
-class WebComponentRecord(DomainModel):
-    component_id: str
-    name: str
-    category: str
-    tags: list[str] = Field(default_factory=list)
-    version_hash: str
-    package_path: str
 
 
 class WebVariantResult(DomainModel):

@@ -6,13 +6,15 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Protocol
 
+from mediaflow.domain.asr import AsrResult
 from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.project import Asset, AssetFingerprint, MediaMetadata, Project, ProjectProfile, Sequence
+from mediaflow.domain.project_records import ExportHistoryRecord, ProjectVersionRecord
 from mediaflow.domain.settings import LlmProviderSettings
-from mediaflow.domain.subtitles import SubtitleDocument, SubtitlePlacement, SubtitleSegment
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitlePlacement, SubtitleSegment, SubtitleWord
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import TimelineMarker, TimelineRange, TimelineState
 from mediaflow.domain.web_media import EditableMediaManifest, WebAssetSpec, WebClipState
@@ -70,6 +72,15 @@ class ProjectAccess(Protocol):
 
     def transaction(self) -> AbstractContextManager[Any]: ...
     def get_project(self) -> Project: ...
+    def content_revision(self) -> int: ...
+
+
+class ProjectRecordsDocuments(Protocol):
+    def save_export_history(self, record: ExportHistoryRecord) -> ExportHistoryRecord: ...
+    def list_export_history(self, sequence_id: str | None = None) -> list[ExportHistoryRecord]: ...
+    def create_project_version(self, name: str) -> ProjectVersionRecord: ...
+    def list_project_versions(self) -> list[ProjectVersionRecord]: ...
+    def restore_project_version(self, version_id: str) -> ProjectVersionRecord: ...
 
 
 class WorkflowDocuments(Protocol):
@@ -155,10 +166,22 @@ class AudioDocuments(Protocol):
 
 
 class SubtitleDocuments(Protocol):
+    def get_asset_transcript(
+        self,
+        asset_id: str,
+        signature: str,
+    ) -> AsrResult | None: ...
+    def save_asset_transcript(
+        self,
+        asset_id: str,
+        signature: str,
+        result: AsrResult,
+    ) -> AsrResult: ...
     def create_subtitle_document(
         self,
         document: SubtitleDocument,
         segments: list[SubtitleSegment],
+        words: list[SubtitleWord] | None = None,
     ) -> SubtitleDocument: ...
     def save_subtitle_document(self, document: SubtitleDocument) -> SubtitleDocument: ...
     def get_subtitle_document(self, document_id: str) -> SubtitleDocument: ...
@@ -169,10 +192,22 @@ class SubtitleDocuments(Protocol):
         sequence_id: str | None = None,
     ) -> list[SubtitleDocument]: ...
     def list_subtitle_segments(self, document_id: str) -> list[SubtitleSegment]: ...
+    def subtitle_segment_summary(self, document_id: str) -> tuple[int, int, int]: ...
     def save_subtitle_segments(
         self,
         document_id: str,
         segments: list[SubtitleSegment],
+    ) -> None: ...
+    def list_subtitle_words(
+        self,
+        document_id: str,
+        *,
+        include_excluded: bool = True,
+    ) -> list[SubtitleWord]: ...
+    def save_subtitle_words(
+        self,
+        document_id: str,
+        words: list[SubtitleWord],
     ) -> None: ...
     def place_subtitle_document(
         self,
@@ -288,6 +323,27 @@ class SubtitleEditingDocuments(
     pass
 
 
+class TimelineEditorDocuments(
+    AssetDocuments,
+    TimelineDocuments,
+    AudioDocuments,
+    WebMediaDocuments,
+    Protocol,
+):
+    pass
+
+
+class TranscriptEditingDocuments(
+    ProjectAccess,
+    ProjectRecordsDocuments,
+    SequenceDocuments,
+    SubtitleDocuments,
+    TimelineEditorDocuments,
+    Protocol,
+):
+    def transaction(self): ...
+
+
 class SubtitlePublicationDocuments(
     ProjectAccess,
     SequenceDocuments,
@@ -309,18 +365,9 @@ class ProjectWorkflowDocuments(
     ProjectAccess,
     WorkflowDocuments,
     AssetDocuments,
+    TimelineDocuments,
     SubtitleDocuments,
     HighlightDocuments,
-    Protocol,
-):
-    pass
-
-
-class TimelineEditorDocuments(
-    AssetDocuments,
-    TimelineDocuments,
-    AudioDocuments,
-    WebMediaDocuments,
     Protocol,
 ):
     pass
@@ -365,6 +412,7 @@ class TaskHandlerDocuments(
     AudioDocuments,
     HighlightDocuments,
     WebMediaDocuments,
+    ProjectRecordsDocuments,
     Protocol,
 ):
     def set_asset_proxy_paths(

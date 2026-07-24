@@ -45,7 +45,6 @@ class WebController(ControllerFacet):
         self._active_layout_id = ""
         self._selected_web_layer_id = ""
         self._browser_values: dict[str, dict] = {}
-        self._component_records: list[dict] = []
         self._rebind_report: dict = {}
         self._pending_rebind_source = ""
         self.selectionChanged.connect(self._refresh)
@@ -172,10 +171,6 @@ class WebController(ControllerFacet):
     @Property("QVariantMap", notify=webStateChanged)
     def componentData(self) -> dict:
         return dict(self._web_manifest.get("component") or {})
-
-    @Property("QVariantList", notify=webStateChanged)
-    def componentOptions(self) -> list[dict]:
-        return list(self._component_records)
 
     @Property("QVariantMap", notify=webStateChanged)
     def rebindReport(self) -> dict:
@@ -446,28 +441,6 @@ class WebController(ControllerFacet):
         except RuntimeError:
             return 0
 
-    @Slot(QUrl)
-    def installComponent(self, source_url: QUrl) -> None:
-        if not self._project:
-            return
-        try:
-            self._project.web_components.install(source_url.toLocalFile())
-            self._refresh_component_records()
-            self.webStateChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
-
-    @Slot(str)
-    def importComponent(self, component_id: str) -> None:
-        if not self._project:
-            return
-        try:
-            record = self._project.web_components.get(component_id)
-            self._project.web.import_package(record.package_path)
-            self.projectStateChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
-
     @Slot(str, str, str)
     def createBatchVariants(
         self,
@@ -604,18 +577,9 @@ class WebController(ControllerFacet):
         self._web_state = state.model_dump(mode="json")
         self._refresh_runtime_state()
         self._refresh_layers()
-        self._refresh_component_records()
         self.webStateChanged.emit()
         self.historyChanged.emit()
         self._projector.schedule_preview_graph()
-
-    def _refresh_component_records(self) -> None:
-        if not self._project:
-            self._component_records = []
-            return
-        self._component_records = [
-            item.model_dump(mode="json") for item in self._project.web_components.list()
-        ]
 
     def _refresh_runtime_state(self) -> None:
         if self._project and self._web_clip_id:
@@ -707,7 +671,6 @@ class WebController(ControllerFacet):
             self._web_edit_mode = False
             self._selected_web_layer_id = ""
         self._refresh_layers()
-        self._refresh_component_records()
         self.webStateChanged.emit()
 
     def _refresh_layers(self) -> None:

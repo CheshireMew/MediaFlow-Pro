@@ -58,9 +58,20 @@ ApplicationWindow {
     palette.buttonText: Theme.text
     palette.highlight: Theme.accent
     palette.highlightedText: "white"
+    palette.light: Theme.surfaceHover
+    palette.midlight: Theme.surfaceFloating
+    palette.mid: Theme.borderStrong
+    palette.dark: Theme.surfaceSunken
+    palette.shadow: "#000000"
+    palette.brightText: Theme.text
+    palette.link: Theme.accentHover
+    palette.linkVisited: Theme.accent
     palette.placeholderText: Theme.textMuted
     palette.toolTipBase: Theme.surfaceRaised
     palette.toolTipText: Theme.text
+    palette.disabled.windowText: Theme.textMuted
+    palette.disabled.text: Theme.textMuted
+    palette.disabled.buttonText: Theme.textMuted
     Component.onCompleted: {
         const data = settingsController.settingsData
         width = Math.max(minimumWidth, Number(data.windowWidth || 1600))

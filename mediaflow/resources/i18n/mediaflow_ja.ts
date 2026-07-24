@@ -1,9 +1,164 @@
 <?xml version='1.0' encoding='utf-8'?>
 <TS version="2.1" language="ja" sourcelanguage="zh_CN">
     <context>
+        <name>AsrLanguageCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_catalogs.py" line="+134" />
+            <source>语言：自动识别</source>
+            <translation>言語：自動検出</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：中文</source>
+            <translation>言語：中国語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：英语</source>
+            <translation>言語：英語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：日语</source>
+            <translation>言語：日本語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：韩语</source>
+            <translation>言語：韓国語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：法语</source>
+            <translation>言語：フランス語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：德语</source>
+            <translation>言語：ドイツ語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：西班牙语</source>
+            <translation>言語：スペイン語</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>语言：俄语</source>
+            <translation>言語：ロシア語</translation>
+        </message>
+        <message>
+            <location line="+14" />
+            <source>语言：当前代码 %1</source>
+            <translation>言語：現在のコード %1</translation>
+        </message>
+    </context>
+    <context>
+        <name>AsrModelCatalog</name>
+        <message>
+            <location line="-100" />
+            <source>推荐，质量与速度均衡</source>
+            <translation>推奨、品質と速度のバランス型</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>最高质量，资源占用最高</source>
+            <translation>最高品質、リソース使用量も最大</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>高质量，中等资源占用</source>
+            <translation>高品質、中程度のリソース使用量</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>英语专用，中等资源占用</source>
+            <translation>英語専用、中程度のリソース使用量</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>较快，适合普通电脑</source>
+            <translation>高速、一般的なパソコン向け</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>英语专用，速度较快</source>
+            <translation>英語専用、高速</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>快速，准确率较低</source>
+            <translation>高速、精度は低め</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>英语专用，资源占用较低</source>
+            <translation>英語専用、リソース使用量は少なめ</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>最快，准确率最低</source>
+            <translation>最速、精度は最も低い</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>英语专用，速度最快</source>
+            <translation>英語専用、最速</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <location line="+15" />
+            <source>已下载</source>
+            <translation>ダウンロード済み</translation>
+        </message>
+        <message>
+            <location line="-13" />
+            <source>首次使用时下载</source>
+            <translation>初回使用時にダウンロード</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>自定义模型</source>
+            <translation>カスタムモデル</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>当前模型：%1 · %2</source>
+            <translation>現在のモデル：%1 · %2</translation>
+        </message>
+    </context>
+    <context>
+        <name>AsrParallelCatalog</name>
+        <message>
+            <location line="+51" />
+            <source>长音频分块：自动（根据内存和显存）</source>
+            <translation>長時間音声チャンク：自動（メモリと VRAM に基づく）</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>长音频分块：顺序转录</source>
+            <translation>長時間音声チャンク：順次処理</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>长音频分块：同时转录 2 块</source>
+            <translation>長時間音声チャンク：2 個を同時処理</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>长音频分块：同时转录 3 块</source>
+            <translation>長時間音声チャンク：3 個を同時処理</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>长音频分块：同时转录 4 块</source>
+            <translation>長時間音声チャンク：4 個を同時処理</translation>
+        </message>
+    </context>
+    <context>
         <name>AudioCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+305" />
+            <location line="+348" />
             <source>参数均衡器</source>
             <translation>パラメトリックEQ</translation>
         </message>
@@ -176,7 +331,7 @@
     <context>
         <name>AudioPanel</name>
         <message>
-            <location filename="../../desktop/qml/AudioPanel.qml" line="+129" />
+            <location filename="../../desktop/qml/AudioPanel.qml" line="+123" />
             <source>48 kHz 浮点总线图</source>
             <translation>48 kHz 浮動小数点バスグラフ</translation>
         </message>
@@ -300,7 +455,7 @@
             <translation>新しいオーディオバス名</translation>
         </message>
         <message>
-            <location line="-101" />
+            <location line="-95" />
             <source>单声道</source>
             <translation>モノラル</translation>
         </message>
@@ -310,12 +465,7 @@
             <translation>ステレオ</translation>
         </message>
         <message>
-            <location line="+16" />
-            <source>音频</source>
-            <translation>音声</translation>
-        </message>
-        <message>
-            <location line="+19" />
+            <location line="+29" />
             <source>所选片段</source>
             <translation>選択したクリップ</translation>
         </message>
@@ -438,12 +588,27 @@
             <translation>バックグラウンドタスク</translation>
         </message>
         <message>
-            <location line="+47" />
+            <location line="+33" />
+            <source>识别 %1%</source>
+            <translation>認識 %1%</translation>
+        </message>
+        <message>
+            <location line="+34" />
+            <source>第 %1/%2 段 · </source>
+            <translation>範囲 %1/%2 ·</translation>
+        </message>
+        <message>
+            <location line="+6" />
             <source>等待执行</source>
             <translation>実行待ち</translation>
         </message>
         <message>
-            <location line="+11" />
+            <location line="+3" />
+            <source> · 当前步骤 %1%</source>
+            <translation>· 現在の処理 %1%</translation>
+        </message>
+        <message>
+            <location line="+23" />
             <source>取消</source>
             <translation>キャンセル</translation>
         </message>
@@ -476,7 +641,7 @@
             <translation>ダウンロード中：%1</translation>
         </message>
         <message>
-            <location line="+22" />
+            <location line="+24" />
             <source>任务详情</source>
             <translation>タスク詳細</translation>
         </message>
@@ -489,12 +654,27 @@
     <context>
         <name>EditPanel</name>
         <message>
-            <location filename="../../desktop/qml/EditPanel.qml" line="+20" />
-            <source>片段属性</source>
-            <translation>クリッププロパティ</translation>
+            <location filename="../../desktop/qml/EditPanel.qml" line="+36" />
+            <source>复合片段</source>
+            <translation>複合クリップ</translation>
         </message>
         <message>
-            <location line="+20" />
+            <location line="+7" />
+            <source>包含 %1 个片段，共 %2 帧。它会作为一个整体移动和删除，预览与导出仍使用原始素材。</source>
+            <translation>%1 個のクリップ、合計 %2 フレームを含みます。一つの単位として移動・削除され、プレビューと書き出しでは元の素材を使用します。</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>解除复合</source>
+            <translation>複合を解除</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>删除复合片段</source>
+            <translation>複合クリップを削除</translation>
+        </message>
+        <message>
+            <location line="+21" />
             <source>时间线片段</source>
             <translation>タイムラインクリップ</translation>
         </message>
@@ -529,7 +709,12 @@
             <translation>速度を適用</translation>
         </message>
         <message>
-            <location line="+20" />
+            <location line="+8" />
+            <source>解除视音频绑定</source>
+            <translation>映像と音声のリンクを解除</translation>
+        </message>
+        <message>
+            <location line="+19" />
             <source>画面变换</source>
             <translation>映像変形</translation>
         </message>
@@ -584,7 +769,32 @@
             <translation>映像設定を適用</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+6" />
+            <source>已有 %1 个画面关键帧</source>
+            <translation>画面キーフレーム %1 個</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>可对视频分析场景、自动构图或跟踪主体</source>
+            <translation>動画のシーン分析、自動リフレーム、被写体追跡を実行できます</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>检测场景</source>
+            <translation>シーンを検出</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>自动构图</source>
+            <translation>自動リフレーム</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>主体跟踪</source>
+            <translation>被写体トラッキング</translation>
+        </message>
+        <message>
+            <location line="+9" />
             <source>删除所选</source>
             <translation>選択項目を削除</translation>
         </message>
@@ -595,8 +805,8 @@
         </message>
         <message>
             <location line="+8" />
-            <source>转场</source>
-            <translation>トランジション</translation>
+            <source>视觉资源 · 转场</source>
+            <translation>ビジュアル素材・トランジション</translation>
         </message>
         <message>
             <location line="+7" />
@@ -604,7 +814,7 @@
             <translation>クリップを選択し、同じトラックの次の隣接クリップとの間にトランジションを作成します。</translation>
         </message>
         <message>
-            <location line="+30" />
+            <location line="+97" />
             <source>调整所选转场</source>
             <translation>選択したトランジションを編集</translation>
         </message>
@@ -619,7 +829,7 @@
             <translation>トランジションを削除</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+14" />
             <source>选择后可以编辑画面、裁剪速度并添加转场。</source>
             <translation>クリップを選択すると、映像、トリミング、速度を編集し、トランジションを追加できます。</translation>
         </message>
@@ -632,7 +842,7 @@
     <context>
         <name>EncoderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-295" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-349" />
             <source>H.264 软件</source>
             <translation>H.264 ソフトウェア</translation>
         </message>
@@ -660,7 +870,7 @@
             <translation>焼き付けない</translation>
         </message>
         <message>
-            <location line="+126" />
+            <location line="+182" />
             <source>MP4 视频 (*.mp4)</source>
             <translation>MP4 動画 (*.mp4)</translation>
         </message>
@@ -696,6 +906,39 @@
         </message>
     </context>
     <context>
+        <name>ExportHistoryPanel</name>
+        <message>
+            <location filename="../../desktop/qml/components/ExportHistoryPanel.qml" line="+22" />
+            <source>导出历史与质量检查</source>
+            <translation>書き出し履歴と品質チェック</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>%1 次</source>
+            <translation>%1 回</translation>
+        </message>
+        <message>
+            <location line="+36" />
+            <source>检查通过 · %1 个提醒</source>
+            <translation>チェック合格・注意 %1 件</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>发现 %1 个问题 · %2 个提醒</source>
+            <translation>問題 %1 件・注意 %2 件</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>成片</source>
+            <translation>完成動画</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>报告</source>
+            <translation>レポート</translation>
+        </message>
+    </context>
+    <context>
         <name>ExportPanel</name>
         <message>
             <location filename="../../desktop/qml/ExportPanel.qml" line="+64" />
@@ -704,11 +947,21 @@
         </message>
         <message>
             <location line="+11" />
-            <source>导出</source>
-            <translation>書き出し</translation>
+            <source>导出 FCPXML</source>
+            <translation>FCPXML を書き出す</translation>
         </message>
         <message>
-            <location line="+32" />
+            <location line="+3" />
+            <source>Final Cut Pro XML (*.fcpxml)</source>
+            <translation>Final Cut Pro XML (*.fcpxml)</translation>
+        </message>
+        <message>
+            <location line="+22" />
+            <source>导出 FCPXML（Final Cut Pro / DaVinci Resolve）</source>
+            <translation>FCPXML を書き出す（Final Cut Pro / DaVinci Resolve）</translation>
+        </message>
+        <message>
+            <location line="+15" />
             <source>导出任务</source>
             <translation>書き出しタスク</translation>
         </message>
@@ -1099,32 +1352,27 @@
     <context>
         <name>HighlightPanel</name>
         <message>
-            <location filename="../../desktop/qml/HighlightPanel.qml" line="+55" />
-            <source>AI 高光</source>
-            <translation>AI ハイライト</translation>
-        </message>
-        <message>
-            <location line="+10" />
+            <location filename="../../desktop/qml/HighlightPanel.qml" line="+70" />
             <source>分析</source>
             <translation>分析</translation>
         </message>
         <message>
-            <location line="+27" />
+            <location line="+17" />
             <source>候选区间保存在项目中，可直接生成独立的 9:16 短视频序列。</source>
             <translation>候補区間はプロジェクトに保存され、独立した 9:16 ショート動画シーケンスを作成できます。</translation>
         </message>
         <message>
-            <location line="-43" />
+            <location line="-38" />
             <source>选择批量导出文件夹</source>
             <translation>一括書き出しフォルダーを選択</translation>
         </message>
         <message>
-            <location line="+28" />
+            <location line="+14" />
             <source>需要先生成字幕</source>
             <translation>先に字幕を生成してください</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+17" />
             <source>AI 分析需要字幕；没有字幕时仍可手动添加候选。</source>
             <translation>AI 分析には字幕が必要ですが、字幕がなくても候補を手動で追加できます。</translation>
         </message>
@@ -1415,7 +1663,7 @@
     <context>
         <name>LlmProviderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+267" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+265" />
             <source>自定义 / 本地</source>
             <translation>カスタム / ローカル</translation>
         </message>
@@ -1423,7 +1671,7 @@
     <context>
         <name>Main</name>
         <message>
-            <location filename="../../desktop/qml/Main.qml" line="+101" />
+            <location filename="../../desktop/qml/Main.qml" line="+112" />
             <source>确认下载</source>
             <translation>ダウンロードの確認</translation>
         </message>
@@ -1433,7 +1681,7 @@
             <translation>リンク解析が完了しました</translation>
         </message>
         <message>
-            <location line="-83" />
+            <location line="-94" />
             <source>最佳可用质量</source>
             <translation>利用可能な最高画質</translation>
         </message>
@@ -1443,7 +1691,7 @@
             <translation>音声のみダウンロード</translation>
         </message>
         <message>
-            <location line="+62" />
+            <location line="+73" />
             <source>选择媒体默认保存位置</source>
             <translation>メディアの既定の保存先を選択</translation>
         </message>
@@ -1582,6 +1830,11 @@
         </message>
         <message>
             <location line="+2" />
+            <source>网页</source>
+            <translation>Web</translation>
+        </message>
+        <message>
+            <location line="+2" />
             <source>字幕</source>
             <translation>字幕</translation>
         </message>
@@ -1596,7 +1849,7 @@
             <translation>メディアはオフラインです</translation>
         </message>
         <message>
-            <location line="+120" />
+            <location line="+126" />
             <source>拖到时间轴；双击则添加到播放头</source>
             <translation>タイムラインへドラッグ、またはダブルクリックで再生ヘッド位置に追加</translation>
         </message>
@@ -1604,12 +1857,7 @@
     <context>
         <name>MediaPanel</name>
         <message>
-            <location filename="../../desktop/qml/MediaPanel.qml" line="+197" />
-            <source>素材</source>
-            <translation>メディア</translation>
-        </message>
-        <message>
-            <location line="-115" />
+            <location filename="../../desktop/qml/MediaPanel.qml" line="+83" />
             <source>添加到播放头</source>
             <translation>再生ヘッド位置に追加</translation>
         </message>
@@ -1629,19 +1877,14 @@
             <translation>リスト</translation>
         </message>
         <message>
-            <location line="+94" />
-            <source>导入媒体</source>
-            <translation>メディアを読み込む</translation>
+            <location line="+32" />
+            <source>打开素材所在文件夹</source>
+            <translation>素材の保存先フォルダーを開く</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+70" />
             <source>所有文件 (*)</source>
             <translation>すべてのファイル (*)</translation>
-        </message>
-        <message>
-            <location line="+0" />
-            <source>媒体文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa)</source>
-            <translation>メディアファイル (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa)</translation>
         </message>
         <message>
             <location line="+5" />
@@ -1659,27 +1902,32 @@
             <translation>異なる内容に置き換えますか？</translation>
         </message>
         <message>
-            <location line="+67" />
+            <location line="+30" />
+            <source>搜索素材、转写内容或概念</source>
+            <translation>素材、文字起こし、概念を検索</translation>
+        </message>
+        <message>
+            <location line="+15" />
             <source>点击切换视图</source>
             <translation>クリックして表示を切り替え</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+21" />
             <source>将素材拖到下方时间轴；同一素材可以重复拖入</source>
             <translation>メディアを下のタイムラインへドラッグします。同じ素材を繰り返し使用できます</translation>
         </message>
         <message>
-            <location line="-161" />
+            <location line="-152" />
             <source>重新定位</source>
             <translation>再リンク</translation>
         </message>
         <message>
-            <location line="+120" />
+            <location line="+145" />
             <source>批量重新定位 (%1)</source>
             <translation>一括再リンク (%1)</translation>
         </message>
         <message>
-            <location line="-28" />
+            <location line="-53" />
             <source>所选文件的内容指纹与原素材不同：
 %1
 
@@ -1690,17 +1938,22 @@
 確認後にリンクを更新し、プレビューキャッシュと音声波形を再生成します。</translation>
         </message>
         <message>
-            <location line="+32" />
+            <location line="-29" />
+            <source>导入素材</source>
+            <translation>素材を読み込む</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>素材文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)</source>
+            <translation>素材ファイル (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)</translation>
+        </message>
+        <message>
+            <location line="+70" />
             <source>导入</source>
             <translation>読み込み</translation>
         </message>
         <message>
-            <location line="+14" />
-            <source>搜索素材</source>
-            <translation>メディアを検索</translation>
-        </message>
-        <message>
-            <location line="+44" />
+            <location line="+37" />
             <source>导入第一个素材</source>
             <translation>最初のメディアを読み込む</translation>
         </message>
@@ -1711,8 +1964,8 @@
         </message>
         <message>
             <location line="+2" />
-            <source>支持视频、音频和图片。下载的视频也会自动出现在这里。</source>
-            <translation>動画、音声、画像に対応しています。ダウンロードした動画も自動的にここへ表示されます。</translation>
+            <source>支持视频、音频、图片、字幕和网页素材。下载的视频也会自动出现在这里。</source>
+            <translation>動画、音声、画像、字幕、Web 素材に対応しています。ダウンロードした動画も自動的にここに表示されます。</translation>
         </message>
         <message>
             <location line="+1" />
@@ -1829,6 +2082,59 @@
         </message>
     </context>
     <context>
+        <name>ProjectVersionsDialog</name>
+        <message>
+            <location filename="../../desktop/qml/ProjectVersionsDialog.qml" line="+17" />
+            <source>命名版本</source>
+            <translation>名前付きバージョン</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>命名版本保存项目数据库的完整快照。恢复后，时间线、字幕、网页素材状态和项目设置会一起回到该版本。</source>
+            <translation>名前付きバージョンはプロジェクトデータベース全体のスナップショットを保存します。復元すると、タイムライン、字幕、Web 素材の状態、プロジェクト設定がまとめて戻ります。</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>例如：客户审阅版</source>
+            <translation>例：クライアント確認版</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>保存当前版本</source>
+            <translation>現在のバージョンを保存</translation>
+        </message>
+        <message>
+            <location line="+43" />
+            <source>项目修订 %1 · %2</source>
+            <translation>プロジェクト改訂 %1・%2</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>恢复</source>
+            <translation>復元</translation>
+        </message>
+        <message>
+            <location line="+14" />
+            <source>还没有命名版本</source>
+            <translation>名前付きバージョンはまだありません</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>在重要调整前保存一个版本，之后可以完整恢复。</source>
+            <translation>大きな編集の前にバージョンを保存すると、後で完全に復元できます。</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>恢复“%1”？</source>
+            <translation>「%1」を復元しますか？</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>当前未命名的编辑会被该版本替换。已有命名版本和快照文件会保留。</source>
+            <translation>現在の未保存編集はこのバージョンに置き換わります。既存の名前付きバージョンとスナップショットファイルは保持されます。</translation>
+        </message>
+    </context>
+    <context>
         <name>SequenceToolbar</name>
         <message>
             <location filename="../../desktop/qml/components/SequenceToolbar.qml" line="+10" />
@@ -1895,7 +2201,7 @@
             <translation>設定</translation>
         </message>
         <message>
-            <location line="+150" />
+            <location line="+153" />
             <source>选择媒体默认保存位置</source>
             <translation>メディアの既定の保存先を選択</translation>
         </message>
@@ -1966,12 +2272,12 @@
         </message>
         <message>
             <location line="+5" />
-            <location line="+327" />
+            <location line="+328" />
             <source>自动</source>
             <translation>自動</translation>
         </message>
         <message>
-            <location line="-327" />
+            <location line="-328" />
             <source>原始素材</source>
             <translation>元のメディア</translation>
         </message>
@@ -2087,12 +2393,12 @@
         </message>
         <message>
             <location line="+198" />
-            <location line="+287" />
+            <location line="+299" />
             <source>保存</source>
             <translation>保存</translation>
         </message>
         <message>
-            <location line="-278" />
+            <location line="-290" />
             <source>视频编码</source>
             <translation>動画コーデック</translation>
         </message>
@@ -2147,7 +2453,7 @@
             <translation>CUDAは未確認です</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="+14" />
             <source>正在处理</source>
             <translation>処理中</translation>
         </message>
@@ -2202,7 +2508,12 @@
             <translation>スマート分割の文字数上限</translation>
         </message>
         <message>
-            <location line="+22" />
+            <location line="+13" />
+            <source>长音频并行分块</source>
+            <translation>長時間音声チャンクの並列処理</translation>
+        </message>
+        <message>
+            <location line="+20" />
             <source>OpenAI 兼容 LLM 提供商</source>
             <translation>OpenAI互換LLMプロバイダー</translation>
         </message>
@@ -2262,12 +2573,12 @@
             <translation>既定の翻訳言語</translation>
         </message>
         <message>
-            <location line="-234" />
+            <location line="-245" />
             <source>取消</source>
             <translation>キャンセル</translation>
         </message>
         <message>
-            <location line="-265" />
+            <location line="-266" />
             <source>响度目标（LUFS）</source>
             <translation>ラウドネス目標（LUFS）</translation>
         </message>
@@ -2342,7 +2653,7 @@
             <translation>カンマ区切り（例：en,zh）</translation>
         </message>
         <message>
-            <location line="+70" />
+            <location line="+71" />
             <source>转录程序路径</source>
             <translation>文字起こしプログラムのパス</translation>
         </message>
@@ -2382,7 +2693,7 @@
             <translation>auto は自動検出</translation>
         </message>
         <message>
-            <location line="+86" />
+            <location line="+97" />
             <source>提供商预设</source>
             <translation>プロバイダープリセット</translation>
         </message>
@@ -2435,7 +2746,7 @@
             <translation>SRT字幕 (*.srt)</translation>
         </message>
         <message>
-            <location line="+15" />
+            <location line="+5" />
             <source>字幕文档</source>
             <translation>字幕ドキュメント</translation>
         </message>
@@ -2667,12 +2978,7 @@
             <translation>中間で分割</translation>
         </message>
         <message>
-            <location line="-470" />
-            <source>字幕编辑</source>
-            <translation>字幕編集</translation>
-        </message>
-        <message>
-            <location line="+438" />
+            <location line="-32" />
             <source>播放头设为开始</source>
             <translation>開始を再生ヘッドに設定</translation>
         </message>
@@ -2748,7 +3054,7 @@
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location line="-371" />
+            <location line="-425" />
             <source>主总线</source>
             <translation>マスター</translation>
         </message>
@@ -2786,7 +3092,22 @@
     <context>
         <name>TaskCatalog</name>
         <message>
-            <location line="+35" />
+            <location line="-27" />
+            <source>内置 faster-whisper</source>
+            <translation>内蔵 faster-whisper</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>自动并行</source>
+            <translation>自動並列処理</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>%1 块并行</source>
+            <translation>%1 チャンク並列</translation>
+        </message>
+        <message>
+            <location line="+57" />
             <source>导入素材 %1</source>
             <translation>メディア %1 を読み込む</translation>
         </message>
@@ -2814,6 +3135,11 @@
             <location line="+3" />
             <source>批量导出短视频</source>
             <translation>ショート動画を一括書き出し</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>渲染网页片段</source>
+            <translation>Web クリップをレンダリング</translation>
         </message>
         <message>
             <location line="+2" />
@@ -2855,16 +3181,16 @@
             <source>测量序列响度</source>
             <translation>シーケンスラウドネスを測定</translation>
         </message>
+        <message>
+            <location line="+2" />
+            <source>检测场景切点</source>
+            <translation>シーンカットを検出</translation>
+        </message>
     </context>
     <context>
         <name>TaskCenterPanel</name>
         <message>
-            <location filename="../../desktop/qml/TaskCenterPanel.qml" line="+35" />
-            <source>任务中心</source>
-            <translation>タスクセンター</translation>
-        </message>
-        <message>
-            <location line="+32" />
+            <location filename="../../desktop/qml/TaskCenterPanel.qml" line="+58" />
             <source>全部取消</source>
             <translation>すべてキャンセル</translation>
         </message>
@@ -2874,7 +3200,7 @@
             <translation>終了済みをクリア</translation>
         </message>
         <message>
-            <location line="+102" />
+            <location line="+130" />
             <source>打开结果</source>
             <translation>結果を開く</translation>
         </message>
@@ -2884,12 +3210,12 @@
             <translation>リストから削除</translation>
         </message>
         <message>
-            <location line="-46" />
+            <location line="-56" />
             <source>等待执行 · 队列第 %1 位</source>
             <translation>待機中 · キュー%1番目</translation>
         </message>
         <message>
-            <location line="-122" />
+            <location line="-131" />
             <source>取消全部任务？</source>
             <translation>すべてのタスクをキャンセルしますか？</translation>
         </message>
@@ -2899,7 +3225,7 @@
             <translation>実行中および待機中のタスクはキャンセルされます。生成済みの結果は削除されません。</translation>
         </message>
         <message>
-            <location line="+21" />
+            <location line="+14" />
             <source>进行中 %1 · 已暂停 %2</source>
             <translation>実行中 %1 · 一時停止 %2</translation>
         </message>
@@ -2909,12 +3235,22 @@
             <translation>実行中 %1</translation>
         </message>
         <message>
-            <location line="+14" />
+            <location line="+12" />
             <source>暂停进行中</source>
             <translation>実行中を一時停止</translation>
         </message>
         <message>
-            <location line="+97" />
+            <location line="+99" />
+            <source>第 %1/%2 段 · </source>
+            <translation>範囲 %1/%2 ·</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source> · 识别 %1%</source>
+            <translation>· 認識 %1%</translation>
+        </message>
+        <message>
+            <location line="+19" />
             <source>暂停</source>
             <translation>一時停止</translation>
         </message>
@@ -2957,7 +3293,7 @@
     <context>
         <name>TaskMessageCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+18" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+21" />
             <source>已排队</source>
             <translation>キューに追加</translation>
         </message>
@@ -2998,46 +3334,146 @@
         </message>
         <message>
             <location line="+1" />
+            <source>正在登记下载素材</source>
+            <translation>ダウンロードした素材を登録中</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>正在加载转录模型</source>
             <translation>文字起こしモデルを読込中</translation>
         </message>
         <message>
             <location line="+1" />
+            <source>正在读取转录音频信息</source>
+            <translation>文字起こし音声の情報を読込中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在检查音频声道</source>
+            <translation>音声チャンネルを確認中</translation>
+        </message>
+        <message>
+            <location line="+3" />
             <source>正在准备转录音频</source>
             <translation>文字起こし用の音声を準備中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>正在编译时间轴音频</source>
-            <translation>タイムライン音声をコンパイル中</translation>
+            <location line="+4" />
+            <source>正在按剪辑位置生成时间线字幕</source>
+            <translation>クリップ位置に合わせてタイムライン字幕を生成中</translation>
         </message>
         <message>
-            <location line="+3" />
-            <source>正在生成时间轴混音</source>
-            <translation>タイムラインミックスを生成中</translation>
-        </message>
-        <message>
-            <location line="+3" />
-            <source>时间轴音频已就绪</source>
-            <translation>タイムライン音声の準備完了</translation>
-        </message>
-        <message>
-            <location line="+3" />
+            <location line="+6" />
             <source>正在转录</source>
             <translation>文字起こし中</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>正在按静音位置切分长音频</source>
-            <translation>無音位置で長い音声を分割中</translation>
+            <source>正在检测长音频静音位置</source>
+            <translation>長い音声の無音位置を検出中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在生成长音频分块</source>
+            <translation>長い音声の分割を生成中</translation>
+        </message>
+        <message>
+            <location line="+12" />
+            <source>正在保存翻译结果</source>
+            <translation>翻訳結果を保存中</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>正在保存高光结果</source>
+            <translation>ハイライト結果を保存中</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>正在创建 SDR 轻量预览文件</source>
+            <translation>SDR 軽量プレビューファイルを作成中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在登记轻量预览文件</source>
+            <translation>軽量プレビューファイルを登録中</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>正在计算音频波形</source>
+            <translation>音声波形を計算中</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>正在转录长音频分块</source>
-            <translation>長い音声の分割を文字起こし中</translation>
+            <source>正在保存音频波形</source>
+            <translation>音声波形を保存中</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>正在处理网页素材</source>
+            <translation>Web 素材を処理中</translation>
         </message>
         <message>
             <location line="+1" />
+            <source>正在复用已有网页画面</source>
+            <translation>既存の Web フレームを再利用中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在复制网页素材结果</source>
+            <translation>Web 素材の結果をコピー中</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在编码网页素材</source>
+            <translation>Web 素材をエンコード中</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>正在检测场景切点</source>
+            <translation>シーンカットを検出中</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在保存场景切点</source>
+            <translation>シーンカットを保存中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在保存画面跟踪结果</source>
+            <translation>被写体トラッキング結果を保存中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在保存下载分析结果</source>
+            <translation>ダウンロード解析結果を保存中</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>正在保存响度结果</source>
+            <translation>ラウドネス結果を保存中</translation>
+        </message>
+        <message>
+            <location line="+17" />
+            <source>正在保存序列入出点分析</source>
+            <translation>シーケンスのイン・アウト解析を保存中</translation>
+        </message>
+        <message>
+            <location line="-88" />
+            <source>正在复用已有源区间转录</source>
+            <translation>既存のソース範囲の文字起こしを再利用しています</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>当前源音频区间识别完成</source>
+            <translation>現在のソース音声範囲の認識が完了しました</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>正在并行转录长音频分块</source>
+            <translation>長時間音声のチャンクを並列で文字起こししています</translation>
+        </message>
+        <message>
+            <location line="+3" />
             <source>CUDA 不可用，正在切换到 CPU</source>
             <translation>CUDA が利用できないため CPU に切り替えています</translation>
         </message>
@@ -3045,11 +3481,6 @@
             <location line="+3" />
             <source>正在启动转录引擎</source>
             <translation>文字起こしエンジンを起動中</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>转录完成</source>
-            <translation>文字起こし完了</translation>
         </message>
         <message>
             <location line="+1" />
@@ -3062,42 +3493,22 @@
             <translation>校正中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>翻译完成</source>
-            <translation>翻訳完了</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+2" />
             <source>正在分析高光</source>
             <translation>ハイライトを分析中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>高光分析完成</source>
-            <translation>ハイライト分析完了</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+2" />
             <source>正在创建轻量预览文件</source>
             <translation>軽量プレビューファイルを作成中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>正在检查轻量预览文件</source>
-            <translation>軽量プレビューファイルを確認中</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+5" />
             <source>正在准备音频波形</source>
             <translation>音声波形を準備中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>正在检查音频波形</source>
-            <translation>音声波形を確認中</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+3" />
             <source>正在读取素材信息</source>
             <translation>メディア情報を読込中</translation>
         </message>
@@ -3113,18 +3524,58 @@
         </message>
         <message>
             <location line="+1" />
+            <source>正在导出时间线</source>
+            <translation>タイムラインを書き出し中</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>正在验证导出文件</source>
             <translation>書き出しを検証中</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>正在导出短视频</source>
-            <translation>ショート動画を書き出し中</translation>
+            <source>正在扫描成片质量</source>
+            <translation>完成映像の品質を検査中</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>短视频批量导出完成</source>
-            <translation>ショート動画の一括書き出し完了</translation>
+            <source>正在生成成片证明帧</source>
+            <translation>完成映像の検証用フレームを生成中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在校验成片文件</source>
+            <translation>完成映像ファイルを検証中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在准备网页画面</source>
+            <translation>Web フレームを準備中</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在渲染网页画面</source>
+            <translation>Web フレームをレンダリング中</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>正在准备场景检测</source>
+            <translation>シーン検出を準備中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在准备画面分析</source>
+            <translation>画面分析を準備中</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在跟踪画面主体</source>
+            <translation>被写体を追跡中</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>正在导出短视频</source>
+            <translation>ショート動画を書き出し中</translation>
         </message>
         <message>
             <location line="+1" />
@@ -3132,14 +3583,14 @@
             <translation>ダウンロードリンクを解析中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>下载分析完成</source>
-            <translation>ダウンロード解析完了</translation>
+            <location line="+4" />
+            <source>正在编译音频图</source>
+            <translation>音声グラフをコンパイル中</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>正在编译音频图</source>
-            <translation>音声グラフをコンパイル中</translation>
+            <source>正在渲染分析音频</source>
+            <translation>解析用音声をレンダリング中</translation>
         </message>
         <message>
             <location line="+1" />
@@ -3152,19 +3603,24 @@
             <translation>ピークを測定中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>响度测量完成</source>
-            <translation>ラウドネス測定完了</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+2" />
             <source>正在编译最终时间线画面</source>
             <translation>最終タイムライン映像をコンパイル中</translation>
         </message>
         <message>
             <location line="+3" />
+            <source>正在渲染片头检测画面</source>
+            <translation>冒頭検出用の映像をレンダリング中</translation>
+        </message>
+        <message>
+            <location line="+3" />
             <source>正在检测片头黑屏</source>
             <translation>先頭の黒画面を検出中</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在渲染片尾检测画面</source>
+            <translation>末尾検出用の映像をレンダリング中</translation>
         </message>
         <message>
             <location line="+3" />
@@ -3177,12 +3633,7 @@
             <translation>字幕の発話範囲を読込中</translation>
         </message>
         <message>
-            <location line="+1" />
-            <source>序列入出点分析完成</source>
-            <translation>シーケンスのイン・アウト解析完了</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+4" />
             <source>工作流已取消</source>
             <translation>ワークフローをキャンセル</translation>
         </message>
@@ -3200,7 +3651,7 @@
     <context>
         <name>TaskStatusCatalog</name>
         <message>
-            <location line="-77" />
+            <location line="-126" />
             <source>等待中</source>
             <translation>待機中</translation>
         </message>
@@ -3233,13 +3684,13 @@
     <context>
         <name>TimelineView</name>
         <message>
-            <location filename="../../desktop/qml/TimelineView.qml" line="+302" />
+            <location filename="../../desktop/qml/TimelineView.qml" line="+451" />
             <source>分割片段</source>
             <translation>クリップを分割</translation>
         </message>
         <message>
-            <location line="-64" />
-            <location line="+84" />
+            <location line="-109" />
+            <location line="+129" />
             <source>删除所选片段</source>
             <translation>選択したクリップを削除</translation>
         </message>
@@ -3264,12 +3715,12 @@
             <translation>字幕トラックを追加</translation>
         </message>
         <message>
-            <location line="+1026" />
+            <location line="+1297" />
             <source>轨道</source>
             <translation>トラック</translation>
         </message>
         <message>
-            <location line="-1017" />
+            <location line="-1288" />
             <source>缩放</source>
             <translation>ズーム</translation>
         </message>
@@ -3279,23 +3730,68 @@
             <translation>再生ヘッド位置で選択クリップを分割（Ctrl+K / Ctrl+B）</translation>
         </message>
         <message>
-            <location line="-77" />
-            <location line="+81" />
+            <location line="-129" />
+            <location line="+133" />
             <source>创建片段副本</source>
             <translation>クリップを複製</translation>
         </message>
         <message>
-            <location line="-86" />
+            <location line="-138" />
             <source>在播放头处分割</source>
             <translation>再生ヘッド位置で分割</translation>
         </message>
         <message>
-            <location line="+17" />
+            <location line="+12" />
+            <source>解除视音频绑定</source>
+            <translation>映像と音声のリンクを解除</translation>
+        </message>
+        <message>
+            <location line="+12" />
             <source>波纹删除所选片段</source>
             <translation>選択したクリップをリップル削除</translation>
         </message>
         <message>
-            <location line="+75" />
+            <location line="+65" />
+            <source>多选</source>
+            <translation>複数選択</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>开启后直接点击多个片段即可选择；不需要按快捷键</source>
+            <translation>有効にすると、ショートカットなしで複数のクリップを直接クリックして選択できます。</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>已选复合片段</source>
+            <translation>複合クリップを選択中</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已选 %1 个</source>
+            <translation>%1 個を選択中</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>清除选择</source>
+            <translation>選択を解除</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>创建复合片段</source>
+            <translation>複合クリップを作成</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>把同一轨道上首尾相接的所选片段合成一个整体</source>
+            <translation>同じトラック上で連続する選択クリップを一つにまとめます。</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>解除复合</source>
+            <translation>複合を解除</translation>
+        </message>
+        <message>
+            <location line="+22" />
             <source>在片段末尾创建副本（Ctrl+D）</source>
             <translation>クリップの末尾に複製を作成（Ctrl+D）</translation>
         </message>
@@ -3410,7 +3906,7 @@
             <translation>タイムライン全体を表示</translation>
         </message>
         <message>
-            <location line="+124" />
+            <location line="+135" />
             <source>序列入点 %1</source>
             <translation>シーケンス入点 %1</translation>
         </message>
@@ -3420,7 +3916,7 @@
             <translation>シーケンス出点 %1</translation>
         </message>
         <message>
-            <location line="+151" />
+            <location line="+152" />
             <source>释放以新建轨道</source>
             <translation>ドロップして新しいトラックを作成</translation>
         </message>
@@ -3435,18 +3931,28 @@
             <translation>現在位置にドロップ</translation>
         </message>
         <message>
-            <location line="+76" />
-            <location line="+169" />
+            <location line="+101" />
+            <location line="+232" />
             <source>音频 · </source>
             <translation>音声 ·</translation>
         </message>
         <message>
-            <location line="-20" />
+            <location line="-40" />
             <source>%1 的音频，起始帧 %2，持续 %3 帧</source>
             <translation>%1の音声、開始フレーム%2、長さ%3フレーム</translation>
         </message>
         <message>
-            <location line="+465" />
+            <location line="+159" />
+            <source>复合片段 %1，包含 %2 个片段</source>
+            <translation>複合クリップ %1、%2 個のクリップを含む</translation>
+        </message>
+        <message>
+            <location line="+18" />
+            <source>复合片段 · %1 个</source>
+            <translation>複合クリップ · %1 個</translation>
+        </message>
+        <message>
+            <location line="+479" />
             <location line="+2" />
             <source>添加轨道</source>
             <translation>トラックを追加</translation>
@@ -3467,7 +3973,28 @@
             <translation>字幕トラック</translation>
         </message>
         <message>
-            <location line="+65" />
+            <location line="+75" />
+            <location line="+52" />
+            <source>转录</source>
+            <translation>文字起こし</translation>
+        </message>
+        <message>
+            <location line="-48" />
+            <source>当前转录轨道</source>
+            <translation>現在の文字起こしトラック</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>设为转录轨道</source>
+            <translation>文字起こしトラックに設定</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>设为转录轨道；转录将只读取这条轨道</source>
+            <translation>文字起こしトラックに設定します。文字起こしではこのトラックのみを読み込みます</translation>
+        </message>
+        <message>
+            <location line="+94" />
             <source>禁用轨道</source>
             <translation>トラックを無効化</translation>
         </message>
@@ -3507,7 +4034,12 @@
             <translation>ソロ</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="-126" />
+            <source>转录只读取这条轨道</source>
+            <translation>文字起こしはこのトラックだけを読み込みます</translation>
+        </message>
+        <message>
+            <location line="+139" />
             <source>轨道上移</source>
             <translation>トラックを上へ移動</translation>
         </message>
@@ -3517,12 +4049,12 @@
             <translation>トラックを下へ移動</translation>
         </message>
         <message>
-            <location line="-768" />
+            <location line="-1135" />
             <source>片段 %1，起始帧 %2，持续 %3 帧</source>
             <translation>クリップ %1、開始フレーム %2、長さ %3 フレーム</translation>
         </message>
         <message>
-            <location line="+292" />
+            <location line="+516" />
             <source>字幕：%1。拖动可移动，拖动两侧可调整时间。 </source>
             <translation>字幕：%1。ドラッグで移動し、両端をドラッグして時間を調整します。</translation>
         </message>
@@ -3548,7 +4080,7 @@
             <translation>トランジション %1、長さ %2 フレーム</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+42" />
             <source> 帧</source>
             <translation>フレーム</translation>
         </message>
@@ -3561,37 +4093,87 @@
     <context>
         <name>TranscriptPanel</name>
         <message>
-            <location filename="../../desktop/qml/TranscriptPanel.qml" line="+111" />
+            <location filename="../../desktop/qml/TranscriptPanel.qml" line="+256" />
             <source>转录任务</source>
             <translation>文字起こしタスク</translation>
         </message>
         <message>
-            <location line="-50" />
+            <location line="-139" />
             <source>当前时间轴</source>
             <translation>現在のタイムライン</translation>
         </message>
         <message>
-            <location line="-20" />
-            <source>自动字幕</source>
-            <translation>自動字幕</translation>
+            <location line="-56" />
+            <source>%1 小时 %2 分钟</source>
+            <translation>%1時間%2分</translation>
         </message>
         <message>
-            <location line="+27" />
-            <source>按时间轴顺序转录所有可听见的视频和音频，并自动生成对齐的字幕。</source>
-            <translation>タイムライン順に聞こえるすべての映像と音声を文字起こしし、同期した字幕を自動生成します。</translation>
+            <location line="+2" />
+            <source>%1 分 %2 秒</source>
+            <translation>%1分%2秒</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>%1 秒</source>
+            <translation>%1秒</translation>
+        </message>
+        <message>
+            <location line="+60" />
+            <source>只读取标记为“对白”的音轨，并合并实际使用到的源音频区间；不会再转录未使用的完整素材。</source>
+            <translation>「会話」に設定されたオーディオトラックのみを読み込み、タイムラインで実際に使用されているソース音声範囲を統合します。未使用部分は文字起こししません。</translation>
         </message>
         <message>
             <location line="+8" />
-            <source>范围：序列入出点 %1–%2 帧</source>
-            <translation>範囲：シーケンスのイン・アウト、%1～%2フレーム</translation>
+            <source>时间轴范围：%1–%2</source>
+            <translation>タイムライン範囲：%1～%2</translation>
         </message>
         <message>
-            <location line="+3" />
-            <source>范围：整个序列，共 %1 帧</source>
-            <translation>範囲：シーケンス全体、%1フレーム</translation>
+            <location line="+5" />
+            <source>当前没有可转录范围</source>
+            <translation>文字起こし可能な範囲がありません</translation>
         </message>
         <message>
-            <location line="+11" />
+            <location line="+8" />
+            <source>实际识别：%1 个素材 · %2 个源区间 · 约 %3</source>
+            <translation>実際の認識量：素材 %1 件 · ソース範囲 %2 件 · 約 %3</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>本次转录设置</source>
+            <translation>今回の文字起こし設定</translation>
+        </message>
+        <message>
+            <location line="+31" />
+            <source>设备：自动</source>
+            <translation>デバイス：自動</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>设备：CUDA</source>
+            <translation>デバイス：CUDA</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>设备：CPU</source>
+            <translation>デバイス：CPU</translation>
+        </message>
+        <message>
+            <location line="+25" />
+            <source>并行分块会同时加载多份模型；自动模式会根据 CPU、内存和显存决定是否并行。</source>
+            <translation>チャンクを並列処理すると複数のモデルが同時に読み込まれます。自動モードでは CPU、メモリ、VRAM に応じて並列実行するかを決定します。</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>引擎：Faster-Whisper XXL CLI</source>
+            <translation>エンジン：Faster-Whisper XXL CLI</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>引擎：内置 faster-whisper</source>
+            <translation>エンジン：内蔵 faster-whisper</translation>
+        </message>
+        <message>
+            <location line="+9" />
             <source>正在转录…</source>
             <translation>文字起こし中…</translation>
         </message>
@@ -3601,27 +4183,27 @@
             <translation>現在のタイムラインを文字起こし</translation>
         </message>
         <message>
-            <location line="+9" />
-            <source>当前时间轴范围内没有可听见的视频或音频。</source>
-            <translation>現在のタイムライン範囲に聞こえる映像または音声がありません。</translation>
-        </message>
-        <message>
-            <location line="+30" />
+            <location line="+43" />
             <source>时间轴字幕已生成</source>
             <translation>タイムライン字幕を生成しました</translation>
         </message>
         <message>
-            <location line="+7" />
-            <source>%1 · %2 条字幕 · %3–%4 帧</source>
-            <translation>%1 · 字幕%2件 · %3～%4フレーム</translation>
-        </message>
-        <message>
-            <location line="+1" />
+            <location line="+8" />
             <source>未知语言</source>
             <translation>言語不明</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="-38" />
+            <source>请先在时间轴把一条音频轨设为“对白”，并确认当前范围内有对白素材。</source>
+            <translation>音声トラックを一つ「台詞」に設定し、現在の範囲に台詞素材があることを確認してください。</translation>
+        </message>
+        <message>
+            <location line="+37" />
+            <source>%1 · %2 条字幕 · %3–%4 帧</source>
+            <translation>%1 · 字幕%2件 · %3～%4フレーム</translation>
+        </message>
+        <message>
+            <location line="+11" />
             <source>字幕已经放入当前序列；重新转录会更新这份字幕。</source>
             <translation>字幕は現在のシーケンスに配置済みです。再文字起こしするとこの字幕が更新されます。</translation>
         </message>
@@ -3632,52 +4214,32 @@
         </message>
     </context>
     <context>
-        <name>TransitionCatalog</name>
+        <name>TranscriptWorkspace</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+150" />
-            <source>交叉溶解</source>
-            <translation>クロスディゾルブ</translation>
+            <location filename="../../desktop/qml/TranscriptWorkspace.qml" line="+21" />
+            <source>转写</source>
+            <translation>文字起こし</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>淡化</source>
-            <translation>フェード</translation>
+            <source>字幕</source>
+            <translation>字幕</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>淡黑</source>
-            <translation>黒へフェード</translation>
+            <source>翻译</source>
+            <translation>翻訳</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>左擦除</source>
-            <translation>左ワイプ</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>右擦除</source>
-            <translation>右ワイプ</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>左滑动</source>
-            <translation>左スライド</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>右滑动</source>
-            <translation>右スライド</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>缩放</source>
-            <translation>ズーム</translation>
+            <source>术语表</source>
+            <translation>用語集</translation>
         </message>
     </context>
     <context>
         <name>TranslationCatalog</name>
         <message>
-            <location line="-43" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+163" />
             <source>标准翻译</source>
             <translation>標準翻訳</translation>
         </message>
@@ -3740,7 +4302,7 @@
     <context>
         <name>TranslationPanel</name>
         <message>
-            <location filename="../../desktop/qml/TranslationPanel.qml" line="+128" />
+            <location filename="../../desktop/qml/TranslationPanel.qml" line="+129" />
             <source>翻译</source>
             <translation>翻訳</translation>
         </message>
@@ -3760,12 +4322,7 @@
             <translation>全文を校正</translation>
         </message>
         <message>
-            <location line="-95" />
-            <source>字幕翻译</source>
-            <translation>字幕翻訳</translation>
-        </message>
-        <message>
-            <location line="+35" />
+            <location line="-60" />
             <source>还没有可翻译的字幕</source>
             <translation>翻訳できる字幕がありません</translation>
         </message>
@@ -3875,7 +4432,7 @@
             <translation>元字幕に含まれる用語だけを翻訳リクエストに送り、指定訳の厳守をモデルに求めます。</translation>
         </message>
         <message>
-            <location line="+49" />
+            <location line="+51" />
             <source>术语库为空</source>
             <translation>用語集は空です</translation>
         </message>
@@ -3916,9 +4473,270 @@
         </message>
     </context>
     <context>
+        <name>WebEditorCanvas</name>
+        <message>
+            <location filename="../../desktop/qml/WebEditorCanvas.qml" line="+114" />
+            <source>拖动图层调整位置；释放鼠标后写入项目</source>
+            <translation>レイヤーをドラッグして位置を調整し、マウスを離すとプロジェクトに保存します。</translation>
+        </message>
+    </context>
+    <context>
+        <name>WebLayerPanel</name>
+        <message>
+            <location filename="../../desktop/qml/WebLayerPanel.qml" line="+34" />
+            <source>导入本地数据快照</source>
+            <translation>ローカルデータスナップショットを読み込む</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>数据文件 (*.json *.csv)</source>
+            <translation>データファイル (*.json *.csv)</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>Editable media manifest (editable-media.json)</source>
+            <translation>編集可能メディアのマニフェスト（editable-media.json）</translation>
+        </message>
+        <message>
+            <location line="-1" />
+            <source>选择新版网页包</source>
+            <translation>新しい Web パッケージを選択</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>选择批量记录</source>
+            <translation>バッチレコードを選択</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>批量数据 (*.json *.csv)</source>
+            <translation>バッチデータ (*.json *.csv)</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>导出网页片段</source>
+            <translation>Web クリップを書き出す</translation>
+        </message>
+        <message>
+            <location line="+17" />
+            <source>网页组件 · </source>
+            <translation>Web コンポーネント ·</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>网页图层</source>
+            <translation>Web レイヤー</translation>
+        </message>
+        <message>
+            <location line="+23" />
+            <source>网页编辑</source>
+            <translation>Web 編集</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>合成预览</source>
+            <translation>合成プレビュー</translation>
+        </message>
+        <message>
+            <location line="+59" />
+            <source>选择一个图层</source>
+            <translation>レイヤーを選択</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>文字内容</source>
+            <translation>テキスト内容</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>颜色，例如 #315efb</source>
+            <translation>色（例：#315efb）</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>字体</source>
+            <translation>フォント</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>清单中的本地图片路径</source>
+            <translation>マニフェスト内のローカル画像パス</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>字号</source>
+            <translation>フォントサイズ</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>宽</source>
+            <translation>幅</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高</source>
+            <translation>高さ</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>旋转</source>
+            <translation>回転</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>透明度</source>
+            <translation>不透明度</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>层级</source>
+            <translation>階層</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>入场 ms</source>
+            <translation>入場 ms</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>离场 ms</source>
+            <translation>退場 ms</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>延迟 ms</source>
+            <translation>遅延 ms</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>动画 ms</source>
+            <translation>アニメーション ms</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>AI 可改字段（关闭后保留人工调整）</source>
+            <translation>AI が編集可能な項目（無効にしても手動調整は保持）</translation>
+        </message>
+        <message>
+            <location line="+26" />
+            <source>关键帧 · 当前播放头 %1 帧</source>
+            <translation>キーフレーム · 再生ヘッド %1 フレーム</translation>
+        </message>
+        <message>
+            <location line="+23" />
+            <source>当前播放头处的值</source>
+            <translation>現在の再生ヘッド位置の値</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>添加/更新关键帧</source>
+            <translation>キーフレームを追加・更新</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>移除关键帧</source>
+            <translation>キーフレームを削除</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>应用图层参数</source>
+            <translation>レイヤー設定を適用</translation>
+        </message>
+        <message>
+            <location line="+26" />
+            <source>品牌主题</source>
+            <translation>ブランドテーマ</translation>
+        </message>
+        <message>
+            <location line="+27" />
+            <source>批量变体</source>
+            <translation>バッチバリアント</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>记录 JSON，例如 [{"name":"Ada"}]</source>
+            <translation>レコード JSON（例：[{"name":"Ada"}]）</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>绑定 JSON，例如 {"name":"layers.title.content"}</source>
+            <translation>バインド JSON（例：{"name":"layers.title.content"}）</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>版本 {index}</source>
+            <translation>バージョン {index}</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>序列名称模板</source>
+            <translation>シーケンス名テンプレート</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>生成批量短序列</source>
+            <translation>ショートシーケンスを一括生成</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>从 CSV/JSON 生成</source>
+            <translation>CSV/JSON から生成</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>网页素材更新</source>
+            <translation>Web 素材を更新</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>检查新版网页包</source>
+            <translation>新しい Web パッケージを確認</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>新增 %1 · 保留 %2 · 移除 %3 · 冲突 %4</source>
+            <translation>追加 %1 · 維持 %2 · 削除 %3 · 競合 %4</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>安全重新绑定</source>
+            <translation>安全に再バインド</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>接受冲突并迁移</source>
+            <translation>競合を受け入れて移行</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>同源多格式导出</source>
+            <translation>同一ソースの複数形式書き出し</translation>
+        </message>
+        <message>
+            <location line="+16" />
+            <source>视频背景</source>
+            <translation>動画背景</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>选择位置并导出</source>
+            <translation>保存先を選択して書き出し</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>数据与图表</source>
+            <translation>データとグラフ</translation>
+        </message>
+        <message>
+            <location line="+23" />
+            <source>文件</source>
+            <translation>ファイル</translation>
+        </message>
+    </context>
+    <context>
         <name>WindowTitleBar</name>
         <message>
-            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+70" />
+            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+75" />
             <source>最小化窗口</source>
             <translation>ウィンドウを最小化</translation>
         </message>
@@ -3941,7 +4759,7 @@
     <context>
         <name>Workspace</name>
         <message>
-            <location filename="../../desktop/qml/Workspace.qml" line="+285" />
+            <location filename="../../desktop/qml/Workspace.qml" line="+275" />
             <source>%1 个素材</source>
             <translation>%1件のメディア</translation>
         </message>
@@ -4004,7 +4822,7 @@
     <context>
         <name>WorkspaceHeader</name>
         <message>
-            <location filename="../../desktop/qml/components/WorkspaceHeader.qml" line="+20" />
+            <location filename="../../desktop/qml/components/WorkspaceHeader.qml" line="+30" />
             <source>只读</source>
             <translation>読み取り専用</translation>
         </message>
@@ -4014,17 +4832,22 @@
             <translation>保存済み</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+13" />
             <source>撤销</source>
             <translation>元に戻す</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+9" />
             <source>重做</source>
             <translation>やり直す</translation>
         </message>
         <message>
-            <location line="+6" />
+            <location line="+9" />
+            <source>版本</source>
+            <translation>バージョン</translation>
+        </message>
+        <message>
+            <location line="+5" />
             <source>关闭项目</source>
             <translation>プロジェクトを閉じる</translation>
         </message>
@@ -4038,18 +4861,8 @@
         </message>
         <message>
             <location line="+4" />
-            <source>自动字幕</source>
-            <translation>自動字幕</translation>
-        </message>
-        <message>
-            <location line="+4" />
-            <source>字幕编辑</source>
-            <translation>字幕編集</translation>
-        </message>
-        <message>
-            <location line="+4" />
-            <source>字幕翻译</source>
-            <translation>字幕翻訳</translation>
+            <source>文本与字幕</source>
+            <translation>テキストと字幕</translation>
         </message>
         <message>
             <location line="+4" />
@@ -4077,7 +4890,7 @@
             <translation>タスク</translation>
         </message>
         <message>
-            <location line="+77" />
+            <location line="+81" />
             <location line="+6" />
             <location line="+6" />
             <source>设置</source>

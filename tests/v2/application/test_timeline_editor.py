@@ -5,8 +5,15 @@ import pytest
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.timeline_diff import FrameInterval, RippleAdjustment, TimelineDiff
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.domain.enums import AssetKind, ColorMode, TrackKind, TransitionKind
-from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.enums import (
+    AssetKind,
+    ClipMediaKind,
+    ColorMode,
+    TrackKind,
+    TransitionKind,
+)
+from mediaflow.domain.project import MediaMetadata, ProjectProfile
+from mediaflow.domain.sequence_audio import audio_clips_for_track
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.domain.timeline import ClipAudio
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -20,7 +27,9 @@ def editor_fixture(tmp_path: Path):
     asset = repository.import_external_asset(source, AssetKind.VIDEO)
     project = repository.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
-    video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+    video_track = editor.add_track(TrackKind.VIDEO)
+    editor.add_track(TrackKind.AUDIO)
+    editor.add_track(TrackKind.SUBTITLE)
     try:
         yield repository, editor, asset, video_track
     finally:
@@ -73,6 +82,78 @@ def test_sequence_in_out_is_persisted_undoable_and_does_not_trim_clip(editor_fix
     assert repository.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 60
     editor.clear_sequence_in_out()
     assert repository.load_timeline(editor.sequence_id).sequence.in_out is None
+
+
+def test_primary_dialogue_track_is_unique_persisted_and_undoable(editor_fixture) -> None:
+    repository, editor, _asset, _video_track = editor_fixture
+    first_audio = next(
+        track for track in editor.state.tracks if track.kind == TrackKind.AUDIO
+    )
+    second_audio = editor.add_track(TrackKind.AUDIO)
+
+    assert not any(track.primary_dialogue for track in editor.state.tracks)
+    voice_source = repository.project_dir.parent / "voice.wav"
+    voice_source.write_bytes(b"real-audio-producer-output")
+    voice_asset = repository.import_external_asset(voice_source, AssetKind.AUDIO)
+    editor.add_clip(
+        track_id=second_audio.id,
+        asset_id=voice_asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=100,
+    )
+    persisted = repository.load_timeline(editor.sequence_id)
+    assert [
+        track.id for track in persisted.tracks if track.primary_dialogue
+    ] == [second_audio.id]
+
+    editor.set_primary_dialogue_track(first_audio.id)
+    persisted = repository.load_timeline(editor.sequence_id)
+    assert [
+        track.id for track in persisted.tracks if track.primary_dialogue
+    ] == [first_audio.id]
+
+    editor.set_primary_dialogue_track(second_audio.id)
+    persisted = repository.load_timeline(editor.sequence_id)
+    assert [
+        track.id for track in persisted.tracks if track.primary_dialogue
+    ] == [second_audio.id]
+
+    editor.undo()
+    assert [
+        track.id for track in repository.load_timeline(editor.sequence_id).tracks
+        if track.primary_dialogue
+    ] == [first_audio.id]
+
+
+def test_empty_audio_track_does_not_claim_dialogue_before_linked_audio_appears(
+    editor_fixture,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    asset = repository.update_asset(
+        asset.model_copy(
+            update={
+                "metadata": asset.metadata.model_copy(
+                    update={"has_video": True, "has_audio": True}
+                )
+            }
+        )
+    )
+
+    assert not any(track.primary_dialogue for track in editor.state.tracks)
+    editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=100,
+    )
+    persisted = repository.load_timeline(editor.sequence_id)
+    persisted_video = next(track for track in persisted.tracks if track.id == video_track.id)
+    assert persisted_video.linked_audio_track_id is not None
+    assert [
+        track.id for track in persisted.tracks if track.primary_dialogue
+    ] == [persisted_video.linked_audio_track_id]
 
 
 def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) -> None:
@@ -147,7 +228,7 @@ def test_move_rejects_same_track_overlap(editor_fixture) -> None:
     assert editor.state.clips[0].id == first.id
 
 
-def test_drag_overlap_becomes_one_undoable_transition_command(editor_fixture) -> None:
+def test_dragging_clips_together_does_not_create_a_transition(editor_fixture) -> None:
     repository, editor, asset, video_track = editor_fixture
     first = editor.add_clip(
         track_id=video_track.id,
@@ -164,22 +245,81 @@ def test_drag_overlap_becomes_one_undoable_transition_command(editor_fixture) ->
         duration=40,
     )
 
-    moved = editor.move_clip(
-        second.id,
-        timeline_start=30,
-        transition_from_overlap=True,
-    )
+    moved = editor.move_clip(second.id, timeline_start=40)
     state = repository.load_timeline(editor.sequence_id)
     assert moved.timeline_start == first.timeline_end
-    assert len(state.transitions) == 1
-    assert state.transitions[0].left_clip_id == first.id
-    assert state.transitions[0].right_clip_id == second.id
-    assert state.transitions[0].duration == 10
+    assert state.transitions == []
 
     editor.undo()
     restored = repository.load_timeline(editor.sequence_id)
     assert next(item for item in restored.clips if item.id == second.id).timeline_start == 60
     assert restored.transitions == []
+
+
+def test_compound_clip_is_persisted_moved_as_one_unit_and_undoable(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    first = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=20,
+        source_in=0,
+        duration=30,
+    )
+    second = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=50,
+        source_in=30,
+        duration=40,
+    )
+
+    compound = editor.create_compound_clip([second.id, first.id])
+    persisted = repository.load_timeline(editor.sequence_id)
+    assert persisted.compounds == [compound]
+    assert compound.clip_ids == [first.id, second.id]
+
+    editor.move_clips(
+        compound.clip_ids,
+        primary_clip_id=first.id,
+        timeline_start=40,
+        track_id=video_track.id,
+    )
+    moved = repository.load_timeline(editor.sequence_id)
+    assert [(clip.id, clip.timeline_start) for clip in moved.clips] == [
+        (first.id, 40),
+        (second.id, 70),
+    ]
+    assert moved.compounds == [compound]
+
+    editor.undo()
+    restored = repository.load_timeline(editor.sequence_id)
+    assert [(clip.id, clip.timeline_start) for clip in restored.clips] == [
+        (first.id, 20),
+        (second.id, 50),
+    ]
+    editor.dissolve_compound_clip(compound.id)
+    assert repository.load_timeline(editor.sequence_id).compounds == []
+
+
+def test_compound_clip_requires_adjacent_clips_on_one_track(editor_fixture) -> None:
+    _, editor, asset, video_track = editor_fixture
+    first = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=20,
+    )
+    second = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=30,
+        source_in=20,
+        duration=20,
+    )
+
+    with pytest.raises(ValueError, match="首尾相接"):
+        editor.create_compound_clip([first.id, second.id])
 
 
 def test_speed_sign_switch_preserves_the_current_source_span(editor_fixture) -> None:
@@ -617,3 +757,107 @@ def test_profile_frame_clock_change_retimes_timeline_subtitles_and_undo(editor_f
     assert (restored.timeline_start, restored.source_in, restored.duration) == (30, 15, 60)
     placement = repository.list_subtitle_placements(subtitle_track.id)[0]
     assert (placement.start_frame, placement.end_frame) == (45, 75)
+
+
+def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_audio(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "linked.mp4"
+    source.write_bytes(b"av-source")
+    with ProjectRepository.create(tmp_path / "Linked Project", "Linked Project") as repository:
+        asset = repository.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=240,
+                        has_video=True,
+                        has_audio=True,
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
+        first_video = editor.add_track(TrackKind.VIDEO)
+        first = editor.add_clip(
+            track_id=first_video.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=60,
+        )
+        state = editor.state
+        first_video = next(track for track in state.tracks if track.id == first_video.id)
+        first_audio_id = first_video.linked_audio_track_id
+        assert first.media_kind == ClipMediaKind.LINKED_AV
+        assert first_audio_id is not None
+        assert [clip.id for clip in audio_clips_for_track(state, first_audio_id)] == [first.id]
+
+        second_video = editor.add_track(TrackKind.VIDEO)
+        second = editor.add_clip(
+            track_id=second_video.id,
+            asset_id=asset.id,
+            timeline_start=60,
+            source_in=60,
+            duration=60,
+        )
+        second_audio_id = next(
+            track.linked_audio_track_id
+            for track in editor.state.tracks
+            if track.id == second_video.id
+        )
+        assert second_audio_id is not None and second_audio_id != first_audio_id
+
+        moved = editor.move_clip(second.id, timeline_start=60, track_id=first_video.id)
+        assert moved.track_id == first_video.id
+        assert [
+            clip.id for clip in audio_clips_for_track(editor.state, first_audio_id)
+        ] == [first.id, second.id]
+
+        second_audio_track = next(
+            track for track in editor.state.tracks if track.id == second_audio_id
+        )
+        editor.set_track_state(
+            second_audio_id,
+            enabled=second_audio_track.enabled,
+            locked=True,
+            muted=second_audio_track.muted,
+            solo=second_audio_track.solo,
+            audio_bus_id=second_audio_track.audio_bus_id,
+        )
+        with pytest.raises(PermissionError, match="Track is locked"):
+            editor.move_clip(
+                second.id,
+                timeline_start=60,
+                track_id=second_video.id,
+            )
+        assert next(
+            clip for clip in editor.state.clips if clip.id == second.id
+        ).track_id == first_video.id
+        editor.set_track_state(
+            second_audio_id,
+            enabled=second_audio_track.enabled,
+            locked=False,
+            muted=second_audio_track.muted,
+            solo=second_audio_track.solo,
+            audio_bus_id=second_audio_track.audio_bus_id,
+        )
+
+        detached_video, detached_audio = editor.detach_clip_audio(first.id)
+        assert detached_video.media_kind == ClipMediaKind.VIDEO_ONLY
+        assert detached_audio.media_kind == ClipMediaKind.AUDIO_ONLY
+        editor.move_clip(
+            detached_audio.id,
+            timeline_start=130,
+            track_id=second_audio_id,
+        )
+        assert editor.state.clips_for_track(first_video.id)[0].timeline_start == 0
+        assert editor.state.clips_for_track(second_audio_id)[0].timeline_start == 130
+
+        editor.undo()
+        editor.undo()
+        restored = next(clip for clip in editor.state.clips if clip.id == first.id)
+        assert restored.media_kind == ClipMediaKind.LINKED_AV
+        assert not any(
+            clip.media_kind == ClipMediaKind.AUDIO_ONLY for clip in editor.state.clips
+        )

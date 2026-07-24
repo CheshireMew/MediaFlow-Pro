@@ -6,6 +6,7 @@ import "."
 
 Rectangle {
     id: root
+    objectName: "webEditorCanvas"
     color: Theme.surfaceSunken
     clip: true
     property int playheadFrame: 0

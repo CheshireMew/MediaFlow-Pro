@@ -19,7 +19,7 @@ from mediaflow.domain.exports import ExportPreset, SubtitleStyle, WatermarkOverl
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
 from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.task_commands import ExportHighlightsCommand
+from mediaflow.domain.task_commands import ExportHighlightsCommand, ExportSequenceCommand
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import (
@@ -30,6 +30,83 @@ from mediaflow.infrastructure.mlt import (
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+
+
+def test_export_task_persists_real_quality_report_history_and_proof_frames(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "qa-source.mp4"
+    generate_real_media(source, paths, width=320, height=180)
+    repository = ProjectRepository.create(tmp_path / "QA Project", "QA Project")
+    assets = AssetService(repository, MediaProbe(paths))
+    asset = assets.import_external(source)
+    assets.adopt_main_profile_from_video(asset.id)
+    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    try:
+        sequence_id = repository.get_project().main_sequence_id
+        editor = project.timeline(sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
+        )
+        output = tmp_path / "qa-export.mp4"
+        preset = ExportPreset(
+            name="QA export",
+            format=ExportFormat.H264,
+            container="mp4",
+            video_codec="libx264",
+            audio_codec="aac",
+            pixel_format="yuv420p",
+        )
+        task = project.start_task(
+            ExportSequenceCommand(
+                sequence_id=sequence_id,
+                output_path=str(output),
+                format=ExportFormat.H264,
+                preset=preset,
+            ),
+            [asset.id],
+            sequence_id=sequence_id,
+        )
+        completed = project.tasks.wait(task.id, timeout=90)
+        assert completed.status == TaskStatus.COMPLETED, completed.error
+        history = repository.list_export_history(sequence_id)
+        assert len(history) == 1
+        record = history[0]
+        assert record.task_id == task.id
+        assert record.output_path == str(output.resolve())
+        assert record.quality.sha256 and record.quality.passed is True
+        checks = {check.key: check for check in record.quality.checks}
+        assert {
+            "streams",
+            "duration",
+            "black",
+            "freeze",
+            "silence",
+            "true_peak",
+            "safe_area",
+            "proof_frames",
+        } <= set(checks)
+        assert checks["streams"].status == "passed"
+        assert checks["duration"].status == "passed"
+        assert len(record.quality.proof_frames) == 3
+        assert all(Path(path).is_file() for path in record.quality.proof_frames)
+        report = (
+            repository.project_dir
+            / "generated"
+            / "export-qa"
+            / record.id
+            / "report.json"
+        )
+        assert report.is_file() and record.id in report.read_text(encoding="utf-8")
+        assert str(report) in completed.artifacts
+    finally:
+        project.close()
 
 
 def test_selected_highlight_candidates_batch_export_to_separate_real_videos(
@@ -157,14 +234,22 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
         asset = asset_service.adopt_main_profile_from_video(asset.id)
         project = repository.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
-        editor.add_clip(
+        video_track = editor.add_track(TrackKind.VIDEO)
+        first_clip = editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
             timeline_start=0,
             source_in=0,
-            duration=25,
+            duration=10,
         )
+        second_clip = editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=10,
+            source_in=10,
+            duration=15,
+        )
+        compound = editor.create_compound_clip([first_clip.id, second_clip.id])
         master_bus = next(
             bus for bus in repository.list_audio_buses(project.main_sequence_id) if bus.parent_bus_id is None
         )
@@ -178,6 +263,7 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
             )
         )
         state = editor.state
+        assert state.compounds == [compound]
         compiler = TimelineCompiler(repository)
         document = compiler.compile(state)
         assert str(source.resolve()) in document.xml
@@ -196,10 +282,12 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
             preset="veryfast",
             gop_frames=25,
         )
+        export_progress = []
         result = MltExportService(compiler, paths).export(
             state,
             preset,
             root / "exports" / "real-mlt-export.mp4",
+            progress=export_progress.append,
         )
 
         assert result.output_path.is_file()
@@ -208,6 +296,10 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
         assert video["codec_name"] == "h264"
         assert audio["codec_name"] == "aac"
         assert (video["width"], video["height"]) == (320, 180)
+        rendering = [item for item in export_progress if item.message_code == "export_rendering"]
+        assert rendering
+        assert all(item.mode == "determinate" and item.unit == "frames" for item in rendering)
+        assert rendering[-1].completed == rendering[-1].total
 
         hardware = {item["value"] for item in EncoderDiscoveryService(paths).video_options()}
         if "h264_nvenc" in hardware:
@@ -226,6 +318,25 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
                 stream for stream in hardware_result.probe["streams"] if stream["codec_type"] == "video"
             )
             assert hardware_video["codec_name"] == "h264"
+
+        detached_video, detached_audio = editor.detach_clip_audio(first_clip.id)
+        assert detached_video.media_kind.value == "video_only"
+        assert detached_audio.media_kind.value == "audio_only"
+        detached_state = editor.state
+        detached_result = MltExportService(compiler, paths).export(
+            detached_state,
+            preset.model_copy(update={"name": "Detached audio test"}),
+            root / "exports" / "detached-audio-export.mp4",
+        )
+        assert {
+            stream["codec_type"] for stream in detached_result.probe["streams"]
+        } >= {"video", "audio"}
+        detached_probe = MediaProbe(paths).probe(
+            detached_result.output_path,
+            timeline_profile=detached_state.sequence.profile,
+        )
+        assert detached_probe.metadata.duration_frames == 25
+        assert detached_probe.metadata.has_audio is True
 
 
 def _generate_color_media(path: Path, paths: RuntimePaths, color: str) -> None:
@@ -460,7 +571,7 @@ def test_mlt_transition_uses_two_real_sources_and_preserves_timeline_duration(tm
         blue = assets.import_external(blue_source)
         red = assets.adopt_main_profile_from_video(red.id)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         left = editor.add_clip(
             track_id=video_track.id,
             asset_id=red.id,
@@ -518,7 +629,7 @@ def test_real_mlt_timewarp_reads_correct_forward_and_reverse_source_frames(tmp_p
         asset = assets.import_external(source)
         asset = assets.adopt_main_profile_from_video(asset.id)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         fast = editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -575,7 +686,7 @@ def test_real_mlt_transition_accepts_speed_adjusted_adjacent_clips(tmp_path: Pat
         blue = assets.import_external(blue_source)
         red = assets.adopt_main_profile_from_video(red.id)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         left = editor.add_clip(
             track_id=video_track.id,
             asset_id=red.id,
@@ -628,8 +739,8 @@ def test_subtitle_placement_is_burned_and_exported_as_external_srt(tmp_path: Pat
         asset = asset_service.adopt_main_profile_from_video(asset.id)
         project = repository.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
-        subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        subtitle_track = editor.add_track(TrackKind.SUBTITLE)
         editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -688,8 +799,8 @@ def test_export_style_watermark_and_trim_reach_the_rendered_video(tmp_path: Path
         watermark_asset = asset_service.import_external(watermark_source)
         project = repository.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
-        subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        subtitle_track = editor.add_track(TrackKind.SUBTITLE)
         editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -796,8 +907,8 @@ def test_smart_sequence_bounds_change_real_export_and_preserve_source_clips(tmp_
         asset = asset_service.adopt_main_profile_from_video(asset.id)
         project = repository.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
-        subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        subtitle_track = editor.add_track(TrackKind.SUBTITLE)
         editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -877,7 +988,7 @@ def test_real_hevc_hdr10_export_is_ten_bit_and_carries_mastering_metadata(tmp_pa
     with ProjectRepository.create(tmp_path / "HDR Project", "HDR Project", profile) as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         first = editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -930,7 +1041,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
         asset = asset_service.import_external(source)
         asset = asset_service.adopt_main_profile_from_video(asset.id)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -1057,7 +1168,7 @@ def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
         project = repository.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        audio_track = next(item for item in editor.state.tracks if item.kind == TrackKind.AUDIO)
+        audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
             track_id=audio_track.id,
             asset_id=asset.id,
@@ -1122,7 +1233,11 @@ def test_dialogue_bus_really_ducks_music_in_exported_audio(tmp_path: Path) -> No
         buses = repository.list_audio_buses(project.main_sequence_id)
         dialogue_bus = next(item for item in buses if item.name == "对白")
         music_bus = next(item for item in buses if item.name == "音乐")
-        dialogue_track = next(item for item in editor.state.tracks if item.kind == TrackKind.AUDIO)
+        dialogue_track = editor.add_track(
+            TrackKind.AUDIO,
+            "Dialogue",
+            audio_bus_id=dialogue_bus.id,
+        )
         music_track = editor.add_track(
             TrackKind.AUDIO,
             "Music",

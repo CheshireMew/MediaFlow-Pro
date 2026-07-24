@@ -13,7 +13,7 @@ from mediaflow.domain.settings import GlobalSettings, default_media_root, defaul
 
 from .runtime_paths import RuntimePaths
 
-SETTINGS_SCHEMA_VERSION = 13
+SETTINGS_SCHEMA_VERSION = 16
 _SETTINGS_WRITE_LOCK = threading.RLock()
 _UNLOADED = object()
 
@@ -88,6 +88,10 @@ class SettingsRepository:
             ui = payload.setdefault("ui", {})
             ui.pop("inspector_width", None)
             ui["left_panel_width"] = max(360, int(ui.get("left_panel_width") or 360))
+        if version < 15:
+            payload.pop("stock_media", None)
+        if version < 16:
+            payload.setdefault("asr", {}).setdefault("parallel_chunks", 0)
         payload["schema_version"] = SETTINGS_SCHEMA_VERSION
         settings = GlobalSettings.model_validate(payload)
         self._ensure_storage_directories(settings)

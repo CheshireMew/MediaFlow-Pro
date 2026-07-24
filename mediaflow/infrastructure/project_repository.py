@@ -31,6 +31,7 @@ from mediaflow.domain.timeline import (
     Clip,
     ClipAudio,
     ClipTransform,
+    ClipTransformKeyframe,
     TimelineMarker,
     TimelineRange,
     Track,
@@ -41,6 +42,7 @@ from .audio_repository import AudioRepository
 from .highlight_repository import HighlightRepository
 from .project_catalog_repository import ProjectCatalogRepository
 from .project_lock import ProjectWriteLock
+from .project_records_repository import ProjectRecordsRepository
 from .project_schema import (
     MANAGED_DIRECTORIES,
     PROJECT_FILE_NAME,
@@ -62,6 +64,7 @@ class ProjectRepository(
     SubtitleRepository,
     HighlightRepository,
     WebMediaRepository,
+    ProjectRecordsRepository,
 ):
     def __init__(
         self,
@@ -230,23 +233,6 @@ class ProjectRepository(
             parent_bus_id=master_bus.id,
             position=3,
         )
-        tracks = [
-            Track(
-                sequence_id=main_sequence_id,
-                name="视频 1",
-                kind=TrackKind.VIDEO,
-                position=0,
-                audio_bus_id=dialogue_bus.id,
-            ),
-            Track(
-                sequence_id=main_sequence_id,
-                name="音频 1",
-                kind=TrackKind.AUDIO,
-                position=1,
-                audio_bus_id=dialogue_bus.id,
-            ),
-            Track(sequence_id=main_sequence_id, name="字幕 1", kind=TrackKind.SUBTITLE, position=2),
-        ]
         with self.transaction() as connection:
             connection.executescript(SCHEMA_SQL)
             connection.execute(
@@ -271,8 +257,6 @@ class ProjectRepository(
             self._insert_sequence(connection, sequence)
             for bus in (master_bus, dialogue_bus, music_bus, effects_bus):
                 self._insert_audio_bus(connection, bus)
-            for track in tracks:
-                self._insert_track(connection, track)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -532,8 +516,8 @@ class ProjectRepository(
         connection.execute(
             """INSERT INTO track(
                 id, sequence_id, name, kind, position, enabled, locked,
-                muted, solo, audio_bus_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                muted, solo, audio_bus_id, linked_audio_track_id, primary_dialogue
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 track.id,
                 track.sequence_id,
@@ -545,6 +529,8 @@ class ProjectRepository(
                 int(track.muted),
                 int(track.solo),
                 track.audio_bus_id,
+                track.linked_audio_track_id,
+                int(track.primary_dialogue),
             ),
         )
 
@@ -553,12 +539,14 @@ class ProjectRepository(
         connection.execute(
             """INSERT INTO track(
                 id, sequence_id, name, kind, position, enabled, locked,
-                muted, solo, audio_bus_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                muted, solo, audio_bus_id, linked_audio_track_id, primary_dialogue
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, kind=excluded.kind, position=excluded.position,
                 enabled=excluded.enabled, locked=excluded.locked, muted=excluded.muted,
-                solo=excluded.solo, audio_bus_id=excluded.audio_bus_id""",
+                solo=excluded.solo, audio_bus_id=excluded.audio_bus_id,
+                linked_audio_track_id=excluded.linked_audio_track_id,
+                primary_dialogue=excluded.primary_dialogue""",
             (
                 track.id,
                 track.sequence_id,
@@ -570,6 +558,8 @@ class ProjectRepository(
                 int(track.muted),
                 int(track.solo),
                 track.audio_bus_id,
+                track.linked_audio_track_id,
+                int(track.primary_dialogue),
             ),
         )
 
@@ -586,23 +576,28 @@ class ProjectRepository(
             muted=bool(row["muted"]),
             solo=bool(row["solo"]),
             audio_bus_id=row["audio_bus_id"],
+            linked_audio_track_id=row["linked_audio_track_id"],
+            primary_dialogue=bool(row["primary_dialogue"]),
         )
 
     @staticmethod
     def _upsert_clip(connection: sqlite3.Connection, clip: Clip) -> None:
         connection.execute(
             """INSERT INTO clip(
-                id, track_id, asset_id, timeline_start, source_in, duration,
+                id, track_id, asset_id, timeline_start, source_in, duration, media_kind,
                 speed_numerator, speed_denominator, pitch_compensation,
-                transform_json, audio_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                transform_json, transform_keyframes_json, audio_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 track_id=excluded.track_id, asset_id=excluded.asset_id,
                 timeline_start=excluded.timeline_start, source_in=excluded.source_in,
-                duration=excluded.duration, speed_numerator=excluded.speed_numerator,
+                duration=excluded.duration, media_kind=excluded.media_kind,
+                speed_numerator=excluded.speed_numerator,
                 speed_denominator=excluded.speed_denominator,
                 pitch_compensation=excluded.pitch_compensation,
-                transform_json=excluded.transform_json, audio_json=excluded.audio_json""",
+                transform_json=excluded.transform_json,
+                transform_keyframes_json=excluded.transform_keyframes_json,
+                audio_json=excluded.audio_json""",
             (
                 clip.id,
                 clip.track_id,
@@ -610,10 +605,12 @@ class ProjectRepository(
                 clip.timeline_start,
                 clip.source_in,
                 clip.duration,
+                clip.media_kind.value,
                 clip.speed_numerator,
                 clip.speed_denominator,
                 int(clip.pitch_compensation),
                 _model_json(clip.transform),
+                _json([item.model_dump(mode="json") for item in clip.transform_keyframes]),
                 _model_json(clip.audio),
             ),
         )
@@ -627,10 +624,15 @@ class ProjectRepository(
             timeline_start=row["timeline_start"],
             source_in=row["source_in"],
             duration=row["duration"],
+            media_kind=row["media_kind"],
             speed_numerator=row["speed_numerator"],
             speed_denominator=row["speed_denominator"],
             pitch_compensation=bool(row["pitch_compensation"]),
             transform=ClipTransform.model_validate_json(row["transform_json"]),
+            transform_keyframes=[
+                ClipTransformKeyframe.model_validate(item)
+                for item in json.loads(row["transform_keyframes_json"])
+            ],
             audio=ClipAudio.model_validate_json(row["audio_json"]),
         )
 

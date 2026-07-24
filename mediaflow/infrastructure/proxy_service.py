@@ -6,13 +6,15 @@ from dataclasses import dataclass
 
 from mediaflow.application.ports import AssetProcessingDocuments
 from mediaflow.domain.enums import ColorMode
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import (
     Asset,
     ProjectProfile,
 )
 
+from .process_observers import FfmpegProgressObserver, ffmpeg_progress_command
 from .runtime_paths import RuntimePaths
-from .subprocess_runner import run_cancellable
+from .subprocess_runner import run_cancellable_streaming
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class ProxyService:
         asset: Asset,
         profile: ProjectProfile,
         *,
+        progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> Asset:
         source = self.repository.resolve_asset_path(asset)
@@ -128,12 +131,12 @@ class ProxyService:
                 str(output),
             ]
         )
-        result = run_cancellable(
+        duration_seconds = asset.metadata.duration_frames / profile.fps
+        result = self._encode(
             command,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=600,
+            message_code="proxy_encoding",
+            duration_seconds=duration_seconds,
+            progress=progress,
             check_cancelled=check_cancelled,
         )
         if result.returncode != 0 or not output.is_file():
@@ -149,7 +152,7 @@ class ProxyService:
                 else ""
             )
             sdr_filters = ",".join(item for item in (sdr_color, scale, f"fps={fps}") if item)
-            sdr_result = run_cancellable(
+            sdr_result = self._encode(
                 [
                     str(self.paths.ffmpeg),
                     "-y",
@@ -184,17 +187,52 @@ class ProxyService:
                     "128k",
                     str(sdr_preview_output),
                 ],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=600,
+                message_code="proxy_sdr_encoding",
+                duration_seconds=duration_seconds,
+                progress=progress,
                 check_cancelled=check_cancelled,
             )
             if sdr_result.returncode != 0 or not sdr_preview_output.is_file():
                 raise RuntimeError(f"SDR preview proxy generation failed: {sdr_result.stderr.strip()}")
+        if progress:
+            progress(OperationProgress.indeterminate("proxy_registering"))
         return self.repository.set_asset_proxy_paths(
             asset.id,
             expected_fingerprint=asset.fingerprint,
             proxy_path=output,
             sdr_preview_proxy_path=sdr_preview_output,
+        )
+
+    def _encode(
+        self,
+        command: list[str],
+        *,
+        message_code: str,
+        duration_seconds: float,
+        progress: Callable[[OperationProgress], None] | None,
+        check_cancelled: Callable[[], None] | None,
+    ):
+        if duration_seconds > 0:
+            observer = FfmpegProgressObserver(
+                duration_seconds,
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        message_code,
+                        completed=position,
+                        total=duration_seconds,
+                        unit="media_seconds",
+                    )
+                )
+                if progress
+                else None,
+            )
+        else:
+            observer = None
+            if progress:
+                progress(OperationProgress.indeterminate(message_code))
+        return run_cancellable_streaming(
+            ffmpeg_progress_command(command),
+            on_stderr_line=observer,
+            timeout=600,
+            check_cancelled=check_cancelled,
         )

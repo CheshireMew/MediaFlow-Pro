@@ -9,6 +9,7 @@ from mediaflow.application.project_artifacts import resolve_project_artifact
 from mediaflow.application.workflow_coordinator import WorkflowCoordinator
 from mediaflow.domain.enums import AssetKind, AssetOrigin, WorkflowStage
 from mediaflow.domain.project import Sequence
+from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.task_commands import (
     AnalyzeHighlightsCommand,
@@ -204,9 +205,35 @@ class TranscribeStageHandler(AdvancingStageHandler):
         ]
         if not transcribable:
             return context.block(run, "workflow_no_transcribable_assets")
+        state = context.documents.load_timeline(run.sequence_id)
+        duration = state.duration_frames
+        bounds = state.sequence.in_out
+        start_frame = min(duration, bounds.in_frame) if bounds else 0
+        end_frame = min(duration, bounds.out_frame) if bounds else duration
+        assets = {
+            asset.id: asset
+            for asset in context.documents.list_assets()
+        }
+        try:
+            plan = build_dialogue_transcription_plan(
+                state,
+                assets,
+                context.settings.asr,
+                start_frame=start_frame,
+                end_frame=end_frame,
+            )
+        except ValueError:
+            return context.block(run, "workflow_no_transcribable_assets")
+        if not plan.sources:
+            return context.block(run, "workflow_no_transcribable_assets")
         return context.run_tasks(
             run,
-            [(TranscribeSequenceCommand(sequence_id=run.sequence_id), transcribable)],
+            [
+                (
+                    TranscribeSequenceCommand(plan=plan),
+                    [source.asset_id for source in plan.sources],
+                )
+            ],
         )
 
     def complete(
@@ -219,7 +246,9 @@ class TranscribeStageHandler(AdvancingStageHandler):
         document_ids = [
             document.id
             for document in context.documents.list_subtitle_documents(sequence_id=run.sequence_id)
-            if document.is_source and document.source_document_id is None
+            if document.is_source
+            and document.source_document_id is None
+            and document.purpose == "sequence_transcript"
         ]
         if not document_ids:
             return context.block(run, "workflow_transcription_artifacts_missing")

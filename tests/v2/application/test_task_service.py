@@ -3,6 +3,7 @@ from pathlib import Path
 
 from mediaflow.application.task_service import TaskContext, TaskService
 from mediaflow.domain.enums import TaskKind, TaskStatus
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.task_commands import AnalyzeDownloadCommand, ExportSequenceCommand
 from mediaflow.domain.tasks import Task
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -20,9 +21,25 @@ def test_real_task_generates_artifact_and_consumer_reads_persisted_result(tmp_pa
 
     def generate(context: TaskContext) -> list[str]:
         output = context.project_dir / "generated" / "task-output.txt"
-        context.report_progress(25, "writing")
-        output.write_text("observable producer output", encoding="utf-8")
-        context.report_progress(75, "verifying")
+        payload = b"observable producer output"
+        context.report(
+            OperationProgress.determinate(
+                "writing",
+                completed=0,
+                total=len(payload),
+                unit="bytes",
+            )
+        )
+        output.write_bytes(payload)
+        context.report(
+            OperationProgress.determinate(
+                "writing",
+                completed=output.stat().st_size,
+                total=len(payload),
+                unit="bytes",
+            )
+        )
+        context.report(OperationProgress.indeterminate("verifying"))
         assert output.read_text(encoding="utf-8") == "observable producer output"
         return [str(output.relative_to(context.project_dir).as_posix())]
 
@@ -69,7 +86,7 @@ def test_running_task_is_paused_after_process_restart(tmp_path: Path) -> None:
     service = TaskService(repository, max_workers=1)
     recovered = repository.get(running.id)
     assert recovered.status == TaskStatus.PAUSED
-    assert recovered.message_code == "interrupted_by_restart"
+    assert recovered.progress.message_code == "interrupted_by_restart"
 
     service.shutdown()
     project_repository.close()
@@ -202,7 +219,14 @@ def test_progress_updates_are_throttled_and_finished_future_is_released(tmp_path
 
     def noisy(context: TaskContext) -> list[str]:
         for value in range(1000):
-            context.report_progress(value / 10, "working")
+            context.report(
+                OperationProgress.determinate(
+                    "working",
+                    completed=value,
+                    total=1000,
+                    unit="items",
+                )
+            )
         return []
 
     service.register(TaskKind.ANALYZE, noisy)

@@ -9,7 +9,7 @@ from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
 from mediaflow.domain.enums import AssetKind, TrackKind, WorkflowStage
 from mediaflow.domain.media_association import related_media_stem
 from mediaflow.domain.model_base import new_id
-from mediaflow.domain.settings import default_media_root
+from mediaflow.domain.settings import AsrSettings, default_media_root
 from mediaflow.infrastructure.legacy_task_commands import legacy_task_command
 from mediaflow.infrastructure.project_serialization import (
     json_value as _json,
@@ -19,7 +19,7 @@ from mediaflow.infrastructure.project_serialization import (
 )
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 18
+PROJECT_SCHEMA_VERSION = 26
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -100,7 +100,9 @@ CREATE TABLE IF NOT EXISTS track (
     locked INTEGER NOT NULL,
     muted INTEGER NOT NULL,
     solo INTEGER NOT NULL,
-    audio_bus_id TEXT REFERENCES audio_bus(id) ON DELETE SET NULL
+    audio_bus_id TEXT REFERENCES audio_bus(id) ON DELETE SET NULL,
+    linked_audio_track_id TEXT REFERENCES track(id) ON DELETE SET NULL,
+    primary_dialogue INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS clip (
     id TEXT PRIMARY KEY,
@@ -109,11 +111,19 @@ CREATE TABLE IF NOT EXISTS clip (
     timeline_start INTEGER NOT NULL,
     source_in INTEGER NOT NULL,
     duration INTEGER NOT NULL,
+    media_kind TEXT NOT NULL CHECK(media_kind IN ('linked_av', 'video_only', 'audio_only')),
     speed_numerator INTEGER NOT NULL,
     speed_denominator INTEGER NOT NULL,
     pitch_compensation INTEGER NOT NULL,
     transform_json TEXT NOT NULL,
+    transform_keyframes_json TEXT NOT NULL DEFAULT '[]',
     audio_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS compound_clip (
+    id TEXT PRIMARY KEY,
+    sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    clip_ids_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS web_clip_state (
     clip_id TEXT PRIMARY KEY REFERENCES clip(id) ON DELETE CASCADE,
@@ -157,7 +167,18 @@ CREATE TABLE IF NOT EXISTS subtitle_document (
     language TEXT NOT NULL,
     source_document_id TEXT REFERENCES subtitle_document(id) ON DELETE SET NULL,
     is_source INTEGER NOT NULL,
+    purpose TEXT NOT NULL DEFAULT 'subtitle'
+        CHECK(purpose IN ('subtitle', 'sequence_transcript')),
     created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS asset_transcript (
+    asset_id TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    signature TEXT NOT NULL,
+    language TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    result_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(asset_id, signature)
 );
 CREATE TABLE IF NOT EXISTS subtitle_segment (
     id TEXT PRIMARY KEY,
@@ -168,6 +189,18 @@ CREATE TABLE IF NOT EXISTS subtitle_segment (
     text TEXT NOT NULL,
     speaker TEXT,
     confidence REAL
+);
+CREATE TABLE IF NOT EXISTS subtitle_word (
+    id TEXT PRIMARY KEY,
+    segment_id TEXT NOT NULL REFERENCES subtitle_segment(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    start_frame INTEGER NOT NULL,
+    end_frame INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    confidence REAL,
+    timing_source TEXT NOT NULL CHECK(timing_source IN ('recognized', 'estimated')),
+    excluded INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(segment_id, position)
 );
 CREATE TABLE IF NOT EXISTS subtitle_placement (
     id TEXT PRIMARY KEY,
@@ -217,14 +250,33 @@ CREATE TABLE IF NOT EXISTS export_preset (
     name TEXT NOT NULL,
     data_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS export_history (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    output_path TEXT NOT NULL,
+    format TEXT NOT NULL,
+    preset_json TEXT NOT NULL,
+    quality_json TEXT NOT NULL,
+    content_revision INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_version (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    snapshot_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    content_revision INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS task (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     sequence_id TEXT REFERENCES sequence(id) ON DELETE SET NULL,
     command_json TEXT NOT NULL,
     status TEXT NOT NULL,
-    progress REAL NOT NULL,
-    message_code TEXT NOT NULL,
+    progress_json TEXT NOT NULL,
     input_asset_ids_json TEXT NOT NULL,
     artifacts_json TEXT NOT NULL,
     execution_trace_json TEXT NOT NULL DEFAULT '[]',
@@ -249,11 +301,17 @@ CREATE TABLE IF NOT EXISTS workflow_run (
 CREATE INDEX IF NOT EXISTS idx_asset_project ON asset(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_sequence_project ON sequence(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_track_sequence ON track(sequence_id, position);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_track_primary_dialogue
+ON track(sequence_id) WHERE primary_dialogue=1;
 CREATE INDEX IF NOT EXISTS idx_clip_track_time ON clip(track_id, timeline_start);
 CREATE INDEX IF NOT EXISTS idx_marker_sequence_time ON timeline_marker(sequence_id, frame);
 CREATE INDEX IF NOT EXISTS idx_range_sequence_time ON timeline_range(sequence_id, start_frame);
 CREATE INDEX IF NOT EXISTS idx_task_project_time ON task(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workflow_project_time ON workflow_run(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_export_history_sequence_time
+ON export_history(sequence_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_project_version_project_time
+ON project_version(project_id, created_at);
 """
 
 WORKFLOW_RUN_TABLE_SQL = """
@@ -1079,6 +1137,445 @@ class ProjectSchemaMigrator:
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
                     (18,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 18 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS compound_clip (
+                           id TEXT PRIMARY KEY,
+                           sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+                           name TEXT NOT NULL,
+                           clip_ids_json TEXT NOT NULL
+                       )"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (19,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 19 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                track_columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(track)")
+                }
+                if "linked_audio_track_id" not in track_columns:
+                    connection.execute(
+                        "ALTER TABLE track ADD COLUMN linked_audio_track_id TEXT "
+                        "REFERENCES track(id) ON DELETE SET NULL"
+                    )
+                clip_columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(clip)")
+                }
+                if "media_kind" not in clip_columns:
+                    connection.execute(
+                        "ALTER TABLE clip ADD COLUMN media_kind TEXT NOT NULL "
+                        "DEFAULT 'video_only' CHECK(media_kind IN "
+                        "('linked_av', 'video_only', 'audio_only'))"
+                    )
+                clip_rows = connection.execute(
+                    """SELECT clip.id, asset.kind AS asset_kind,
+                              asset.metadata_json, track.kind AS track_kind
+                       FROM clip
+                       JOIN asset ON asset.id=clip.asset_id
+                       JOIN track ON track.id=clip.track_id"""
+                ).fetchall()
+                for clip_row in clip_rows:
+                    asset_kind = str(clip_row["asset_kind"])
+                    track_kind = str(clip_row["track_kind"])
+                    metadata = json.loads(str(clip_row["metadata_json"]))
+                    if track_kind == TrackKind.AUDIO.value or asset_kind == AssetKind.AUDIO.value:
+                        media_kind = "audio_only"
+                    elif asset_kind == AssetKind.VIDEO.value and bool(metadata.get("has_audio")):
+                        media_kind = "linked_av"
+                    else:
+                        media_kind = "video_only"
+                    connection.execute(
+                        "UPDATE clip SET media_kind=? WHERE id=?",
+                        (media_kind, clip_row["id"]),
+                    )
+                sequence_rows = connection.execute("SELECT id FROM sequence ORDER BY position, id").fetchall()
+                for sequence_row in sequence_rows:
+                    sequence_id = str(sequence_row["id"])
+                    video_tracks = connection.execute(
+                        """SELECT track.* FROM track
+                           WHERE track.sequence_id=? AND track.kind=?
+                             AND EXISTS(
+                                 SELECT 1 FROM clip
+                                 WHERE clip.track_id=track.id AND clip.media_kind='linked_av'
+                             )
+                           ORDER BY track.position, track.id""",
+                        (sequence_id, TrackKind.VIDEO.value),
+                    ).fetchall()
+                    audio_tracks = list(
+                        connection.execute(
+                            """SELECT * FROM track
+                               WHERE sequence_id=? AND kind=?
+                               ORDER BY position, id""",
+                            (sequence_id, TrackKind.AUDIO.value),
+                        ).fetchall()
+                    )
+                    used_audio_ids: set[str] = set()
+                    next_position = int(
+                        connection.execute(
+                            "SELECT COALESCE(MAX(position), -1) + 1 FROM track WHERE sequence_id=?",
+                            (sequence_id,),
+                        ).fetchone()[0]
+                    )
+                    audio_count = len(audio_tracks)
+                    for video_track in video_tracks:
+                        audio_track = next(
+                            (
+                                item
+                                for item in audio_tracks
+                                if str(item["id"]) not in used_audio_ids
+                                and item["audio_bus_id"] == video_track["audio_bus_id"]
+                            ),
+                            None,
+                        )
+                        if audio_track is None:
+                            audio_track = next(
+                                (
+                                    item
+                                    for item in audio_tracks
+                                    if str(item["id"]) not in used_audio_ids
+                                ),
+                                None,
+                            )
+                        if audio_track is None:
+                            audio_count += 1
+                            audio_track_id = new_id()
+                            connection.execute(
+                                """INSERT INTO track(
+                                       id, sequence_id, name, kind, position, enabled,
+                                       locked, muted, solo, audio_bus_id, linked_audio_track_id
+                                   ) VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, ?, NULL)""",
+                                (
+                                    audio_track_id,
+                                    sequence_id,
+                                    f"音频 {audio_count}",
+                                    TrackKind.AUDIO.value,
+                                    next_position,
+                                    video_track["audio_bus_id"],
+                                ),
+                            )
+                            next_position += 1
+                        else:
+                            audio_track_id = str(audio_track["id"])
+                        used_audio_ids.add(audio_track_id)
+                        connection.execute(
+                            "UPDATE track SET linked_audio_track_id=? WHERE id=?",
+                            (audio_track_id, video_track["id"]),
+                        )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (20,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 20 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS subtitle_word (
+                           id TEXT PRIMARY KEY,
+                           segment_id TEXT NOT NULL REFERENCES subtitle_segment(id) ON DELETE CASCADE,
+                           position INTEGER NOT NULL,
+                           start_frame INTEGER NOT NULL,
+                           end_frame INTEGER NOT NULL,
+                           text TEXT NOT NULL,
+                           confidence REAL,
+                           timing_source TEXT NOT NULL
+                               CHECK(timing_source IN ('recognized', 'estimated')),
+                           excluded INTEGER NOT NULL DEFAULT 0,
+                           UNIQUE(segment_id, position)
+                       )"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (21,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 21 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                connection.executescript(
+                    """CREATE TABLE IF NOT EXISTS export_history (
+                           id TEXT PRIMARY KEY,
+                           task_id TEXT NOT NULL,
+                           sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+                           output_path TEXT NOT NULL,
+                           format TEXT NOT NULL,
+                           preset_json TEXT NOT NULL,
+                           quality_json TEXT NOT NULL,
+                           content_revision INTEGER NOT NULL,
+                           created_at INTEGER NOT NULL
+                       );
+                       CREATE TABLE IF NOT EXISTS project_version (
+                           id TEXT PRIMARY KEY,
+                           project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+                           name TEXT NOT NULL,
+                           snapshot_path TEXT NOT NULL,
+                           sha256 TEXT NOT NULL,
+                           content_revision INTEGER NOT NULL,
+                           created_at INTEGER NOT NULL
+                       );
+                       CREATE INDEX IF NOT EXISTS idx_export_history_sequence_time
+                       ON export_history(sequence_id, created_at);
+                       CREATE INDEX IF NOT EXISTS idx_project_version_project_time
+                       ON project_version(project_id, created_at);"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (22,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 22 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                clip_columns = {
+                    str(item["name"])
+                    for item in connection.execute("PRAGMA table_info(clip)").fetchall()
+                }
+                if "transform_keyframes_json" not in clip_columns:
+                    connection.execute(
+                        "ALTER TABLE clip ADD COLUMN transform_keyframes_json "
+                        "TEXT NOT NULL DEFAULT '[]'"
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (23,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 23 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                track_columns = {
+                    str(item["name"])
+                    for item in connection.execute("PRAGMA table_info(track)").fetchall()
+                }
+                if "primary_dialogue" not in track_columns:
+                    connection.execute(
+                        "ALTER TABLE track ADD COLUMN primary_dialogue "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                sequence_ids = [
+                    str(item["id"])
+                    for item in connection.execute(
+                        "SELECT id FROM sequence ORDER BY position, id"
+                    ).fetchall()
+                ]
+                for sequence_id in sequence_ids:
+                    candidate = connection.execute(
+                        """SELECT track.id
+                           FROM track
+                           LEFT JOIN audio_bus ON audio_bus.id=track.audio_bus_id
+                           WHERE track.sequence_id=? AND track.kind=?
+                           ORDER BY
+                               CASE WHEN audio_bus.name='对白' THEN 0 ELSE 1 END,
+                               CASE WHEN EXISTS(
+                                   SELECT 1
+                                   FROM clip
+                                   WHERE clip.track_id=track.id
+                               ) THEN 0 ELSE 1 END,
+                               track.position,
+                               track.id
+                           LIMIT 1""",
+                        (sequence_id, TrackKind.AUDIO.value),
+                    ).fetchone()
+                    if candidate is not None:
+                        connection.execute(
+                            "UPDATE track SET primary_dialogue=1 WHERE id=?",
+                            (candidate["id"],),
+                        )
+                connection.execute(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS idx_track_primary_dialogue
+                       ON track(sequence_id) WHERE primary_dialogue=1"""
+                )
+                document_columns = {
+                    str(item["name"])
+                    for item in connection.execute(
+                        "PRAGMA table_info(subtitle_document)"
+                    ).fetchall()
+                }
+                if "purpose" not in document_columns:
+                    connection.execute(
+                        "ALTER TABLE subtitle_document ADD COLUMN purpose "
+                        "TEXT NOT NULL DEFAULT 'subtitle' "
+                        "CHECK(purpose IN ('subtitle', 'sequence_transcript'))"
+                    )
+                connection.execute(
+                    """UPDATE subtitle_document
+                       SET purpose='sequence_transcript'
+                       WHERE sequence_id IS NOT NULL
+                         AND is_source=1
+                         AND source_document_id IS NULL"""
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS asset_transcript (
+                           asset_id TEXT NOT NULL
+                               REFERENCES asset(id) ON DELETE CASCADE,
+                           signature TEXT NOT NULL,
+                           language TEXT NOT NULL,
+                           duration_seconds REAL NOT NULL,
+                           result_json TEXT NOT NULL,
+                           updated_at INTEGER NOT NULL,
+                           PRIMARY KEY(asset_id, signature)
+                       )"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (24,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 24 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                task_columns = {
+                    str(item["name"])
+                    for item in connection.execute("PRAGMA table_info(task)").fetchall()
+                }
+                if "progress_json" not in task_columns:
+                    task_rows = connection.execute(
+                        """SELECT id, project_id, sequence_id, command_json, status,
+                                  message_code, input_asset_ids_json, artifacts_json,
+                                  execution_trace_json, error, revision, created_at, updated_at
+                           FROM task"""
+                    ).fetchall()
+                    connection.execute("DROP INDEX IF EXISTS idx_task_project_time")
+                    connection.execute("ALTER TABLE task RENAME TO task_progress_v24")
+                    connection.execute(
+                        """CREATE TABLE task (
+                               id TEXT PRIMARY KEY,
+                               project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+                               sequence_id TEXT REFERENCES sequence(id) ON DELETE SET NULL,
+                               command_json TEXT NOT NULL,
+                               status TEXT NOT NULL,
+                               progress_json TEXT NOT NULL,
+                               input_asset_ids_json TEXT NOT NULL,
+                               artifacts_json TEXT NOT NULL,
+                               execution_trace_json TEXT NOT NULL DEFAULT '[]',
+                               error TEXT,
+                               revision INTEGER NOT NULL DEFAULT 0,
+                               created_at INTEGER NOT NULL,
+                               updated_at INTEGER NOT NULL
+                           )"""
+                    )
+                    for task_row in task_rows:
+                        status = str(task_row["status"])
+                        message_code = str(task_row["message_code"])
+                        progress = (
+                            {
+                                "mode": "determinate",
+                                "message_code": "completed",
+                                "completed": 1.0,
+                                "total": 1.0,
+                                "unit": "task",
+                            }
+                            if status == "completed"
+                            else {
+                                "mode": "indeterminate",
+                                "message_code": message_code,
+                                "completed": None,
+                                "total": None,
+                                "unit": None,
+                            }
+                        )
+                        connection.execute(
+                            """INSERT INTO task(
+                                   id, project_id, sequence_id, command_json, status,
+                                   progress_json, input_asset_ids_json, artifacts_json,
+                                   execution_trace_json, error, revision, created_at, updated_at
+                               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                task_row["id"],
+                                task_row["project_id"],
+                                task_row["sequence_id"],
+                                task_row["command_json"],
+                                status,
+                                _json(progress),
+                                task_row["input_asset_ids_json"],
+                                task_row["artifacts_json"],
+                                task_row["execution_trace_json"],
+                                task_row["error"],
+                                task_row["revision"],
+                                task_row["created_at"],
+                                task_row["updated_at"],
+                            ),
+                        )
+                    connection.execute("DROP TABLE task_progress_v24")
+                    connection.execute(
+                        "CREATE INDEX idx_task_project_time ON task(project_id, created_at)"
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (25,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 25 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                task_rows = connection.execute(
+                    """SELECT id, sequence_id, command_json, status
+                       FROM task"""
+                ).fetchall()
+                for task_row in task_rows:
+                    command = json.loads(str(task_row["command_json"]))
+                    if command.get("command_type") != "transcribe_sequence":
+                        continue
+                    if "plan" not in command:
+                        sequence_id = str(
+                            command.pop("sequence_id", None)
+                            or task_row["sequence_id"]
+                            or ""
+                        )
+                        sequence_row = connection.execute(
+                            """SELECT fps_numerator, fps_denominator
+                               FROM sequence WHERE id=?""",
+                            (sequence_id,),
+                        ).fetchone()
+                        command["plan"] = {
+                            "sequence_id": sequence_id,
+                            "timeline_signature": "legacy",
+                            "dialogue_track_id": "",
+                            "timeline_start_frame": 0,
+                            "timeline_end_frame": 0,
+                            "fps_numerator": (
+                                int(sequence_row["fps_numerator"])
+                                if sequence_row is not None
+                                else 30
+                            ),
+                            "fps_denominator": (
+                                int(sequence_row["fps_denominator"])
+                                if sequence_row is not None
+                                else 1
+                            ),
+                            "sources": [],
+                            "asr": AsrSettings().model_dump(mode="json"),
+                        }
+                    status = str(task_row["status"])
+                    update_values: list[object] = [_json(command)]
+                    update_clause = "command_json=?"
+                    if (
+                        status in {"pending", "running", "paused"}
+                        and not command["plan"].get("sources")
+                    ):
+                        update_clause += ", status='cancelled', progress_json=?, error=?"
+                        update_values.extend(
+                            [
+                                _json(
+                                    {
+                                        "mode": "indeterminate",
+                                        "message_code": "cancelled",
+                                        "completed": None,
+                                        "total": None,
+                                        "unit": None,
+                                    }
+                                ),
+                                "旧版转录任务缺少可复现计划，请重新发起转录",
+                            ]
+                        )
+                    update_values.append(task_row["id"])
+                    connection.execute(
+                        f"UPDATE task SET {update_clause} WHERE id=?",
+                        tuple(update_values),
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (26,),
                 )
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         if row is None or int(row["version"]) != PROJECT_SCHEMA_VERSION:

@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from pydantic import JsonValue, TypeAdapter
 
 from mediaflow.automation.contracts import (
+    MUTATING_OPERATIONS,
     OPERATION_SCHEMAS,
     AutomationRequest,
     describe_contract,
@@ -22,6 +23,7 @@ from mediaflow.domain.task_commands import (
     TaskCommand,
 )
 from mediaflow.domain.timeline import ClipAudio, ClipTransform
+from mediaflow.domain.transcript_edits import TranscriptEditPlan, TranscriptEditRequest
 from mediaflow.domain.web_media import WebExportFormat
 from mediaflow.infrastructure.web_render_service import WebRenderService
 
@@ -91,34 +93,12 @@ def execute_request(
     validate_arguments(operation, arguments)
     api = application or EditorApplication()
 
-    if operation == "web.component.list":
-        return {
-            "components": [
-                item.model_dump(mode="json") for item in api.web_components.list()
-            ]
-        }
-    if operation == "web.component.install":
-        record = api.web_components.install(str(_required(arguments, "source")))
-        return {"component": record.model_dump(mode="json")}
-
     if operation == "project.create":
         root = _project_path(envelope.project)
         with api.create_project(root, str(_required(arguments, "name"))) as project:
             return _project_snapshot(project)
 
-    writable = operation not in {
-        "project.inspect",
-        "asset.list",
-        "timeline.get",
-        "subtitle.list",
-        "audio.inspect",
-        "task.list",
-        "task.status",
-        "web.inspect",
-        "web.clip.get",
-        "web.clip.diff",
-        "web.component.list",
-    }
+    writable = operation in MUTATING_OPERATIONS
     with api.open_project(
         _project_path(envelope.project),
         writable=writable,
@@ -128,6 +108,21 @@ def execute_request(
 
         if operation == "project.inspect":
             return _project_snapshot(project)
+        if operation == "project.version.list":
+            return {
+                "versions": [
+                    item.model_dump(mode="json")
+                    for item in project.list_versions()
+                ]
+            }
+        if operation == "project.version.restore":
+            record = project.restore_version(
+                str(_required(arguments, "version_id"))
+            )
+            return {
+                "restored_version": record.model_dump(mode="json"),
+                **_project_snapshot(project),
+            }
         if operation == "asset.list":
             return {"assets": [item.model_dump(mode="json") for item in documents.list_assets()]}
         if operation == "asset.import":
@@ -236,6 +231,39 @@ def execute_request(
                 text=str(_required(arguments, "text")),
             )
             return {"segment": segment.model_dump(mode="json")}
+        if operation == "transcript.get":
+            snapshot = project.transcript_editing.inspect_transcript(
+                sequence_id,
+                document_id=(
+                    str(arguments["document_id"])
+                    if arguments.get("document_id")
+                    else None
+                ),
+            )
+            return {"transcript": snapshot.model_dump(mode="json")}
+        if operation == "transcript.edit.preview":
+            edit = TranscriptEditRequest.model_validate(
+                _required(arguments, "edit")
+            )
+            plan = project.transcript_editing.preview_plan(
+                edit,
+                project.timeline(edit.sequence_id),
+            )
+            return {"plan": plan.model_dump(mode="json")}
+        if operation == "transcript.edit.apply":
+            plan = TranscriptEditPlan.model_validate(
+                _required(arguments, "plan")
+            )
+            if plan.warnings and not bool(arguments.get("accept_warnings", False)):
+                raise ValueError(
+                    "Transcript edit plan contains warnings; review them and set "
+                    "arguments.accept_warnings=true to apply"
+                )
+            result = project.transcript_editing.apply_plan(
+                plan,
+                project.timeline(plan.sequence_id),
+            )
+            return {"edit": result.model_dump(mode="json")}
         if operation == "audio.inspect":
             buses = documents.list_audio_buses(sequence_id)
             return {
@@ -500,16 +528,4 @@ def execute_request(
                 allow_conflicts=bool(arguments.get("allow_conflicts", False)),
             )
             return {"rebind": report.model_dump(mode="json")}
-        if operation == "web.component.import":
-            record = project.web_components.get(
-                str(_required(arguments, "component_id")),
-                str(arguments["version_hash"]) if arguments.get("version_hash") else None,
-            )
-            asset = project.web.import_package(record.package_path)
-            return {
-                "component": record.model_dump(mode="json"),
-                "asset": asset.model_dump(mode="json"),
-                "web_asset": project.web.inspect_asset(asset.id).model_dump(mode="json"),
-            }
-
     raise RuntimeError(f"Operation was declared but not dispatched: {operation}")

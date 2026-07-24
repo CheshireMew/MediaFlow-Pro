@@ -9,12 +9,14 @@ from pathlib import Path
 
 from mediaflow.domain.enums import ColorMode, ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.srt_time import format_srt_timestamp
 from mediaflow.domain.timebase import frames_to_seconds
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.font_assets import apply_bundled_font_environment
+from mediaflow.infrastructure.process_observers import MeltProgressObserver
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable
+from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
 from .compiler import TimelineCompiler
 
@@ -40,6 +42,7 @@ class MltExportService:
         preset: ExportPreset,
         output_path: str | Path,
         *,
+        progress=None,
         check_cancelled=None,
     ) -> ExportResult:
         if self.paths.melt is None:
@@ -49,6 +52,8 @@ class MltExportService:
         graph_path = (
             self.compiler.repository.project_dir / "cache" / "mlt" / f"{state.sequence.id}-export.mlt"
         )
+        if progress:
+            progress(OperationProgress.indeterminate("export_compiling"))
         self.compiler.write(
             state,
             graph_path,
@@ -61,6 +66,7 @@ class MltExportService:
         consumer = self._consumer_properties(state, preset)
         command = [
             str(self.paths.melt),
+            "-progress2",
             str(graph_path),
             f"in={start_frame}",
             f"out={end_frame - 1}",
@@ -79,20 +85,47 @@ class MltExportService:
             preset.subtitle_style.font_family if preset.subtitle_style else None,
             environment,
         )
-        result = run_cancellable(
+        total_frames = end_frame - start_frame
+        observer = MeltProgressObserver(
+            total_frames,
+            lambda frame: progress(
+                OperationProgress.determinate(
+                    "export_rendering",
+                    completed=frame,
+                    total=total_frames,
+                    unit="frames",
+                )
+            )
+            if progress
+            else None,
+        )
+        result = run_cancellable_streaming(
             command,
             cwd=mlt_root,
             env=environment,
-            text=True,
             encoding="utf-8",
             errors="replace",
             timeout=3600,
             check_cancelled=check_cancelled,
+            on_stdout_line=observer,
+            on_stderr_line=observer,
+            split_carriage_returns=True,
         )
         if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
             raise RuntimeError(
                 "MLT export failed:\n" + "\n".join(part for part in (result.stdout, result.stderr) if part)
             )
+        if progress:
+            progress(
+                OperationProgress.determinate(
+                    "export_rendering",
+                    completed=total_frames,
+                    total=total_frames,
+                    unit="frames",
+                )
+            )
+        if progress:
+            progress(OperationProgress.indeterminate("export_verifying"))
         probe = self._probe(output)
         self._validate_probe(
             state,

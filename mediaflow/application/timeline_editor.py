@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterable
 
 from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
 from mediaflow.application.ports import TimelineEditorDocuments
 from mediaflow.application.timeline_diff import TimelineDiff
 from mediaflow.domain.effect_registry import transition_is_available
-from mediaflow.domain.enums import AssetKind, TrackKind, TransitionKind
+from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind, TransitionKind
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
+from mediaflow.domain.sequence_audio import audio_clips_for_track
 from mediaflow.domain.timebase import (
     reframe_frames,
     source_frames_for_timeline_frames,
@@ -17,12 +19,15 @@ from mediaflow.domain.timeline import (
     Clip,
     ClipAudio,
     ClipTransform,
+    ClipTransformKeyframe,
+    CompoundClip,
     TimelineMarker,
     TimelineRange,
     TimelineState,
     Track,
     Transition,
     compatible_track_kinds,
+    default_clip_media_kind,
 )
 from mediaflow.domain.web_media import WebClipState
 
@@ -63,19 +68,23 @@ class TimelineEditor:
         name: str | None = None,
         *,
         audio_bus_id: str | None = None,
+        position: int | None = None,
     ) -> Track:
-        position = len(self._state.tracks)
+        insert_position = len(self._state.tracks) if position is None else position
+        if not 0 <= insert_position <= len(self._state.tracks):
+            raise ValueError("Track position is outside the timeline")
         count = sum(track.kind == kind for track in self._state.tracks) + 1
         track = Track(
             sequence_id=self.sequence_id,
             name=name or f"{self._track_label(kind)} {count}",
             kind=kind,
-            position=position,
+            position=insert_position,
             audio_bus_id=audio_bus_id,
         )
 
         def mutate(state: TimelineState) -> None:
-            state.tracks.append(track)
+            state.tracks.insert(insert_position, track)
+            self._renumber_tracks(state)
 
         self._commit("添加轨道", mutate)
         return track
@@ -111,6 +120,22 @@ class TimelineEditor:
             )
 
         self._commit("调整轨道", mutate)
+        return self._track(track_id)
+
+    def set_primary_dialogue_track(self, track_id: str) -> Track:
+        source = self._track(track_id)
+        if source.kind != TrackKind.AUDIO:
+            raise ValueError("主要对白只能指定到音频轨")
+
+        def mutate(state: TimelineState) -> None:
+            state.tracks = [
+                track.model_copy(update={"primary_dialogue": track.id == track_id})
+                if track.kind == TrackKind.AUDIO
+                else track
+                for track in state.tracks
+            ]
+
+        self._commit("指定主要对白轨", mutate)
         return self._track(track_id)
 
     def move_track(self, track_id: str, position: int) -> Track:
@@ -155,6 +180,12 @@ class TimelineEditor:
                             fade_in_frames=reframe(clip.audio.fade_in_frames),
                             fade_out_frames=reframe(clip.audio.fade_out_frames),
                         ),
+                        "transform_keyframes": [
+                            item.model_copy(
+                                update={"source_frame": reframe(item.source_frame)}
+                            )
+                            for item in clip.transform_keyframes
+                        ],
                     }
                 )
                 for clip in state.clips
@@ -227,19 +258,23 @@ class TimelineEditor:
     ) -> Clip:
         track = self._track(track_id)
         asset = self.repository.get_asset(asset_id)
-        self._validate_asset_track(asset.kind, track.kind)
+        media_kind = default_clip_media_kind(asset.kind, has_audio=asset.metadata.has_audio)
+        self._validate_clip_track(asset.kind, media_kind, track.kind, asset.metadata.has_audio)
         clip = Clip(
             track_id=track_id,
             asset_id=asset_id,
             timeline_start=timeline_start,
             source_in=source_in,
             duration=duration,
+            media_kind=media_kind,
             speed_numerator=speed_numerator,
             speed_denominator=speed_denominator,
             pitch_compensation=pitch_compensation,
         )
 
         def mutate(state: TimelineState) -> None:
+            if media_kind == ClipMediaKind.LINKED_AV:
+                self._ensure_linked_audio_track(state, track_id)
             state.clips.append(clip)
             if asset.kind == AssetKind.WEB:
                 state.web_states[clip.id] = WebClipState(
@@ -258,56 +293,21 @@ class TimelineEditor:
         track_id: str | None = None,
         snap_targets: Iterable[int] = (),
         snap_tolerance_frames: int = 0,
-        transition_from_overlap: bool = False,
     ) -> Clip:
         destination = track_id or self._clip(clip_id).track_id
         track = self._track(destination)
         source = self._clip(clip_id)
         asset = self.repository.get_asset(source.asset_id)
-        self._validate_asset_track(asset.kind, track.kind)
+        self._validate_clip_track(
+            asset.kind,
+            source.media_kind,
+            track.kind,
+            asset.metadata.has_audio,
+        )
         snapped = self.snap_frame(timeline_start, snap_targets, snap_tolerance_frames)
-        overlap_transition: Transition | None = None
-        if transition_from_overlap and track.kind == TrackKind.VIDEO:
-            overlaps = [
-                item
-                for item in self._state.clips_for_track(destination)
-                if item.id != clip_id
-                and snapped < item.timeline_end
-                and snapped + source.duration > item.timeline_start
-            ]
-            if len(overlaps) == 1:
-                neighbor = overlaps[0]
-                if snapped < neighbor.timeline_start:
-                    overlap = snapped + source.duration - neighbor.timeline_start
-                    snapped = neighbor.timeline_start - source.duration
-                    left_id, right_id = source.id, neighbor.id
-                else:
-                    overlap = neighbor.timeline_end - snapped
-                    snapped = neighbor.timeline_end
-                    left_id, right_id = neighbor.id, source.id
-                if snapped < 0 or overlap <= 0 or overlap > min(source.duration, neighbor.duration):
-                    raise ValueError("Clip overlap cannot form a transition")
-                previous = next(
-                    (
-                        item
-                        for item in self._state.transitions
-                        if item.left_clip_id == left_id and item.right_clip_id == right_id
-                    ),
-                    None,
-                )
-                overlap_transition = (
-                    previous.model_copy(update={"track_id": destination, "duration": overlap})
-                    if previous
-                    else Transition(
-                        track_id=destination,
-                        left_clip_id=left_id,
-                        right_clip_id=right_id,
-                        kind=TransitionKind.DISSOLVE,
-                        duration=overlap,
-                    )
-                )
-
         def mutate(state: TimelineState) -> None:
+            if source.media_kind == ClipMediaKind.LINKED_AV:
+                self._ensure_linked_audio_track(state, destination)
             index = self._clip_index(state, clip_id)
             state.clips[index] = state.clips[index].model_copy(
                 update={"track_id": destination, "timeline_start": snapped}
@@ -317,10 +317,8 @@ class TimelineEditor:
                 for item in state.transitions
                 if item.left_clip_id != clip_id and item.right_clip_id != clip_id
             ]
-            if overlap_transition is not None:
-                state.transitions.append(overlap_transition)
 
-        self._commit("移动片段并调整转场" if overlap_transition else "移动片段", mutate)
+        self._commit("移动片段", mutate)
         return self._clip(clip_id)
 
     def move_clips(
@@ -353,13 +351,22 @@ class TimelineEditor:
                 raise ValueError("Selected clips cannot move outside the timeline tracks")
             destination = tracks[destination_position]
             asset = self.repository.get_asset(clip.asset_id)
-            self._validate_asset_track(asset.kind, destination.kind)
+            self._validate_clip_track(
+                asset.kind,
+                clip.media_kind,
+                destination.kind,
+                asset.metadata.has_audio,
+            )
             next_start = clip.timeline_start + frame_delta
             if next_start < 0:
                 raise ValueError("Selected clips cannot move before the timeline start")
             updates[clip.id] = (destination.id, next_start)
 
         def mutate(state: TimelineState) -> None:
+            for clip in selected:
+                destination_id = updates[clip.id][0]
+                if clip.media_kind == ClipMediaKind.LINKED_AV:
+                    self._ensure_linked_audio_track(state, destination_id)
             state.clips = [
                 clip.model_copy(
                     update={
@@ -390,13 +397,20 @@ class TimelineEditor:
         destination = track_id or source.track_id
         track = self._track(destination)
         asset = self.repository.get_asset(source.asset_id)
-        self._validate_asset_track(asset.kind, track.kind)
+        self._validate_clip_track(
+            asset.kind,
+            source.media_kind,
+            track.kind,
+            asset.metadata.has_audio,
+        )
         snapped = self.snap_frame(timeline_start, snap_targets, snap_tolerance_frames)
         copied = source.model_copy(
             update={"id": new_id(), "track_id": destination, "timeline_start": snapped}
         )
 
         def mutate(state: TimelineState) -> None:
+            if copied.media_kind == ClipMediaKind.LINKED_AV:
+                self._ensure_linked_audio_track(state, destination)
             state.clips.append(copied)
             if clip_id in state.web_states:
                 state.web_states[copied.id] = state.web_states[clip_id].model_copy(
@@ -435,6 +449,24 @@ class TimelineEditor:
             state.clips[index] = state.clips[index].model_copy(update={"transform": transform})
 
         self._commit("调整画面", mutate)
+        return self._clip(clip_id)
+
+    def set_clip_transform_keyframes(
+        self,
+        clip_id: str,
+        keyframes: list[ClipTransformKeyframe],
+    ) -> Clip:
+        ordered = sorted(keyframes, key=lambda item: item.source_frame)
+        if len({item.source_frame for item in ordered}) != len(ordered):
+            raise ValueError("画面跟踪关键帧不能位于同一源帧")
+
+        def mutate(state: TimelineState) -> None:
+            index = self._clip_index(state, clip_id)
+            state.clips[index] = state.clips[index].model_copy(
+                update={"transform_keyframes": ordered}
+            )
+
+        self._commit("更新画面跟踪", mutate)
         return self._clip(clip_id)
 
     def set_clip_audio(self, clip_id: str, audio: ClipAudio) -> Clip:
@@ -525,6 +557,7 @@ class TimelineEditor:
                     timeline_start=split_frame,
                     source_in=right_source_in,
                     duration=right_duration,
+                    media_kind=source.media_kind,
                     speed_numerator=source.speed_numerator,
                     speed_denominator=source.speed_denominator,
                     pitch_compensation=source.pitch_compensation,
@@ -553,6 +586,50 @@ class TimelineEditor:
 
         self._commit("分割片段", mutate)
         return self._clip(left.id), self._clip(right.id)
+
+    def detach_clip_audio(self, clip_id: str) -> tuple[Clip, Clip]:
+        source = self._clip(clip_id)
+        asset = self.repository.get_asset(source.asset_id)
+        if source.media_kind != ClipMediaKind.LINKED_AV or not asset.metadata.has_audio:
+            raise ValueError("所选片段没有可解除绑定的音频")
+        source_track = self._track(source.track_id)
+        if source_track.kind != TrackKind.VIDEO:
+            raise ValueError("只有视频轨道上的绑定视音频才能解除绑定")
+        detached = Clip(
+            track_id="",
+            asset_id=source.asset_id,
+            timeline_start=source.timeline_start,
+            source_in=source.source_in,
+            duration=source.duration,
+            media_kind=ClipMediaKind.AUDIO_ONLY,
+            speed_numerator=source.speed_numerator,
+            speed_denominator=source.speed_denominator,
+            pitch_compensation=source.pitch_compensation,
+            audio=source.audio,
+        )
+
+        def mutate(state: TimelineState) -> None:
+            video_track = next(track for track in state.tracks if track.id == source.track_id)
+            audio_track_id = video_track.linked_audio_track_id
+            audio_track = next(
+                (track for track in state.tracks if track.id == audio_track_id),
+                None,
+            )
+            if audio_track is None or not self._interval_available(
+                state,
+                audio_track.id,
+                source.timeline_start,
+                source.duration,
+            ):
+                audio_track = self._insert_audio_track_after(state, video_track)
+            source_index = self._clip_index(state, source.id)
+            state.clips[source_index] = source.model_copy(
+                update={"media_kind": ClipMediaKind.VIDEO_ONLY}
+            )
+            state.clips.append(detached.model_copy(update={"track_id": audio_track.id}))
+
+        self._commit("解除视音频绑定", mutate)
+        return self._clip(source.id), self._clip(detached.id)
 
     def delete_clip(self, clip_id: str, *, ripple: bool = False) -> None:
         self.delete_clips([clip_id], ripple=ripple)
@@ -588,6 +665,223 @@ class TimelineEditor:
         if len(selected_ids) == 1:
             label = "波纹删除" if ripple else "删除片段"
         self._commit(label, mutate)
+
+    @staticmethod
+    def _apply_ripple_delete_interval(
+        state: TimelineState,
+        start_frame: int,
+        end_frame: int,
+    ) -> None:
+        """Remove one interval from an in-memory timeline state."""
+        start = max(0, int(start_frame))
+        end = min(state.duration_frames, int(end_frame))
+        if end <= start:
+            raise ValueError("删除范围必须包含至少一帧")
+        duration = end - start
+
+        def advanced_source_in(clip: Clip, timeline_frames: int) -> int:
+            consumed = source_frames_for_timeline_frames(
+                timeline_frames,
+                clip.speed_numerator,
+                clip.speed_denominator,
+            )
+            value = (
+                clip.source_in + consumed
+                if clip.speed_numerator > 0
+                else clip.source_in - consumed
+            )
+            if value < 0:
+                raise ValueError("删除范围超出了反向片段的可用源区间")
+            return value
+
+        def collapse(frame: int) -> int:
+            if frame < start:
+                return frame
+            if frame < end:
+                return start
+            return frame - duration
+
+        locked_track_ids = {track.id for track in state.tracks if track.locked}
+        output: list[Clip] = []
+        removed_ids: set[str] = set()
+        split_ids: dict[str, str] = {}
+        split_web_states: dict[str, WebClipState] = {}
+        for clip in state.clips:
+            if clip.track_id in locked_track_ids or clip.timeline_end <= start:
+                output.append(clip)
+                continue
+            if clip.timeline_start >= end:
+                output.append(
+                    clip.model_copy(update={"timeline_start": clip.timeline_start - duration})
+                )
+                continue
+            if clip.timeline_start >= start and clip.timeline_end <= end:
+                removed_ids.add(clip.id)
+                continue
+            if clip.timeline_start < start and clip.timeline_end > end:
+                left = clip.model_copy(update={"duration": start - clip.timeline_start})
+                right_id = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"mediaflow:ripple:{clip.id}:{start}:{end}",
+                    )
+                )
+                right = clip.model_copy(
+                    update={
+                        "id": right_id,
+                        "timeline_start": start,
+                        "source_in": advanced_source_in(clip, end - clip.timeline_start),
+                        "duration": clip.timeline_end - end,
+                    }
+                )
+                output.extend((left, right))
+                split_ids[clip.id] = right.id
+                if clip.id in state.web_states:
+                    split_web_states[right.id] = state.web_states[clip.id].model_copy(
+                        update={"clip_id": right.id, "revision": 0}
+                    )
+                continue
+            if clip.timeline_start < start:
+                output.append(clip.model_copy(update={"duration": start - clip.timeline_start}))
+                continue
+            output.append(
+                clip.model_copy(
+                    update={
+                        "timeline_start": start,
+                        "source_in": advanced_source_in(clip, end - clip.timeline_start),
+                        "duration": clip.timeline_end - end,
+                    }
+                )
+            )
+        state.clips = output
+        state.web_states = {
+            clip_id: web_state
+            for clip_id, web_state in state.web_states.items()
+            if clip_id not in removed_ids
+        }
+        state.web_states.update(split_web_states)
+        clips_by_id = {clip.id: clip for clip in state.clips}
+        rebuilt_compounds: list[CompoundClip] = []
+        for compound in state.compounds:
+            clip_ids: list[str] = []
+            for clip_id in compound.clip_ids:
+                if clip_id in clips_by_id:
+                    clip_ids.append(clip_id)
+                if clip_id in split_ids:
+                    clip_ids.append(split_ids[clip_id])
+            if len(clip_ids) >= 2:
+                rebuilt_compounds.append(compound.model_copy(update={"clip_ids": clip_ids}))
+        state.compounds = rebuilt_compounds
+        state.transitions = [
+            item
+            for item in state.transitions
+            if TimelineEditor._transition_is_valid(item, clips_by_id)
+        ]
+        state.markers = [
+            marker.model_copy(update={"frame": collapse(marker.frame)})
+            for marker in state.markers
+        ]
+        ranges: list[TimelineRange] = []
+        for item in state.ranges:
+            range_start = collapse(item.start_frame)
+            range_end = collapse(item.end_frame)
+            if range_end > range_start:
+                ranges.append(
+                    item.model_copy(
+                        update={"start_frame": range_start, "end_frame": range_end}
+                    )
+                )
+        state.ranges = ranges
+        if state.sequence.in_out is not None:
+            in_frame = collapse(state.sequence.in_out.in_frame)
+            out_frame = collapse(state.sequence.in_out.out_frame)
+            state.sequence = state.sequence.model_copy(
+                update={
+                    "in_out": (
+                        SequenceInOut(in_frame=in_frame, out_frame=out_frame)
+                        if out_frame > in_frame
+                        else None
+                    )
+                }
+            )
+
+    def preview_ripple_delete_intervals(
+        self,
+        intervals: Iterable[tuple[int, int]],
+    ) -> TimelineState:
+        preview = self._state.model_copy(deep=True)
+        normalized = sorted(
+            {(int(start), int(end)) for start, end in intervals},
+            reverse=True,
+        )
+        if not normalized:
+            raise ValueError("删除计划必须至少包含一个时间范围")
+        for start, end in normalized:
+            self._apply_ripple_delete_interval(preview, start, end)
+        return preview
+
+    def apply_ripple_delete_intervals(
+        self,
+        intervals: Iterable[tuple[int, int]],
+        *,
+        label: str = "按转录计划波纹剪辑",
+    ) -> None:
+        normalized = sorted(
+            {(int(start), int(end)) for start, end in intervals},
+            reverse=True,
+        )
+        if not normalized:
+            raise ValueError("删除计划必须至少包含一个时间范围")
+
+        def mutate(state: TimelineState) -> None:
+            for start, end in normalized:
+                self._apply_ripple_delete_interval(state, start, end)
+
+        self._commit(label, mutate)
+
+    def create_compound_clip(
+        self,
+        clip_ids: Iterable[str],
+        *,
+        name: str = "复合片段",
+    ) -> CompoundClip:
+        selected_ids = list(dict.fromkeys(clip_ids))
+        if len(selected_ids) < 2:
+            raise ValueError("请至少选择两个片段来创建复合片段")
+        selected = sorted(
+            (self._clip(clip_id) for clip_id in selected_ids),
+            key=lambda clip: (clip.timeline_start, clip.id),
+        )
+        if len({clip.track_id for clip in selected}) != 1:
+            raise ValueError("复合片段必须位于同一轨道")
+        if any(
+            left.timeline_end != right.timeline_start
+            for left, right in zip(selected, selected[1:], strict=False)
+        ):
+            raise ValueError("复合片段中的片段必须首尾相接")
+        occupied = {clip_id for item in self._state.compounds for clip_id in item.clip_ids}
+        if occupied.intersection(selected_ids):
+            raise ValueError("所选片段已经属于其他复合片段")
+        compound = CompoundClip(
+            sequence_id=self.sequence_id,
+            name=name,
+            clip_ids=[clip.id for clip in selected],
+        )
+
+        def mutate(state: TimelineState) -> None:
+            state.compounds.append(compound)
+
+        self._commit("创建复合片段", mutate)
+        return next(item for item in self._state.compounds if item.id == compound.id)
+
+    def dissolve_compound_clip(self, compound_id: str) -> None:
+        if not any(item.id == compound_id for item in self._state.compounds):
+            raise KeyError(compound_id)
+
+        def mutate(state: TimelineState) -> None:
+            state.compounds = [item for item in state.compounds if item.id != compound_id]
+
+        self._commit("解除复合片段", mutate)
 
     def create_transition(
         self,
@@ -784,7 +1078,9 @@ class TimelineEditor:
         before = self._snapshot(self._state)
         after = self._snapshot(before)
         mutate(after)
+        self._assign_default_primary_dialogue_track(after)
         self._normalize_sequence_in_out(after)
+        self._normalize_compounds(after)
         self._validate_timeline(after, allow_locked_changes=allow_locked_changes)
         if after == before:
             return
@@ -826,14 +1122,44 @@ class TimelineEditor:
         )
 
     @staticmethod
+    def _assign_default_primary_dialogue_track(state: TimelineState) -> None:
+        if any(track.primary_dialogue for track in state.tracks):
+            return
+        candidates: list[tuple[int, int, str, str]] = []
+        for audio_track in (
+            track for track in state.tracks if track.kind == TrackKind.AUDIO
+        ):
+            for clip in audio_clips_for_track(state, audio_track.id):
+                candidates.append(
+                    (
+                        clip.timeline_start,
+                        audio_track.position,
+                        clip.id,
+                        audio_track.id,
+                    )
+                )
+        if not candidates:
+            return
+        primary_track_id = min(candidates)[3]
+        state.tracks = [
+            track.model_copy(
+                update={"primary_dialogue": track.id == primary_track_id}
+            )
+            if track.kind == TrackKind.AUDIO
+            else track
+            for track in state.tracks
+        ]
+
+    @staticmethod
     def _snapshot(state: TimelineState) -> TimelineState:
         # Editing commands replace validated domain objects instead of mutating
-        # them in place. Copying the four containers is therefore a complete
+        # them in place. Copying the state containers is therefore a complete
         # session snapshot without recursively cloning hundreds of clips.
         return state.model_copy(
             update={
                 "tracks": list(state.tracks),
                 "clips": list(state.clips),
+                "compounds": list(state.compounds),
                 "transitions": list(state.transitions),
                 "markers": list(state.markers),
                 "ranges": list(state.ranges),
@@ -847,6 +1173,7 @@ class TimelineEditor:
         graph_is_unchanged = (
             before.sequence == after.sequence
             and before.tracks == after.tracks
+            and before.compounds == after.compounds
             and before.transitions == after.transitions
             and before.markers == after.markers
             and before.ranges == after.ranges
@@ -873,6 +1200,30 @@ class TimelineEditor:
         tracks = {track.id: track for track in state.tracks}
         if len({track.position for track in state.tracks}) != len(state.tracks):
             raise ValueError("Track positions must be unique")
+        if [track.position for track in state.tracks] != list(range(len(state.tracks))):
+            raise ValueError("Track positions must match timeline order")
+        linked_audio_track_ids = [
+            track.linked_audio_track_id
+            for track in state.tracks
+            if track.linked_audio_track_id is not None
+        ]
+        if len(set(linked_audio_track_ids)) != len(linked_audio_track_ids):
+            raise ValueError("An audio track can only be paired with one video track")
+        primary_dialogue_tracks = [
+            track for track in state.tracks if track.primary_dialogue
+        ]
+        if len(primary_dialogue_tracks) > 1:
+            raise ValueError("A sequence can only have one primary dialogue track")
+        if any(
+            track.kind != TrackKind.AUDIO for track in primary_dialogue_tracks
+        ):
+            raise ValueError("The primary dialogue track must be an audio track")
+        for track in state.tracks:
+            if track.linked_audio_track_id is None:
+                continue
+            linked = tracks.get(track.linked_audio_track_id)
+            if track.kind != TrackKind.VIDEO or linked is None or linked.kind != TrackKind.AUDIO:
+                raise ValueError("Video tracks can only link to an audio track in the same sequence")
         if any(clip.track_id not in tracks for clip in state.clips):
             raise ValueError("Clip references an unknown track")
         if any(marker.sequence_id != state.sequence.id for marker in state.markers):
@@ -902,13 +1253,73 @@ class TimelineEditor:
             for clip in track_clips:
                 if clip.track_id not in tracks:
                     raise ValueError("Clip references an unknown track")
+                asset = self.repository.get_asset(clip.asset_id)
+                self._validate_clip_track(
+                    asset.kind,
+                    clip.media_kind,
+                    track.kind,
+                    asset.metadata.has_audio,
+                )
+                if (
+                    clip.media_kind == ClipMediaKind.LINKED_AV
+                    and track.linked_audio_track_id is None
+                ):
+                    raise ValueError("Linked video audio requires a paired audio track")
                 if previous is not None and clip.timeline_start < previous.timeline_end:
                     raise ValueError(f"Clips cannot overlap on the same track: {track.name}")
                 previous = clip
+        for audio_track in (track for track in state.tracks if track.kind == TrackKind.AUDIO):
+            audible_clips = audio_clips_for_track(state, audio_track.id)
+            if (
+                not allow_locked_changes
+                and audio_track.locked
+                and audio_clips_for_track(self._state, audio_track.id) != audible_clips
+            ):
+                raise PermissionError(f"Track is locked: {audio_track.name}")
+            for left, right in zip(audible_clips, audible_clips[1:], strict=False):
+                if right.timeline_start < left.timeline_end:
+                    raise ValueError(f"Audio cannot overlap on the same track: {audio_track.name}")
         clips_by_id = {clip.id: clip for clip in state.clips}
+        compound_members: set[str] = set()
+        for compound in state.compounds:
+            if compound.sequence_id != state.sequence.id:
+                raise ValueError("Compound clip references another sequence")
+            members = [clips_by_id[clip_id] for clip_id in compound.clip_ids]
+            if compound_members.intersection(compound.clip_ids):
+                raise ValueError("A clip cannot belong to more than one compound clip")
+            compound_members.update(compound.clip_ids)
+            if len({clip.track_id for clip in members}) != 1:
+                raise ValueError("Compound clip members must be on one track")
+            ordered = sorted(members, key=lambda clip: (clip.timeline_start, clip.id))
+            if [clip.id for clip in ordered] != compound.clip_ids:
+                raise ValueError("Compound clip members must be stored in timeline order")
+            if any(
+                left.timeline_end != right.timeline_start
+                for left, right in zip(ordered, ordered[1:], strict=False)
+            ):
+                raise ValueError("Compound clip members must remain adjacent")
         for transition in state.transitions:
             if not self._transition_is_valid(transition, clips_by_id):
                 raise ValueError("Transition references clips that are no longer adjacent")
+
+    @staticmethod
+    def _normalize_compounds(state: TimelineState) -> None:
+        clips = {clip.id: clip for clip in state.clips}
+        normalized: list[CompoundClip] = []
+        for compound in state.compounds:
+            if any(clip_id not in clips for clip_id in compound.clip_ids):
+                continue
+            members = [clips[clip_id] for clip_id in compound.clip_ids]
+            if len({clip.track_id for clip in members}) != 1:
+                continue
+            ordered = sorted(members, key=lambda clip: (clip.timeline_start, clip.id))
+            if any(
+                left.timeline_end != right.timeline_start
+                for left, right in zip(ordered, ordered[1:], strict=False)
+            ):
+                continue
+            normalized.append(compound.model_copy(update={"clip_ids": [clip.id for clip in ordered]}))
+        state.compounds = normalized
 
     def _track(self, track_id: str) -> Track:
         try:
@@ -960,9 +1371,89 @@ class TimelineEditor:
             raise KeyError(clip_id) from error
 
     @staticmethod
-    def _validate_asset_track(asset_kind: AssetKind, track_kind: TrackKind) -> None:
-        if track_kind not in compatible_track_kinds(asset_kind):
-            raise ValueError(f"Cannot place {asset_kind.value} on a {track_kind.value} track")
+    def _validate_clip_track(
+        asset_kind: AssetKind,
+        media_kind: ClipMediaKind,
+        track_kind: TrackKind,
+        has_audio: bool,
+    ) -> None:
+        if track_kind not in compatible_track_kinds(media_kind):
+            raise ValueError(f"Cannot place {media_kind.value} on a {track_kind.value} track")
+        if media_kind == ClipMediaKind.LINKED_AV and (
+            asset_kind != AssetKind.VIDEO or not has_audio
+        ):
+            raise ValueError("Only video assets with audio can create linked clips")
+        if media_kind == ClipMediaKind.AUDIO_ONLY and (
+            asset_kind not in {AssetKind.VIDEO, AssetKind.AUDIO} or not has_audio
+        ):
+            raise ValueError("The source asset has no audio component")
+        if media_kind == ClipMediaKind.VIDEO_ONLY and asset_kind not in {
+            AssetKind.VIDEO,
+            AssetKind.IMAGE,
+            AssetKind.WEB,
+        }:
+            raise ValueError("The source asset has no video component")
+
+    @staticmethod
+    def _renumber_tracks(state: TimelineState) -> None:
+        state.tracks = [
+            track.model_copy(update={"position": position})
+            for position, track in enumerate(state.tracks)
+        ]
+
+    def _insert_audio_track_after(self, state: TimelineState, video_track: Track) -> Track:
+        count = sum(track.kind == TrackKind.AUDIO for track in state.tracks) + 1
+        video_index = next(
+            index for index, track in enumerate(state.tracks) if track.id == video_track.id
+        )
+        audio_track = Track(
+            sequence_id=self.sequence_id,
+            name=f"{self._track_label(TrackKind.AUDIO)} {count}",
+            kind=TrackKind.AUDIO,
+            position=video_index + 1,
+            audio_bus_id=video_track.audio_bus_id,
+        )
+        state.tracks.insert(video_index + 1, audio_track)
+        self._renumber_tracks(state)
+        return audio_track
+
+    def _ensure_linked_audio_track(self, state: TimelineState, video_track_id: str) -> Track:
+        video_index = next(
+            index for index, track in enumerate(state.tracks) if track.id == video_track_id
+        )
+        video_track = state.tracks[video_index]
+        linked = next(
+            (
+                track
+                for track in state.tracks
+                if track.id == video_track.linked_audio_track_id
+                and track.kind == TrackKind.AUDIO
+            ),
+            None,
+        )
+        if linked is not None:
+            return linked
+        linked = self._insert_audio_track_after(state, video_track)
+        video_index = next(
+            index for index, track in enumerate(state.tracks) if track.id == video_track_id
+        )
+        state.tracks[video_index] = state.tracks[video_index].model_copy(
+            update={"linked_audio_track_id": linked.id}
+        )
+        return linked
+
+    @staticmethod
+    def _interval_available(
+        state: TimelineState,
+        track_id: str,
+        start: int,
+        duration: int,
+    ) -> bool:
+        end = start + duration
+        return all(
+            end <= clip.timeline_start or start >= clip.timeline_end
+            for clip in state.clips_for_track(track_id)
+        )
 
     @staticmethod
     def _track_label(kind: TrackKind) -> str:

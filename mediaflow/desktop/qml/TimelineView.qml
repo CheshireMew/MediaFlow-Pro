@@ -20,9 +20,12 @@ Rectangle {
     property string contextClipId: ""
     property real draggingClipOffsetX: 0
     property int draggingClipTrackPosition: -1
+    property int draggingClipAudioTrackPosition: -1
+    property bool draggingClipHasLinkedAudio: false
     property string draggingClipTrackKind: ""
     property int trackControlsWidth: 196
     property bool snapEnabled: true
+    property bool multiSelectMode: false
     property int trackHeight: 72
     property int trackPitch: trackHeight + 1
     readonly property real fpsExact: Math.max(1, workspaceController.profileFpsNumerator)
@@ -171,32 +174,125 @@ Rectangle {
         playheadSeekPending = playheadFrame !== interactivePlayheadFrame;
     }
 
-    function beginClipDrag(clipId, trackPosition, trackKind) {
-        draggingClipId = clipId;
+    function trackPositionById(trackId) {
+        if (!trackId)
+            return -1;
+        for (let position = 0;
+                position < timelineController.tracksModel.rowCount();
+                ++position) {
+            const track = timelineController.tracksModel.get(position);
+            if (String(track.trackId) === String(trackId))
+                return position;
+        }
+        return -1;
+    }
+
+    function videoTrackPositionForAudioTrack(audioTrackId) {
+        for (let position = 0;
+                position < timelineController.tracksModel.rowCount();
+                ++position) {
+            const track = timelineController.tracksModel.get(position);
+            if (String(track.kind) === "video"
+                    && String(track.linkedAudioTrackId) === String(audioTrackId))
+                return position;
+        }
+        return -1;
+    }
+
+    function requestedDragTrackPosition(originalTrackPosition, deltaY) {
+        return Math.max(0, Math.min(
+            timelineController.tracksModel.rowCount() - 1,
+            Math.floor(
+                (originalTrackPosition * trackPitch + 12 + deltaY + 23)
+                / trackPitch
+            )
+        ));
+    }
+
+    function beginClipDrag(clipId, trackPosition, trackKind, audioTrackPosition) {
         draggingClipOffsetX = 0;
         draggingClipTrackPosition = trackPosition;
+        draggingClipAudioTrackPosition = audioTrackPosition === undefined
+            ? -1 : Number(audioTrackPosition);
+        draggingClipHasLinkedAudio = draggingClipAudioTrackPosition >= 0;
         draggingClipTrackKind = trackKind;
+        draggingClipId = clipId;
+    }
+
+    function clearTimelineSelection() {
+        multiSelectMode = false;
+        timelineController.clearSelection();
     }
 
     function updateClipDrag(clipId, startFrame, originalTrackPosition, allowedTrackKinds, deltaX, deltaY) {
         if (draggingClipId !== clipId)
             return;
         draggingClipOffsetX = Math.max(-startFrame * pixelsPerFrame, deltaX);
-        const requestedPosition = Math.max(0, Math.min(
-            timelineController.tracksModel.rowCount() - 1,
-            Math.floor((originalTrackPosition * trackPitch + 12 + deltaY + 23) / trackPitch)
-        ));
+        const requestedPosition = requestedDragTrackPosition(
+            originalTrackPosition,
+            deltaY
+        );
         const requestedTrack = timelineController.tracksModel.get(requestedPosition);
         if (allowedTrackKinds.indexOf(String(requestedTrack.kind)) >= 0 && !requestedTrack.locked) {
+            if (draggingClipHasLinkedAudio
+                    && String(requestedTrack.kind) === "video") {
+                const audioPosition = trackPositionById(
+                    requestedTrack.linkedAudioTrackId
+                );
+                if (audioPosition >= 0) {
+                    const audioTrack = timelineController.tracksModel.get(
+                        audioPosition
+                    );
+                    if (audioTrack.locked)
+                        return;
+                }
+                draggingClipAudioTrackPosition = audioPosition;
+            }
             draggingClipTrackPosition = requestedPosition;
             draggingClipTrackKind = String(requestedTrack.kind);
         }
+    }
+
+    function updateLinkedAudioDrag(
+            clipId,
+            startFrame,
+            originalAudioTrackPosition,
+            deltaX,
+            deltaY) {
+        if (draggingClipId !== clipId)
+            return;
+        draggingClipOffsetX = Math.max(-startFrame * pixelsPerFrame, deltaX);
+        const requestedAudioPosition = requestedDragTrackPosition(
+            originalAudioTrackPosition,
+            deltaY
+        );
+        const requestedAudioTrack = timelineController.tracksModel.get(
+            requestedAudioPosition
+        );
+        if (String(requestedAudioTrack.kind) !== "audio"
+                || requestedAudioTrack.locked)
+            return;
+        const requestedVideoPosition = videoTrackPositionForAudioTrack(
+            requestedAudioTrack.trackId
+        );
+        if (requestedVideoPosition < 0)
+            return;
+        const requestedVideoTrack = timelineController.tracksModel.get(
+            requestedVideoPosition
+        );
+        if (requestedVideoTrack.locked)
+            return;
+        draggingClipTrackPosition = requestedVideoPosition;
+        draggingClipAudioTrackPosition = requestedAudioPosition;
+        draggingClipTrackKind = "video";
     }
 
     function cancelClipDrag() {
         draggingClipId = "";
         draggingClipOffsetX = 0;
         draggingClipTrackPosition = -1;
+        draggingClipAudioTrackPosition = -1;
+        draggingClipHasLinkedAudio = false;
         draggingClipTrackKind = "";
     }
 
@@ -219,27 +315,35 @@ Rectangle {
         clipContextMenu.popup();
     }
 
-    Menu {
+    AppMenu {
         id: clipContextMenu
         objectName: "timelineClipContextMenu"
-        MenuItem {
+        AppMenuItem {
+            objectName: "timelineSplitClipMenuItem"
             text: qsTr("在播放头处分割") + "\tCtrl+K"
             enabled: root.contextClipId.length > 0
             onTriggered: timelineController.splitClip(root.contextClipId, root.playheadFrame)
         }
-        MenuItem {
+        AppMenuItem {
             text: qsTr("创建片段副本") + "\tCtrl+D"
             enabled: root.contextClipId.length > 0
             onTriggered: timelineController.duplicateClip(
                 root.contextClipId, root.pixelsPerFrame, root.playheadFrame)
         }
-        MenuSeparator {}
-        MenuItem {
+        AppMenuItem {
+            objectName: "timelineDetachAudioMenuItem"
+            text: qsTr("解除视音频绑定")
+            enabled: root.contextClipId.length > 0
+                && timelineController.selectedClipData.canDetachAudio === true
+            onTriggered: timelineController.detachClipAudio(root.contextClipId)
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
             text: qsTr("删除所选片段") + "\tDelete"
             enabled: timelineController.selectedClipIds.length > 0
             onTriggered: timelineController.deleteSelectedClips(false)
         }
-        MenuItem {
+        AppMenuItem {
             text: qsTr("波纹删除所选片段") + "\tShift+Delete"
             enabled: timelineController.selectedClipIds.length > 0
             onTriggered: timelineController.deleteSelectedClips(true)
@@ -260,6 +364,12 @@ Rectangle {
         }
         function onHistoryChanged() {
             root.synchronizeInitialZoom();
+        }
+    }
+    Connections {
+        target: timelineController
+        function onExclusiveSelectionRequested() {
+            root.multiSelectMode = false;
         }
     }
 
@@ -296,6 +406,45 @@ Rectangle {
                         Layout.preferredHeight: implicitHeight
                         onCreateShortRequested: workspaceController.createShortSequence("")
                         onEditProfileRequested: root.editProfileRequested()
+                    }
+                    AppButton {
+                        objectName: "timelineMultiSelectButton"
+                        text: qsTr("多选")
+                        checkable: true
+                        checked: root.multiSelectMode
+                        onToggled: root.multiSelectMode = checked
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("开启后直接点击多个片段即可选择；不需要按快捷键")
+                    }
+                    Text {
+                        visible: timelineController.selectedClipIds.length > 0
+                        text: timelineController.selectedCompoundId.length > 0
+                            ? qsTr("已选复合片段")
+                            : qsTr("已选 %1 个").arg(timelineController.selectedClipIds.length)
+                        color: Theme.warning
+                        font.pixelSize: Theme.fontSizeBodySmall
+                        font.weight: Font.DemiBold
+                    }
+                    AppButton {
+                        objectName: "clearTimelineSelectionButton"
+                        text: qsTr("清除选择")
+                        visible: timelineController.selectedClipIds.length > 0
+                        onClicked: root.clearTimelineSelection()
+                    }
+                    AppButton {
+                        objectName: "createCompoundClipButton"
+                        text: qsTr("创建复合片段")
+                        enabled: timelineController.canCreateCompoundClip
+                        visible: timelineController.selectedCompoundId.length === 0
+                        onClicked: timelineController.createCompoundClip()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("把同一轨道上首尾相接的所选片段合成一个整体")
+                    }
+                    AppButton {
+                        objectName: "dissolveCompoundClipButton"
+                        text: qsTr("解除复合")
+                        visible: timelineController.selectedCompoundId.length > 0
+                        onClicked: timelineController.dissolveSelectedCompoundClip()
                     }
                     AppButton {
                         text: "✂"
@@ -378,10 +527,10 @@ Rectangle {
                         objectName: "timelineMoreButton"
                         text: qsTr("更多") + " ▾"
                         onClicked: timelineMoreMenu.open()
-                        Menu {
+                        AppMenu {
                             id: timelineMoreMenu
                             y: timelineMoreButton.height + 4
-                            MenuItem {
+                            AppMenuItem {
                                 objectName: "smartSequenceBoundsButton"
                                 text: timelineController.sequenceBoundaryAnalysisRunning
                                     ? qsTr("正在分析入出点…") : qsTr("智能设置入出点")
@@ -389,39 +538,39 @@ Rectangle {
                                     && !timelineController.sequenceBoundaryAnalysisRunning
                                 onTriggered: timelineController.analyzeSequenceBoundaries()
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("清除入点和出点")
                                 enabled: workspaceController.hasSequenceInOut
                                 onTriggered: timelineController.clearSequenceInOut()
                             }
-                            MenuSeparator {}
-                            MenuItem {
+                            AppMenuSeparator {}
+                            AppMenuItem {
                                 text: timelineController.rangeInFrame < 0
                                     ? qsTr("设置短视频选区起点")
                                     : qsTr("重新设置短视频选区起点")
                                 onTriggered: timelineController.setRangeIn(root.playheadFrame)
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("设置短视频选区终点")
                                 enabled: timelineController.rangeInFrame >= 0
                                 onTriggered: timelineController.commitTimelineRange(root.playheadFrame)
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("从所选区间创建短视频")
                                 enabled: timelineController.selectedRangeId.length > 0
                                 onTriggered: timelineController.createShortFromRange(
                                     timelineController.selectedRangeId)
                             }
-                            MenuSeparator {}
-                            MenuItem {
+                            AppMenuSeparator {}
+                            AppMenuItem {
                                 text: qsTr("添加视频轨")
                                 onTriggered: timelineController.addTrack("video")
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("添加音频轨")
                                 onTriggered: timelineController.addTrack("audio")
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("添加字幕轨")
                                 onTriggered: timelineController.addTrack("subtitle")
                             }
@@ -476,13 +625,24 @@ Rectangle {
             boundsBehavior: Flickable.StopAtBounds
 
             function dropTrackAt(dropY) {
+                const trackCount = timelineController.tracksModel.rowCount();
+                if (trackCount === 0)
+                    return {"trackId": "", "position": 0, "forceNew": true};
                 const row = Math.floor(dropY / root.trackPitch);
-                if (row < 0 || row >= timelineController.tracksModel.rowCount())
+                if (row < 0)
+                    return {"trackId": "", "position": 0, "forceNew": true};
+                if (row >= trackCount)
                     return {
                         "trackId": "",
-                        "position": row,
+                        "position": trackCount,
                         "forceNew": true
                     };
+                const rowY = dropY - row * root.trackPitch;
+                const insertionMargin = 10;
+                if (rowY <= insertionMargin)
+                    return {"trackId": "", "position": row, "forceNew": true};
+                if (rowY >= root.trackHeight - insertionMargin)
+                    return {"trackId": "", "position": row + 1, "forceNew": true};
                 const track = timelineController.tracksModel.get(row);
                 return {
                     "trackId": String(track.trackId),
@@ -695,6 +855,7 @@ Rectangle {
                 width: timelineFlick.contentWidth
                 spacing: 1
                 Repeater {
+                    id: tracksRepeater
                     model: timelineController.tracksModel
                     delegate: Rectangle {
                         id: trackRow
@@ -745,12 +906,12 @@ Rectangle {
                     updateTarget(drop);
                     const target = timelineFlick.dropTrackAt(drop.y);
                     if (drop.hasUrls) {
-                        timelineController.importFilesToTimeline(drop.urls, target.trackId, targetFrame, root.pixelsPerFrame, root.playheadFrame, root.snapEnabled, target.forceNew);
+                        timelineController.importFilesToTimeline(drop.urls, target.trackId, target.position, targetFrame, root.pixelsPerFrame, root.playheadFrame, root.snapEnabled, target.forceNew);
                         drop.acceptProposedAction();
                         return;
                     }
                     if (drop.source && drop.source.draggedAssetIds) {
-                        timelineController.dropAssets(drop.source.draggedAssetIds, target.trackId, targetFrame, root.pixelsPerFrame, root.playheadFrame, root.snapEnabled, target.forceNew);
+                        timelineController.dropAssets(drop.source.draggedAssetIds, target.trackId, target.position, targetFrame, root.pixelsPerFrame, root.playheadFrame, root.snapEnabled, target.forceNew);
                         drop.acceptProposedAction();
                     }
                 }
@@ -759,7 +920,7 @@ Rectangle {
             Rectangle {
                 visible: timelineDropArea.containsDrag
                 x: timelineDropArea.targetFrame * root.pixelsPerFrame
-                y: timelineDropArea.targetCreatesTrack ? 28 + tracksColumn.height : 28 + Math.max(0, timelineDropArea.targetTrackPosition) * root.trackPitch
+                y: 28 + Math.max(0, timelineDropArea.targetTrackPosition) * root.trackPitch
                 width: Math.max(120, root.fpsRounded * root.pixelsPerFrame * 2)
                 height: root.trackHeight
                 radius: 5
@@ -781,13 +942,14 @@ Rectangle {
                 x: 0
                 y: 28
                 width: timelineFlick.contentWidth
-                height: tracksColumn.height
+                height: Math.max(tracksColumn.height, timelineFlick.height - 28)
                 z: 2
                 MouseArea {
+                    objectName: "timelineBlankSelectionArea"
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton
                     onPressed: function (mouse) {
-                        timelineController.clearSelection();
+                        root.clearTimelineSelection();
                         root.seekToFrame(mouse.x / root.pixelsPerFrame);
                     }
                 }
@@ -807,13 +969,17 @@ Rectangle {
                         required property real speed
                         required property string assetKind
                         required property string trackKind
+                        required property string mediaKind
                         required property var allowedTrackKinds
+                        required property int audioTrackPosition
                         required property bool waveformReady
+                        required property string compoundId
                         property real leftTrimOffset: 0
                         property real rightTrimOffset: 0
                         readonly property string displayedTrackKind: root.draggingClipId === clipId
                             ? root.draggingClipTrackKind
                             : trackKind
+                        visible: compoundId.length === 0
                         x: startFrame * root.pixelsPerFrame
                             + (root.draggingClipId === clipId ? root.draggingClipOffsetX : 0)
                             + leftTrimOffset
@@ -822,14 +988,34 @@ Rectangle {
                         height: 46
                         radius: 5
                         color: displayedTrackKind === "audio" ? Theme.audio : assetKind === "image" ? Theme.subtitle : Theme.video
-                        border.width: timelineController.isClipSelected(clipId) ? 2 : 1
-                        border.color: timelineController.isClipSelected(clipId) ? "white" : Qt.lighter(color, 1.25)
+                        border.width: timelineController.isClipSelected(clipId) ? 3 : 1
+                        border.color: timelineController.isClipSelected(clipId) ? Theme.warning : Qt.lighter(color, 1.25)
                         clip: true
                         activeFocusOnTab: true
                         Accessible.name: qsTr("片段 %1，起始帧 %2，持续 %3 帧").arg(assetName).arg(startFrame).arg(durationFrames)
                         Accessible.role: Accessible.ListItem
                         Keys.onReturnPressed: timelineController.selectClip(clipId)
                         Keys.onSpacePressed: timelineController.selectClip(clipId)
+
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 4
+                            width: 20
+                            height: 20
+                            radius: 10
+                            visible: timelineController.isClipSelected(clipId)
+                            color: Theme.warning
+                            border.color: "white"
+                            z: 20
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✓"
+                                color: Theme.window
+                                font.pixelSize: Theme.fontSizeBodySmall
+                                font.weight: Font.Bold
+                            }
+                        }
 
                         ClipWaveform {
                             assetId: clipDelegate.assetId
@@ -880,6 +1066,7 @@ Rectangle {
                             id: clipMouse
                             anchors.fill: parent
                             hoverEnabled: true
+                            preventStealing: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             property real pressContentX: 0
                             property real pressContentY: 0
@@ -890,15 +1077,25 @@ Rectangle {
                                         timelineController.selectClip(clipId, false);
                                     return;
                                 }
-                                const toggle = (mouse.modifiers & Qt.ControlModifier) !== 0;
+                                const toggle = root.multiSelectMode
+                                    || (mouse.modifiers & Qt.ControlModifier) !== 0;
                                 if (toggle || !timelineController.isClipSelected(clipId))
                                     timelineController.selectClip(clipId, toggle);
                                 const point = clipDelegate.mapToItem(clipLayer, mouse.x, mouse.y);
                                 pressContentX = point.x;
                                 pressContentY = point.y;
                                 const sourceTrack = timelineController.tracksModel.get(trackPosition);
-                                if (!sourceTrack.locked)
-                                    root.beginClipDrag(clipId, trackPosition, trackKind);
+                                const sourceAudioTrack = audioTrackPosition >= 0
+                                    ? timelineController.tracksModel.get(audioTrackPosition)
+                                    : null;
+                                if (!sourceTrack.locked
+                                        && (!sourceAudioTrack || !sourceAudioTrack.locked))
+                                    root.beginClipDrag(
+                                        clipId,
+                                        trackPosition,
+                                        trackKind,
+                                        audioTrackPosition
+                                    );
                             }
                             onPositionChanged: function (mouse) {
                                 if (!pressed || root.draggingClipId !== clipId)
@@ -997,30 +1194,59 @@ Rectangle {
                         required property real speed
                         required property string assetKind
                         required property string trackKind
+                        required property string mediaKind
                         required property bool hasAudio
                         required property int audioTrackPosition
                         required property bool waveformReady
+                        required property string compoundId
 
                         objectName: "embeddedAudioClip"
                         readonly property string displayedTrackKind: root.draggingClipId === clipId
                             ? root.draggingClipTrackKind
                             : trackKind
-                        visible: displayedTrackKind === "video" && assetKind === "video" && hasAudio && audioTrackPosition >= 0
+                        readonly property int displayedAudioTrackPosition:
+                            root.draggingClipId === clipId
+                                && root.draggingClipAudioTrackPosition >= 0
+                            ? root.draggingClipAudioTrackPosition
+                            : audioTrackPosition
+                        visible: compoundId.length === 0 && displayedTrackKind === "video"
+                            && mediaKind === "linked_av" && assetKind === "video"
+                            && hasAudio && audioTrackPosition >= 0
                         x: startFrame * root.pixelsPerFrame
                             + (root.draggingClipId === clipId ? root.draggingClipOffsetX : 0)
-                        y: audioTrackPosition * root.trackPitch + 10
+                        y: displayedAudioTrackPosition * root.trackPitch + 10
                         width: Math.max(14, durationFrames * root.pixelsPerFrame)
                         height: 50
                         radius: 5
                         color: Theme.audio
-                        border.width: timelineController.isClipSelected(clipId) ? 2 : 1
-                        border.color: timelineController.isClipSelected(clipId) ? "white" : Qt.lighter(color, 1.25)
+                        border.width: timelineController.isClipSelected(clipId) ? 3 : 1
+                        border.color: timelineController.isClipSelected(clipId) ? Theme.warning : Qt.lighter(color, 1.25)
                         clip: true
                         activeFocusOnTab: true
                         Accessible.name: qsTr("%1 的音频，起始帧 %2，持续 %3 帧").arg(assetName).arg(startFrame).arg(durationFrames)
                         Accessible.role: Accessible.ListItem
                         Keys.onReturnPressed: timelineController.selectClip(clipId)
                         Keys.onSpacePressed: timelineController.selectClip(clipId)
+
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 4
+                            width: 20
+                            height: 20
+                            radius: 10
+                            visible: timelineController.isClipSelected(clipId)
+                            color: Theme.warning
+                            border.color: "white"
+                            z: 20
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✓"
+                                color: Theme.window
+                                font.pixelSize: Theme.fontSizeBodySmall
+                                font.weight: Font.Bold
+                            }
+                        }
 
                         ClipWaveform {
                             assetId: embeddedAudioDelegate.assetId
@@ -1047,8 +1273,10 @@ Rectangle {
                             id: embeddedAudioMouse
                             anchors.fill: parent
                             hoverEnabled: true
+                            preventStealing: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             property real pressContentX: 0
+                            property real pressContentY: 0
                             cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
                             onPressed: function (mouse) {
                                 if (mouse.button === Qt.RightButton) {
@@ -1056,7 +1284,8 @@ Rectangle {
                                         timelineController.selectClip(clipId, false);
                                     return;
                                 }
-                                const toggle = (mouse.modifiers & Qt.ControlModifier) !== 0;
+                                const toggle = root.multiSelectMode
+                                    || (mouse.modifiers & Qt.ControlModifier) !== 0;
                                 if (toggle || !timelineController.isClipSelected(clipId))
                                     timelineController.selectClip(clipId, toggle);
                                 const point = embeddedAudioDelegate.mapToItem(
@@ -1065,9 +1294,18 @@ Rectangle {
                                     mouse.y
                                 );
                                 pressContentX = point.x;
+                                pressContentY = point.y;
                                 const sourceTrack = timelineController.tracksModel.get(trackPosition);
-                                if (!sourceTrack.locked)
-                                    root.beginClipDrag(clipId, trackPosition, trackKind);
+                                const sourceAudioTrack = timelineController.tracksModel.get(
+                                    audioTrackPosition
+                                );
+                                if (!sourceTrack.locked && !sourceAudioTrack.locked)
+                                    root.beginClipDrag(
+                                        clipId,
+                                        trackPosition,
+                                        trackKind,
+                                        audioTrackPosition
+                                    );
                             }
                             onPositionChanged: function (mouse) {
                                 if (!pressed || root.draggingClipId !== clipId)
@@ -1077,13 +1315,12 @@ Rectangle {
                                     mouse.x,
                                     mouse.y
                                 );
-                                root.updateClipDrag(
+                                root.updateLinkedAudioDrag(
                                     clipId,
                                     startFrame,
-                                    trackPosition,
-                                    [trackKind],
+                                    audioTrackPosition,
                                     point.x - pressContentX,
-                                    0
+                                    point.y - pressContentY
                                 );
                             }
                             onReleased: function (mouse) {
@@ -1097,6 +1334,136 @@ Rectangle {
                                     startFrame,
                                     trackPosition,
                                     root.snapEnabled && (mouse.modifiers & Qt.ShiftModifier) === 0
+                                );
+                            }
+                            onCanceled: root.cancelClipDrag()
+                        }
+                    }
+                }
+            }
+
+            Item {
+                id: compoundClipLayer
+                objectName: "compoundClipLayer"
+                x: 0
+                y: 28
+                width: timelineFlick.contentWidth
+                height: tracksColumn.height
+                z: 5
+
+                Repeater {
+                    objectName: "compoundClipRepeater"
+                    model: timelineController.compoundClipsModel
+                    delegate: Rectangle {
+                        id: compoundDelegate
+                        objectName: "timelineCompoundClip"
+                        required property string compoundId
+                        required property string name
+                        required property string primaryClipId
+                        required property var memberClipIds
+                        required property int memberCount
+                        required property string trackId
+                        required property int trackPosition
+                        required property string trackKind
+                        required property int startFrame
+                        required property int durationFrames
+
+                        x: startFrame * root.pixelsPerFrame
+                            + (root.draggingClipId === primaryClipId ? root.draggingClipOffsetX : 0)
+                        y: (root.draggingClipId === primaryClipId
+                            ? root.draggingClipTrackPosition : trackPosition) * root.trackPitch + 12
+                        width: Math.max(28, durationFrames * root.pixelsPerFrame)
+                        height: 46
+                        radius: 7
+                        color: timelineController.selectedCompoundId === compoundId
+                            ? "#2c7f85" : "#245d68"
+                        border.width: timelineController.selectedCompoundId === compoundId ? 3 : 1
+                        border.color: timelineController.selectedCompoundId === compoundId
+                            ? Theme.warning : "#6bc4c9"
+                        clip: true
+                        activeFocusOnTab: true
+                        Accessible.name: qsTr("复合片段 %1，包含 %2 个片段").arg(name).arg(memberCount)
+                        Accessible.role: Accessible.ListItem
+                        Keys.onReturnPressed: timelineController.selectCompoundClip(compoundId)
+                        Keys.onSpacePressed: timelineController.selectCompoundClip(compoundId)
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: 6
+                            color: "#6bc4c9"
+                        }
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 14
+                            anchors.right: selectionMark.left
+                            anchors.rightMargin: 6
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("复合片段 · %1 个").arg(memberCount)
+                            color: "white"
+                            font.pixelSize: Theme.fontSizeCaption
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            id: selectionMark
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 4
+                            width: 20
+                            height: 20
+                            radius: 10
+                            visible: timelineController.selectedCompoundId === compoundId
+                            color: Theme.warning
+                            border.color: "white"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✓"
+                                color: Theme.window
+                                font.pixelSize: Theme.fontSizeBodySmall
+                                font.weight: Font.Bold
+                            }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            preventStealing: true
+                            acceptedButtons: Qt.LeftButton
+                            property real pressContentX: 0
+                            property real pressContentY: 0
+                            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                            onPressed: function (mouse) {
+                                timelineController.selectCompoundClip(compoundId);
+                                const point = compoundDelegate.mapToItem(
+                                    compoundClipLayer, mouse.x, mouse.y);
+                                pressContentX = point.x;
+                                pressContentY = point.y;
+                                const sourceTrack = timelineController.tracksModel.get(trackPosition);
+                                if (!sourceTrack.locked)
+                                    root.beginClipDrag(primaryClipId, trackPosition, trackKind);
+                            }
+                            onPositionChanged: function (mouse) {
+                                if (!pressed || root.draggingClipId !== primaryClipId)
+                                    return;
+                                const point = compoundDelegate.mapToItem(
+                                    compoundClipLayer, mouse.x, mouse.y);
+                                root.updateClipDrag(
+                                    primaryClipId,
+                                    startFrame,
+                                    trackPosition,
+                                    [trackKind],
+                                    point.x - pressContentX,
+                                    point.y - pressContentY
+                                );
+                            }
+                            onReleased: function (mouse) {
+                                root.finishClipDrag(
+                                    primaryClipId,
+                                    startFrame,
+                                    trackPosition,
+                                    root.snapEnabled
+                                        && (mouse.modifiers & Qt.ShiftModifier) === 0
                                 );
                             }
                             onCanceled: root.cancelClipDrag()
@@ -1219,13 +1586,13 @@ Rectangle {
                             ToolTip.visible: containsMouse
                             ToolTip.text: subtitleOverlay.text + qsTr("\n拖动移动；双击播放；按住 Shift 临时关闭吸附")
                         }
-                        Menu {
+                        AppMenu {
                             id: subtitleOverlayMenu
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("播放这一条")
                                 onTriggered: subtitleController.previewSubtitlePlacement(placementId)
                             }
-                            MenuItem {
+                            AppMenuItem {
                                 text: qsTr("恢复字幕文档时间")
                                 enabled: subtitleOverlay.timingOverridden
                                 onTriggered: subtitleController.resetSubtitlePlacementTiming(placementId)
@@ -1304,6 +1671,7 @@ Rectangle {
 
             Item {
                 id: transitionLayer
+                objectName: "transitionLayer"
                 x: 0
                 y: 28
                 width: timelineFlick.contentWidth
@@ -1311,31 +1679,60 @@ Rectangle {
                 z: 7
                 Repeater {
                     model: timelineController.transitionsModel
-                    delegate: Rectangle {
+                    delegate: Item {
+                        objectName: "timelineTransition"
                         required property string transitionId
                         required property int trackPosition
                         required property string kind
                         required property int durationFrames
                         required property int boundaryFrame
+                        required property bool internalToCompound
                         x: (boundaryFrame - durationFrames / 2) * root.pixelsPerFrame
                         y: trackPosition * root.trackPitch + 19
-                        width: Math.max(16, durationFrames * root.pixelsPerFrame)
+                        width: Math.max(24, durationFrames * root.pixelsPerFrame)
                         height: 32
-                        rotation: 45
-                        radius: 3
-                        color: timelineController.selectedTransitionId === transitionId ? Theme.accentHover : Theme.accent
-                        border.color: "white"
+                        visible: !internalToCompound
                         activeFocusOnTab: true
                         Accessible.name: qsTr("转场 %1，持续 %2 帧").arg(kind).arg(durationFrames)
                         Accessible.role: Accessible.Button
                         Keys.onReturnPressed: timelineController.selectTransition(transitionId)
                         Keys.onSpacePressed: timelineController.selectTransition(transitionId)
-                        Text {
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.topMargin: 9
+                            anchors.bottomMargin: 9
+                            radius: 7
+                            color: timelineController.selectedTransitionId === transitionId
+                                ? "#8045a1ff" : "#502389f4"
+                            border.color: timelineController.selectedTransitionId === transitionId
+                                ? "white" : Theme.accentHover
+                            border.width: timelineController.selectedTransitionId === transitionId ? 2 : 1
+                        }
+                        Rectangle {
+                            width: 24
+                            height: 22
                             anchors.centerIn: parent
-                            rotation: -45
-                            text: "T"
-                            color: "white"
-                            font.pixelSize: Theme.fontSizeCaption
+                            radius: 11
+                            color: timelineController.selectedTransitionId === transitionId
+                                ? Theme.accentHover : Theme.surfaceFloating
+                            border.color: Theme.accentHover
+                            Canvas {
+                                objectName: "transitionCrossfadeIcon"
+                                anchors.fill: parent
+                                onPaint: {
+                                    const context = getContext("2d");
+                                    context.reset();
+                                    context.lineWidth = 2;
+                                    context.strokeStyle = "white";
+                                    context.beginPath();
+                                    context.moveTo(6, 7);
+                                    context.lineTo(18, 15);
+                                    context.moveTo(6, 15);
+                                    context.lineTo(18, 7);
+                                    context.stroke();
+                                }
+                            }
                         }
                         ToolTip.visible: transitionMouse.containsMouse
                         ToolTip.text: kind + " · " + durationFrames + qsTr(" 帧")
@@ -1452,7 +1849,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         width: Math.min(root.trackControlsWidth, root.width)
-        visible: timelineController.tracksModel.rowCount() > 0
+        visible: tracksRepeater.count > 0
         clip: true
         z: 10
 
@@ -1486,18 +1883,18 @@ Rectangle {
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("添加轨道")
                     onClicked: addTrackMenu.open()
-                    Menu {
+                    AppMenu {
                         id: addTrackMenu
                         y: addTrackButton.height + 3
-                        MenuItem {
+                        AppMenuItem {
                             text: qsTr("视频轨")
                             onTriggered: timelineController.addTrack("video")
                         }
-                        MenuItem {
+                        AppMenuItem {
                             text: qsTr("音频轨")
                             onTriggered: timelineController.addTrack("audio")
                         }
-                        MenuItem {
+                        AppMenuItem {
                             text: qsTr("字幕轨")
                             onTriggered: timelineController.addTrack("subtitle")
                         }
@@ -1521,15 +1918,29 @@ Rectangle {
                     required property bool locked
                     required property bool muted
                     required property bool solo
+                    required property bool primaryDialogue
                     required property string audioBusId
                     required property var model
 
                     objectName: "trackControlsOverlay"
                     width: trackControlsPanel.width
                     height: root.trackHeight
-                    color: Theme.surfaceRaised
-                    border.color: Theme.border
+                    color: primaryDialogue
+                        ? Theme.transcriptTrackSoft : Theme.surfaceRaised
+                    border.color: primaryDialogue
+                        ? Theme.transcriptTrack : Theme.border
+                    border.width: primaryDialogue ? 2 : 1
                     opacity: 0.96
+
+                    Rectangle {
+                        objectName: "primaryDialogueTrackMarker"
+                        visible: primaryDialogue
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 4
+                        color: Theme.transcriptTrack
+                    }
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -1538,16 +1949,115 @@ Rectangle {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
-                            Text {
-                                text: kind === "video" ? "▣" : kind === "audio" ? "♫" : "CC"
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontSizeCaption
+                            Item {
+                                Layout.preferredWidth: kind === "audio"
+                                    ? (primaryDialogue ? 54 : 24)
+                                    : 22
+                                Layout.preferredHeight: 22
+
+                                Text {
+                                    visible: kind !== "audio"
+                                    anchors.centerIn: parent
+                                    text: kind === "video" ? "▣" : "CC"
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontSizeCaption
+                                }
+
+                                Button {
+                                    id: primaryDialogueButton
+                                    visible: kind === "audio"
+                                    objectName: "primaryDialogueButton"
+                                    anchors.fill: parent
+                                    checkable: true
+                                    checked: primaryDialogue
+                                    text: primaryDialogue ? qsTr("转录") : ""
+                                    leftPadding: 3
+                                    rightPadding: 3
+                                    Accessible.name: primaryDialogue
+                                        ? qsTr("当前转录轨道")
+                                        : qsTr("设为转录轨道")
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: primaryDialogue
+                                        ? qsTr("转录只读取这条轨道")
+                                        : qsTr("设为转录轨道；转录将只读取这条轨道")
+                                    onClicked:
+                                        timelineController.setPrimaryDialogueTrack(trackId)
+
+                                    contentItem: Row {
+                                        spacing: 4
+                                        anchors.centerIn: parent
+                                        Item {
+                                            width: 14
+                                            height: 16
+                                            Rectangle {
+                                                objectName: "primaryDialogueMicrophone"
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                y: 0
+                                                width: 7
+                                                height: 10
+                                                radius: 4
+                                                color: primaryDialogue
+                                                    ? Theme.transcriptTrack
+                                                    : Theme.audio
+                                            }
+                                            Rectangle {
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                y: 9
+                                                width: 2
+                                                height: 4
+                                                color: primaryDialogue
+                                                    ? Theme.transcriptTrack
+                                                    : Theme.textMuted
+                                            }
+                                            Rectangle {
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                y: 13
+                                                width: 9
+                                                height: 2
+                                                radius: 1
+                                                color: primaryDialogue
+                                                    ? Theme.transcriptTrack
+                                                    : Theme.textMuted
+                                            }
+                                        }
+                                        Text {
+                                            visible: primaryDialogue
+                                            text: qsTr("转录")
+                                            color: Theme.transcriptTrackHover
+                                            font.pixelSize: Theme.fontSizeCaption
+                                            font.weight: Font.Bold
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                    }
+                                    background: Rectangle {
+                                        objectName:
+                                            "primaryDialogueButtonBackground"
+                                        radius: Theme.radiusSmall
+                                        color: primaryDialogue
+                                            ? Theme.transcriptTrackSoft
+                                            : primaryDialogueButton.hovered
+                                                ? Theme.surfaceHover
+                                                : Theme.surfaceSunken
+                                        border.color: primaryDialogue
+                                            ? Theme.transcriptTrack
+                                            : primaryDialogueButton.hovered
+                                                ? Theme.audio
+                                                : Theme.border
+                                        border.width: primaryDialogue ? 2 : 1
+                                    }
+                                }
                             }
                             Text {
                                 Layout.fillWidth: true
                                 text: displayName
-                                color: model.enabled ? Theme.text : Theme.textMuted
+                                color: !model.enabled
+                                    ? Theme.textMuted
+                                    : primaryDialogue
+                                        ? Theme.transcriptTrackHover
+                                        : Theme.text
                                 font.pixelSize: Theme.fontSizeCaption
+                                font.weight: primaryDialogue
+                                    ? Font.DemiBold : Font.Normal
                                 elide: Text.ElideRight
                             }
                             Text {

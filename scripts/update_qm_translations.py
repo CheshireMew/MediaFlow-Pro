@@ -9,6 +9,119 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "多选": ("Multi-select", "複数選択"),
+    "开启后直接点击多个片段即可选择；不需要按快捷键": (
+        "When enabled, click clips directly to select several; no keyboard shortcut is required.",
+        "有効にすると、ショートカットなしで複数のクリップを直接クリックして選択できます。",
+    ),
+    "已选复合片段": ("Compound clip selected", "複合クリップを選択中"),
+    "已选 %1 个": ("%1 selected", "%1 個を選択中"),
+    "清除选择": ("Clear Selection", "選択を解除"),
+    "创建复合片段": ("Create Compound Clip", "複合クリップを作成"),
+    "把同一轨道上首尾相接的所选片段合成一个整体": (
+        "Combine the selected adjacent clips on one track into a single unit.",
+        "同じトラック上で連続する選択クリップを一つにまとめます。",
+    ),
+    "解除复合": ("Break Apart", "複合を解除"),
+    "解除视音频绑定": ("Detach Audio", "映像と音声のリンクを解除"),
+    "复合片段": ("Compound Clip", "複合クリップ"),
+    "复合片段 %1，包含 %2 个片段": (
+        "Compound clip %1, containing %2 clips",
+        "複合クリップ %1、%2 個のクリップを含む",
+    ),
+    "复合片段 · %1 个": ("Compound Clip · %1 clips", "複合クリップ · %1 個"),
+    "包含 %1 个片段，共 %2 帧。它会作为一个整体移动和删除，预览与导出仍使用原始素材。": (
+        "Contains %1 clips across %2 frames. It moves and deletes as one unit while preview and export continue to use the original media.",
+        "%1 個のクリップ、合計 %2 フレームを含みます。一つの単位として移動・削除され、プレビューと書き出しでは元の素材を使用します。",
+    ),
+    "删除复合片段": ("Delete Compound Clip", "複合クリップを削除"),
+    "AI 可改字段（关闭后保留人工调整）": (
+        "Fields AI may edit (manual adjustments are kept when disabled)",
+        "AI が編集可能な項目（無効にしても手動調整は保持）",
+    ),
+    "Editable media manifest (editable-media.json)": (
+        "Editable media manifest (editable-media.json)",
+        "編集可能メディアのマニフェスト（editable-media.json）",
+    ),
+    "从 CSV/JSON 生成": ("Generate from CSV/JSON", "CSV/JSON から生成"),
+    "入场 ms": ("Enter ms", "入場 ms"),
+    "关键帧 · 当前播放头 %1 帧": (
+        "Keyframes · Playhead at frame %1",
+        "キーフレーム · 再生ヘッド %1 フレーム",
+    ),
+    "动画 ms": ("Animation ms", "アニメーション ms"),
+    "合成预览": ("Composite Preview", "合成プレビュー"),
+    "同源多格式导出": ("Multi-format Export", "同一ソースの複数形式書き出し"),
+    "品牌主题": ("Brand Theme", "ブランドテーマ"),
+    "字体": ("Font", "フォント"),
+    "安全重新绑定": ("Safe Rebind", "安全に再バインド"),
+    "导入素材": ("Import Media", "素材を読み込む"),
+    "打开素材所在文件夹": (
+        "Open Containing Folder",
+        "素材の保存先フォルダーを開く",
+    ),
+    "素材文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)": (
+        "Media Files (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)",
+        "素材ファイル (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)",
+    ),
+    "支持视频、音频、图片、字幕和网页素材。下载的视频也会自动出现在这里。": (
+        "Supports video, audio, images, subtitles, and web media. Downloaded videos also appear here automatically.",
+        "動画、音声、画像、字幕、Web 素材に対応しています。ダウンロードした動画も自動的にここに表示されます。",
+    ),
+    "导入本地数据快照": ("Import Local Data Snapshot", "ローカルデータスナップショットを読み込む"),
+    "导出网页片段": ("Export Web Clip", "Web クリップを書き出す"),
+    "层级": ("Hierarchy", "階層"),
+    "序列名称模板": ("Sequence Name Template", "シーケンス名テンプレート"),
+    "应用图层参数": ("Apply Layer Properties", "レイヤー設定を適用"),
+    "延迟 ms": ("Delay ms", "遅延 ms"),
+    "当前播放头处的值": ("Value at Current Playhead", "現在の再生ヘッド位置の値"),
+    "批量变体": ("Batch Variants", "バッチバリアント"),
+    "批量数据 (*.json *.csv)": ("Batch Data (*.json *.csv)", "バッチデータ (*.json *.csv)"),
+    "拖动图层调整位置；释放鼠标后写入项目": (
+        "Drag the layer to reposition it; release to save it to the project.",
+        "レイヤーをドラッグして位置を調整し、マウスを離すとプロジェクトに保存します。",
+    ),
+    "接受冲突并迁移": ("Accept Conflicts and Migrate", "競合を受け入れて移行"),
+    "数据与图表": ("Data and Charts", "データとグラフ"),
+    "数据文件 (*.json *.csv)": ("Data Files (*.json *.csv)", "データファイル (*.json *.csv)"),
+    "文件": ("File", "ファイル"),
+    "文字内容": ("Text Content", "テキスト内容"),
+    "新增 %1 · 保留 %2 · 移除 %3 · 冲突 %4": (
+        "Added %1 · Kept %2 · Removed %3 · Conflicts %4",
+        "追加 %1 · 維持 %2 · 削除 %3 · 競合 %4",
+    ),
+    "旋转": ("Rotation", "回転"),
+    "检查新版网页包": ("Check Updated Web Package", "新しい Web パッケージを確認"),
+    "网页素材更新": ("Update Web Media", "Web 素材を更新"),
+    "正在准备网页画面": ("Preparing web frames", "Web フレームを準備中"),
+    "正在检查网页画面": ("Checking web frames", "Web フレームを確認中"),
+    "正在渲染网页画面": ("Rendering web frames", "Web フレームをレンダリング中"),
+    "添加/更新关键帧": ("Add/Update Keyframe", "キーフレームを追加・更新"),
+    "清单中的本地图片路径": ("Local Image Path from Manifest", "マニフェスト内のローカル画像パス"),
+    "渲染网页片段": ("Render Web Clip", "Web クリップをレンダリング"),
+    "版本 {index}": ("Version {index}", "バージョン {index}"),
+    "生成批量短序列": ("Generate Batch Short Sequences", "ショートシーケンスを一括生成"),
+    "离场 ms": ("Exit ms", "退場 ms"),
+    "移除关键帧": ("Remove Keyframe", "キーフレームを削除"),
+    '绑定 JSON，例如 {"name":"layers.title.content"}': (
+        'Binding JSON, for example {"name":"layers.title.content"}',
+        'バインド JSON（例：{"name":"layers.title.content"}）',
+    ),
+    "网页": ("Web", "Web"),
+    "网页包": ("Web Package", "Web パッケージ"),
+    "网页图层": ("Web Layers", "Web レイヤー"),
+    "网页组件 ·": ("Web Component ·", "Web コンポーネント ·"),
+    "网页编辑": ("Web Editing", "Web 編集"),
+    "视频背景": ("Video Background", "動画背景"),
+    '记录 JSON，例如 [{"name":"Ada"}]': (
+        'Records JSON, for example [{"name":"Ada"}]',
+        'レコード JSON（例：[{"name":"Ada"}]）',
+    ),
+    "选择一个图层": ("Select a Layer", "レイヤーを選択"),
+    "选择位置并导出": ("Choose Location and Export", "保存先を選択して書き出し"),
+    "选择批量记录": ("Choose Batch Records", "バッチレコードを選択"),
+    "选择新版网页包": ("Choose Updated Web Package", "新しい Web パッケージを選択"),
+    "颜色，例如 #315efb": ("Color, for example #315efb", "色（例：#315efb）"),
     "AV1 SVT 软件": ("AV1 SVT Software", "AV1 SVT ソフトウェア"),
     "CUDA 不可用，正在切换到 CPU": (
         "CUDA is unavailable; switching to CPU",
@@ -60,22 +173,90 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "軽量プレビューファイルを確認中",
     ),
     "正在准备音频波形": ("Preparing audio waveform", "音声波形を準備中"),
+    "正在保存下载分析结果": (
+        "Saving download analysis",
+        "ダウンロード解析結果を保存中",
+    ),
+    "正在保存响度结果": ("Saving loudness results", "ラウドネス結果を保存中"),
+    "正在保存场景切点": ("Saving scene cuts", "シーンカットを保存中"),
+    "正在保存序列入出点分析": (
+        "Saving sequence in/out analysis",
+        "シーケンスのイン・アウト解析を保存中",
+    ),
+    "正在保存画面跟踪结果": (
+        "Saving subject tracking results",
+        "被写体トラッキング結果を保存中",
+    ),
+    "正在保存翻译结果": ("Saving translation", "翻訳結果を保存中"),
+    "正在保存音频波形": ("Saving audio waveform", "音声波形を保存中"),
+    "正在保存高光结果": ("Saving highlight results", "ハイライト結果を保存中"),
+    "正在创建 SDR 轻量预览文件": (
+        "Creating SDR lightweight preview file",
+        "SDR 軽量プレビューファイルを作成中",
+    ),
+    "正在处理主要对白轨素材": (
+        "Processing primary dialogue-track media",
+        "主要な台詞トラックの素材を処理中",
+    ),
+    "正在处理网页素材": ("Processing web media", "Web 素材を処理中"),
+    "正在复制网页素材结果": (
+        "Copying web media result",
+        "Web 素材の結果をコピー中",
+    ),
+    "正在复用已有网页画面": (
+        "Reusing existing web frames",
+        "既存の Web フレームを再利用中",
+    ),
+    "正在导出时间线": ("Exporting timeline", "タイムラインを書き出し中"),
+    "正在扫描成片质量": (
+        "Scanning final media quality",
+        "完成映像の品質を検査中",
+    ),
+    "正在校验成片文件": (
+        "Verifying final media file",
+        "完成映像ファイルを検証中",
+    ),
+    "正在检查音频声道": ("Checking audio channels", "音声チャンネルを確認中"),
+    "正在检测场景切点": ("Detecting scene cuts", "シーンカットを検出中"),
+    "正在检测长音频静音位置": (
+        "Detecting silence in long audio",
+        "長い音声の無音位置を検出中",
+    ),
+    "正在渲染分析音频": ("Rendering analysis audio", "解析用音声をレンダリング中"),
+    "正在渲染片头检测画面": (
+        "Rendering leading-edge analysis frames",
+        "冒頭検出用の映像をレンダリング中",
+    ),
+    "正在渲染片尾检测画面": (
+        "Rendering trailing-edge analysis frames",
+        "末尾検出用の映像をレンダリング中",
+    ),
+    "正在生成成片证明帧": (
+        "Generating final-media proof frames",
+        "完成映像の検証用フレームを生成中",
+    ),
+    "正在生成长音频分块": (
+        "Creating long-audio chunks",
+        "長い音声の分割を生成中",
+    ),
+    "正在登记下载素材": (
+        "Registering downloaded media",
+        "ダウンロードした素材を登録中",
+    ),
+    "正在登记轻量预览文件": (
+        "Registering lightweight preview file",
+        "軽量プレビューファイルを登録中",
+    ),
+    "正在编码网页素材": ("Encoding web media", "Web 素材をエンコード中"),
+    "正在计算音频波形": ("Calculating audio waveform", "音声波形を計算中"),
+    "正在读取转录音频信息": (
+        "Reading transcription audio metadata",
+        "文字起こし音声の情報を読込中",
+    ),
     "正在检查音频波形": ("Checking audio waveform", "音声波形を確認中"),
     "正在准备转录音频": (
         "Preparing transcription audio",
         "文字起こし用の音声を準備中",
-    ),
-    "正在编译时间轴音频": (
-        "Compiling timeline audio",
-        "タイムライン音声をコンパイル中",
-    ),
-    "正在生成时间轴混音": (
-        "Rendering timeline mix",
-        "タイムラインミックスを生成中",
-    ),
-    "时间轴音频已就绪": (
-        "Timeline audio ready",
-        "タイムライン音声の準備完了",
     ),
     "正在分析下载链接": ("Analyzing download link", "ダウンロードリンクを解析中"),
     "正在分析高光": ("Analyzing highlights", "ハイライトを分析中"),
@@ -198,6 +379,36 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "参数预设": ("Parameter Preset", "パラメータープリセット"),
     "默认": ("Default", "デフォルト"),
     "对白": ("Dialogue", "台詞"),
+    "当前主要对白轨": ("Current primary dialogue track", "現在の主要台詞トラック"),
+    "设为主要对白轨": ("Set as primary dialogue track", "主要台詞トラックに設定"),
+    "转录只读取这条轨道": (
+        "Transcription reads only this track",
+        "文字起こしはこのトラックだけを読み込みます",
+    ),
+    "设为主要对白轨；转录将只读取这条轨道": (
+        "Set as the primary dialogue track; transcription will read only this track",
+        "主要台詞トラックに設定します。文字起こしはこのトラックだけを読み込みます",
+    ),
+    "只转录标记为“对白”的音轨。同一素材只识别一次，再按片段入出点和时间线位置生成字幕。": (
+        "Transcribe only the track marked Dialogue. Each source is recognized once, then captions are mapped from clip in/out points onto the timeline.",
+        "「台詞」に指定したトラックだけを文字起こしします。同じ素材は一度だけ認識し、クリップの入出点とタイムライン位置に合わせて字幕を生成します。",
+    ),
+    "请先在时间轴把一条音频轨设为“对白”，并确认当前范围内有对白素材。": (
+        "Mark one audio track as Dialogue and make sure the current range contains dialogue media.",
+        "音声トラックを一つ「台詞」に設定し、現在の範囲に台詞素材があることを確認してください。",
+    ),
+    "正在读取主要对白轨素材": (
+        "Reading primary dialogue sources",
+        "主要台詞トラックの素材を読み込み中",
+    ),
+    "正在复用已有素材转录": (
+        "Reusing a cached source transcript",
+        "既存の素材文字起こしを再利用中",
+    ),
+    "正在按剪辑位置生成时间线字幕": (
+        "Mapping source transcripts onto the timeline",
+        "クリップ位置に合わせてタイムライン字幕を生成中",
+    ),
     "轻柔": ("Gentle", "ソフト"),
     "强力": ("Strong", "強力"),
     "社交平台": ("Social", "ソーシャル"),
@@ -602,13 +813,9 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "搜索素材": ("Search Media", "メディアを検索"),
     "可用": ("Available", "利用可能"),
     "导入第一个素材": ("Import Your First Media", "最初のメディアを読み込む"),
-    "支持视频、音频和图片。下载的视频也会自动出现在这里。": (
-        "Supports video, audio, and images. Downloaded videos also appear here automatically.",
-        "動画、音声、画像に対応しています。ダウンロードした動画も自動的にここへ表示されます。",
-    ),
     "设置": ("Settings", "設定"),
     "常规": ("General", "一般"),
-    "下载与媒体": ("Downloads & Media", "ダウンロードとメディア"),
+    "下载与媒体": ("Downloads and Media", "ダウンロードとメディア"),
     "AI": ("AI", "AI"),
     "界面": ("Interface", "インターフェース"),
     "语言": ("Language", "言語"),
@@ -1074,6 +1281,87 @@ TRANSLATIONS.update(
 
 TRANSLATIONS.update(
     {
+        "%1 × %2 · 作者 %3": ("%1 × %2 · By %3", "%1 × %2・作者 %3"),
+        "%1 次": ("%1 times", "%1 回"),
+        "Final Cut Pro XML (*.fcpxml)": (
+            "Final Cut Pro XML (*.fcpxml)",
+            "Final Cut Pro XML (*.fcpxml)",
+        ),
+        "Pexels API Key": ("Pexels API Key", "Pexels API キー"),
+        "Pexels 和 Pixabay 提供视频，Unsplash 提供图片。": (
+            "Pexels and Pixabay provide videos; Unsplash provides images.",
+            "Pexels と Pixabay は動画、Unsplash は画像を提供します。",
+        ),
+        "Pixabay API Key": ("Pixabay API Key", "Pixabay API キー"),
+        "Unsplash Access Key": ("Unsplash Access Key", "Unsplash アクセスキー"),
+        "主体跟踪": ("Subject Tracking", "被写体トラッキング"),
+        "例如：客户审阅版": ("For example: Client review", "例：クライアント確認版"),
+        "保存当前版本": ("Save Current Version", "現在のバージョンを保存"),
+        "发现 %1 个问题 · %2 个提醒": (
+            "%1 issues · %2 warnings found",
+            "問題 %1 件・注意 %2 件",
+        ),
+        "可对视频分析场景、自动构图或跟踪主体": (
+            "Analyze scenes, auto-reframe, or track subjects in video",
+            "動画のシーン分析、自動リフレーム、被写体追跡を実行できます",
+        ),
+        "命名版本": ("Named Versions", "名前付きバージョン"),
+        "命名版本保存项目数据库的完整快照。恢复后，时间线、字幕、网页素材状态和项目设置会一起回到该版本。": (
+            "A named version stores a complete project database snapshot. Restoring it returns the timeline, subtitles, web media state, and project settings together.",
+            "名前付きバージョンはプロジェクトデータベース全体のスナップショットを保存します。復元すると、タイムライン、字幕、Web 素材の状態、プロジェクト設定がまとめて戻ります。",
+        ),
+        "在重要调整前保存一个版本，之后可以完整恢复。": (
+            "Save a version before a major edit so you can restore it completely later.",
+            "大きな編集の前にバージョンを保存すると、後で完全に復元できます。",
+        ),
+        "场景切点已生成": ("Scene Cuts Generated", "シーンカットを生成しました"),
+        "导出 FCPXML": ("Export FCPXML", "FCPXML を書き出す"),
+        "导出 FCPXML（Final Cut Pro / DaVinci Resolve）": (
+            "Export FCPXML (Final Cut Pro / DaVinci Resolve)",
+            "FCPXML を書き出す（Final Cut Pro / DaVinci Resolve）",
+        ),
+        "导出历史与质量检查": ("Export History and Quality Check", "書き出し履歴と品質チェック"),
+        "已有 %1 个画面关键帧": (
+            "%1 visual keyframes",
+            "画面キーフレーム %1 個",
+        ),
+        "已选 %1": ("Selected: %1", "選択済み：%1"),
+        "当前未命名的编辑会被该版本替换。已有命名版本和快照文件会保留。": (
+            "Current unnamed edits will be replaced by this version. Existing named versions and snapshot files will be kept.",
+            "現在の未保存編集はこのバージョンに置き換わります。既存の名前付きバージョンとスナップショットファイルは保持されます。",
+        ),
+        "恢复": ("Restore", "復元"),
+        "恢复“%1”？": ("Restore “%1”?", "「%1」を復元しますか？"),
+        "成片": ("Final Cut", "完成動画"),
+        "报告": ("Report", "レポート"),
+        "搜索": ("Search", "検索"),
+        "搜索素材、转写内容或概念": (
+            "Search media, transcripts, or concepts",
+            "素材、文字起こし、概念を検索",
+        ),
+        "文本与字幕": ("Text and Subtitles", "テキストと字幕"),
+        "术语表": ("Glossary", "用語集"),
+        "检查通过 · %1 个提醒": (
+            "Check passed · %1 warnings",
+            "チェック合格・注意 %1 件",
+        ),
+        "检测场景": ("Detect Scenes", "シーンを検出"),
+        "检测场景切点": ("Detect Scene Cuts", "シーンカットを検出"),
+        "正在准备场景检测": ("Preparing Scene Detection", "シーン検出を準備中"),
+        "正在准备画面分析": ("Preparing Visual Analysis", "画面分析を準備中"),
+        "正在跟踪画面主体": ("Tracking Subject", "被写体を追跡中"),
+        "版本": ("Versions", "バージョン"),
+        "画面跟踪已生成": ("Visual Tracking Generated", "画面トラッキングを生成しました"),
+        "自动构图": ("Auto Reframe", "自動リフレーム"),
+        "视觉资源 · 转场": ("Visual Assets · Transitions", "ビジュアル素材・トランジション"),
+        "转写": ("Transcript", "文字起こし"),
+        "还没有命名版本": ("No Named Versions Yet", "名前付きバージョンはまだありません"),
+        "项目修订 %1 · %2": ("Project revision %1 · %2", "プロジェクト改訂 %1・%2"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
         "%1 个素材": ("%1 media items", "%1件のメディア"),
         "%1 的音频，起始帧 %2，持续 %3 帧": (
             "%1 audio, starting at frame %2 for %3 frames",
@@ -1274,6 +1562,147 @@ TRANSLATIONS.update(
         "重译所选 %1": ("Retranslate Selected (%1)", "選択項目を再翻訳（%1）"),
         "高光任务": ("Highlight Task", "ハイライトタスク"),
         "（空白源文本）": ("(Empty source text)", "（原文なし）"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 分 %2 秒": ("%1 min %2 sec", "%1分%2秒"),
+        "%1 小时 %2 分钟": ("%1 hr %2 min", "%1時間%2分"),
+        "· 当前步骤 %1%": ("· Current step %1%", "· 現在の処理 %1%"),
+        "· 识别 %1%": ("· Recognition %1%", "· 認識 %1%"),
+        "只读取标记为“对白”的音轨，并合并实际使用到的源音频区间；不会再转录未使用的完整素材。": (
+            "Only audio tracks marked as Dialogue are read. Source-audio ranges actually used on the timeline are merged; unused portions of source media are not transcribed.",
+            "「会話」に設定されたオーディオトラックのみを読み込み、タイムラインで実際に使用されているソース音声範囲を統合します。未使用部分は文字起こししません。",
+        ),
+        "实际识别：%1 个素材 · %2 个源区间 · 约 %3": (
+            "Actual recognition: %1 media files · %2 source ranges · about %3",
+            "実際の認識量：素材 %1 件 · ソース範囲 %2 件 · 約 %3",
+        ),
+        "并行分块会同时加载多份模型；自动模式会根据 CPU、内存和显存决定是否并行。": (
+            "Parallel chunks load multiple model instances at once. Auto mode decides whether to run in parallel from the available CPU, RAM, and VRAM.",
+            "チャンクを並列処理すると複数のモデルが同時に読み込まれます。自動モードでは CPU、メモリ、VRAM に応じて並列実行するかを決定します。",
+        ),
+        "引擎：Faster-Whisper XXL CLI": (
+            "Engine: Faster-Whisper XXL CLI",
+            "エンジン：Faster-Whisper XXL CLI",
+        ),
+        "引擎：内置 faster-whisper": (
+            "Engine: Built-in faster-whisper",
+            "エンジン：内蔵 faster-whisper",
+        ),
+        "当前模型：%1 · %2": ("Current model: %1 · %2", "現在のモデル：%1 · %2"),
+        "当前没有可转录范围": (
+            "There is no transcribable range",
+            "文字起こし可能な範囲がありません",
+        ),
+        "当前源音频区间识别完成": (
+            "Current source-audio range recognized",
+            "現在のソース音声範囲の認識が完了しました",
+        ),
+        "当前转录轨道": ("Current Transcription Track", "現在の文字起こしトラック"),
+        "时间轴范围：%1–%2": ("Timeline range: %1–%2", "タイムライン範囲：%1～%2"),
+        "本次转录设置": ("Transcription Settings for This Run", "今回の文字起こし設定"),
+        "正在复用已有源区间转录": (
+            "Reusing an existing source-range transcript",
+            "既存のソース範囲の文字起こしを再利用しています",
+        ),
+        "正在并行转录长音频分块": (
+            "Transcribing long-audio chunks in parallel",
+            "長時間音声のチャンクを並列で文字起こししています",
+        ),
+        "第 %1/%2 段 ·": ("Range %1/%2 ·", "範囲 %1/%2 ·"),
+        "设为转录轨道": ("Set as Transcription Track", "文字起こしトラックに設定"),
+        "设为转录轨道；转录将只读取这条轨道": (
+            "Set as the transcription track; transcription will read only this track",
+            "文字起こしトラックに設定します。文字起こしではこのトラックのみを読み込みます",
+        ),
+        "设备：CPU": ("Device: CPU", "デバイス：CPU"),
+        "设备：CUDA": ("Device: CUDA", "デバイス：CUDA"),
+        "设备：自动": ("Device: Auto", "デバイス：自動"),
+        "识别 %1%": ("Recognition %1%", "認識 %1%"),
+        "语言：当前代码 %1": (
+            "Language: Current code %1",
+            "言語：現在のコード %1",
+        ),
+        "长音频并行分块": ("Parallel Long-Audio Chunks", "長時間音声チャンクの並列処理"),
+        "自动并行": ("Automatic Parallelism", "自動並列処理"),
+        "%1 块并行": ("%1 chunks in parallel", "%1 チャンク並列"),
+        "推荐，质量与速度均衡": (
+            "Recommended; balanced quality and speed",
+            "推奨、品質と速度のバランス型",
+        ),
+        "最高质量，资源占用最高": (
+            "Highest quality; highest resource use",
+            "最高品質、リソース使用量も最大",
+        ),
+        "高质量，中等资源占用": (
+            "High quality; moderate resource use",
+            "高品質、中程度のリソース使用量",
+        ),
+        "英语专用，中等资源占用": (
+            "English-only; moderate resource use",
+            "英語専用、中程度のリソース使用量",
+        ),
+        "较快，适合普通电脑": (
+            "Faster; suitable for typical computers",
+            "高速、一般的なパソコン向け",
+        ),
+        "英语专用，速度较快": (
+            "English-only; faster",
+            "英語専用、高速",
+        ),
+        "快速，准确率较低": (
+            "Fast; lower accuracy",
+            "高速、精度は低め",
+        ),
+        "英语专用，资源占用较低": (
+            "English-only; lower resource use",
+            "英語専用、リソース使用量は少なめ",
+        ),
+        "最快，准确率最低": (
+            "Fastest; lowest accuracy",
+            "最速、精度は最も低い",
+        ),
+        "英语专用，速度最快": (
+            "English-only; fastest",
+            "英語専用、最速",
+        ),
+        "已下载": ("Downloaded", "ダウンロード済み"),
+        "首次使用时下载": (
+            "Downloads on first use",
+            "初回使用時にダウンロード",
+        ),
+        "自定义模型": ("Custom model", "カスタムモデル"),
+        "语言：自动识别": ("Language: Auto Detect", "言語：自動検出"),
+        "语言：中文": ("Language: Chinese", "言語：中国語"),
+        "语言：英语": ("Language: English", "言語：英語"),
+        "语言：日语": ("Language: Japanese", "言語：日本語"),
+        "语言：韩语": ("Language: Korean", "言語：韓国語"),
+        "语言：法语": ("Language: French", "言語：フランス語"),
+        "语言：德语": ("Language: German", "言語：ドイツ語"),
+        "语言：西班牙语": ("Language: Spanish", "言語：スペイン語"),
+        "语言：俄语": ("Language: Russian", "言語：ロシア語"),
+        "长音频分块：自动（根据内存和显存）": (
+            "Long-audio chunks: Auto (based on RAM and VRAM)",
+            "長時間音声チャンク：自動（メモリと VRAM に基づく）",
+        ),
+        "长音频分块：顺序转录": (
+            "Long-audio chunks: Sequential",
+            "長時間音声チャンク：順次処理",
+        ),
+        "长音频分块：同时转录 2 块": (
+            "Long-audio chunks: 2 at once",
+            "長時間音声チャンク：2 個を同時処理",
+        ),
+        "长音频分块：同时转录 3 块": (
+            "Long-audio chunks: 3 at once",
+            "長時間音声チャンク：3 個を同時処理",
+        ),
+        "长音频分块：同时转录 4 块": (
+            "Long-audio chunks: 4 at once",
+            "長時間音声チャンク：4 個を同時処理",
+        ),
     }
 )
 

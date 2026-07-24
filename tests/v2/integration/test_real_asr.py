@@ -6,6 +6,7 @@ from pathlib import Path
 from mediaflow.application.asset_service import AssetService
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import TaskStatus, TrackKind
+from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings, GlobalSettings
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure.media_probe import MediaProbe
@@ -51,7 +52,7 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
     try:
         sequence_id = repository.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
-        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
             track_id=audio_track.id,
             asset_id=asset.id,
@@ -60,7 +61,16 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
             duration=asset.metadata.duration_frames,
         )
         task = project.start_task(
-            TranscribeSequenceCommand(sequence_id=sequence_id),
+            TranscribeSequenceCommand(
+                plan=build_dialogue_transcription_plan(
+                    repository.load_timeline(sequence_id),
+                    {
+                        item.id: item
+                        for item in repository.list_assets()
+                    },
+                    settings.asr,
+                )
+            ),
             [asset.id],
             sequence_id=sequence_id,
         )

@@ -70,13 +70,15 @@ ColumnLayout {
             selectedFile.toString(),
             exportSettings.exportOptions())
     }
-
-    Text {
-        text: qsTr("导出")
-        color: Theme.text
-        font.pixelSize: Theme.fontSizeSection
-        font.weight: Font.DemiBold
+    FileDialog {
+        id: fcpxmlDialog
+        title: qsTr("导出 FCPXML")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "fcpxml"
+        nameFilters: [qsTr("Final Cut Pro XML (*.fcpxml)")]
+        onAccepted: exportController.exportFcpxml(selectedFile.toString())
     }
+
     ExportSequenceSummary {
         Layout.fillWidth: true
     }
@@ -92,6 +94,12 @@ ColumnLayout {
             exportSettings.exportOptions())
         onSaveAsRequested: saveDialog.open()
     }
+    AppButton {
+        objectName: "exportFcpxmlButton"
+        Layout.fillWidth: true
+        text: qsTr("导出 FCPXML（Final Cut Pro / DaVinci Resolve）")
+        onClicked: fcpxmlDialog.open()
+    }
     ScrollView {
         id: settingsScroll
         Layout.fillWidth: true
@@ -106,6 +114,7 @@ ColumnLayout {
                 taskData: root.taskData
                 fallbackTitle: qsTr("导出任务")
             }
+            ExportHistoryPanel { }
             ExportSettings {
                 id: exportSettings
                 Layout.fillWidth: true

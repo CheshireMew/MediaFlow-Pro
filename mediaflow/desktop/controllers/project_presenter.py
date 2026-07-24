@@ -14,14 +14,16 @@ from mediaflow.desktop.presentation_catalogs import (
     task_message_label,
     task_status_label,
     task_title,
+    transcription_configuration_label,
 )
 from mediaflow.domain.enums import (
     AssetKind,
+    ClipMediaKind,
     ColorMode,
     TaskStatus,
     TrackKind,
 )
-from mediaflow.domain.task_commands import RenderWebClipCommand
+from mediaflow.domain.task_commands import RenderWebClipCommand, TranscribeSequenceCommand
 from mediaflow.domain.timebase import (
     seconds_to_frames,
 )
@@ -58,7 +60,8 @@ class ProjectPresentationProjector:
             **self._api.runtime_tool_status(),
             **(cuda if preserve_cuda else {}),
             "busy": False,
-            "progress": 0.0,
+            "progressMode": "indeterminate",
+            "progressValue": 0.0,
             "message": "",
             "operation": "",
         }
@@ -119,6 +122,13 @@ class ProjectPresentationProjector:
             for asset_id, path in self._asset_thumbnail_paths.items()
             if asset_id in available_ids
         }
+        transcript_terms: dict[str, list[str]] = {}
+        for document in self._documents.list_subtitle_documents():
+            text = " ".join(
+                segment.text for segment in self._documents.list_subtitle_segments(document.id)
+            )
+            for asset_id in {document.asset_id, document.media_asset_id} - {None}:
+                transcript_terms.setdefault(asset_id, []).append(text)
         rows = [
             {
                 "assetId": asset.id,
@@ -137,6 +147,10 @@ class ProjectPresentationProjector:
                 ),
                 "proxyReady": bool(asset.proxy_path),
                 "waveformReady": bool(asset.waveform_path),
+                "searchText": self._asset_search_text(
+                    asset,
+                    transcript_terms.get(asset.id, []),
+                ),
             }
             for asset in assets
         ]
@@ -147,6 +161,24 @@ class ProjectPresentationProjector:
             asset_id for asset_id in self._selected_asset_ids if asset_id in available_ids
         ]
         self.request_asset_thumbnails(assets)
+
+    @staticmethod
+    def _asset_search_text(asset, transcript_terms: list[str]) -> str:
+        terms = [
+            asset.name,
+            asset.kind.value,
+            asset.metadata.video_codec or "",
+            asset.metadata.audio_codec or "",
+            f"{asset.metadata.width or 0}x{asset.metadata.height or 0}",
+        ]
+        if asset.metadata.width and asset.metadata.height:
+            terms.append(
+                "横屏 landscape"
+                if asset.metadata.width >= asset.metadata.height
+                else "竖屏 portrait"
+            )
+        terms.extend(transcript_terms)
+        return " ".join(term for term in terms if term).casefold()
 
     def request_asset_thumbnails(self, assets) -> None:
         if not self._project or not any(
@@ -229,38 +261,25 @@ class ProjectPresentationProjector:
         )
 
     @staticmethod
-    def _audio_lane_projection(state, assets: dict) -> tuple[dict[str, int], int]:
-        """Map canonical media clips onto the audio rows used by the timeline UI."""
+    def _audio_lane_projection(state) -> dict[str, int]:
+        """Map still-linked video clips onto their paired audio tracks."""
         ordered_tracks = sorted(state.tracks, key=lambda track: (track.position, track.id))
         track_positions = {track.id: index for index, track in enumerate(ordered_tracks)}
-        audio_tracks = [track for track in ordered_tracks if track.kind == TrackKind.AUDIO]
-        if not audio_tracks:
-            return {}, -1
-        default_audio_position = track_positions[audio_tracks[0].id]
-        audio_position_by_bus: dict[str, int] = {}
-        for track in audio_tracks:
-            if track.audio_bus_id:
-                audio_position_by_bus.setdefault(track.audio_bus_id, track_positions[track.id])
         clip_positions: dict[str, int] = {}
         tracks_by_id = {track.id: track for track in ordered_tracks}
         for clip in state.clips:
-            asset = assets.get(clip.asset_id)
-            if asset is None or not asset.metadata.has_audio:
+            if clip.media_kind != ClipMediaKind.LINKED_AV:
                 continue
             source_track = tracks_by_id[clip.track_id]
-            if source_track.kind == TrackKind.AUDIO:
-                clip_positions[clip.id] = track_positions[source_track.id]
-            elif source_track.kind == TrackKind.VIDEO:
-                clip_positions[clip.id] = audio_position_by_bus.get(
-                    source_track.audio_bus_id,
-                    default_audio_position,
-                )
-        return clip_positions, default_audio_position
+            if source_track.linked_audio_track_id in track_positions:
+                clip_positions[clip.id] = track_positions[source_track.linked_audio_track_id]
+        return clip_positions
 
     def refresh_timeline(self) -> None:
         if not self._editor or not self._documents:
             self._track_model.set_items([])
             self._clip_model.set_items([])
+            self._compound_clip_model.set_items([])
             self._transition_model.set_items([])
             self._marker_model.set_items([])
             self._range_model.set_items([])
@@ -269,7 +288,12 @@ class ProjectPresentationProjector:
         assets = {asset.id: asset for asset in self._documents.list_assets()}
         tracks_by_id = {track.id: track for track in state.tracks}
         track_positions = {track.id: index for index, track in enumerate(state.tracks)}
-        audio_lane_positions, _default_audio_position = self._audio_lane_projection(state, assets)
+        audio_lane_positions = self._audio_lane_projection(state)
+        compound_by_clip_id = {
+            clip_id: compound.id
+            for compound in state.compounds
+            for clip_id in compound.clip_ids
+        }
         self._track_model.set_items(
             [
                 {
@@ -283,6 +307,8 @@ class ProjectPresentationProjector:
                     "muted": track.muted,
                     "solo": track.solo,
                     "audioBusId": track.audio_bus_id or "",
+                    "linkedAudioTrackId": track.linked_audio_track_id or "",
+                    "primaryDialogue": track.primary_dialogue,
                 }
                 for track in state.tracks
             ]
@@ -300,10 +326,11 @@ class ProjectPresentationProjector:
                 "endFrame": clip.timeline_end,
                 "speed": clip.speed_numerator / clip.speed_denominator,
                 "pitchCompensation": clip.pitch_compensation,
+                "mediaKind": clip.media_kind.value,
                 "assetKind": assets[clip.asset_id].kind.value,
                 "trackKind": tracks_by_id[clip.track_id].kind.value,
                 "allowedTrackKinds": [
-                    kind.value for kind in compatible_track_kinds(assets[clip.asset_id].kind)
+                    kind.value for kind in compatible_track_kinds(clip.media_kind)
                 ],
                 "hasAudio": assets[clip.asset_id].metadata.has_audio,
                 "audioTrackPosition": audio_lane_positions.get(clip.id, -1),
@@ -322,15 +349,46 @@ class ProjectPresentationProjector:
                 "pan": clip.audio.pan,
                 "fadeInFrames": clip.audio.fade_in_frames,
                 "fadeOutFrames": clip.audio.fade_out_frames,
+                "compoundId": compound_by_clip_id.get(clip.id, ""),
+                "canDetachAudio": clip.media_kind == ClipMediaKind.LINKED_AV,
+                "transformKeyframeCount": len(clip.transform_keyframes),
+                "transformKeyframeSource": (
+                    clip.transform_keyframes[0].source if clip.transform_keyframes else ""
+                ),
             }
             for clip in state.clips
         ]
         self._clip_model.set_items(clip_rows)
+        clips_by_id = {clip.id: clip for clip in state.clips}
+        compound_rows = []
+        for compound in state.compounds:
+            members = [clips_by_id[clip_id] for clip_id in compound.clip_ids]
+            first = members[0]
+            compound_rows.append(
+                {
+                    "compoundId": compound.id,
+                    "name": compound.name,
+                    "primaryClipId": first.id,
+                    "memberClipIds": list(compound.clip_ids),
+                    "memberCount": len(members),
+                    "trackId": first.track_id,
+                    "trackPosition": track_positions[first.track_id],
+                    "trackKind": tracks_by_id[first.track_id].kind.value,
+                    "startFrame": first.timeline_start,
+                    "endFrame": members[-1].timeline_end,
+                    "durationFrames": members[-1].timeline_end - first.timeline_start,
+                    "hasAudio": any(assets[clip.asset_id].metadata.has_audio for clip in members),
+                }
+            )
+        self._compound_clip_model.set_items(compound_rows)
         available_clip_ids = {item["clipId"] for item in clip_rows}
         self._selected_clip_ids = [
             clip_id for clip_id in self._selected_clip_ids if clip_id in available_clip_ids
         ]
-        clips = {clip.id: clip for clip in state.clips}
+        available_compound_ids = {item["compoundId"] for item in compound_rows}
+        if self._selected_compound_id not in available_compound_ids:
+            self._selected_compound_id = ""
+        clips = clips_by_id
         self._transition_model.set_items(
             [
                 {
@@ -342,6 +400,11 @@ class ProjectPresentationProjector:
                     "kind": item.kind.value,
                     "durationFrames": item.duration,
                     "boundaryFrame": clips[item.left_clip_id].timeline_end,
+                    "internalToCompound": bool(
+                        compound_by_clip_id.get(item.left_clip_id)
+                        and compound_by_clip_id.get(item.left_clip_id)
+                        == compound_by_clip_id.get(item.right_clip_id)
+                    ),
                 }
                 for item in state.transitions
             ]
@@ -383,13 +446,30 @@ class ProjectPresentationProjector:
                 {
                     "taskId": task.id,
                     "displayName": task_title(task),
+                    "configurationLabel": (
+                        transcription_configuration_label(task.command)
+                        if isinstance(task.command, TranscribeSequenceCommand)
+                        else ""
+                    ),
                     "commandType": task.command.command_type,
                     "kind": task.kind.value,
                     "status": task.status.value,
                     "statusLabel": task_status_label(task.status.value),
-                    "progress": task.progress,
-                    "messageCode": task.message_code,
-                    "messageLabel": task_message_label(task.message_code),
+                    "progressMode": task.progress.mode,
+                    "progressValue": task.progress.percent or 0.0,
+                    "progressCompleted": task.progress.completed or 0.0,
+                    "progressTotal": task.progress.total or 0.0,
+                    "progressUnit": task.progress.unit or "",
+                    "hasOverallProgress": task.progress.overall_percent is not None,
+                    "overallProgressValue": task.progress.overall_percent or 0.0,
+                    "overallProgressCompleted": task.progress.overall_completed or 0.0,
+                    "overallProgressTotal": task.progress.overall_total or 0.0,
+                    "overallProgressUnit": task.progress.overall_unit or "",
+                    "progressItemIndex": task.progress.item_index or 0,
+                    "progressItemTotal": task.progress.item_total or 0,
+                    "progressItemLabel": task.progress.item_label or "",
+                    "messageCode": task.progress.message_code,
+                    "messageLabel": task_message_label(task.progress.message_code),
                     "queuePosition": queue_positions.get(task.id, 0),
                     "inputAssetIds": list(task.input_asset_ids),
                     "contextId": self._task_context_id(task.command),
@@ -427,7 +507,9 @@ class ProjectPresentationProjector:
                     "language": document.language,
                     "isSource": document.is_source,
                     "sourceDocumentId": document.source_document_id or "",
-                    "segmentCount": len(self._documents.list_subtitle_segments(document.id)),
+                    "segmentCount": self._documents.subtitle_segment_summary(
+                        document.id
+                    )[0],
                 }
                 for document in documents
             ]
@@ -668,8 +750,15 @@ class ProjectPresentationProjector:
             for document in self._documents.list_subtitle_documents()
             for segment in self._documents.list_subtitle_segments(document.id)
         }
-        assets = {asset.id: asset for asset in self._documents.list_assets()}
-        audio_lane_positions, default_audio_position = self._audio_lane_projection(state, assets)
+        audio_lane_positions = self._audio_lane_projection(state)
+        default_audio_position = next(
+            (
+                index
+                for index, track in enumerate(state.tracks)
+                if track.kind == TrackKind.AUDIO
+            ),
+            -1,
+        )
         placement_rows = []
         for track in tracks:
             track_subtitles: list[tuple[int, int, str]] = []

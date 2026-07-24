@@ -183,6 +183,7 @@ class HighlightController(ControllerFacet):
             if self._active_sequence_id == main_sequence_id:
                 self._editor = editor
                 self._selected_clip_ids = [clip.id]
+                self._selected_compound_id = ""
                 self._projector.refresh_timeline()
                 self.selectionChanged.emit()
                 self.historyChanged.emit()

@@ -32,6 +32,7 @@ class SettingsForm(BaseModel):
     asr_compute_type: str = Field(alias="asrComputeType")
     asr_language: str = Field(alias="asrLanguage")
     asr_smart_split_limit: int = Field(alias="asrSmartSplitLimit", ge=1, le=200)
+    asr_parallel_chunks: int = Field(alias="asrParallelChunks", ge=0, le=4)
     translation_target_language: str = Field(alias="translationTargetLanguage")
     translation_mode: TranslationMode = Field(alias="translationMode")
     automatic_proxy: bool = Field(alias="automaticProxy")
@@ -65,6 +66,7 @@ class SettingsForm(BaseModel):
                 "asr_compute_type": settings.asr.compute_type,
                 "asr_language": settings.asr.language,
                 "asr_smart_split_limit": settings.asr.smart_split_limit,
+                "asr_parallel_chunks": settings.asr.parallel_chunks,
                 "translation_target_language": settings.translation.target_language,
                 "translation_mode": settings.translation.mode,
                 "automatic_proxy": settings.preview.automatic_proxy,
@@ -101,6 +103,7 @@ class SettingsForm(BaseModel):
         candidate.asr.compute_type = self.asr_compute_type
         candidate.asr.language = self.asr_language
         candidate.asr.smart_split_limit = self.asr_smart_split_limit
+        candidate.asr.parallel_chunks = self.asr_parallel_chunks
         candidate.translation.target_language = self.translation_target_language
         candidate.translation.mode = self.translation_mode
         candidate.preview.automatic_proxy = self.automatic_proxy

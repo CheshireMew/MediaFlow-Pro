@@ -12,7 +12,7 @@ from mediaflow.domain.settings import (
     default_media_root,
     default_project_root,
 )
-from mediaflow.infrastructure.settings_repository import SettingsRepository
+from mediaflow.infrastructure.settings_repository import SETTINGS_SCHEMA_VERSION, SettingsRepository
 
 
 def test_default_repository_honors_isolated_settings_path(
@@ -92,7 +92,7 @@ def test_version_two_settings_migrate_cli_engine_and_gain_translation(tmp_path: 
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.translation.target_language == "zh_CN"
     assert loaded.translation.mode == "standard"
     assert loaded.translation.glossary_terms == []
@@ -112,11 +112,11 @@ def test_version_seven_settings_gain_quick_download_memory(tmp_path: Path) -> No
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.download.last_url == ""
     assert loaded.ui.default_project_directory == default_project_root()
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 13
+    assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
     assert persisted["download"]["last_url"] == ""
     assert persisted["ui"]["default_project_directory"] == default_project_root()
 
@@ -130,10 +130,10 @@ def test_version_eight_settings_gain_automatic_project_root(tmp_path: Path) -> N
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.ui.default_project_directory == default_project_root()
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 13
+    assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
     assert persisted["ui"]["default_project_directory"] == default_project_root()
 
 
@@ -147,7 +147,7 @@ def test_version_nine_settings_gain_translation_default_from_ui_language(tmp_pat
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.translation.target_language == "en"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["translation"]["target_language"] == "en"
@@ -170,7 +170,7 @@ def test_version_ten_settings_separate_media_and_project_roots(
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.ui.default_project_directory == default_project_root()
     assert loaded.download.output_directory == default_media_root()
     assert Path(default_project_root()).is_dir()
@@ -189,7 +189,7 @@ def test_version_eleven_settings_default_to_compatible_download_codec(tmp_path: 
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.download.codec == "avc"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["download"]["codec"] == "avc"
@@ -205,12 +205,31 @@ def test_version_twelve_settings_remove_inspector_layout(tmp_path: Path) -> None
 
     loaded = SettingsRepository(path).load()
 
-    assert loaded.schema_version == 13
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.ui.left_panel_width == 360
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 13
+    assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
     assert persisted["ui"]["left_panel_width"] == 360
     assert "inspector_width" not in persisted["ui"]
+
+
+def test_version_fourteen_settings_remove_stock_media_configuration(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 14
+    payload["stock_media"] = {
+        "pexels_api_key": "old-pexels-key",
+        "pixabay_api_key": "old-pixabay-key",
+        "unsplash_access_key": "old-unsplash-key",
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
+    assert "stock_media" not in persisted
 
 
 def test_concurrent_settings_writer_is_rejected_instead_of_losing_updates(tmp_path: Path) -> None:

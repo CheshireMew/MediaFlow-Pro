@@ -11,17 +11,70 @@ ScrollView {
     contentWidth: availableWidth
     property var taskData: ({})
     property var resultData: ({})
+    property var planData: ({})
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
     signal modeRequested(string mode)
+
+    function indexOfValue(model, value) {
+        for (var index = 0; index < model.length; ++index) {
+            if (model[index].value === value)
+                return index
+        }
+        return 0
+    }
+
+    function syncTranscriptionSettings() {
+        const data = settingsController.settingsData
+        asrModelSelect.currentIndex = indexOfValue(
+            asrModelSelect.model, data.asrModel)
+        asrDeviceSelect.currentIndex = indexOfValue(
+            asrDeviceSelect.model, data.asrDevice)
+        asrLanguageSelect.currentIndex = indexOfValue(
+            asrLanguageSelect.model, data.asrLanguage)
+        asrParallelSelect.currentIndex = indexOfValue(
+            asrParallelSelect.model, Number(data.asrParallelChunks || 0))
+    }
+
+    function formatTimecode(frame) {
+        const fps = Math.max(1, Math.round(
+            workspaceController.profileFpsNumerator
+                / Math.max(1, workspaceController.profileFpsDenominator)))
+        const bounded = Math.max(0, Math.round(Number(frame || 0)))
+        const frames = bounded % fps
+        const totalSeconds = Math.floor(bounded / fps)
+        const seconds = totalSeconds % 60
+        const totalMinutes = Math.floor(totalSeconds / 60)
+        const minutes = totalMinutes % 60
+        const hours = Math.floor(totalMinutes / 60)
+        function pad(value) { return value < 10 ? "0" + value : String(value) }
+        return pad(hours) + ":" + pad(minutes) + ":" + pad(seconds)
+            + ":" + pad(frames)
+    }
+
+    function formatDuration(seconds) {
+        const value = Math.max(0, Math.round(Number(seconds || 0)))
+        const hours = Math.floor(value / 3600)
+        const minutes = Math.floor((value % 3600) / 60)
+        const remaining = value % 60
+        return hours > 0
+            ? qsTr("%1 小时 %2 分钟").arg(hours).arg(minutes)
+            : minutes > 0
+                ? qsTr("%1 分 %2 秒").arg(minutes).arg(remaining)
+                : qsTr("%1 秒").arg(remaining)
+    }
 
     function refreshContext() {
         const sequenceId = String(workspaceController.activeSequenceId || "");
         taskData = taskController.latestTask("transcribe", sequenceId);
         resultData = subtitleController.sequenceTranscriptionSummary(sequenceId);
+        planData = subtitleController.transcriptionPlanSummary;
     }
 
-    Component.onCompleted: refreshContext()
+    Component.onCompleted: {
+        syncTranscriptionSettings()
+        refreshContext()
+    }
 
     Connections {
         target: taskController
@@ -32,17 +85,17 @@ ScrollView {
         function onProjectStateChanged() { transcriptScroll.refreshContext(); }
         function onHistoryChanged() { transcriptScroll.refreshContext(); }
     }
+    Connections {
+        target: settingsController
+        function onSettingsChanged() {
+            transcriptScroll.syncTranscriptionSettings()
+            transcriptScroll.refreshContext()
+        }
+    }
 
     ColumnLayout {
         width: transcriptScroll.availableWidth
         spacing: 10
-
-        Text {
-            text: qsTr("自动字幕")
-            color: Theme.text
-            font.pixelSize: Theme.fontSizeSection
-            font.weight: Font.DemiBold
-        }
 
         Panel {
             objectName: "transcriptTimelinePanel"
@@ -65,22 +118,107 @@ ScrollView {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("按时间轴顺序转录所有可听见的视频和音频，并自动生成对齐的字幕。")
+                    text: qsTr("只读取标记为“对白”的音轨，并合并实际使用到的源音频区间；不会再转录未使用的完整素材。")
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: workspaceController.hasSequenceInOut
-                        ? qsTr("范围：序列入出点 %1–%2 帧").arg(
-                            workspaceController.sequenceInFrame).arg(
-                            workspaceController.sequenceOutFrame)
-                        : qsTr("范围：整个序列，共 %1 帧").arg(
-                            workspaceController.timelineDurationFrames)
+                    text: transcriptScroll.planData.available
+                        ? qsTr("时间轴范围：%1–%2").arg(
+                            transcriptScroll.formatTimecode(
+                                transcriptScroll.planData.timelineStartFrame)).arg(
+                            transcriptScroll.formatTimecode(
+                                transcriptScroll.planData.timelineEndFrame))
+                        : (transcriptScroll.planData.error || qsTr("当前没有可转录范围"))
                     color: Theme.accentHover
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: Boolean(transcriptScroll.planData.available)
+                    text: qsTr("实际识别：%1 个素材 · %2 个源区间 · 约 %3").arg(
+                        transcriptScroll.planData.sourceCount || 0).arg(
+                        transcriptScroll.planData.regionCount || 0).arg(
+                        transcriptScroll.formatDuration(
+                            transcriptScroll.planData.recognitionSeconds))
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    text: qsTr("本次转录设置")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontSizeBodySmall
+                    font.weight: Font.DemiBold
+                }
+                AppComboBox {
+                    id: asrModelSelect
+                    objectName: "transcriptionModelSelect"
+                    Layout.fillWidth: true
+                    textRole: "text"
+                    valueRole: "value"
+                    model: settingsController.asrModelOptions
+                    enabled: !transcriptScroll.taskActive
+                }
+                Text {
+                    objectName: "transcriptionModelDetail"
+                    Layout.fillWidth: true
+                    text: asrModelSelect.currentText || ""
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    AppComboBox {
+                        id: asrDeviceSelect
+                        objectName: "transcriptionDeviceSelect"
+                        Layout.fillWidth: true
+                        textRole: "text"
+                        valueRole: "value"
+                        model: [
+                            {text: qsTr("设备：自动"), value: "auto"},
+                            {text: qsTr("设备：CUDA"), value: "cuda"},
+                            {text: qsTr("设备：CPU"), value: "cpu"}
+                        ]
+                        enabled: !transcriptScroll.taskActive
+                    }
+                    AppComboBox {
+                        id: asrLanguageSelect
+                        objectName: "transcriptionLanguageSelect"
+                        Layout.fillWidth: true
+                        textRole: "text"
+                        valueRole: "value"
+                        model: settingsController.asrLanguageOptions
+                        enabled: !transcriptScroll.taskActive
+                    }
+                }
+                AppComboBox {
+                    id: asrParallelSelect
+                    objectName: "transcriptionParallelSelect"
+                    Layout.fillWidth: true
+                    textRole: "text"
+                    valueRole: "value"
+                    model: settingsController.asrParallelOptions
+                    enabled: !transcriptScroll.taskActive
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("并行分块会同时加载多份模型；自动模式会根据 CPU、内存和显存决定是否并行。")
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: settingsController.settingsData.asrEngine === "faster_whisper_cli"
+                        ? qsTr("引擎：Faster-Whisper XXL CLI")
+                        : qsTr("引擎：内置 faster-whisper")
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
                 }
                 AppButton {
                     objectName: "transcribeTimelineButton"
@@ -91,12 +229,16 @@ ScrollView {
                     enabled: subtitleController.canTranscribeCurrentSequence
                         && !transcriptScroll.taskActive
                         && !workspaceController.readOnly
-                    onClicked: subtitleController.transcribeCurrentSequence()
+                    onClicked: subtitleController.transcribeCurrentSequence(
+                        String(asrModelSelect.currentValue || ""),
+                        String(asrDeviceSelect.currentValue || "auto"),
+                        String(asrLanguageSelect.currentValue || "auto"),
+                        Number(asrParallelSelect.currentValue || 0))
                 }
                 Text {
                     Layout.fillWidth: true
                     visible: !subtitleController.canTranscribeCurrentSequence
-                    text: qsTr("当前时间轴范围内没有可听见的视频或音频。")
+                    text: qsTr("请先在时间轴把一条音频轨设为“对白”，并确认当前范围内有对白素材。")
                     color: Theme.warning
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap

@@ -10,7 +10,6 @@ from mediaflow.application.web_media_service import (
 )
 from mediaflow.domain.web_media import EditableMediaManifest, WebComponentRecord
 
-
 class WebComponentLibrary:
     """Versioned local library of product-independent editable media packages."""
 
@@ -87,4 +86,11 @@ class WebComponentLibrary:
             tags=component.tags,
             version_hash=source_hash,
             package_path=str(package_root.resolve()),
+            preview_url=(package_root / manifest.entry).resolve().as_uri() + "?capture=1",
+            description=component.description,
+            preview_background=component.preview_background,
+            preview_accent=component.preview_accent,
+            aspect_ratios=component.aspect_ratios,
+            duration_ms=manifest.timeline.duration_ms,
+            builtin=package_root.name.startswith("builtin-"),
         )

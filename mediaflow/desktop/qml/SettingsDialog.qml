@@ -47,6 +47,8 @@ Dialog {
         computeType.text = data.asrComputeType
         asrLanguage.text = data.asrLanguage
         asrSmartSplitLimit.value = Number(data.asrSmartSplitLimit ?? 42)
+        asrParallelChunks.currentIndex = root.indexOfValue(
+            asrParallelChunks.model, Number(data.asrParallelChunks ?? 0))
         translationTargetLanguage.currentIndex = root.indexOfValue(
             translationTargetLanguage.model, data.translationTargetLanguage)
         translationMode.currentIndex = root.indexOfValue(
@@ -111,6 +113,7 @@ Dialog {
             asrComputeType: computeType.text,
             asrLanguage: asrLanguage.text,
             asrSmartSplitLimit: asrSmartSplitLimit.value,
+            asrParallelChunks: asrParallelChunks.currentValue,
             translationTargetLanguage: translationTargetLanguage.currentValue,
             translationMode: translationMode.currentValue,
             automaticProxy: automaticProxy.checked,
@@ -533,7 +536,8 @@ Dialog {
                                 Layout.fillWidth: true
                                 visible: settingsController.runtimeToolStatus.busy
                                 from: 0; to: 100
-                                value: Number(settingsController.runtimeToolStatus.progress || 0)
+                                indeterminate: settingsController.runtimeToolStatus.progressMode !== "determinate"
+                                value: Number(settingsController.runtimeToolStatus.progressValue || 0)
                             }
                             Text {
                                 visible: settingsController.runtimeToolStatus.busy
@@ -633,6 +637,17 @@ Dialog {
                             value: 42
                             editable: true
                             onValueChanged: root.scheduleSettingsSave()
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: qsTr("长音频并行分块"); color: Theme.textMuted; Layout.preferredWidth: 180 }
+                        AppComboBox {
+                            id: asrParallelChunks
+                            Layout.fillWidth: true
+                            textRole: "text"; valueRole: "value"
+                            model: settingsController.asrParallelOptions
+                            onActivated: root.scheduleSettingsSave()
                         }
                     }
                 }

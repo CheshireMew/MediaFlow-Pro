@@ -53,12 +53,6 @@ ScrollView {
             }
             return 0;
         }
-        Text {
-            text: qsTr("音频")
-            color: Theme.text
-            font.pixelSize: Theme.fontSizeSection
-            font.weight: Font.DemiBold
-        }
         Panel {
             objectName: "audioClipProperties"
             Layout.fillWidth: true

@@ -64,6 +64,7 @@ class AsrSettings(DomainModel):
     compute_type: str = "float16"
     language: str = "auto"
     smart_split_limit: int = 42
+    parallel_chunks: int = Field(default=0, ge=0, le=4)
 
 
 class GlossaryTermSettings(DomainModel):
@@ -161,7 +162,7 @@ class UiSettings(DomainModel):
 
 
 class GlobalSettings(DomainModel):
-    schema_version: int = 13
+    schema_version: int = 16
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     asr: AsrSettings = Field(default_factory=AsrSettings)

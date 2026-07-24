@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadPlan, DownloadRequest
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import DownloadSettings
 
 from .cookie_store import CookieStore
@@ -15,7 +16,7 @@ from .platform_media import PlatformMediaResolver
 from .runtime_paths import RuntimePaths
 from .runtime_tools import prepare_ytdlp_import
 
-DownloadProgress = Callable[[float, str], None]
+DownloadProgress = Callable[[OperationProgress], None]
 
 
 class YtDlpDownloadService:
@@ -109,10 +110,19 @@ class YtDlpDownloadService:
             if status == "downloading" and progress:
                 total = event.get("total_bytes") or event.get("total_bytes_estimate") or 0
                 downloaded = event.get("downloaded_bytes") or 0
-                value = (float(downloaded) / float(total) * 95.0) if total else 0.0
-                progress(value, "downloading")
+                if total:
+                    progress(
+                        OperationProgress.determinate(
+                            "downloading",
+                            completed=min(float(downloaded), float(total)),
+                            total=float(total),
+                            unit="bytes",
+                        )
+                    )
+                else:
+                    progress(OperationProgress.indeterminate("downloading"))
             elif status == "finished" and progress:
-                progress(97.0, "postprocessing")
+                progress(OperationProgress.indeterminate("postprocessing"))
 
         def after_move(event: dict[str, Any]) -> None:
             path = event.get("filepath") or (event.get("info_dict") or {}).get("filepath")
@@ -211,8 +221,6 @@ class YtDlpDownloadService:
             outputs.append(path)
         if not outputs:
             raise RuntimeError("yt-dlp completed without an observable downloaded file")
-        if progress:
-            progress(100.0, "completed")
         return outputs
 
     @staticmethod

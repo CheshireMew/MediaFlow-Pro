@@ -54,7 +54,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(tmp_path: P
         asset = assets.import_external(source)
         asset = assets.adopt_main_profile_from_video(asset.id)
         editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -63,10 +63,11 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(tmp_path: P
             duration=125,
         )
 
+        progress = []
         metrics, result_path = LoudnessAnalysisService(
             TimelineCompiler(repository),
             paths,
-        ).analyze(editor.state)
+        ).analyze(editor.state, progress=progress.append)
 
         assert -30.0 < metrics.sample_peak_dbfs < -10.0
         assert metrics.true_peak_dbtp == pytest.approx(metrics.sample_peak_dbfs, abs=1.0)
@@ -77,3 +78,13 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(tmp_path: P
         assert payload["sequence_id"] == editor.state.sequence.id
         assert payload["integrated_lufs"] == metrics.integrated_lufs
         assert (repository.project_dir / payload["rendered_audio"]).is_file()
+        render_progress = [
+            item for item in progress if item.message_code == "audio_analysis_rendering"
+        ]
+        loudness_progress = [
+            item
+            for item in progress
+            if item.message_code == "audio_analysis_measuring_loudness"
+        ]
+        assert render_progress[-1].completed == render_progress[-1].total
+        assert loudness_progress[-1].completed == loudness_progress[-1].total

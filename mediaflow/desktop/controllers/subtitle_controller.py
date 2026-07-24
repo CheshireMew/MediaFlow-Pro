@@ -9,10 +9,12 @@ from mediaflow.desktop.presentation_catalogs import (
     translation_language_options,
     translation_mode_options,
 )
+from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.enums import (
     TrackKind,
 )
-from mediaflow.domain.sequence_audio import select_audible_sequence_audio
+from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
+from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitles import SubtitleSegment
 from mediaflow.domain.task_commands import (
     TranscribeSequenceCommand,
@@ -169,23 +171,33 @@ class SubtitleController(ControllerFacet):
 
     @Property(bool, notify=historyChanged)
     def canTranscribeCurrentSequence(self) -> bool:
-        if not self._documents or not self._editor or not self._active_sequence_id:
+        try:
+            return self._current_transcription_plan().region_count > 0
+        except (RuntimeError, ValueError):
             return False
-        state = self._editor.state
-        duration = state.duration_frames
-        bounds = state.sequence.in_out
-        start_frame = min(duration, bounds.in_frame) if bounds else 0
-        end_frame = min(duration, bounds.out_frame) if bounds else duration
-        assets = {asset.id: asset for asset in self._documents.list_assets()}
-        return bool(
-            select_audible_sequence_audio(
-                state,
-                assets,
-                self._documents.list_audio_buses(state.sequence.id),
-                start_frame=start_frame,
-                end_frame=end_frame,
-            ).asset_ids
-        )
+
+    @Property("QVariantMap", notify=historyChanged)
+    def transcriptionPlanSummary(self) -> dict:
+        try:
+            plan = self._current_transcription_plan()
+        except (RuntimeError, ValueError) as error:
+            return {"available": False, "error": str(error)}
+        return {
+            "available": plan.region_count > 0,
+            "timelineStartFrame": plan.timeline_start_frame,
+            "timelineEndFrame": plan.timeline_end_frame,
+            "timelineDurationFrames": (
+                plan.timeline_end_frame - plan.timeline_start_frame
+            ),
+            "recognitionSeconds": plan.recognition_seconds,
+            "sourceCount": plan.source_count,
+            "regionCount": plan.region_count,
+            "engine": plan.asr.engine,
+            "model": plan.asr.model,
+            "device": plan.asr.device,
+            "language": plan.asr.language,
+            "parallelChunks": plan.asr.parallel_chunks,
+        }
 
     @Slot(str, result="QVariantMap")
     def sequenceTranscriptionSummary(self, sequence_id: str) -> dict:
@@ -194,18 +206,22 @@ class SubtitleController(ControllerFacet):
         documents = [
             item
             for item in self._documents.list_subtitle_documents(sequence_id=sequence_id)
-            if item.is_source and item.source_document_id is None
+            if item.is_source
+            and item.source_document_id is None
+            and item.purpose == "sequence_transcript"
         ]
         if not documents:
             return {}
         document = documents[-1]
-        segments = self._documents.list_subtitle_segments(document.id)
+        segment_count, start_frame, end_frame = (
+            self._documents.subtitle_segment_summary(document.id)
+        )
         return {
             "documentId": document.id,
             "language": document.language,
-            "segmentCount": len(segments),
-            "startFrame": segments[0].start_frame if segments else 0,
-            "endFrame": segments[-1].end_frame if segments else 0,
+            "segmentCount": segment_count,
+            "startFrame": start_frame,
+            "endFrame": end_frame,
         }
 
     @Slot(str, int, float, int, bool)
@@ -296,34 +312,61 @@ class SubtitleController(ControllerFacet):
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
-    @Slot()
-    def transcribeCurrentSequence(self) -> None:
+    @Slot(str, str, str, int)
+    def transcribeCurrentSequence(
+        self,
+        model: str,
+        device: str,
+        language: str,
+        parallel_chunks: int,
+    ) -> None:
         try:
             self._require_writable()
-            if not self.canTranscribeCurrentSequence:
-                raise ValueError("当前时间轴范围内没有可听见的视频或音频")
-            state = self._editor.state
-            duration = state.duration_frames
-            bounds = state.sequence.in_out
-            start_frame = min(duration, bounds.in_frame) if bounds else 0
-            end_frame = min(duration, bounds.out_frame) if bounds else duration
-            assets = {asset.id: asset for asset in self._documents.list_assets()}
-            input_asset_ids = list(
-                select_audible_sequence_audio(
-                    state,
-                    assets,
-                    self._documents.list_audio_buses(state.sequence.id),
-                    start_frame=start_frame,
-                    end_frame=end_frame,
-                ).asset_ids
+            selected_asr = AsrSettings.model_validate(
+                {
+                    **self.settings.asr.model_dump(mode="python"),
+                    "model": model.strip(),
+                    "device": device,
+                    "language": language.strip() or "auto",
+                    "parallel_chunks": parallel_chunks,
+                }
             )
+            if not selected_asr.model:
+                raise ValueError("请选择转录模型")
+            candidate = self.settings.model_copy(deep=True)
+            candidate.asr = selected_asr.model_copy(deep=True)
+            self._commit_settings(candidate, "转录设置已更新")
+            plan = self._current_transcription_plan(selected_asr)
+            if plan.region_count <= 0:
+                raise ValueError("请指定主要对白轨，并确认当前范围内有对白素材")
             self._start_task(
-                TranscribeSequenceCommand(sequence_id=self._active_sequence_id),
-                input_asset_ids,
-                sequence_id=self._active_sequence_id,
+                TranscribeSequenceCommand(plan=plan),
+                [source.asset_id for source in plan.sources],
+                sequence_id=plan.sequence_id,
             )
         except Exception as error:
             self.errorOccurred.emit(str(error))
+
+    def _current_transcription_plan(
+        self,
+        asr: AsrSettings | None = None,
+    ) -> TranscriptionPlan:
+        if not self._documents or not self._editor or not self._active_sequence_id:
+            raise RuntimeError("当前没有可转录的时间轴")
+        state = self._editor.state
+        duration = state.duration_frames
+        if duration <= 0:
+            raise ValueError("当前时间轴还没有可转录的素材")
+        bounds = state.sequence.in_out
+        start_frame = min(duration, bounds.in_frame) if bounds else 0
+        end_frame = min(duration, bounds.out_frame) if bounds else duration
+        return build_dialogue_transcription_plan(
+            state,
+            {asset.id: asset for asset in self._documents.list_assets()},
+            asr or self.settings.asr,
+            start_frame=start_frame,
+            end_frame=end_frame,
+        )
 
     @Slot(str, str, str)
     def translateDocument(self, document_id: str, target_language: str, mode: str) -> None:
@@ -497,8 +540,15 @@ class SubtitleController(ControllerFacet):
         try:
             self._require_writable()
             subtitle_track = next(
-                track for track in self._editor.state.tracks if track.kind == TrackKind.SUBTITLE
+                (
+                    track
+                    for track in self._editor.state.tracks
+                    if track.kind == TrackKind.SUBTITLE and not track.locked
+                ),
+                None,
             )
+            if subtitle_track is None:
+                subtitle_track = self._editor.add_track(TrackKind.SUBTITLE)
             document = self._documents.get_subtitle_document(document_id)
             media_asset_id = document.media_asset_id or document.asset_id
             matching_clips = [clip for clip in self._editor.state.clips if clip.asset_id == media_asset_id]
@@ -510,7 +560,9 @@ class SubtitleController(ControllerFacet):
                 )
             else:
                 placements = self._documents.place_subtitle_document(document_id, subtitle_track.id)
+            self._projector.refresh_timeline()
             self._projector.refresh_preview_subtitles()
+            self.projectStateChanged.emit()
             self._set_status(f"已放入 {len(placements)} 条字幕")
         except Exception as error:
             self.errorOccurred.emit(str(error))

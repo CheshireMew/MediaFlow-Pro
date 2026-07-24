@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from PySide6.QtCore import (
@@ -142,12 +143,31 @@ class AssetListModel(DictListModel):
                 "previewUrl",
                 "proxyReady",
                 "waveformReady",
+                "searchText",
             ],
             parent,
         )
 
 
 class AssetFilterModel(QSortFilterProxyModel):
+    _CONCEPTS = (
+        {"night", "nighttime", "夜", "夜晚", "夜景", "黑夜"},
+        {"city", "urban", "城市", "都市", "街道", "街景"},
+        {"interview", "talking", "dialogue", "访谈", "采访", "对话", "口播"},
+        {"people", "person", "human", "人物", "人像", "人", "主体"},
+        {"nature", "outdoor", "landscape", "自然", "户外", "风景", "景观"},
+        {"food", "cooking", "meal", "食物", "美食", "烹饪", "餐饮"},
+        {"technology", "tech", "digital", "科技", "技术", "数码"},
+        {"business", "office", "work", "商业", "办公", "工作"},
+        {"music", "concert", "音乐", "演出", "演唱会"},
+        {"sport", "sports", "fitness", "运动", "体育", "健身"},
+        {"vertical", "portrait", "竖屏", "纵向"},
+        {"horizontal", "landscape", "横屏", "横向"},
+        {"video", "footage", "clip", "视频", "镜头", "片段"},
+        {"audio", "sound", "voice", "音频", "声音", "语音"},
+        {"image", "photo", "picture", "图片", "照片", "图像"},
+    )
+
     def __init__(self, source_model: AssetListModel, parent: QObject | None = None):
         super().__init__(parent)
         self._search_text = ""
@@ -169,7 +189,28 @@ class AssetFilterModel(QSortFilterProxyModel):
         source = self.sourceModel()
         if not isinstance(source, AssetListModel):
             return False
-        return self._search_text in str(source.get(source_row).get("name") or "").casefold()
+        row = source.get(source_row)
+        corpus = str(row.get("searchText") or row.get("name") or "").casefold()
+        if self._search_text in corpus:
+            return True
+        query_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", self._search_text))
+        if not query_terms:
+            return False
+        corpus_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", corpus))
+        expanded_corpus = set(corpus_terms)
+        for concept in self._CONCEPTS:
+            if any(term in corpus for term in concept):
+                expanded_corpus.update(concept)
+        return all(
+            any(
+                query == candidate
+                or query in candidate
+                or candidate in query
+                for candidate in expanded_corpus
+            )
+            or any(query in concept and bool(concept & expanded_corpus) for concept in self._CONCEPTS)
+            for query in query_terms
+        )
 
 
 class SequenceListModel(DictListModel):
@@ -227,6 +268,8 @@ class TrackListModel(DictListModel):
                 "muted",
                 "solo",
                 "audioBusId",
+                "linkedAudioTrackId",
+                "primaryDialogue",
             ],
             parent,
         )
@@ -247,6 +290,7 @@ class ClipListModel(DictListModel):
                 "endFrame",
                 "speed",
                 "pitchCompensation",
+                "mediaKind",
                 "assetKind",
                 "trackKind",
                 "allowedTrackKinds",
@@ -267,6 +311,31 @@ class ClipListModel(DictListModel):
                 "pan",
                 "fadeInFrames",
                 "fadeOutFrames",
+                "compoundId",
+                "canDetachAudio",
+                "transformKeyframeCount",
+                "transformKeyframeSource",
+            ],
+            parent,
+        )
+
+
+class CompoundClipListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            [
+                "compoundId",
+                "name",
+                "primaryClipId",
+                "memberClipIds",
+                "memberCount",
+                "trackId",
+                "trackPosition",
+                "trackKind",
+                "startFrame",
+                "endFrame",
+                "durationFrames",
+                "hasAudio",
             ],
             parent,
         )
@@ -318,6 +387,7 @@ class TransitionListModel(DictListModel):
                 "kind",
                 "durationFrames",
                 "boundaryFrame",
+                "internalToCompound",
             ],
             parent,
         )
@@ -339,11 +409,24 @@ class TaskListModel(DictListModel):
             [
                 "taskId",
                 "displayName",
+                "configurationLabel",
                 "commandType",
                 "kind",
                 "status",
                 "statusLabel",
-                "progress",
+                "progressMode",
+                "progressValue",
+                "progressCompleted",
+                "progressTotal",
+                "progressUnit",
+                "hasOverallProgress",
+                "overallProgressValue",
+                "overallProgressCompleted",
+                "overallProgressTotal",
+                "overallProgressUnit",
+                "progressItemIndex",
+                "progressItemTotal",
+                "progressItemLabel",
                 "messageCode",
                 "messageLabel",
                 "queuePosition",

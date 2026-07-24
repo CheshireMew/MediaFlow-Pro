@@ -7,6 +7,7 @@ from pathlib import Path
 
 from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.model_base import now_ms
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.tasks import Task
 from mediaflow.infrastructure.project_schema import PROJECT_FILE_NAME
 
@@ -32,10 +33,10 @@ class TaskRepository:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """INSERT INTO task(
-                    id, project_id, sequence_id, command_json, status, progress,
-                    message_code, input_asset_ids_json,
+                    id, project_id, sequence_id, command_json, status, progress_json,
+                    input_asset_ids_json,
                     artifacts_json, execution_trace_json, error, revision, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 self._values(task),
             )
         return self.get(task.id)
@@ -47,17 +48,26 @@ class TaskRepository:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """UPDATE task SET
-                    project_id=?, sequence_id=?, command_json=?, status=?, progress=?,
-                    message_code=?, input_asset_ids_json=?,
+                    project_id=?, sequence_id=?, command_json=?, status=?, progress_json=?,
+                    input_asset_ids_json=?,
                     artifacts_json=?, execution_trace_json=?, error=?, revision=?, created_at=?, updated_at=?
                 WHERE id=? AND revision=?""",
                 (
                     next_task.project_id,
                     next_task.sequence_id,
-                    self._json(next_task.command.model_dump(mode="json")),
+                    self._json(
+                        next_task.command.model_dump(
+                            mode="json",
+                            exclude_computed_fields=True,
+                        )
+                    ),
                     next_task.status.value,
-                    next_task.progress,
-                    next_task.message_code,
+                    self._json(
+                        next_task.progress.model_dump(
+                            mode="json",
+                            exclude_computed_fields=True,
+                        )
+                    ),
                     self._json(next_task.input_asset_ids),
                     self._json(next_task.artifacts),
                     self._json([item.model_dump(mode="json") for item in next_task.execution_trace]),
@@ -113,7 +123,9 @@ class TaskRepository:
                         task.model_copy(
                             update={
                                 "status": TaskStatus.PAUSED,
-                                "message_code": "interrupted_by_restart",
+                                "progress": OperationProgress.indeterminate(
+                                    "interrupted_by_restart"
+                                ),
                                 "error": None,
                             }
                         )
@@ -131,10 +143,19 @@ class TaskRepository:
             task.id,
             task.project_id,
             task.sequence_id,
-            cls._json(task.command.model_dump(mode="json")),
+            cls._json(
+                task.command.model_dump(
+                    mode="json",
+                    exclude_computed_fields=True,
+                )
+            ),
             task.status.value,
-            task.progress,
-            task.message_code,
+            cls._json(
+                task.progress.model_dump(
+                    mode="json",
+                    exclude_computed_fields=True,
+                )
+            ),
             cls._json(task.input_asset_ids),
             cls._json(task.artifacts),
             cls._json([item.model_dump(mode="json") for item in task.execution_trace]),
@@ -152,8 +173,7 @@ class TaskRepository:
             sequence_id=row["sequence_id"],
             command=json.loads(row["command_json"]),
             status=TaskStatus(row["status"]),
-            progress=row["progress"],
-            message_code=row["message_code"],
+            progress=json.loads(row["progress_json"]),
             input_asset_ids=json.loads(row["input_asset_ids_json"]),
             artifacts=json.loads(row["artifacts_json"]),
             execution_trace=json.loads(row["execution_trace_json"]),

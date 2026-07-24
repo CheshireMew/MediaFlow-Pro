@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 import math
 import struct
+import subprocess
+import sys
 import wave
 from pathlib import Path
 
+from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.automation.contracts import describe_contract
 from mediaflow.cli import execute_request, main
 from mediaflow.composition import EditorApplication
-from mediaflow.domain.enums import TrackKind
+from mediaflow.domain.enums import AssetKind, TrackKind
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
+from mediaflow.infrastructure.project_repository import ProjectRepository
 
 
 def _write_wave(path: Path) -> None:
@@ -22,6 +28,62 @@ def _write_wave(path: Path) -> None:
         destination.setsampwidth(2)
         destination.setframerate(sample_rate)
         destination.writeframes(frames)
+
+
+def _run_cli_request(
+    tmp_path: Path,
+    project_path: Path,
+    operation: str,
+    arguments: dict | None = None,
+) -> tuple[int, dict]:
+    request_path = tmp_path / f"{operation.replace('.', '-')}.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "protocol": "mediaflow-cli",
+                "version": 1,
+                "operation": operation,
+                "project": str(project_path),
+                "arguments": arguments or {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mediaflow.cli",
+            "execute",
+            "--request",
+            str(request_path),
+        ],
+        cwd=Path(__file__).resolve().parents[3],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return completed.returncode, json.loads(completed.stdout)
+
+
+def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> None:
+    operations = {
+        item["name"]: item
+        for item in describe_contract()["operations"]
+    }
+    edit_schema = operations["transcript.edit.preview"]["arguments_schema"][
+        "properties"
+    ]["edit"]
+    assert edit_schema["properties"]["selections"]["items"]["properties"]["kind"][
+        "enum"
+    ] == ["words", "segments"]
+    assert "$ref" not in json.dumps(edit_schema)
+    plan_schema = operations["transcript.edit.apply"]["arguments_schema"][
+        "properties"
+    ]["plan"]
+    assert "plan_digest" in plan_schema["required"]
+    assert "$ref" not in json.dumps(plan_schema)
 
 
 def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
@@ -112,6 +174,185 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     assert output["result"]["assets"][0]["id"] == asset_id
 
 
+def test_ai_transcript_edit_plan_runs_through_real_cli_and_can_restore(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "AI Transcript Project"
+    source = tmp_path / "interview.mp4"
+    source.write_bytes(b"timeline-source")
+    with ProjectRepository.create(project_path, "AI Transcript Project") as repository:
+        project = repository.get_project()
+        asset = repository.import_external_asset(source, AssetKind.VIDEO)
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=90,
+        )
+        locked_track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=locked_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=90,
+        )
+        editor.set_track_state(
+            locked_track.id,
+            enabled=True,
+            locked=True,
+            muted=False,
+            solo=False,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            sequence_id=project.main_sequence_id,
+            language="en",
+            purpose="sequence_transcript",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=0,
+            end_frame=90,
+            text="one two three",
+        )
+        words = [
+            SubtitleWord(
+                segment_id=segment.id,
+                position=position,
+                start_frame=position * 30,
+                end_frame=(position + 1) * 30,
+                text=text,
+            )
+            for position, text in enumerate(("one", "two", "three"))
+        ]
+        repository.create_subtitle_document(document, [segment], words)
+
+    code, inspected = _run_cli_request(
+        tmp_path,
+        project_path,
+        "transcript.get",
+    )
+    assert code == 0 and inspected["ok"] is True
+    transcript = inspected["result"]["transcript"]
+    assert transcript["recognized_word_count"] == 3
+    assert transcript["estimated_word_count"] == 0
+    word_id = transcript["segments"][0]["words"][1]["id"]
+    edit = {
+        "sequence_id": transcript["document"]["sequence_id"],
+        "document_id": transcript["document"]["id"],
+        "expected_content_revision": transcript["content_revision"],
+        "selections": [
+            {
+                "kind": "words",
+                "ids": [word_id],
+                "reason": "Remove repeated filler",
+            }
+        ],
+    }
+
+    code, previewed = _run_cli_request(
+        tmp_path,
+        project_path,
+        "transcript.edit.preview",
+        {"edit": edit},
+    )
+    assert code == 0 and previewed["ok"] is True
+    plan = previewed["result"]["plan"]
+    assert plan["impact"]["removed_duration_frames"] == 30
+    assert plan["impact"]["before_duration_frames"] == 90
+    assert plan["impact"]["after_duration_frames"] == 90
+    assert plan["impact"]["locked_track_ids"] == [locked_track.id]
+    assert plan["warnings"]
+    assert plan["resolved_selections"][0]["text"] == "two"
+
+    code, unacknowledged = _run_cli_request(
+        tmp_path,
+        project_path,
+        "transcript.edit.apply",
+        {"plan": plan},
+    )
+    assert code == 1
+    assert unacknowledged["error"]["code"] == "invalid_request"
+
+    code, applied = _run_cli_request(
+        tmp_path,
+        project_path,
+        "transcript.edit.apply",
+        {"plan": plan, "accept_warnings": True},
+    )
+    assert code == 0 and applied["ok"] is True
+    result = applied["result"]["edit"]
+    assert result["removed_word_count"] == 1
+    assert result["after_duration_frames"] == 90
+    recovery_version = result["recovery_version"]
+    recovery_path = project_path / recovery_version["snapshot_path"]
+    assert recovery_path.is_file()
+
+    with ProjectRepository.open(project_path) as repository:
+        timeline = repository.load_timeline(transcript["document"]["sequence_id"])
+        clips_by_track = {
+            track_id: sorted(
+                (
+                    clip.timeline_start,
+                    clip.source_in,
+                    clip.duration,
+                )
+                for clip in timeline.clips
+                if clip.track_id == track_id
+            )
+            for track_id in (track.id, locked_track.id)
+        }
+        assert clips_by_track == {
+            track.id: [(0, 0, 30), (30, 60, 30)],
+            locked_track.id: [(0, 0, 90)],
+        }
+        assert repository.list_subtitle_segments(transcript["document"]["id"])[0].text == (
+            "one three"
+        )
+        edited_srt = next(
+            (project_path / "generated" / "subtitles").rglob("*.srt")
+        )
+        assert "one three" in edited_srt.read_text(encoding="utf-8-sig")
+
+    code, stale = _run_cli_request(
+        tmp_path,
+        project_path,
+        "transcript.edit.apply",
+        {"plan": plan, "accept_warnings": True},
+    )
+    assert code == 1
+    assert stale["error"]["code"] == "conflict"
+
+    code, restored = _run_cli_request(
+        tmp_path,
+        project_path,
+        "project.version.restore",
+        {"version_id": recovery_version["id"]},
+    )
+    assert code == 0 and restored["ok"] is True
+    with ProjectRepository.open(project_path) as repository:
+        timeline = repository.load_timeline(transcript["document"]["sequence_id"])
+        assert {
+            clip.track_id: (clip.timeline_start, clip.source_in, clip.duration)
+            for clip in timeline.clips
+        } == {
+            track.id: (0, 0, 90),
+            locked_track.id: (0, 0, 90),
+        }
+        assert repository.list_subtitle_segments(transcript["document"]["id"])[0].text == (
+            "one two three"
+        )
+        restored_srt = next(
+            (project_path / "generated" / "subtitles").rglob("*.srt")
+        )
+        assert "one two three" in restored_srt.read_text(encoding="utf-8-sig")
+
+
 def test_timeline_navigation_preserves_one_project_history(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
@@ -143,7 +384,7 @@ def test_preview_snapshots_are_content_addressed_and_never_overwrite_active_grap
     with application.create_project(tmp_path / "Preview Project", "Preview Project") as project:
         asset = project.assets.import_external(source)
         editor = project.timeline(project.documents.get_project().main_sequence_id)
-        audio_track = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
+        audio_track = editor.add_track(TrackKind.AUDIO)
         clip = editor.add_clip(
             track_id=audio_track.id,
             asset_id=asset.id,

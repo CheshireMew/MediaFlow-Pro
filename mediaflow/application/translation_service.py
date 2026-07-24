@@ -10,11 +10,12 @@ from mediaflow.application.ports import (
     TranslationCachePort,
     TranslationDocuments,
 )
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import GlossaryTermSettings, LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.domain.translation import TranslationMode, validate_translation_mode
 
-TranslationProgress = Callable[[float, str], None]
+TranslationProgress = Callable[[OperationProgress], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,14 +111,13 @@ class TranslationService:
             translate_batch,
             progress=progress,
             message="proofreading" if mode == "proofread" else "translating",
-            progress_limit=98.0,
             check_cancelled=check_cancelled,
         )
 
+        if progress:
+            progress(OperationProgress.indeterminate("translation_saving"))
         self.repository.create_subtitle_document(document, output_segments)
         self.write_document_srt(document.id)
-        if progress:
-            progress(100.0, "translation_completed")
         return document
 
     def translate_segments_preserving_timing(
@@ -159,7 +159,6 @@ class TranslationService:
             translate_batch,
             progress=progress,
             message="proofreading" if mode == "proofread" else "translating",
-            progress_limit=100.0,
             check_cancelled=check_cancelled,
         )
 
@@ -465,7 +464,6 @@ class TranslationService:
         *,
         progress: TranslationProgress | None,
         message: str,
-        progress_limit: float,
         check_cancelled: Callable[[], None] | None,
     ) -> list[SubtitleSegment]:
         results: dict[int, list[SubtitleSegment]] = {}
@@ -476,8 +474,24 @@ class TranslationService:
             results[batch.index] = value
             completed += 1
             if progress:
-                progress(completed / len(batches) * progress_limit, message)
+                progress(
+                    OperationProgress.determinate(
+                        message,
+                        completed=completed,
+                        total=len(batches),
+                        unit="items",
+                    )
+                )
 
+        if progress:
+            progress(
+                OperationProgress.determinate(
+                    message,
+                    completed=0,
+                    total=len(batches),
+                    unit="items",
+                )
+            )
         if len(batches) == 1:
             self._checkpoint(check_cancelled)
             store(batches[0], worker(batches[0]))

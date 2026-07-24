@@ -4,6 +4,7 @@
 #include <QMutex>
 #include <QQuickItem>
 #include <QThread>
+#include <QTimer>
 
 #include <atomic>
 
@@ -127,6 +128,8 @@ private:
     int m_pendingDuration = 0;
     int m_requestedPosition = 0;
     bool m_seekPending = false;
+    int m_seekRetryAttempts = 0;
+    QTimer m_seekRetryTimer;
     quint64 m_pendingRequestId = 0;
     bool m_frameDeliveryScheduled = false;
     bool m_openScheduled = false;

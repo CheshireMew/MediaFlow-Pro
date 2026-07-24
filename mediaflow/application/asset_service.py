@@ -206,6 +206,7 @@ class AssetService:
             ),
             tracks=state.tracks,
             clips=[self._reframe_clip(item, old_profile, profile) for item in state.clips],
+            compounds=state.compounds,
             transitions=[self._reframe_transition(item, old_profile, profile) for item in state.transitions],
             markers=[
                 item.model_copy(update={"frame": reframe_frames(item.frame, old_profile, profile)})
@@ -287,6 +288,18 @@ class AssetService:
                         new_profile,
                     ),
                 ),
+                "transform_keyframes": [
+                    item.model_copy(
+                        update={
+                            "source_frame": reframe_frames(
+                                item.source_frame,
+                                old_profile,
+                                new_profile,
+                            )
+                        }
+                    )
+                    for item in clip.transform_keyframes
+                ],
             }
         )
 

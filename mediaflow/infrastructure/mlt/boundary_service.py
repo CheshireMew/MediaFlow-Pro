@@ -7,12 +7,18 @@ import re
 from pathlib import Path
 
 from mediaflow.domain.enums import TrackKind
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import SequenceInOut
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.infrastructure.process_observers import (
+    FfmpegProgressObserver,
+    MeltProgressObserver,
+    ffmpeg_progress_command,
+)
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable
+from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
 from .compiler import TimelineCompiler
 
@@ -52,7 +58,7 @@ class SequenceBoundaryAnalysisService:
         *,
         expected_snapshot_hash: str,
         check_cancelled=None,
-        report_progress=None,
+        progress=None,
     ) -> tuple[SequenceBoundaryAnalysis, Path]:
         if self.paths.melt is None:
             raise FileNotFoundError("MLT melt runtime is not installed")
@@ -71,31 +77,29 @@ class SequenceBoundaryAnalysisService:
         )
         cache_dir.mkdir(parents=True, exist_ok=True)
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        if report_progress:
-            report_progress(5, "sequence_boundary_compiling")
+        if progress:
+            progress(OperationProgress.indeterminate("sequence_boundary_compiling"))
         self.compiler.write(state, graph_path, use_proxies=False)
 
-        if report_progress:
-            report_progress(15, "sequence_boundary_leading_black")
         black_in = self._detect_edge_black(
             state,
             graph_path,
             cache_dir,
             edge="leading",
             check_cancelled=check_cancelled,
+            progress=progress,
         )
-        if report_progress:
-            report_progress(50, "sequence_boundary_trailing_black")
         black_out = self._detect_edge_black(
             state,
             graph_path,
             cache_dir,
             edge="trailing",
             check_cancelled=check_cancelled,
+            progress=progress,
         )
 
-        if report_progress:
-            report_progress(80, "sequence_boundary_speech")
+        if progress:
+            progress(OperationProgress.indeterminate("sequence_boundary_speech"))
         speech = self._speech_bounds(state, duration)
         speech_in, speech_out = speech if speech is not None else (None, None)
         suggested_in = max(value for value in (0, black_in, speech_in) if value is not None)
@@ -115,8 +119,8 @@ class SequenceBoundaryAnalysisService:
         temporary = result_path.with_suffix(result_path.suffix + ".tmp")
         temporary.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
         temporary.replace(result_path)
-        if report_progress:
-            report_progress(100, "sequence_boundary_complete")
+        if progress:
+            progress(OperationProgress.indeterminate("sequence_boundary_saving"))
         return analysis, result_path
 
     def _speech_bounds(self, state: TimelineState, duration: int) -> tuple[int, int] | None:
@@ -153,6 +157,7 @@ class SequenceBoundaryAnalysisService:
         *,
         edge: str,
         check_cancelled,
+        progress,
     ) -> int | None:
         duration = state.duration_frames
         profile = state.sequence.profile
@@ -174,14 +179,22 @@ class SequenceBoundaryAnalysisService:
                 start_frame=start_frame,
                 end_frame=end_frame,
                 check_cancelled=check_cancelled,
+                progress=progress,
+                message_code=f"sequence_boundary_{edge}_rendering",
             )
-            intervals = self._black_intervals(rendered, check_cancelled)
             window_seconds = float(
                 frames_to_seconds(
                     end_frame - start_frame,
                     profile.fps_numerator,
                     profile.fps_denominator,
                 )
+            )
+            intervals = self._black_intervals(
+                rendered,
+                check_cancelled,
+                duration_seconds=window_seconds,
+                progress=progress,
+                message_code=f"sequence_boundary_{edge}_scanning",
             )
             tolerance = max(
                 0.05,
@@ -231,6 +244,8 @@ class SequenceBoundaryAnalysisService:
         start_frame: int,
         end_frame: int,
         check_cancelled,
+        progress,
+        message_code: str,
     ) -> None:
         profile = state.sequence.profile
         width = min(320, profile.width)
@@ -245,9 +260,24 @@ class SequenceBoundaryAnalysisService:
         mlt_root = melt.parent
         environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
         environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
-        result = run_cancellable(
+        total_frames = end_frame - start_frame
+        observer = MeltProgressObserver(
+            total_frames,
+            lambda frame: progress(
+                OperationProgress.determinate(
+                    message_code,
+                    completed=frame,
+                    total=total_frames,
+                    unit="frames",
+                )
+            )
+            if progress
+            else None,
+        )
+        result = run_cancellable_streaming(
             [
                 str(melt),
+                "-progress2",
                 str(graph_path),
                 f"in={start_frame}",
                 f"out={end_frame - 1}",
@@ -266,21 +296,39 @@ class SequenceBoundaryAnalysisService:
             ],
             cwd=mlt_root,
             env=environment,
-            text=True,
             encoding="utf-8",
             errors="replace",
             timeout=3600,
             check_cancelled=check_cancelled,
+            on_stdout_line=observer,
+            on_stderr_line=observer,
+            split_carriage_returns=True,
         )
         if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
             raise RuntimeError(
                 "Sequence edge render failed:\n"
                 + "\n".join(part for part in (result.stdout, result.stderr) if part)
             )
+        if progress:
+            progress(
+                OperationProgress.determinate(
+                    message_code,
+                    completed=total_frames,
+                    total=total_frames,
+                    unit="frames",
+                )
+            )
 
-    def _black_intervals(self, source: Path, check_cancelled) -> list[tuple[float, float]]:
-        result = run_cancellable(
-            [
+    def _black_intervals(
+        self,
+        source: Path,
+        check_cancelled,
+        *,
+        duration_seconds: float,
+        progress,
+        message_code: str,
+    ) -> list[tuple[float, float]]:
+        command = [
                 str(self.paths.ffmpeg),
                 "-hide_banner",
                 "-v",
@@ -293,8 +341,23 @@ class SequenceBoundaryAnalysisService:
                 "-f",
                 "null",
                 "-",
-            ],
-            text=True,
+            ]
+        observer = FfmpegProgressObserver(
+            duration_seconds,
+            lambda position: progress(
+                OperationProgress.determinate(
+                    message_code,
+                    completed=position,
+                    total=duration_seconds,
+                    unit="media_seconds",
+                )
+            )
+            if progress
+            else None,
+        )
+        result = run_cancellable_streaming(
+            ffmpeg_progress_command(command),
+            on_stderr_line=observer,
             encoding="utf-8",
             errors="replace",
             timeout=3600,

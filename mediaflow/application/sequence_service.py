@@ -10,6 +10,7 @@ from mediaflow.domain.timebase import (
 )
 from mediaflow.domain.timeline import (
     Clip,
+    CompoundClip,
     TimelineMarker,
     TimelineRange,
     TimelineState,
@@ -154,9 +155,26 @@ class SequenceService:
                 muted=track.muted,
                 solo=track.solo,
                 audio_bus_id=audio_bus_id,
+                primary_dialogue=track.primary_dialogue,
             )
             destination.tracks.append(copied_track)
             track_map[track.id] = copied_track.id
+        destination.tracks = [
+            track.model_copy(
+                update={
+                    "linked_audio_track_id": (
+                        track_map[source_track.linked_audio_track_id]
+                        if source_track.linked_audio_track_id in track_map
+                        else None
+                    )
+                }
+            )
+            for track, source_track in zip(
+                destination.tracks,
+                sorted(source.tracks, key=lambda item: item.position),
+                strict=True,
+            )
+        ]
 
         clip_map: dict[str, str] = {}
         destination.clips = []
@@ -190,10 +208,23 @@ class SequenceService:
                 timeline_start=timeline_start,
                 source_in=reframe_frames(source_in, source_profile, destination_profile),
                 duration=max(1, timeline_end - timeline_start),
+                media_kind=clip.media_kind,
                 speed_numerator=clip.speed_numerator,
                 speed_denominator=clip.speed_denominator,
                 pitch_compensation=clip.pitch_compensation,
                 transform=clip.transform,
+                transform_keyframes=[
+                    item.model_copy(
+                        update={
+                            "source_frame": reframe_frames(
+                                item.source_frame,
+                                source_profile,
+                                destination_profile,
+                            )
+                        }
+                    )
+                    for item in clip.transform_keyframes
+                ],
                 audio=clip.audio,
             )
             destination.clips.append(copied)
@@ -206,6 +237,16 @@ class SequenceService:
             for source_clip_id, destination_clip_id in clip_map.items()
             if source_clip_id in source.web_states
         }
+
+        destination.compounds = [
+            CompoundClip(
+                sequence_id=destination_sequence.id,
+                name=item.name,
+                clip_ids=[clip_map[clip_id] for clip_id in item.clip_ids],
+            )
+            for item in source.compounds
+            if all(clip_id in clip_map for clip_id in item.clip_ids)
+        ]
 
         destination.transitions = []
         for item in source.transitions:

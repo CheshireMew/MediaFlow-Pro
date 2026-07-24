@@ -91,7 +91,22 @@ class TaskController(ControllerFacet):
     @Property(float, notify=tasksChanged)
     def downloadProgress(self) -> float:
         tasks = self._active_download_tasks()
-        return sum(task.progress for task in tasks) / len(tasks) if tasks else 0.0
+        if not tasks or not all(
+            task.progress.mode == "determinate" and task.progress.unit == "bytes"
+            for task in tasks
+        ):
+            return 0.0
+        completed = sum(task.progress.completed or 0.0 for task in tasks)
+        total = sum(task.progress.total or 0.0 for task in tasks)
+        return completed / total * 100.0 if total > 0 else 0.0
+
+    @Property(bool, notify=tasksChanged)
+    def downloadProgressDeterminate(self) -> bool:
+        tasks = self._active_download_tasks()
+        return bool(tasks) and all(
+            task.progress.mode == "determinate" and task.progress.unit == "bytes"
+            for task in tasks
+        )
 
     @Property(int, notify=tasksChanged)
     def activeDownloadCount(self) -> int:

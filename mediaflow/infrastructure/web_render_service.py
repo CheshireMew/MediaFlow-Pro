@@ -15,6 +15,7 @@ from pathlib import Path
 from mediaflow.application.ports import TimelineCompilationDocuments
 from mediaflow.application.web_media_service import editable_media_source_hash
 from mediaflow.domain.enums import AssetKind
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset
 from mediaflow.domain.timeline import Clip, TimelineState
 from mediaflow.domain.web_media import (
@@ -25,7 +26,12 @@ from mediaflow.domain.web_media import (
     web_runtime_state,
 )
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
+from mediaflow.infrastructure.process_observers import (
+    FfmpegProgressObserver,
+    ffmpeg_progress_command,
+)
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 from mediaflow.infrastructure.web_browser import validate_editable_media_page
 
 WEB_RENDERER_VERSION = "2"
@@ -121,9 +127,23 @@ class WebRenderService:
         for index, clip in enumerate(web_clips):
             if check_cancelled is not None:
                 check_cancelled()
-            results.append(self.render_clip(state, clip.id, check_cancelled=check_cancelled))
+            results.append(
+                self.render_clip(
+                    state,
+                    clip.id,
+                    progress=progress,
+                    check_cancelled=check_cancelled,
+                )
+            )
             if progress is not None and web_clips:
-                progress((index + 1) / len(web_clips) * 100)
+                progress(
+                    OperationProgress.determinate(
+                        "web_render_items",
+                        completed=index + 1,
+                        total=len(web_clips),
+                        unit="items",
+                    )
+                )
         return results
 
     def render_clip(
@@ -131,6 +151,7 @@ class WebRenderService:
         state: TimelineState,
         clip_id: str,
         *,
+        progress=None,
         check_cancelled=None,
     ) -> Path:
         try:
@@ -140,7 +161,18 @@ class WebRenderService:
         asset = self.documents.get_asset(clip.asset_id)
         target = self.cache.target(state, clip, asset)
         if self._cache_is_ready(target.path):
+            if progress:
+                progress(
+                    OperationProgress.determinate(
+                        "web_render_cache_ready",
+                        completed=1,
+                        total=1,
+                        unit="items",
+                    )
+                )
             return target.path
+        if progress:
+            progress(OperationProgress.indeterminate("web_render_preparing"))
         target.path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = target.path.with_name(f"{target.path.name}.lock")
         owns_lock = self._acquire_cache_lock(
@@ -164,6 +196,7 @@ class WebRenderService:
                 clip_state,
                 state,
                 target,
+                progress=progress,
                 check_cancelled=check_cancelled,
             )
             if not self._cache_is_ready(target.path):
@@ -221,13 +254,19 @@ class WebRenderService:
         time_ms: int = 0,
         background: str = "#000000",
         overwrite: bool = False,
+        progress=None,
         check_cancelled=None,
     ) -> WebClipExportResult:
         try:
             clip = next(item for item in state.clips if item.id == clip_id)
         except StopIteration as error:
             raise KeyError(clip_id) from error
-        cache_path = self.render_clip(state, clip_id, check_cancelled=check_cancelled)
+        cache_path = self.render_clip(
+            state,
+            clip_id,
+            progress=progress,
+            check_cancelled=check_cancelled,
+        )
         destination = Path(output_path).expanduser().resolve()
         if destination.exists() and not overwrite:
             raise FileExistsError(destination)
@@ -246,9 +285,13 @@ class WebRenderService:
                 f"{sorted(expected_suffixes[format])}"
             )
         if format == "overlay" or (format == "alpha_video" and target.animated):
+            if progress:
+                progress(OperationProgress.indeterminate("web_export_copying"))
             shutil.copyfile(cache_path, destination)
         elif format == "png":
             if cache_path.suffix.lower() == ".png" and time_ms == 0:
+                if progress:
+                    progress(OperationProgress.indeterminate("web_export_copying"))
                 shutil.copyfile(cache_path, destination)
             else:
                 self._run_ffmpeg(
@@ -261,10 +304,20 @@ class WebRenderService:
                         "1",
                         "-y",
                         str(destination),
-                    ]
+                    ],
+                    duration_seconds=None,
+                    progress=progress,
+                    check_cancelled=check_cancelled,
                 )
         elif format == "alpha_video":
-            self._encode_static_alpha(cache_path, state, clip, destination)
+            self._encode_static_alpha(
+                cache_path,
+                state,
+                clip,
+                destination,
+                progress=progress,
+                check_cancelled=check_cancelled,
+            )
         elif format == "gif":
             fps = state.sequence.profile.fps
             duration = max(1 / fps, clip.duration / fps)
@@ -284,7 +337,10 @@ class WebRenderService:
                     "0",
                     "-y",
                     str(destination),
-                ]
+                ],
+                duration_seconds=duration,
+                progress=progress,
+                check_cancelled=check_cancelled,
             )
         elif format == "video":
             if not re.fullmatch(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?", background):
@@ -318,7 +374,10 @@ class WebRenderService:
                     "+faststart",
                     "-y",
                     str(destination),
-                ]
+                ],
+                duration_seconds=duration,
+                progress=progress,
+                check_cancelled=check_cancelled,
             )
         else:
             raise ValueError(f"Unknown editable media export format: {format}")
@@ -337,6 +396,9 @@ class WebRenderService:
         state: TimelineState,
         clip: Clip,
         destination: Path,
+        *,
+        progress=None,
+        check_cancelled=None,
     ) -> None:
         fps = state.sequence.profile.fps
         duration = max(1 / fps, clip.duration / fps)
@@ -359,7 +421,10 @@ class WebRenderService:
                 "bgra",
                 "-y",
                 str(destination),
-            ]
+            ],
+            duration_seconds=duration,
+            progress=progress,
+            check_cancelled=check_cancelled,
         )
 
     @staticmethod
@@ -377,16 +442,44 @@ class WebRenderService:
             ]
         return ["-i", str(cache_path)]
 
-    def _run_ffmpeg(self, arguments: list[str]) -> None:
-        result = subprocess.run(
-            [str(self.paths.ffmpeg), "-hide_banner", "-loglevel", "error", *arguments],
-            capture_output=True,
-            check=False,
+    def _run_ffmpeg(
+        self,
+        arguments: list[str],
+        *,
+        duration_seconds: float | None,
+        progress=None,
+        check_cancelled=None,
+    ) -> None:
+        if duration_seconds is not None and duration_seconds > 0:
+            observer = FfmpegProgressObserver(
+                duration_seconds,
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        "web_export_encoding",
+                        completed=position,
+                        total=duration_seconds,
+                        unit="media_seconds",
+                    )
+                )
+                if progress
+                else None,
+            )
+        else:
+            observer = None
+            if progress:
+                progress(OperationProgress.indeterminate("web_export_encoding"))
+        result = run_cancellable_streaming(
+            ffmpeg_progress_command(
+                [str(self.paths.ffmpeg), "-hide_banner", "-loglevel", "error", *arguments]
+            ),
+            on_stderr_line=observer,
+            check_cancelled=check_cancelled,
+            timeout=1800,
         )
         if result.returncode != 0:
             raise RuntimeError(
                 "FFmpeg editable media export failed: "
-                + result.stderr.decode("utf-8", errors="replace")
+                + result.stderr
             )
 
     def _render_browser(
@@ -397,6 +490,7 @@ class WebRenderService:
         state: TimelineState,
         target: WebRenderTarget,
         *,
+        progress=None,
         check_cancelled=None,
     ) -> None:
         try:
@@ -480,6 +574,15 @@ class WebRenderService:
                     ffmpeg = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
                     if ffmpeg.stdin is None:
                         raise RuntimeError("FFmpeg web render pipe was not created")
+                    if progress:
+                        progress(
+                            OperationProgress.determinate(
+                                "web_rendering",
+                                completed=0,
+                                total=target.frame_count,
+                                unit="frames",
+                            )
+                        )
                     for frame in range(target.frame_count):
                         if check_cancelled is not None:
                             check_cancelled()
@@ -487,6 +590,15 @@ class WebRenderService:
                         page.evaluate("time => window.editableMedia.setTime(time)", milliseconds)
                         page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => resolve()))")
                         ffmpeg.stdin.write(page.screenshot(type="png", omit_background=True))
+                        if progress:
+                            progress(
+                                OperationProgress.determinate(
+                                    "web_rendering",
+                                    completed=frame + 1,
+                                    total=target.frame_count,
+                                    unit="frames",
+                                )
+                            )
                     ffmpeg.stdin.close()
                     stderr = ffmpeg.stderr.read().decode("utf-8", errors="replace") if ffmpeg.stderr else ""
                     return_code = ffmpeg.wait()
@@ -494,8 +606,26 @@ class WebRenderService:
                     if return_code != 0:
                         raise RuntimeError(f"FFmpeg editable web media render failed: {stderr}")
                 else:
+                    if progress:
+                        progress(
+                            OperationProgress.determinate(
+                                "web_rendering",
+                                completed=0,
+                                total=1,
+                                unit="frames",
+                            )
+                        )
                     page.evaluate("time => window.editableMedia.setTime(time)", 0)
                     partial.write_bytes(page.screenshot(type="png", omit_background=True))
+                    if progress:
+                        progress(
+                            OperationProgress.determinate(
+                                "web_rendering",
+                                completed=1,
+                                total=1,
+                                unit="frames",
+                            )
+                        )
                 browser.close()
             partial.replace(target.path)
         except Exception:

@@ -24,7 +24,6 @@ from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
-from mediaflow.infrastructure.web_component_library import WebComponentLibrary
 from mediaflow.infrastructure.web_render_service import WebRenderService
 
 STARTER = Path(
@@ -44,7 +43,7 @@ def test_real_starter_import_edit_history_copy_render_and_mlt_consumption(tmp_pa
         assert copied_root == repository.project_dir / "sources" / "web" / asset.id
         assert (copied_root / "editable-media.json").is_file()
 
-        video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
+        video_track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
             track_id=video_track.id,
             asset_id=asset.id,
@@ -245,7 +244,7 @@ def test_transparent_static_web_state_reaches_browser_cache_and_final_export(tmp
     web = WebMediaService(repository, lambda _sequence_id: editor, BrowserWebPackageValidator())
     try:
         asset = web.import_package(package)
-        track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+        track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
             track_id=track.id,
             asset_id=asset.id,
@@ -260,12 +259,21 @@ def test_transparent_static_web_state_reaches_browser_cache_and_final_export(tmp
             expected_revision=0,
         )
         renderer = WebRenderService(repository, RuntimePaths.discover())
-        moved_cache = renderer.render_clip(repository.load_timeline(project.main_sequence_id), clip.id)
+        render_progress = []
+        moved_cache = renderer.render_clip(
+            repository.load_timeline(project.main_sequence_id),
+            clip.id,
+            progress=render_progress.append,
+        )
         moved_image = QImage(str(moved_cache))
         assert not moved_image.isNull()
         assert moved_image.pixelColor(1, 1).alpha() == 0
         moved_pixel = moved_image.pixelColor(33, 25)
         assert moved_pixel.alpha() > 240 and moved_pixel.red() > 220
+        measured_frames = [
+            item for item in render_progress if item.message_code == "web_rendering"
+        ]
+        assert measured_frames[-1].completed == measured_frames[-1].total == 1
 
         web.update_clip(
             project.main_sequence_id,
@@ -422,7 +430,7 @@ def test_import_rejects_missing_runtime_interface_and_remote_dependencies(tmp_pa
         repository.close()
 
 
-def test_extended_web_state_variants_component_library_and_rebind_share_one_state(
+def test_extended_web_state_variants_and_rebind_share_one_state(
     tmp_path: Path,
 ) -> None:
     repository = ProjectRepository.create(tmp_path / "Extended Web Project", "Extended Web")
@@ -434,7 +442,7 @@ def test_extended_web_state_variants_component_library_and_rebind_share_one_stat
     ), validator)
     try:
         asset = service.import_package(STARTER)
-        track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+        track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
             track_id=track.id,
             asset_id=asset.id,
@@ -547,12 +555,6 @@ def test_extended_web_state_variants_component_library_and_rebind_share_one_stat
             assert variant_state.variant_name == f"Card {expected}"
             assert variant_state.layers["title"].content == expected
 
-        library = WebComponentLibrary(tmp_path / "components", validator)
-        installed = library.install(STARTER)
-        assert installed.component_id == "editable-card"
-        assert library.get("editable-card").version_hash == installed.version_hash
-        assert library.list() == [installed]
-
         replacement = tmp_path / "replacement-package"
         shutil.copytree(STARTER, replacement)
         manifest_path = replacement / "editable-media.json"
@@ -583,7 +585,7 @@ def test_version_seventeen_web_state_migrates_whole_layer_lock_to_field_locks(
     editor = TimelineEditor(repository, project.main_sequence_id)
     service = WebMediaService(repository, lambda _sequence_id: editor, BrowserWebPackageValidator())
     asset = service.import_package(STARTER)
-    track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+    track = editor.add_track(TrackKind.VIDEO)
     clip = editor.add_clip(
         track_id=track.id,
         asset_id=asset.id,
@@ -639,18 +641,14 @@ def test_versioned_cli_subprocess_reads_updates_and_renders_the_same_web_state(
 
     created = execute_request(request("project.create", {"name": "CLI Web Project"}))
     sequence_id = created["project"]["main_sequence_id"]
-    installed = execute_request(request("web.component.install", {"source": str(STARTER)}))
-    assert installed["component"]["component_id"] == "editable-card"
-    listed = execute_request(request("web.component.list"))
-    assert [item["component_id"] for item in listed["components"]] == ["editable-card"]
-    component_asset = execute_request(
-        request("web.component.import", {"component_id": "editable-card"})
-    )
-    assert component_asset["asset"]["kind"] == "web"
     imported = execute_request(request("web.import", {"source": str(STARTER)}))
     asset_id = imported["asset"]["id"]
-    timeline = execute_request(request("timeline.get", {"sequence_id": sequence_id}))["timeline"]
-    video_track_id = next(item["id"] for item in timeline["tracks"] if item["kind"] == "video")
+    video_track_id = execute_request(
+        request(
+            "timeline.track.add",
+            {"sequence_id": sequence_id, "kind": "video"},
+        )
+    )["track"]["id"]
     clip = execute_request(
         request(
             "timeline.clip.add",

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import ExportFormat, TaskKind, WorkflowStage
 from mediaflow.domain.exports import ExportPreset
-from mediaflow.domain.settings import default_media_root
+from mediaflow.domain.settings import AsrSettings, default_media_root
 from mediaflow.domain.task_commands import (
     AnalyzeDownloadCommand,
     AnalyzeHighlightsCommand,
@@ -82,7 +83,17 @@ def legacy_task_command(
         if not target_sequence_id:
             raise ValueError("Persisted transcription task has no sequence")
         return TranscribeSequenceCommand(
-            sequence_id=target_sequence_id,
+            plan=TranscriptionPlan(
+                sequence_id=target_sequence_id,
+                timeline_signature="legacy",
+                dialogue_track_id="",
+                timeline_start_frame=0,
+                timeline_end_frame=0,
+                fps_numerator=30,
+                fps_denominator=1,
+                sources=[],
+                asr=AsrSettings(),
+            ),
             workflow=workflow,
         )
     if task_kind == TaskKind.TRANSLATE:

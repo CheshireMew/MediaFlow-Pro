@@ -4,7 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
-from mediaflow.domain.enums import ColorMode, SequenceKind
+from mediaflow.domain.enums import ClipMediaKind, ColorMode, SequenceKind
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile, Sequence
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
 from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
@@ -24,6 +25,45 @@ def test_hdr10_requires_ten_bit_profile() -> None:
     assert profile.bit_depth == 10
 
 
+def test_operation_progress_only_exposes_percent_for_measured_work() -> None:
+    measured = OperationProgress.determinate(
+        "rendering",
+        completed=25,
+        total=200,
+        unit="frames",
+    )
+    unknown = OperationProgress.indeterminate("loading_model")
+
+    assert measured.percent == 12.5
+    assert unknown.percent is None
+    contextual = measured.with_task_context(
+        item_index=2,
+        item_total=4,
+        item_label="Interview.wav",
+        overall_completed=75,
+        overall_total=300,
+        overall_unit="media_seconds",
+    )
+    assert contextual.percent == 12.5
+    assert contextual.overall_percent == 25.0
+    assert contextual.item_index == 2
+    with pytest.raises(ValidationError, match="cannot carry measured work"):
+        OperationProgress(
+            mode="indeterminate",
+            message_code="loading_model",
+            completed=1,
+            total=2,
+            unit="items",
+        )
+    with pytest.raises(ValidationError, match="within its total"):
+        OperationProgress.determinate(
+            "rendering",
+            completed=201,
+            total=200,
+            unit="frames",
+        )
+
+
 def test_clip_rejects_speed_outside_creator_editor_range() -> None:
     with pytest.raises(ValidationError, match="0.25x"):
         Clip(
@@ -32,6 +72,7 @@ def test_clip_rejects_speed_outside_creator_editor_range() -> None:
             timeline_start=0,
             source_in=0,
             duration=100,
+            media_kind=ClipMediaKind.VIDEO_ONLY,
             speed_numerator=5,
         )
 
@@ -43,6 +84,7 @@ def test_reverse_clip_has_positive_timeline_duration() -> None:
         timeline_start=12,
         source_in=200,
         duration=30,
+        media_kind=ClipMediaKind.VIDEO_ONLY,
         speed_numerator=-1,
     )
     assert clip.timeline_end == 42
@@ -62,6 +104,7 @@ def test_timeline_media_duration_is_not_extended_by_annotations() -> None:
                 timeline_start=12,
                 source_in=0,
                 duration=30,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
             )
         ],
         markers=[TimelineMarker(sequence_id="sequence", frame=500)],

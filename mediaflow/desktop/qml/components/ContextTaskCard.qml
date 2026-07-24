@@ -37,8 +37,13 @@ Panel {
             Text {
                 objectName: "contextTaskStatus"
                 text: root.compactCompleted ? root.taskData.statusLabel
-                    : (root.taskData.statusLabel ? root.taskData.statusLabel + " · " : "")
-                        + Math.round(Number(root.taskData.progress || 0)) + "%"
+                    : (root.taskData.statusLabel || "")
+                        + (Boolean(root.taskData.hasOverallProgress)
+                            ? " · " + qsTr("识别 %1%").arg(
+                                Math.round(Number(root.taskData.overallProgressValue || 0)))
+                            : root.taskData.progressMode === "determinate"
+                            ? " · " + Math.round(Number(root.taskData.progressValue || 0)) + "%"
+                            : "")
                 color: Theme.accentHover
                 font.pixelSize: Theme.fontSizeCaption
             }
@@ -48,15 +53,51 @@ Panel {
             visible: !root.compactCompleted
             from: 0
             to: 100
-            value: Number(root.taskData.progress || 0)
+            indeterminate: root.taskActive && !Boolean(root.taskData.hasOverallProgress)
+                && root.taskData.progressMode !== "determinate"
+            value: Boolean(root.taskData.hasOverallProgress)
+                ? Number(root.taskData.overallProgressValue || 0)
+                : Number(root.taskData.progressValue || 0)
         }
         Text {
             Layout.fillWidth: true
             visible: !root.compactCompleted
-            text: root.taskData.error || root.taskData.messageLabel || qsTr("等待执行")
+                && Boolean(root.taskData.configurationLabel)
+            text: root.taskData.configurationLabel || ""
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: !root.compactCompleted
+            text: root.taskData.error || (
+                (root.taskData.progressItemTotal > 0
+                    ? qsTr("第 %1/%2 段 · ").arg(
+                        root.taskData.progressItemIndex).arg(
+                        root.taskData.progressItemTotal)
+                        + (root.taskData.progressItemLabel
+                            ? root.taskData.progressItemLabel + " · " : "")
+                    : "")
+                + (root.taskData.messageLabel || qsTr("等待执行"))
+                + (Boolean(root.taskData.hasOverallProgress)
+                    && root.taskData.progressMode === "determinate"
+                    ? qsTr(" · 当前步骤 %1%").arg(
+                        Math.round(Number(root.taskData.progressValue || 0)))
+                    : "")
+            )
             color: root.taskData.error ? Theme.danger : Theme.textMuted
             font.pixelSize: Theme.fontSizeCaption
             wrapMode: Text.WordWrap
+        }
+        ProgressBar {
+            Layout.fillWidth: true
+            visible: !root.compactCompleted
+                && Boolean(root.taskData.hasOverallProgress)
+                && root.taskData.progressMode === "determinate"
+            from: 0
+            to: 100
+            value: Number(root.taskData.progressValue || 0)
         }
         RowLayout {
             Layout.fillWidth: true

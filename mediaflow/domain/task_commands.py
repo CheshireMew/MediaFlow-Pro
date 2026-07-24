@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
+from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import ExportFormat, TaskKind, WorkflowStage
 from mediaflow.domain.exports import ExportPreset
@@ -117,7 +118,11 @@ class ExportWebClipCommand(CommandModel):
 
 class TranscribeSequenceCommand(CommandModel):
     command_type: Literal["transcribe_sequence"] = "transcribe_sequence"
-    sequence_id: str
+    plan: TranscriptionPlan
+
+    @property
+    def sequence_id(self) -> str:
+        return self.plan.sequence_id
 
     @property
     def task_kind(self) -> TaskKind:
@@ -185,6 +190,28 @@ class AnalyzeLoudnessCommand(CommandModel):
         return TaskKind.ANALYZE
 
 
+class AnalyzeScenesCommand(CommandModel):
+    command_type: Literal["analyze_scenes"] = "analyze_scenes"
+    sequence_id: str
+    clip_id: str
+    threshold: float = Field(default=0.35, ge=0.05, le=0.95)
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.ANALYZE
+
+
+class TrackSubjectCommand(CommandModel):
+    command_type: Literal["track_subject"] = "track_subject"
+    sequence_id: str
+    clip_id: str
+    mode: Literal["auto_reframe", "subject_tracking"]
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.ANALYZE
+
+
 type TaskCommand = Annotated[
     ImportAssetCommand
     | GenerateProxyCommand
@@ -200,6 +227,8 @@ type TaskCommand = Annotated[
     | AnalyzeHighlightsCommand
     | AnalyzeDownloadCommand
     | AnalyzeSequenceBoundsCommand
-    | AnalyzeLoudnessCommand,
+    | AnalyzeLoudnessCommand
+    | AnalyzeScenesCommand
+    | TrackSubjectCommand,
     Field(discriminator="command_type"),
 ]

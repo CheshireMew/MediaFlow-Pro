@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from mediaflow.application.settings_form import SettingsForm, settings_data
 from mediaflow.desktop.presentation_catalogs import (
+    asr_language_options,
+    asr_model_options,
+    asr_parallel_options,
     built_in_subtitle_style_presets,
     llm_provider_presets,
 )
@@ -77,6 +81,21 @@ class SettingsController(ControllerFacet):
     def settingsData(self) -> dict:
         return settings_data(self.settings)
 
+    @Property("QVariantList", notify=settingsChanged)
+    def asrModelOptions(self) -> list[dict]:
+        return asr_model_options(
+            self.settings.asr.model,
+            installed_models=self._installed_asr_models(),
+        )
+
+    @Property("QVariantList", notify=settingsChanged)
+    def asrLanguageOptions(self) -> list[dict]:
+        return asr_language_options(self.settings.asr.language)
+
+    @Property("QVariantList", constant=True)
+    def asrParallelOptions(self) -> list[dict]:
+        return asr_parallel_options()
+
     @Property("QVariantMap", notify=runtimeToolsChanged)
     def runtimeToolStatus(self) -> dict:
         return self._runtime_tool_status
@@ -103,22 +122,29 @@ class SettingsController(ControllerFacet):
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
-    @Slot(str, str, str)
-    def saveAsrQuickSettings(self, model: str, device: str, language: str) -> None:
-        try:
-            normalized_model = model.strip()
-            normalized_language = language.strip() or "auto"
-            if not normalized_model:
-                raise ValueError("转录模型不能为空")
-            if device not in {"auto", "cuda", "cpu"}:
-                raise ValueError("转录计算设备无效")
-            candidate = self.settings.model_copy(deep=True)
-            candidate.asr.model = normalized_model
-            candidate.asr.device = device
-            candidate.asr.language = normalized_language
-            self._commit_settings(candidate, "转录设置已更新")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+    def _installed_asr_models(self) -> frozenset[str]:
+        root = self._api.runtime_paths.runtime_dir / "models" / "faster-whisper"
+        if not root.is_dir():
+            return frozenset()
+        installed: set[str] = set()
+        prefix = "models--Systran--faster-whisper-"
+        for candidate in root.iterdir():
+            if not candidate.is_dir():
+                continue
+            model = candidate.name.removeprefix(prefix)
+            if model == candidate.name:
+                model = candidate.name
+            direct_model = candidate / "model.bin"
+            snapshots = candidate / "snapshots"
+            has_snapshot = snapshots.is_dir() and any(
+                (snapshot / "model.bin").is_file() for snapshot in snapshots.iterdir()
+            )
+            if direct_model.is_file() or has_snapshot:
+                installed.add(model)
+        configured = self.settings.asr.model.strip()
+        if configured and Path(configured).expanduser().is_dir():
+            installed.add(configured)
+        return frozenset(installed)
 
     @Slot(str)
     def setDefaultDownloadDirectory(self, value: str) -> None:

@@ -43,6 +43,12 @@ class TrackKind(DomainEnum):
     SUBTITLE = "subtitle"
 
 
+class ClipMediaKind(DomainEnum):
+    LINKED_AV = "linked_av"
+    VIDEO_ONLY = "video_only"
+    AUDIO_ONLY = "audio_only"
+
+
 class TransitionKind(DomainEnum):
     FADE = "fade"
     DISSOLVE = "dissolve"

@@ -14,12 +14,14 @@ from mediaflow.domain.enums import (
     TransitionKind,
 )
 from mediaflow.domain.task_commands import (
+    AnalyzeScenesCommand,
     AnalyzeSequenceBoundsCommand,
+    TrackSubjectCommand,
 )
 from mediaflow.domain.timebase import (
     source_frames_for_timeline_frames,
 )
-from mediaflow.domain.timeline import ClipAudio, ClipTransform
+from mediaflow.domain.timeline import ClipAudio, ClipTransform, Transition
 
 from .controller_facet import ControllerFacet
 from .project_controller import _TimelinePlacement
@@ -41,6 +43,7 @@ class TimelineController(ControllerFacet):
     runtimeToolsChanged = Signal()
     waveformDataChanged = Signal(str)
     previewRangeRequested = Signal(int, int)
+    exclusiveSelectionRequested = Signal()
     errorOccurred = Signal(str)
     errorReferenceChanged = Signal()
 
@@ -51,6 +54,10 @@ class TimelineController(ControllerFacet):
     @Property(QObject, constant=True)
     def clipsModel(self) -> QObject:
         return self._clip_model
+
+    @Property(QObject, constant=True)
+    def compoundClipsModel(self) -> QObject:
+        return self._compound_clip_model
 
     @Property(QObject, constant=True)
     def transitionsModel(self) -> QObject:
@@ -81,6 +88,61 @@ class TimelineController(ControllerFacet):
         except ValueError:
             return False
 
+    @Slot(str, str, int)
+    def previewTransitionAfter(self, clip_id: str, kind: str, duration: int) -> None:
+        """Compile a temporary transition through the real MLT preview graph."""
+        try:
+            if not self._project or not self._editor or not clip_id:
+                return
+            state = self._editor.state
+            left = next(item for item in state.clips if item.id == clip_id)
+            right = next(
+                item
+                for item in state.clips_for_track(left.track_id)
+                if item.timeline_start == left.timeline_end
+            )
+            transition_kind = TransitionKind(kind)
+            if not transition_is_available(transition_kind, state.sequence.profile.color_mode):
+                return
+            transition_duration = max(1, min(int(duration), left.duration, right.duration))
+            preview = Transition(
+                track_id=left.track_id,
+                left_clip_id=left.id,
+                right_clip_id=right.id,
+                kind=transition_kind,
+                duration=transition_duration,
+            )
+            state.transitions = [
+                item
+                for item in state.transitions
+                if item.left_clip_id != left.id and item.right_clip_id != right.id
+            ]
+            state.transitions.append(preview)
+            path = self._api.write_preview_snapshot(
+                self._project.project_dir,
+                state,
+                use_proxies=self.settings.preview.preview_quality != "source",
+                prefer_sdr_preview_proxy=(
+                    state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
+                    and not self._hdr_preview_active
+                ),
+            )
+            self._preview_graph_path = str(path)
+            self.previewGraphChanged.emit()
+            self.previewRangeRequested.emit(
+                max(0, left.timeline_end - transition_duration),
+                min(state.duration_frames, left.timeline_end + transition_duration),
+            )
+        except (KeyError, StopIteration, ValueError):
+            return
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot()
+    def clearTransitionPreview(self) -> None:
+        if self._editor and self._editor.state.clips:
+            self._projector.schedule_preview_graph()
+
     @Property(bool, notify=tasksChanged)
     def sequenceBoundaryAnalysisRunning(self) -> bool:
         if not self._tasks or not self._active_sequence_id:
@@ -94,11 +156,17 @@ class TimelineController(ControllerFacet):
 
     @Property(str, notify=selectionChanged)
     def selectedClipId(self) -> str:
+        if self._selected_compound_id:
+            return ""
         return self._selected_clip_ids[-1] if self._selected_clip_ids else ""
 
     @Property("QVariantList", notify=selectionChanged)
     def selectedClipIds(self) -> list[str]:
         return list(self._selected_clip_ids)
+
+    @Property(str, notify=selectionChanged)
+    def selectedCompoundId(self) -> str:
+        return self._selected_compound_id
 
     @Property(str, notify=selectionChanged)
     def selectedTransitionId(self) -> str:
@@ -126,6 +194,34 @@ class TimelineController(ControllerFacet):
         row = self._clip_model.findRow("clipId", self.selectedClipId)
         return self._clip_model.get(row)
 
+    @Property("QVariantMap", notify=selectionChanged)
+    def selectedCompoundData(self) -> dict:
+        row = self._compound_clip_model.findRow("compoundId", self._selected_compound_id)
+        return self._compound_clip_model.get(row)
+
+    @Property(bool, notify=selectionChanged)
+    def canCreateCompoundClip(self) -> bool:
+        if not self._editor or self._selected_compound_id or len(self._selected_clip_ids) < 2:
+            return False
+        selected_ids = set(self._selected_clip_ids)
+        if any(
+            selected_ids.intersection(item.clip_ids)
+            for item in self._editor.state.compounds
+        ):
+            return False
+        selected = sorted(
+            (clip for clip in self._editor.state.clips if clip.id in selected_ids),
+            key=lambda clip: (clip.timeline_start, clip.id),
+        )
+        return (
+            len(selected) == len(selected_ids)
+            and len({clip.track_id for clip in selected}) == 1
+            and all(
+                left.timeline_end == right.timeline_start
+                for left, right in zip(selected, selected[1:], strict=False)
+            )
+        )
+
     @Property(bool, notify=historyChanged)
     def canUndo(self) -> bool:
         return bool(self._editor and self._editor.can_undo)
@@ -137,12 +233,28 @@ class TimelineController(ControllerFacet):
     @Slot(str)
     @Slot(str, bool)
     def selectClip(self, clip_id: str, toggle: bool = False) -> None:
+        self._selected_compound_id = ""
         self._selected_clip_ids = self._updated_selection(
             self._selected_clip_ids,
             clip_id,
             toggle=toggle,
         )
         self._selected_transition_id = ""
+        self.selectionChanged.emit()
+
+    @Slot(str)
+    def selectCompoundClip(self, compound_id: str) -> None:
+        if not self._editor:
+            return
+        try:
+            compound = next(item for item in self._editor.state.compounds if item.id == compound_id)
+        except StopIteration:
+            return
+        self._selected_compound_id = compound.id
+        self._selected_clip_ids = list(compound.clip_ids)
+        self._selected_transition_id = ""
+        self._selected_marker_id = ""
+        self._selected_range_id = ""
         self.selectionChanged.emit()
 
     @Slot(str, result=bool)
@@ -152,6 +264,7 @@ class TimelineController(ControllerFacet):
     @Slot()
     def selectAllClips(self) -> None:
         self._selected_clip_ids = [clip.id for clip in self._editor.state.clips] if self._editor else []
+        self._selected_compound_id = ""
         self._selected_transition_id = ""
         self._selected_marker_id = ""
         self._selected_range_id = ""
@@ -160,6 +273,7 @@ class TimelineController(ControllerFacet):
     @Slot()
     def clearSelection(self) -> None:
         self._selected_clip_ids = []
+        self._selected_compound_id = ""
         self._selected_transition_id = ""
         self._selected_marker_id = ""
         self._selected_range_id = ""
@@ -177,11 +291,12 @@ class TimelineController(ControllerFacet):
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
-    @Slot("QVariantList", str, int, float, int, bool, bool)
+    @Slot("QVariantList", str, int, int, float, int, bool, bool)
     def dropAssets(
         self,
         asset_ids: list[object],
         track_id: str,
+        track_position: int,
         start_frame: int,
         pixels_per_frame: float,
         playhead_frame: int,
@@ -194,6 +309,7 @@ class TimelineController(ControllerFacet):
                 [str(asset_id) for asset_id in asset_ids],
                 _TimelinePlacement(
                     track_id=track_id,
+                    track_position=track_position if track_position >= 0 else None,
                     start_frame=max(0, start_frame),
                     pixels_per_frame=pixels_per_frame,
                     playhead_frame=playhead_frame,
@@ -204,11 +320,12 @@ class TimelineController(ControllerFacet):
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
-    @Slot("QVariantList", str, int, float, int, bool, bool)
+    @Slot("QVariantList", str, int, int, float, int, bool, bool)
     def importFilesToTimeline(
         self,
         path_urls: list[object],
         track_id: str,
+        track_position: int,
         start_frame: int,
         pixels_per_frame: float,
         playhead_frame: int,
@@ -220,6 +337,7 @@ class TimelineController(ControllerFacet):
                 path_urls,
                 placement=_TimelinePlacement(
                     track_id=track_id,
+                    track_position=track_position if track_position >= 0 else None,
                     start_frame=max(0, start_frame),
                     pixels_per_frame=pixels_per_frame,
                     playhead_frame=playhead_frame,
@@ -250,6 +368,16 @@ class TimelineController(ControllerFacet):
                 solo=solo,
                 audio_bus_id=audio_bus_id or None,
             )
+            self._projector.refresh_timeline()
+            self.historyChanged.emit()
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str)
+    def setPrimaryDialogueTrack(self, track_id: str) -> None:
+        try:
+            self._require_writable()
+            self._editor.set_primary_dialogue_track(track_id)
             self._projector.refresh_timeline()
             self.historyChanged.emit()
         except Exception as error:
@@ -298,7 +426,6 @@ class TimelineController(ControllerFacet):
                     track_id=track_id or None,
                     snap_targets=targets,
                     snap_tolerance_frames=tolerance,
-                    transition_from_overlap=True,
                 )
             self._projector.refresh_timeline()
             self.selectionChanged.emit()
@@ -318,6 +445,7 @@ class TimelineController(ControllerFacet):
                 snap_tolerance_frames=self._snap_tolerance_frames(pixels_per_frame),
             )
             self._selected_clip_ids = [copied.id]
+            self._selected_compound_id = ""
             self._projector.refresh_timeline()
             self.selectionChanged.emit()
             self.historyChanged.emit()
@@ -330,9 +458,28 @@ class TimelineController(ControllerFacet):
             self._require_writable()
             _, right = self._editor.split_clip(clip_id, frame)
             self._selected_clip_ids = [right.id]
+            self._selected_compound_id = ""
             self._projector.refresh_timeline()
             self.selectionChanged.emit()
             self.historyChanged.emit()
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot(str)
+    def detachClipAudio(self, clip_id: str) -> None:
+        try:
+            self._require_writable()
+            video, _audio = self._editor.detach_clip_audio(clip_id)
+            self._selected_clip_ids = [video.id]
+            self._selected_compound_id = ""
+            self._projector.refresh_timeline()
+            self._projector.schedule_preview_graph()
+            self.exclusiveSelectionRequested.emit()
+            self.selectionChanged.emit()
+            self.historyChanged.emit()
+            self._set_status(
+                "已解除视音频绑定；当前仅选中视频。点击空白处或按 Esc 可清除选择"
+            )
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
@@ -342,6 +489,7 @@ class TimelineController(ControllerFacet):
             self._require_writable()
             self._editor.delete_clip(clip_id, ripple=ripple)
             self._selected_clip_ids = [value for value in self._selected_clip_ids if value != clip_id]
+            self._selected_compound_id = ""
             self._projector.refresh_timeline()
             self.selectionChanged.emit()
             self.historyChanged.emit()
@@ -356,9 +504,41 @@ class TimelineController(ControllerFacet):
                 return
             self._editor.delete_clips(self._selected_clip_ids, ripple=ripple)
             self._selected_clip_ids = []
+            self._selected_compound_id = ""
             self._projector.refresh_timeline()
             self.selectionChanged.emit()
             self.historyChanged.emit()
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot()
+    def createCompoundClip(self) -> None:
+        try:
+            self._require_writable()
+            compound = self._editor.create_compound_clip(self._selected_clip_ids)
+            self._selected_compound_id = compound.id
+            self._selected_clip_ids = list(compound.clip_ids)
+            self._projector.refresh_timeline()
+            self.selectionChanged.emit()
+            self.historyChanged.emit()
+            self._set_status("已创建复合片段")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot()
+    def dissolveSelectedCompoundClip(self) -> None:
+        try:
+            self._require_writable()
+            if not self._selected_compound_id:
+                return
+            selected_ids = list(self._selected_clip_ids)
+            self._editor.dissolve_compound_clip(self._selected_compound_id)
+            self._selected_compound_id = ""
+            self._selected_clip_ids = selected_ids
+            self._projector.refresh_timeline()
+            self.selectionChanged.emit()
+            self.historyChanged.emit()
+            self._set_status("已解除复合片段")
         except Exception as error:
             self.errorOccurred.emit(str(error))
 
@@ -393,6 +573,7 @@ class TimelineController(ControllerFacet):
     def selectTransition(self, transition_id: str) -> None:
         self._selected_transition_id = transition_id
         self._selected_clip_ids = []
+        self._selected_compound_id = ""
         self.selectionChanged.emit()
 
     @Slot(str)
@@ -651,6 +832,58 @@ class TimelineController(ControllerFacet):
             self._projector.refresh_timeline()
             self.selectionChanged.emit()
             self.historyChanged.emit()
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    def _selected_video_clip(self):
+        if not self._editor or len(self._selected_clip_ids) != 1:
+            raise ValueError("请先选择一个视频片段")
+        clip = next(item for item in self._editor.state.clips if item.id == self._selected_clip_ids[0])
+        asset = self._documents.get_asset(clip.asset_id)
+        if asset.kind.value != "video":
+            raise ValueError("此操作只适用于视频片段")
+        return clip
+
+    @Slot(float)
+    def detectScenesSelected(self, threshold: float = 0.35) -> None:
+        try:
+            self._require_writable()
+            clip = self._selected_video_clip()
+            self._start_task(
+                AnalyzeScenesCommand(
+                    sequence_id=self._active_sequence_id,
+                    clip_id=clip.id,
+                    threshold=threshold,
+                ),
+                [clip.asset_id],
+                sequence_id=self._active_sequence_id,
+            )
+            self._set_status("正在检测场景切点")
+        except Exception as error:
+            self.errorOccurred.emit(str(error))
+
+    @Slot()
+    def autoReframeSelected(self) -> None:
+        self._start_subject_tracking("auto_reframe")
+
+    @Slot()
+    def trackSubjectSelected(self) -> None:
+        self._start_subject_tracking("subject_tracking")
+
+    def _start_subject_tracking(self, mode: str) -> None:
+        try:
+            self._require_writable()
+            clip = self._selected_video_clip()
+            self._start_task(
+                TrackSubjectCommand(
+                    sequence_id=self._active_sequence_id,
+                    clip_id=clip.id,
+                    mode=mode,
+                ),
+                [clip.asset_id],
+                sequence_id=self._active_sequence_id,
+            )
+            self._set_status("正在分析画面主体")
         except Exception as error:
             self.errorOccurred.emit(str(error))
 

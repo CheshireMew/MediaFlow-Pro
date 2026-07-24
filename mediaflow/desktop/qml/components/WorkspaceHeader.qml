@@ -6,7 +6,16 @@ import ".."
 Item {
     id: root
 
-    implicitWidth: controls.implicitWidth
+    ProjectVersionsDialog {
+        id: projectVersionsDialog
+    }
+
+    implicitWidth: Math.min(statusText.implicitWidth, 320)
+        + undoButton.implicitWidth
+        + redoButton.implicitWidth
+        + versionsButton.implicitWidth
+        + closeProjectButton.implicitWidth
+        + controls.spacing * 4
     implicitHeight: 38
 
     RowLayout {
@@ -14,6 +23,7 @@ Item {
         anchors.fill: parent
         spacing: 6
         Text {
+            id: statusText
             objectName: "workspaceStatusMessage"
             Layout.maximumWidth: 320
             text: workspaceController.readOnly
@@ -29,6 +39,7 @@ Item {
             }
         }
         AppButton {
+            id: undoButton
             text: "↶"
             Accessible.name: qsTr("撤销")
             ToolTip.visible: hovered
@@ -37,6 +48,7 @@ Item {
             onClicked: timelineController.undo()
         }
         AppButton {
+            id: redoButton
             text: "↷"
             Accessible.name: qsTr("重做")
             ToolTip.visible: hovered
@@ -44,6 +56,16 @@ Item {
             enabled: timelineController.canRedo
             onClicked: timelineController.redo()
         }
-        AppButton { text: qsTr("关闭项目"); onClicked: workspaceController.closeProject() }
+        AppButton {
+            id: versionsButton
+            objectName: "openProjectVersionsButton"
+            text: qsTr("版本")
+            onClicked: projectVersionsDialog.open()
+        }
+        AppButton {
+            id: closeProjectButton
+            text: qsTr("关闭项目")
+            onClicked: workspaceController.closeProject()
+        }
     }
 }

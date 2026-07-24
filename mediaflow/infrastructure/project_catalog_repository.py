@@ -11,7 +11,6 @@ from mediaflow.domain.enums import (
     AssetStatus,
     SequenceKind,
     TaskStatus,
-    TrackKind,
     WorkflowStage,
     WorkflowStatus,
 )
@@ -25,7 +24,6 @@ from mediaflow.domain.project import (
     ProjectProfile,
     Sequence,
 )
-from mediaflow.domain.timeline import Track
 from mediaflow.domain.workflows import WorkflowRun
 
 from .file_fingerprint import fingerprint_file, fingerprint_matches
@@ -203,30 +201,6 @@ class ProjectCatalogRepository:
             self._insert_sequence(connection, sequence)
             for bus in (master, dialogue, music, effects):
                 self._insert_audio_bus(connection, bus)
-            self._insert_track(
-                connection,
-                Track(
-                    sequence_id=sequence.id,
-                    name="视频 1",
-                    kind=TrackKind.VIDEO,
-                    position=0,
-                    audio_bus_id=dialogue.id,
-                ),
-            )
-            self._insert_track(
-                connection,
-                Track(
-                    sequence_id=sequence.id,
-                    name="音频 1",
-                    kind=TrackKind.AUDIO,
-                    position=1,
-                    audio_bus_id=dialogue.id,
-                ),
-            )
-            self._insert_track(
-                connection,
-                Track(sequence_id=sequence.id, name="字幕 1", kind=TrackKind.SUBTITLE, position=2),
-            )
             self._touch_project(connection)
         return sequence
 
@@ -322,6 +296,10 @@ class ProjectCatalogRepository:
                 path=str(source),
                 managed=False,
                 fingerprint=fingerprint_file(source),
+                metadata=MediaMetadata(
+                    has_video=kind in {AssetKind.VIDEO, AssetKind.IMAGE},
+                    has_audio=kind == AssetKind.AUDIO,
+                ),
             )
         )
 

@@ -21,6 +21,7 @@ from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.application.web_media_service import MANIFEST_FILE_NAME
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.composition import EditorApplication, EditorProject
 from mediaflow.desktop.models import (
@@ -30,6 +31,7 @@ from mediaflow.desktop.models import (
     AudioEffectListModel,
     AudioEffectParameterListModel,
     ClipListModel,
+    CompoundClipListModel,
     DownloadEntryListModel,
     GlossaryTermListModel,
     HighlightListModel,
@@ -54,14 +56,18 @@ from mediaflow.domain.enums import (
     TrackKind,
     WorkflowStage,
 )
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.sequence_audio import audio_clips_for_track
 from mediaflow.domain.settings import (
     GlobalSettings,
 )
 from mediaflow.domain.task_commands import (
+    AnalyzeScenesCommand,
     GenerateProxyCommand,
     GenerateWaveformCommand,
     TaskCommand,
+    TrackSubjectCommand,
     TranscribeSequenceCommand,
 )
 from mediaflow.domain.tasks import Task
@@ -82,6 +88,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class _TimelinePlacement:
     track_id: str = ""
+    track_position: int | None = None
     start_frame: int | None = None
     pixels_per_frame: float = 3.0
     playhead_frame: int = 0
@@ -161,6 +168,7 @@ class ProjectSession(QObject):
         self._active_sequence_id = ""
         self._selected_asset_ids: list[str] = []
         self._selected_clip_ids: list[str] = []
+        self._selected_compound_id = ""
         self._selected_document_id = ""
         self._selected_subtitle_segment_ids: list[str] = []
         self._selected_subtitle_placement_id = ""
@@ -213,7 +221,8 @@ class ProjectSession(QObject):
         self._runtime_tool_status = {
             **self._api.runtime_tool_status(),
             "busy": False,
-            "progress": 0.0,
+            "progressMode": "indeterminate",
+            "progressValue": 0.0,
             "message": "",
             "operation": "",
         }
@@ -254,6 +263,7 @@ class ProjectSession(QObject):
         self._download_entry_model = DownloadEntryListModel(self)
         self._track_model = TrackListModel(self)
         self._clip_model = ClipListModel(self)
+        self._compound_clip_model = CompoundClipListModel(self)
         self._transition_model = TransitionListModel(self)
         self._marker_model = TimelineMarkerListModel(self)
         self._range_model = TimelineRangeListModel(self)
@@ -320,7 +330,8 @@ class ProjectSession(QObject):
         self._runtime_tool_status = {
             **self._runtime_tool_status,
             "busy": True,
-            "progress": 0.0,
+            "progressMode": "indeterminate",
+            "progressValue": 0.0,
             "message": "starting",
             "operation": operation,
         }
@@ -330,12 +341,14 @@ class ProjectSession(QObject):
             if self._runtime_tool_cancel.is_set():
                 raise RuntimeError("运行时工具操作已取消")
 
-        def report(progress: float, message: str) -> None:
+        def report(progress: OperationProgress) -> None:
             self._runtime_tool_bridge.eventReceived.emit(
                 {
                     "type": "progress",
-                    "progress": float(progress),
-                    "message": message,
+                    "progress": progress.model_dump(
+                        mode="json",
+                        exclude_computed_fields=True,
+                    ),
                     "operation": operation,
                 }
             )
@@ -370,10 +383,12 @@ class ProjectSession(QObject):
     def _on_runtime_tool_event(self, event: dict) -> None:
         event_type = event.get("type")
         if event_type == "progress":
+            progress = OperationProgress.model_validate(event.get("progress"))
             self._runtime_tool_status = {
                 **self._runtime_tool_status,
-                "progress": max(0.0, min(100.0, float(event.get("progress", 0)))),
-                "message": str(event.get("message") or ""),
+                "progressMode": progress.mode,
+                "progressValue": progress.percent or 0.0,
+                "message": progress.message_code,
             }
             self.runtimeToolsChanged.emit()
             return
@@ -490,6 +505,7 @@ class ProjectSession(QObject):
             )
             self._selected_document_id = document.id
             self._selected_clip_ids = []
+            self._selected_compound_id = ""
             self._projector.refresh_all()
             self.selectionChanged.emit()
             self._projector.schedule_preview_graph()
@@ -531,6 +547,7 @@ class ProjectSession(QObject):
             duration=duration,
         )
         self._selected_clip_ids = [clip.id]
+        self._selected_compound_id = ""
         self._projector.refresh_all()
         self.selectionChanged.emit()
         self._schedule_asset_background(asset, dropped_frames=0)
@@ -540,6 +557,8 @@ class ProjectSession(QObject):
         return _PlacedTimelineAsset(track_id=track.id, end_frame=clip.timeline_end)
 
     def _placement_start(self, placement: _TimelinePlacement, fallback: int) -> int:
+        if self._timeline_is_empty():
+            return 0
         if placement.start_frame is None:
             return fallback
         requested = max(0, placement.start_frame)
@@ -549,6 +568,16 @@ class ProjectSession(QObject):
             requested,
             self._timeline_snap_targets([], placement.playhead_frame),
             self._snap_tolerance_frames(placement.pixels_per_frame),
+        )
+
+    def _timeline_is_empty(self) -> bool:
+        state = self._editor.state
+        if state.clips:
+            return False
+        return not any(
+            self._documents.list_subtitle_placements(track.id)
+            for track in state.tracks
+            if track.kind == TrackKind.SUBTITLE
         )
 
     def _resolve_drop_track(
@@ -590,7 +619,13 @@ class ProjectSession(QObject):
                 )
                 if available is not None:
                     return available
-        return self._add_timeline_track(kind)
+        if placement.force_new_track:
+            insert_position = placement.track_position
+        elif requested is not None:
+            insert_position = requested.position + 1
+        else:
+            insert_position = None
+        return self._add_timeline_track(kind, position=insert_position)
 
     def _track_interval_available(
         self,
@@ -603,12 +638,17 @@ class ProjectSession(QObject):
         if kind == TrackKind.SUBTITLE:
             occupied = self._documents.list_subtitle_placements(track_id)
             return all(end <= item.start_frame or start >= item.end_frame for item in occupied)
+        clips = (
+            audio_clips_for_track(self._editor.state, track_id)
+            if kind == TrackKind.AUDIO
+            else self._editor.state.clips_for_track(track_id)
+        )
         return all(
             end <= clip.timeline_start or start >= clip.timeline_end
-            for clip in self._editor.state.clips_for_track(track_id)
+            for clip in clips
         )
 
-    def _add_timeline_track(self, kind: TrackKind):
+    def _add_timeline_track(self, kind: TrackKind, *, position: int | None = None):
         audio_bus_id = None
         if kind in {TrackKind.VIDEO, TrackKind.AUDIO}:
             buses = self._documents.list_audio_buses(self._active_sequence_id)
@@ -617,7 +657,7 @@ class ProjectSession(QObject):
                 (bus.id for bus in buses if bus.name == preferred_name),
                 next((bus.id for bus in buses if bus.parent_bus_id is None), None),
             )
-        return self._editor.add_track(kind, audio_bus_id=audio_bus_id)
+        return self._editor.add_track(kind, audio_bus_id=audio_bus_id, position=position)
 
     def _start_media_import(self, source: Path) -> Task:
         if source.suffix.lower() in {".srt", ".vtt", ".ass", ".ssa"}:
@@ -649,23 +689,44 @@ class ProjectSession(QObject):
         sources = [self._local_path_value(value) for value in path_values]
         if not sources:
             return
-        invalid = [source for source in sources if not source.is_file()]
-        if invalid:
-            raise ValueError(f"只能导入文件：{invalid[0]}")
-        tasks = [self._start_media_import(source) for source in sources]
+        imported_asset_ids: list[str | None] = [None] * len(sources)
+        tasks: list[tuple[int, Task]] = []
+        for index, source in enumerate(sources):
+            manifest_path = source / MANIFEST_FILE_NAME if source.is_dir() else source
+            if manifest_path.is_file() and manifest_path.name == MANIFEST_FILE_NAME:
+                imported_asset_ids[index] = self._project.web.import_package(manifest_path).id
+            elif source.is_file():
+                tasks.append((index, self._start_media_import(source)))
+            elif source.is_dir():
+                raise ValueError(f"目录中缺少 {MANIFEST_FILE_NAME}：{source}")
+            else:
+                raise ValueError(f"素材不存在：{source}")
         if placement is not None:
             batch_id = uuid.uuid4().hex
             batch = _ImportDropBatch(
                 placement=placement,
-                asset_ids=[None] * len(tasks),
-                pending_task_ids={task.id for task in tasks},
+                asset_ids=imported_asset_ids,
+                pending_task_ids={task.id for _, task in tasks},
             )
-            self._pending_import_drop_batches[batch_id] = batch
-            for index, task in enumerate(tasks):
+            for index, task in tasks:
                 self._pending_import_drop_tasks[task.id] = (batch_id, index)
-        self._projector.refresh_tasks()
-        label = sources[0].name if len(sources) == 1 else f"{len(sources)} 个文件"
-        self._set_status(f"正在导入 {label}")
+            if batch.pending_task_ids:
+                self._pending_import_drop_batches[batch_id] = batch
+            else:
+                self._queue_assets_for_timeline(
+                    [asset_id for asset_id in imported_asset_ids if asset_id],
+                    placement,
+                )
+        imported_web_ids = [asset_id for asset_id in imported_asset_ids if asset_id]
+        if imported_web_ids:
+            self._selected_asset_ids = [imported_web_ids[-1]]
+            self._projector.refresh_all()
+            self.selectionChanged.emit()
+        else:
+            self._projector.refresh_tasks()
+        label = sources[0].name if len(sources) == 1 else f"{len(sources)} 个素材"
+        state = "正在导入" if tasks else "已导入"
+        self._set_status(f"{state} {label}")
 
     def _finish_import_drop(self, task_id: str, asset_id: str) -> None:
         task_entry = self._pending_import_drop_tasks.pop(task_id, None)
@@ -857,6 +918,7 @@ class ProjectSession(QObject):
         return (
             "_selected_asset_ids",
             "_selected_clip_ids",
+            "_selected_compound_id",
             "_selected_document_id",
             "_selected_subtitle_segment_ids",
             "_selected_subtitle_placement_id",
@@ -892,6 +954,7 @@ class ProjectSession(QObject):
     def _reset_project_selection(self) -> None:
         self._selected_asset_ids = []
         self._selected_clip_ids = []
+        self._selected_compound_id = ""
         self._selected_document_id = ""
         self._selected_subtitle_segment_ids = []
         self._selected_subtitle_placement_id = ""
@@ -1089,19 +1152,27 @@ class ProjectSession(QObject):
                 self._projector.refresh_timeline()
         if task.kind in {TaskKind.TRANSCRIBE, TaskKind.TRANSLATE}:
             if isinstance(task.command, TranscribeSequenceCommand):
-                documents = [
-                    document
-                    for document in self._documents.list_subtitle_documents(
-                        sequence_id=task.command.sequence_id
-                    )
-                    if document.is_source and document.source_document_id is None
-                ]
-                if documents:
-                    self._selected_document_id = documents[-1].id
-                    self._selected_subtitle_segment_ids = []
+                if task.command.sequence_id == self._active_sequence_id:
+                    self._editor.reload()
+                    self._projector.refresh_timeline()
+                    self.projectStateChanged.emit()
                 self._projector.refresh_assets()
             self._projector.refresh_documents()
             self._projector.refresh_preview_subtitles()
+        if isinstance(task.command, (AnalyzeScenesCommand, TrackSubjectCommand)):
+            if task.command.sequence_id == self._active_sequence_id:
+                self._editor.reload()
+                self._projector.refresh_timeline()
+                self.projectStateChanged.emit()
+                self.selectionChanged.emit()
+                self.historyChanged.emit()
+            if task.status.value == "completed":
+                label = (
+                    "场景切点已写入时间线"
+                    if isinstance(task.command, AnalyzeScenesCommand)
+                    else "画面跟踪已应用"
+                )
+                self._set_status(label)
         if task.kind == TaskKind.HIGHLIGHT:
             self._projector.refresh_highlights()
         if task.kind in {TaskKind.PROXY, TaskKind.ANALYZE}:
@@ -1136,6 +1207,7 @@ class ProjectSession(QObject):
         self._active_sequence_id = ""
         self._selected_asset_ids = []
         self._selected_clip_ids = []
+        self._selected_compound_id = ""
         self._selected_document_id = ""
         self._selected_subtitle_segment_ids = []
         self._selected_subtitle_placement_id = ""
@@ -1178,6 +1250,7 @@ class ProjectSession(QObject):
         self._sequence_model.set_items([])
         self._track_model.set_items([])
         self._clip_model.set_items([])
+        self._compound_clip_model.set_items([])
         self._transition_model.set_items([])
         self._marker_model.set_items([])
         self._range_model.set_items([])

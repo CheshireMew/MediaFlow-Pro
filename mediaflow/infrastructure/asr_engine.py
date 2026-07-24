@@ -11,10 +11,12 @@ import threading
 import traceback
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 
-from mediaflow.domain.asr import AsrEngine, AsrProgress, AsrResult, AsrSegment
+from mediaflow.domain.asr import AsrEngine, AsrProgress, AsrResult, AsrSegment, AsrWord
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitle_file import SubtitleFile
 
@@ -22,8 +24,8 @@ from .audio_chunking import AudioChunkingService, AudioPreparationService
 from .runtime_paths import RuntimePaths
 
 
-class PreparedAudioAsrEngine:
-    """Publish one phase-safe, 16 kHz mono PCM input to every ASR engine."""
+class AsrPipeline:
+    """Prepare one requested source region and transcribe only that region."""
 
     def __init__(
         self,
@@ -36,51 +38,50 @@ class PreparedAudioAsrEngine:
         self.paths = paths or RuntimePaths.discover()
         self.check_cancelled = check_cancelled
 
-    def transcribe(
+    def transcribe_region(
         self,
         media_path: str | Path,
         *,
+        start_seconds: float,
+        end_seconds: float,
         language: str | None = None,
         progress: AsrProgress | None = None,
     ) -> AsrResult:
-        if progress:
-            progress(1.0, "preparing_asr_audio")
         prepared = AudioPreparationService(self.paths).prepare_for_asr(
             media_path,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
             check_cancelled=self.check_cancelled,
+            progress=progress,
         )
-
-        def report(value: float, code: str) -> None:
-            if progress:
-                progress(10.0 + min(100.0, max(0.0, value)) * 0.9, code)
-
-        result = self.engine.transcribe(
+        return self.engine.transcribe(
             prepared,
             language=language,
-            progress=report,
+            progress=progress,
         )
-        if progress:
-            progress(100.0, "transcription_completed")
-        return result
 
 
-class LongAudioAsrEngine:
-    """Apply the original silence-aware long-media strategy around one ASR engine."""
+class ChunkedAsrEngine:
+    """Apply one silence-aware, resource-bounded chunk strategy to every backend."""
 
     def __init__(
         self,
         engine: AsrEngine,
+        settings: AsrSettings,
         paths: RuntimePaths | None = None,
         *,
         check_cancelled: Callable[[], None] | None = None,
         threshold_seconds: float = 900.0,
         target_chunk_seconds: float = 600.0,
+        worker_count: int | None = None,
     ):
         self.engine = engine
+        self.settings = settings
         self.paths = paths or RuntimePaths.discover()
         self.check_cancelled = check_cancelled
         self.threshold_seconds = threshold_seconds
         self.target_chunk_seconds = target_chunk_seconds
+        self.worker_count = worker_count
 
     def transcribe(
         self,
@@ -97,11 +98,11 @@ class LongAudioAsrEngine:
                 language=language,
                 progress=progress,
             )
-        if progress:
-            progress(5.0, "asr_audio_splitting")
         silences = chunking.detect_silence(
             media_path,
+            duration_seconds=duration,
             check_cancelled=self.check_cancelled,
+            progress=progress,
         )
         chunks = chunking.extract_chunks(
             media_path,
@@ -110,27 +111,94 @@ class LongAudioAsrEngine:
                 silences,
                 target_duration=self.target_chunk_seconds,
             ),
+            total_duration=duration,
             check_cancelled=self.check_cancelled,
+            progress=progress,
         )
-        output: list[AsrSegment] = []
-        detected_language = language or "unknown"
-        for index, (path, offset) in enumerate(chunks):
+        chunk_durations = [
+            (chunks[index + 1][1] if index + 1 < len(chunks) else duration) - offset
+            for index, (_path, offset) in enumerate(chunks)
+        ]
+        completed_seconds = [0.0] * len(chunks)
+        results: list[AsrResult | None] = [None] * len(chunks)
+        progress_lock = threading.Lock()
+        workers = min(
+            len(chunks),
+            self.worker_count
+            if self.worker_count is not None
+            else recommended_chunk_workers(self.settings),
+        )
+
+        def transcribe_chunk(index: int) -> tuple[int, AsrResult]:
             if self.check_cancelled:
                 self.check_cancelled()
 
-            def report(
-                value: float,
-                _code: str,
-                chunk_index: int = index,
-                chunk_total: int = len(chunks),
-            ) -> None:
+            def report_chunk(value: OperationProgress) -> None:
+                if not progress:
+                    return
+                with progress_lock:
+                    if (
+                        value.mode == "determinate"
+                        and value.completed is not None
+                        and value.total is not None
+                    ):
+                        completed_seconds[index] = max(
+                            completed_seconds[index],
+                            chunk_durations[index] * (
+                                value.completed / value.total
+                            ),
+                        )
+                        progress(
+                            OperationProgress.determinate(
+                                (
+                                    "asr_chunks_transcribing"
+                                    if value.message_code == "transcribing"
+                                    else value.message_code
+                                ),
+                                completed=sum(completed_seconds),
+                                total=duration,
+                                unit="media_seconds",
+                            )
+                        )
+                    else:
+                        progress(OperationProgress.indeterminate(value.message_code))
+
+            result = self.engine.transcribe(
+                chunks[index][0],
+                language=language,
+                progress=report_chunk,
+            )
+            with progress_lock:
+                completed_seconds[index] = chunk_durations[index]
                 if progress:
                     progress(
-                        20.0 + ((chunk_index + min(100.0, value) / 100.0) / chunk_total) * 75.0,
-                        "asr_chunks_progress",
+                        OperationProgress.determinate(
+                            "asr_chunks_transcribing",
+                            completed=sum(completed_seconds),
+                            total=duration,
+                            unit="media_seconds",
+                        )
                     )
+            return index, result
 
-            result = self.engine.transcribe(path, language=language, progress=report)
+        with ThreadPoolExecutor(
+            max_workers=max(1, workers),
+            thread_name_prefix="mediaflow-asr-chunk",
+        ) as executor:
+            futures = [
+                executor.submit(transcribe_chunk, index)
+                for index in range(len(chunks))
+            ]
+            for future in as_completed(futures):
+                index, result = future.result()
+                results[index] = result
+
+        output: list[AsrSegment] = []
+        detected_language = language or "unknown"
+        for index, (_path, offset) in enumerate(chunks):
+            result = results[index]
+            if result is None:
+                raise RuntimeError(f"转录分块没有返回结果：{index + 1}")
             detected_language = result.language or detected_language
             output.extend(
                 AsrSegment(
@@ -138,11 +206,18 @@ class LongAudioAsrEngine:
                     end_seconds=segment.end_seconds + offset,
                     text=segment.text,
                     confidence=segment.confidence,
+                    words=tuple(
+                        AsrWord(
+                            start_seconds=word.start_seconds + offset,
+                            end_seconds=word.end_seconds + offset,
+                            text=word.text,
+                            confidence=word.confidence,
+                        )
+                        for word in segment.words
+                    ),
                 )
                 for segment in result.segments
             )
-        if progress:
-            progress(100.0, "transcription_completed")
         return AsrResult(
             language=detected_language,
             duration_seconds=duration,
@@ -177,7 +252,7 @@ class FasterWhisperEngine:
             language=requested_language,
             beam_size=5,
             vad_filter=True,
-            word_timestamps=False,
+            word_timestamps=True,
             condition_on_previous_text=True,
         )
         duration = float(getattr(info, "duration", 0.0) or 0.0)
@@ -196,12 +271,31 @@ class FasterWhisperEngine:
                     end_seconds=float(segment.end),
                     text=text,
                     confidence=confidence,
+                    words=tuple(
+                        AsrWord(
+                            start_seconds=float(word.start),
+                            end_seconds=float(word.end),
+                            text=str(word.word),
+                            confidence=(
+                                float(word.probability)
+                                if getattr(word, "probability", None) is not None
+                                else None
+                            ),
+                        )
+                        for word in (getattr(segment, "words", None) or ())
+                        if str(getattr(word, "word", "")).strip()
+                    ),
                 )
             )
             if progress and duration > 0:
-                progress(min(98.0, float(segment.end) / duration * 98.0), "transcribing")
-        if progress:
-            progress(100.0, "transcription_completed")
+                progress(
+                    OperationProgress.determinate(
+                        "transcribing",
+                        completed=min(duration, float(segment.end)),
+                        total=duration,
+                        unit="media_seconds",
+                    )
+                )
         return AsrResult(
             language=str(getattr(info, "language", None) or requested_language or "unknown"),
             duration_seconds=duration,
@@ -212,7 +306,7 @@ class FasterWhisperEngine:
         if self._model is not None:
             return self._model
         if progress:
-            progress(1.0, "loading_asr_model")
+            progress(OperationProgress.indeterminate("loading_asr_model"))
         import ctranslate2
         from faster_whisper import WhisperModel
 
@@ -244,8 +338,13 @@ def _whisper_process_entry(
         os.environ["MEDIAFLOW_RUNTIME_DIR"] = runtime_dir
         settings = AsrSettings.model_validate(settings_data)
 
-        def report(value: float, code: str) -> None:
-            messages.put(("progress", float(value), str(code)))
+        def report(value: OperationProgress) -> None:
+            messages.put(
+                (
+                    "progress",
+                    value.model_dump(mode="json", exclude_computed_fields=True),
+                )
+            )
 
         result = FasterWhisperEngine(settings).transcribe(
             media_path,
@@ -288,7 +387,7 @@ class FasterWhisperProcessEngine:
             if self.settings.device not in {"auto", "cuda"} or not _is_cuda_error(error):
                 raise
             if progress:
-                progress(2.0, "asr_cuda_cpu_fallback")
+                progress(OperationProgress.indeterminate("asr_cuda_cpu_fallback"))
             fallback = FasterWhisperProcessEngine(
                 self.settings.model_copy(update={"device": "cpu", "compute_type": "int8"}),
                 self.paths,
@@ -337,7 +436,7 @@ class FasterWhisperProcessEngine:
                 kind = message[0]
                 if kind == "progress":
                     if progress:
-                        progress(float(message[1]), str(message[2]))
+                        progress(OperationProgress.model_validate(message[1]))
                     continue
                 if kind == "error":
                     raise RuntimeError(f"ASR worker failed:\n{message[1]}")
@@ -353,6 +452,19 @@ class FasterWhisperProcessEngine:
                                 text=str(item["text"]),
                                 confidence=(
                                     float(item["confidence"]) if item["confidence"] is not None else None
+                                ),
+                                words=tuple(
+                                    AsrWord(
+                                        start_seconds=float(word["start_seconds"]),
+                                        end_seconds=float(word["end_seconds"]),
+                                        text=str(word["text"]),
+                                        confidence=(
+                                            float(word["confidence"])
+                                            if word["confidence"] is not None
+                                            else None
+                                        ),
+                                    )
+                                    for word in item.get("words", [])
                                 ),
                             )
                             for item in payload["segments"]
@@ -405,7 +517,7 @@ class FasterWhisperCliEngine:
             if self.settings.device != "cuda" or not _is_cuda_error(error):
                 raise
             if progress:
-                progress(2.0, "asr_cuda_cpu_fallback")
+                progress(OperationProgress.indeterminate("asr_cuda_cpu_fallback"))
             return FasterWhisperCliEngine(
                 self.settings.model_copy(update={"device": "cpu"}),
                 self.paths,
@@ -424,7 +536,7 @@ class FasterWhisperCliEngine:
         output_dir.mkdir(parents=True, exist_ok=True)
         command = self.build_command(source, output_dir, language=language)
         if progress:
-            progress(1.0, "asr_cli_starting")
+            progress(OperationProgress.indeterminate("asr_cli_starting"))
         returncode, output = self._run(command, progress)
         srt_path = next(
             (
@@ -445,8 +557,6 @@ class FasterWhisperCliEngine:
             fps_denominator=1,
         )
         requested_language = language or self.settings.language
-        if progress:
-            progress(100.0, "transcription_completed")
         return AsrResult(
             language=(requested_language if requested_language and requested_language != "auto" else "und"),
             duration_seconds=max(cue.end_frame for cue in cues) / 1000,
@@ -550,7 +660,14 @@ class FasterWhisperCliEngine:
                 captured.append(line)
                 match = re.search(r"(?<![\d.])(\d{1,3})%", line)
                 if match and progress and "MB" not in line and "kB" not in line:
-                    progress(5 + min(100, int(match.group(1))) * 0.9, "transcribing")
+                    progress(
+                        OperationProgress.determinate(
+                            "transcribing",
+                            completed=min(100, int(match.group(1))),
+                            total=100,
+                            unit="percent",
+                        )
+                    )
                 if self.check_cancelled:
                     self.check_cancelled()
             return process.wait(timeout=30), captured
@@ -567,34 +684,123 @@ class FasterWhisperCliEngine:
             reader.join(timeout=2)
 
 
-def create_asr_engine(
+def create_asr_pipeline(
     settings: AsrSettings,
     paths: RuntimePaths | None = None,
     *,
     check_cancelled: Callable[[], None] | None = None,
-) -> AsrEngine:
+) -> AsrPipeline:
     runtime_paths = paths or RuntimePaths.discover()
     if settings.engine == "faster_whisper_cli":
-        engine: AsrEngine = FasterWhisperCliEngine(
+        backend: AsrEngine = FasterWhisperCliEngine(
             settings,
             runtime_paths,
             check_cancelled=check_cancelled,
         )
     else:
-        engine = LongAudioAsrEngine(
-            FasterWhisperProcessEngine(
-                settings,
-                runtime_paths,
-                check_cancelled=check_cancelled,
-            ),
+        backend = FasterWhisperProcessEngine(
+            settings,
             runtime_paths,
             check_cancelled=check_cancelled,
         )
-    return PreparedAudioAsrEngine(
-        engine,
+    return AsrPipeline(
+        ChunkedAsrEngine(
+            backend,
+            settings,
+            runtime_paths,
+            check_cancelled=check_cancelled,
+        ),
         runtime_paths,
         check_cancelled=check_cancelled,
     )
+
+
+def recommended_chunk_workers(settings: AsrSettings) -> int:
+    if settings.parallel_chunks > 0:
+        return settings.parallel_chunks
+    cpu_count = max(1, os.cpu_count() or 1)
+    available_memory = _available_memory_bytes()
+    model_memory = _estimated_model_memory_bytes(settings.model)
+    memory_workers = max(1, int(available_memory * 0.60 // model_memory))
+    if _resolved_device(settings) == "cuda":
+        free_vram = _cuda_free_memory_bytes()
+        if free_vram is not None:
+            memory_workers = max(1, int(free_vram * 0.80 // model_memory))
+        return max(1, min(2, memory_workers))
+    return max(1, min(2, cpu_count // 4, memory_workers))
+
+
+def _resolved_device(settings: AsrSettings) -> str:
+    if settings.device != "auto":
+        return settings.device
+    return "cuda" if shutil.which("nvidia-smi") else "cpu"
+
+
+def _estimated_model_memory_bytes(model: str) -> int:
+    name = Path(model).name.lower()
+    gib = 1.0
+    if "large" in name:
+        gib = 5.0 if "turbo" in name else 7.0
+    elif "medium" in name:
+        gib = 4.0
+    elif "small" in name:
+        gib = 2.5
+    elif "base" in name:
+        gib = 1.5
+    return int(gib * 1024**3)
+
+
+def _available_memory_bytes() -> int:
+    if os.name == "nt":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", ctypes.c_ulong),
+                ("memory_load", ctypes.c_ulong),
+                ("total_physical", ctypes.c_ulonglong),
+                ("available_physical", ctypes.c_ulonglong),
+                ("total_page_file", ctypes.c_ulonglong),
+                ("available_page_file", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong),
+                ("available_virtual", ctypes.c_ulonglong),
+                ("available_extended_virtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(MemoryStatus)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.available_physical)
+    try:
+        return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+    except (AttributeError, OSError, ValueError):
+        return 4 * 1024**3
+
+
+def _cuda_free_memory_bytes() -> int | None:
+    executable = shutil.which("nvidia-smi")
+    if not executable:
+        return None
+    result = subprocess.run(
+        [
+            executable,
+            "--query-gpu=memory.free",
+            "--format=csv,noheader,nounits",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    if result.returncode != 0:
+        return None
+    values = [
+        int(match.group(0))
+        for line in result.stdout.splitlines()
+        if (match := re.search(r"\d+", line))
+    ]
+    return max(values) * 1024**2 if values else None
 
 
 def _is_cuda_error(error: Exception) -> bool:

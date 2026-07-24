@@ -22,6 +22,9 @@ QtObject {
     readonly property color video: "#3478c8"
     readonly property color audio: "#7e5ac7"
     readonly property color subtitle: "#be7a37"
+    readonly property color transcriptTrack: highContrast ? "#00ffd0" : "#35d0b5"
+    readonly property color transcriptTrackHover: highContrast ? "#7fffe8" : "#52e3c9"
+    readonly property color transcriptTrackSoft: highContrast ? "#004b40" : "#123c39"
     readonly property int radiusSmall: 6
     readonly property int radius: 10
     readonly property int radiusLarge: 16

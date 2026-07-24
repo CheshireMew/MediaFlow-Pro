@@ -92,7 +92,7 @@ class WebMediaService:
         asset = Asset(
             id=asset_id,
             project_id=project.id,
-            name=package_root.name,
+            name=(copied_manifest.component.name if copied_manifest.component else package_root.name),
             kind=AssetKind.WEB,
             origin=AssetOrigin.EXTERNAL,
             path=str(destination / copied_manifest.entry),

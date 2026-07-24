@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mediaflow.application.ports import SubtitleAcquisitionDocuments
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
-from mediaflow.domain.asr import AsrEngine
+from mediaflow.domain.asr import AsrResult, RegionAsrPipeline
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.media_association import related_media_paths
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset
+from mediaflow.domain.sequence_audio import ProjectedDialogueSegment
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
-from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.timebase import seconds_to_frames
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 
 if TYPE_CHECKING:
     from mediaflow.application.asset_service import AssetService
@@ -29,87 +31,153 @@ class SubtitleAcquisitionService:
         self.repository = repository
         self.publication = publication
 
-    def transcribe_sequence_audio(
+    def transcribe_asset_region(
         self,
-        sequence_id: str,
-        audio_asset_id: str,
+        asset_id: str,
         source: str | Path,
-        engine: AsrEngine,
+        pipeline: RegionAsrPipeline,
         *,
-        start_frame: int,
-        end_frame: int,
+        start_seconds: float,
+        end_seconds: float,
+        signature: str,
         language: str | None = None,
         check_cancelled: Callable[[], None] | None = None,
-        progress: Callable[[float, str], None] | None = None,
-    ) -> SubtitleDocument:
-        audio_source = Path(source).resolve(strict=True)
-        audio_asset = self.repository.get_asset(audio_asset_id)
-        if audio_asset.kind != AssetKind.AUDIO:
-            raise ValueError("时间轴转录源必须是生成的音频素材")
-        sequence = self.repository.get_sequence(sequence_id)
-        start = max(0, int(start_frame))
-        end = int(end_frame)
-        if end <= start:
-            raise ValueError("当前时间轴没有可转录的范围")
-        project = self.repository.get_project()
-        existing = [
-            document
-            for document in self.repository.list_subtitle_documents(sequence_id=sequence_id)
-            if document.is_source and document.source_document_id is None
-        ]
-        if existing:
-            document = existing[-1].model_copy(update={"asset_id": audio_asset_id})
-        else:
-            document = SubtitleDocument(
-                project_id=project.id,
-                asset_id=audio_asset_id,
-                sequence_id=sequence_id,
-                language=language or "und",
-                is_source=True,
-            )
-
-        def report(value: float, code: str) -> None:
+        progress: Callable[[OperationProgress], None] | None = None,
+    ) -> tuple[AsrResult, bool]:
+        media_source = Path(source).resolve(strict=True)
+        asset = self.repository.get_asset(asset_id)
+        if (
+            asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}
+            or not asset.metadata.has_audio
+        ):
+            raise ValueError("主要对白轨上的素材必须包含音频")
+        cached = self.repository.get_asset_transcript(asset_id, signature)
+        if cached is not None:
             if progress:
-                progress(15.0 + min(100.0, max(0.0, value)) * 0.8, code)
-
-        if check_cancelled:
-            check_cancelled()
-        asr_result = engine.transcribe(audio_source, language=language, progress=report)
-        document = document.model_copy(update={"language": asr_result.language})
-        segments: list[SubtitleSegment] = []
-        for recognized in asr_result.segments:
-            recognized_start = start + seconds_to_frames(
-                recognized.start_seconds,
-                sequence.profile.fps_numerator,
-                sequence.profile.fps_denominator,
-            )
-            recognized_end = start + seconds_to_frames(
-                recognized.end_seconds,
-                sequence.profile.fps_numerator,
-                sequence.profile.fps_denominator,
-            )
-            recognized_start = max(start, min(end - 1, recognized_start))
-            recognized_end = max(recognized_start + 1, min(end, recognized_end))
-            text = recognized.text.strip()
-            if text:
-                segments.append(
-                    SubtitleSegment(
-                        document_id=document.id,
-                        start_frame=recognized_start,
-                        end_frame=recognized_end,
-                        text=text,
-                        confidence=recognized.confidence,
+                progress(
+                    OperationProgress.determinate(
+                        "transcription_source_cached",
+                        completed=1,
+                        total=1,
+                        unit="items",
                     )
                 )
-        if not segments:
-            raise RuntimeError("当前时间轴范围内没有识别出可用语音")
+            return cached, True
+        if check_cancelled:
+            check_cancelled()
+        result = pipeline.transcribe_region(
+            media_source,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            language=language,
+            progress=progress,
+        )
+        if check_cancelled:
+            check_cancelled()
+        self.repository.save_asset_transcript(asset_id, signature, result)
+        return result, False
+
+    def save_sequence_transcript(
+        self,
+        sequence_id: str,
+        subtitle_asset_id: str,
+        projected: tuple[ProjectedDialogueSegment, ...],
+        *,
+        language: str,
+    ) -> SubtitleDocument:
+        if not projected:
+            raise RuntimeError("主要对白轨范围内没有识别出可用语音")
+        project = self.repository.get_project()
+        self.repository.get_sequence(sequence_id)
+        subtitle_asset = self.repository.get_asset(subtitle_asset_id)
+        if subtitle_asset.kind != AssetKind.SUBTITLE:
+            raise ValueError("时间线转录文档必须关联生成的字幕素材")
+        existing = [
+            document
+            for document in self.repository.list_subtitle_documents(
+                sequence_id=sequence_id
+            )
+            if document.is_source
+            and document.source_document_id is None
+            and document.purpose == "sequence_transcript"
+        ]
+        document = (
+            existing[-1].model_copy(
+                update={
+                    "asset_id": subtitle_asset_id,
+                    "media_asset_id": None,
+                    "language": language,
+                    "purpose": "sequence_transcript",
+                }
+            )
+            if existing
+            else SubtitleDocument(
+                project_id=project.id,
+                asset_id=subtitle_asset_id,
+                sequence_id=sequence_id,
+                language=language,
+                is_source=True,
+                purpose="sequence_transcript",
+            )
+        )
+        segments: list[SubtitleSegment] = []
+        words: list[SubtitleWord] = []
+        for item in projected:
+            if item.text.strip():
+                segment = SubtitleSegment(
+                    document_id=document.id,
+                    start_frame=item.start_frame,
+                    end_frame=item.end_frame,
+                    text=item.text.strip(),
+                    confidence=item.confidence,
+                )
+                segments.append(segment)
+                if item.words:
+                    words.extend(
+                        SubtitleWord(
+                            segment_id=segment.id,
+                            position=position,
+                            start_frame=word.start_frame,
+                            end_frame=word.end_frame,
+                            text=word.text,
+                            confidence=word.confidence,
+                            timing_source="recognized",
+                        )
+                        for position, word in enumerate(item.words)
+                    )
+                else:
+                    words.extend(self._estimated_words(segment))
         if existing:
             self.repository.save_subtitle_document(document)
             self.repository.save_subtitle_segments(document.id, segments)
+            self.repository.save_subtitle_words(document.id, words)
         else:
-            self.repository.create_subtitle_document(document, segments)
-        self.publication.write_document_srt(document.id)
+            self.repository.create_subtitle_document(document, segments, words)
         return document
+
+    @staticmethod
+    def _estimated_words(segment: SubtitleSegment) -> list[SubtitleWord]:
+        tokens = re.findall(
+            r"[\u3400-\u9fff]|[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|[^\s]",
+            segment.text,
+        )
+        if not tokens:
+            return []
+        duration = segment.end_frame - segment.start_frame
+        return [
+            SubtitleWord(
+                segment_id=segment.id,
+                position=position,
+                start_frame=segment.start_frame + duration * position // len(tokens),
+                end_frame=max(
+                    segment.start_frame + duration * position // len(tokens) + 1,
+                    segment.start_frame + duration * (position + 1) // len(tokens),
+                ),
+                text=token,
+                timing_source="estimated",
+            )
+            for position, token in enumerate(tokens)
+        ]
 
     def import_subtitle_file(
         self,

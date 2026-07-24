@@ -17,9 +17,10 @@ from mediaflow.domain.exports import (
     WatermarkOverlay,
 )
 from mediaflow.domain.project import Asset
-from mediaflow.domain.sequence_audio import select_audible_sequence_audio
+from mediaflow.domain.sequence_audio import audio_clips_for_track, select_audible_sequence_audio
 from mediaflow.domain.timeline import (
     Clip,
+    ClipTransform,
     TimelineState,
     Track,
     Transition,
@@ -413,6 +414,7 @@ class TimelineCompiler:
             or transform.scale_y != 1.0
             or transform.rotation
             or transform.opacity != 1.0
+            or clip.transform_keyframes
         ):
             filter_element = ET.SubElement(
                 producer,
@@ -424,15 +426,46 @@ class TimelineCompiler:
                 },
             )
             self._property(filter_element, "mlt_service", "affine" if native_preview else "qtblend")
-            width = max(0.01, transform.scale_x) * 100.0
-            height = max(0.01, transform.scale_y) * 100.0
-            rect = f"{transform.x}%/{transform.y}%:{width}%x{height}%:{transform.opacity * 100}%"
+            def rect_value(value: ClipTransform) -> str:
+                width = max(0.01, value.scale_x) * 100.0
+                height = max(0.01, value.scale_y) * 100.0
+                return (
+                    f"{value.x:g}%/{value.y:g}%:{width:g}%x{height:g}%:"
+                    f"{value.opacity * 100:g}%"
+                )
+
+            rect = rect_value(transform)
+            rotation = f"{transform.rotation:g}"
+            if clip.transform_keyframes:
+                speed = Fraction(abs(clip.speed_numerator), clip.speed_denominator)
+                points: dict[int, ClipTransform] = {producer_start: transform}
+                for keyframe in clip.transform_keyframes:
+                    source_delta = (
+                        keyframe.source_frame - clip.source_in
+                        if clip.speed_numerator > 0
+                        else clip.source_in - keyframe.source_frame
+                    )
+                    if source_delta < 0:
+                        continue
+                    local_frame = self._round_fraction(Fraction(source_delta) / speed)
+                    if 0 <= local_frame < clip.duration:
+                        points[producer_start + local_frame] = keyframe.transform
+                final_value = points[max(points)]
+                points[producer_start + clip.duration - 1] = final_value
+                rect = ";".join(
+                    f"{frame}={rect_value(value)}"
+                    for frame, value in sorted(points.items())
+                )
+                rotation = ";".join(
+                    f"{frame}={value.rotation:g}"
+                    for frame, value in sorted(points.items())
+                )
             if native_preview:
                 self._property(filter_element, "transition.rect", rect)
-                self._property(filter_element, "transition.rotate_z", str(transform.rotation))
+                self._property(filter_element, "transition.rotate_z", rotation)
             else:
                 self._property(filter_element, "rect", rect)
-                self._property(filter_element, "rotation", str(transform.rotation))
+                self._property(filter_element, "rotation", rotation)
         self._append_clip_audio_filters(producer, clip, producer_start=producer_start)
         if asset.kind in {AssetKind.IMAGE, AssetKind.WEB}:
             self._property(producer, "set.test_audio", "1")
@@ -828,8 +861,20 @@ class TimelineCompiler:
         use_proxies: bool,
         prefer_sdr_preview_proxy: bool,
     ) -> None:
-        clips = state.clips_for_track(track.id)
-        transitions = [item for item in state.transitions if item.track_id == track.id]
+        clips = audio_clips_for_track(state, track.id)
+        source_track_ids = {track.id} | {
+            source.id
+            for source in state.tracks
+            if source.linked_audio_track_id == track.id
+        }
+        clip_ids = {clip.id for clip in clips}
+        transitions = [
+            item
+            for item in state.transitions
+            if item.track_id in source_track_ids
+            and item.left_clip_id in clip_ids
+            and item.right_clip_id in clip_ids
+        ]
         outgoing = {item.left_clip_id: item for item in transitions}
         for clip in clips:
             asset = assets[clip.asset_id]

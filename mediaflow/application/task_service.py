@@ -12,6 +12,7 @@ from mediaflow.application.events import TaskEvent, TaskEventBus
 from mediaflow.application.ports import TaskStore
 from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.model_base import now_ms
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.task_commands import TaskCommand
 from mediaflow.domain.tasks import Task, TaskExecutionTraceItem
 
@@ -42,7 +43,7 @@ class CancellationToken:
             raise TaskStopped(requested)
 
 
-ProgressReporter = Callable[[float, str], None]
+ProgressReporter = Callable[[OperationProgress], None]
 
 
 @dataclass(slots=True)
@@ -50,7 +51,7 @@ class TaskContext:
     task: Task
     project_dir: Path
     cancellation: CancellationToken
-    report_progress: ProgressReporter
+    report: ProgressReporter
 
 
 TaskHandler = Callable[[TaskContext], list[str] | None]
@@ -113,7 +114,7 @@ class TaskService:
             task.model_copy(
                 update={
                     "status": TaskStatus.PENDING,
-                    "message_code": "queued",
+                    "progress": OperationProgress.indeterminate("queued"),
                     "error": None,
                 }
             )
@@ -147,7 +148,12 @@ class TaskService:
             task = self.repository.get(task_id)
             if task.status in {TaskStatus.PENDING, TaskStatus.PAUSED}:
                 cancelled = self.repository.save(
-                    task.model_copy(update={"status": TaskStatus.CANCELLED, "message_code": "cancelled"})
+                    task.model_copy(
+                        update={
+                            "status": TaskStatus.CANCELLED,
+                            "progress": OperationProgress.indeterminate("cancelled"),
+                        }
+                    )
                 )
                 self._publish(cancelled, "status")
                 return
@@ -230,47 +236,64 @@ class TaskService:
     def _run(self, task_id: str, token: CancellationToken) -> None:
         task = self.repository.get(task_id)
         running = self.repository.save(
-            task.model_copy(update={"status": TaskStatus.RUNNING, "message_code": "running", "error": None})
+            task.model_copy(
+                update={
+                    "status": TaskStatus.RUNNING,
+                    "progress": OperationProgress.indeterminate("running"),
+                    "error": None,
+                }
+            )
         )
         self._publish(running, "status")
 
         last_progress = running.progress
-        last_message = running.message_code
         last_persisted_at = time.monotonic()
 
-        def report(progress: float, message_code: str) -> None:
-            nonlocal last_progress, last_message, last_persisted_at
+        def report(progress: OperationProgress) -> None:
+            nonlocal last_progress, last_persisted_at
             token.raise_if_requested()
-            normalized = max(0.0, min(100.0, float(progress)))
             now = time.monotonic()
+            same_phase = (
+                progress.message_code == last_progress.message_code
+                and progress.mode == last_progress.mode
+                and progress.unit == last_progress.unit
+                and progress.total == last_progress.total
+            )
+            previous_percent = last_progress.percent
+            current_percent = progress.percent
             if (
-                message_code == last_message
-                and normalized < 100.0
-                and abs(normalized - last_progress) < 1.0
+                same_phase
                 and now - last_persisted_at < 0.1
+                and (
+                    progress.mode == "indeterminate"
+                    or (
+                        previous_percent is not None
+                        and current_percent is not None
+                        and current_percent < 100.0
+                        and abs(current_percent - previous_percent) < 1.0
+                    )
+                )
             ):
                 return
             current = self.repository.get(task_id)
-            trace = self._advance_trace(current, message_code)
+            trace = self._advance_trace(current, progress.message_code)
             updated = self.repository.save(
                 current.model_copy(
                     update={
-                        "progress": normalized,
-                        "message_code": message_code,
+                        "progress": progress,
                         "execution_trace": trace,
                     }
                 )
             )
             self._publish(updated, "progress")
-            last_progress = normalized
-            last_message = message_code
+            last_progress = progress
             last_persisted_at = now
 
         context = TaskContext(
             task=running,
             project_dir=self.repository.project_dir,
             cancellation=token,
-            report_progress=report,
+            report=report,
         )
         try:
             token.raise_if_requested()
@@ -282,8 +305,12 @@ class TaskService:
                 current.model_copy(
                     update={
                         "status": TaskStatus.COMPLETED,
-                        "progress": 100.0,
-                        "message_code": "completed",
+                        "progress": OperationProgress.determinate(
+                            "completed",
+                            completed=1,
+                            total=1,
+                            unit="task",
+                        ),
                         "artifacts": artifacts,
                         "execution_trace": self._finish_trace(current, "success"),
                         "error": None,
@@ -297,7 +324,7 @@ class TaskService:
                 current.model_copy(
                     update={
                         "status": stopped.status,
-                        "message_code": stopped.status.value,
+                        "progress": OperationProgress.indeterminate(stopped.status.value),
                         "error": None,
                         "execution_trace": self._finish_trace(current, "cancelled"),
                     }
@@ -310,7 +337,7 @@ class TaskService:
                 current.model_copy(
                     update={
                         "status": TaskStatus.FAILED,
-                        "message_code": "failed",
+                        "progress": OperationProgress.indeterminate("failed"),
                         "error": str(error),
                         "execution_trace": self._finish_trace(
                             current,
@@ -362,7 +389,11 @@ class TaskService:
         if not trace or trace[-1].status != "running":
             trace.append(
                 TaskExecutionTraceItem(
-                    step=task.message_code if task.message_code != "running" else task.kind.value,
+                    step=(
+                        task.progress.message_code
+                        if task.progress.message_code != "running"
+                        else task.kind.value
+                    ),
                     started_at=task.updated_at,
                 )
             )

@@ -7,9 +7,15 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.infrastructure.process_observers import (
+    FfmpegProgressObserver,
+    MeltProgressObserver,
+    ffmpeg_progress_command,
+)
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable
+from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
 from .compiler import TimelineCompiler
 
@@ -34,7 +40,7 @@ class LoudnessAnalysisService:
         state: TimelineState,
         *,
         check_cancelled=None,
-        report_progress=None,
+        progress=None,
     ) -> tuple[LoudnessMetrics, Path]:
         if self.paths.melt is None:
             raise FileNotFoundError("MLT melt runtime is not installed")
@@ -46,17 +52,32 @@ class LoudnessAnalysisService:
         cache_dir.mkdir(parents=True, exist_ok=True)
         result_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if report_progress:
-            report_progress(5, "audio_analysis_compiling")
+        if progress:
+            progress(OperationProgress.indeterminate("audio_analysis_compiling"))
         self.compiler.write(state, graph_path, use_proxies=False)
         environment = os.environ.copy()
         environment.pop("MLT_REPOSITORY_DENY", None)
         mlt_root = self.paths.melt.parent
         environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
         environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
-        render = run_cancellable(
+        total_frames = max(1, state.duration_frames)
+        melt_observer = MeltProgressObserver(
+            total_frames,
+            lambda frame: progress(
+                OperationProgress.determinate(
+                    "audio_analysis_rendering",
+                    completed=frame,
+                    total=total_frames,
+                    unit="frames",
+                )
+            )
+            if progress
+            else None,
+        )
+        render = run_cancellable_streaming(
             [
                 str(self.paths.melt),
+                "-progress2",
                 str(graph_path),
                 "-consumer",
                 f"avformat:{rendered_audio}",
@@ -70,30 +91,43 @@ class LoudnessAnalysisService:
             ],
             cwd=mlt_root,
             env=environment,
-            text=True,
             encoding="utf-8",
             errors="replace",
             timeout=3600,
             check_cancelled=check_cancelled,
+            on_stdout_line=melt_observer,
+            on_stderr_line=melt_observer,
+            split_carriage_returns=True,
         )
         if render.returncode != 0 or not rendered_audio.is_file() or rendered_audio.stat().st_size == 0:
             raise RuntimeError("Sequence audio render failed:\n" + (render.stderr or render.stdout or ""))
+        if progress:
+            progress(
+                OperationProgress.determinate(
+                    "audio_analysis_rendering",
+                    completed=total_frames,
+                    total=total_frames,
+                    unit="frames",
+                )
+            )
 
-        if report_progress:
-            report_progress(65, "audio_analysis_measuring_loudness")
         loudness_log = self._ffmpeg_measure(
             rendered_audio,
             "ebur128=peak=true:framelog=verbose",
             check_cancelled,
             loglevel="verbose",
+            message_code="audio_analysis_measuring_loudness",
+            duration_seconds=total_frames / state.sequence.profile.fps,
+            progress=progress,
         )
-        if report_progress:
-            report_progress(82, "audio_analysis_measuring_peak")
         peak_log = self._ffmpeg_measure(
             rendered_audio,
             "astats=metadata=0:reset=0",
             check_cancelled,
             loglevel="info",
+            message_code="audio_analysis_measuring_peak",
+            duration_seconds=total_frames / state.sequence.profile.fps,
+            progress=progress,
         )
         metrics = LoudnessMetrics(
             sample_peak_dbfs=self._sample_peak(peak_log),
@@ -116,8 +150,8 @@ class LoudnessAnalysisService:
             encoding="utf-8",
         )
         temporary.replace(result_path)
-        if report_progress:
-            report_progress(98, "audio_analysis_complete")
+        if progress:
+            progress(OperationProgress.indeterminate("audio_analysis_saving"))
         return metrics, result_path
 
     def _ffmpeg_measure(
@@ -127,9 +161,11 @@ class LoudnessAnalysisService:
         check_cancelled,
         *,
         loglevel: str,
+        message_code: str,
+        duration_seconds: float,
+        progress=None,
     ) -> str:
-        result = run_cancellable(
-            [
+        command = [
                 str(self.paths.ffmpeg),
                 "-hide_banner",
                 "-nostats",
@@ -142,8 +178,23 @@ class LoudnessAnalysisService:
                 "-f",
                 "null",
                 "-",
-            ],
-            text=True,
+            ]
+        observer = FfmpegProgressObserver(
+            duration_seconds,
+            lambda position: progress(
+                OperationProgress.determinate(
+                    message_code,
+                    completed=position,
+                    total=duration_seconds,
+                    unit="media_seconds",
+                )
+            )
+            if progress
+            else None,
+        )
+        result = run_cancellable_streaming(
+            ffmpeg_progress_command(command),
+            on_stderr_line=observer,
             encoding="utf-8",
             errors="replace",
             timeout=3600,
