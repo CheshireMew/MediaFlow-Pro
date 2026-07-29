@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import "."
 import "components"
 
-Dialog {
+AppDialog {
     id: root
     objectName: "projectVersionsDialog"
     property string pendingRestoreId: ""
@@ -32,6 +32,7 @@ Dialog {
                 id: versionName
                 objectName: "projectVersionNameInput"
                 Layout.fillWidth: true
+                enabled: Boolean(workspaceController.actionCapabilities.canEdit)
                 placeholderText: qsTr("例如：客户审阅版")
             }
             AppButton {
@@ -39,7 +40,7 @@ Dialog {
                 primary: true
                 text: qsTr("保存当前版本")
                 enabled: versionName.text.trim().length > 0
-                    && !workspaceController.readOnly
+                    && Boolean(workspaceController.actionCapabilities.canEdit)
                 onClicked: {
                     workspaceController.createNamedVersion(versionName.text);
                     versionName.clear();
@@ -54,7 +55,7 @@ Dialog {
             clip: true
             spacing: 6
             model: workspaceController.projectVersions
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: AppScrollBar {}
             delegate: Rectangle {
                 required property string versionId
                 required property string name
@@ -90,7 +91,7 @@ Dialog {
                     AppButton {
                         objectName: "restoreProjectVersionButton"
                         text: qsTr("恢复")
-                        enabled: !workspaceController.readOnly
+                        enabled: Boolean(workspaceController.actionCapabilities.canEdit)
                         onClicked: {
                             root.pendingRestoreId = versionId;
                             root.pendingRestoreName = name;
@@ -102,14 +103,14 @@ Dialog {
             EmptyState {
                 anchors.fill: parent
                 visible: versionList.count === 0
-                iconText: "版"
+                iconName: "versions"
                 title: qsTr("还没有命名版本")
                 description: qsTr("在重要调整前保存一个版本，之后可以完整恢复。")
             }
         }
     }
 
-    Dialog {
+    AppDialog {
         id: restoreConfirmation
         parent: root.parent
         anchors.centerIn: parent
@@ -118,7 +119,8 @@ Dialog {
         title: qsTr("恢复“%1”？").arg(root.pendingRestoreName)
         standardButtons: Dialog.Yes | Dialog.Cancel
         onAccepted: {
-            workspaceController.restoreNamedVersion(root.pendingRestoreId);
+            if (workspaceController.actionCapabilities.canEdit)
+                workspaceController.restoreNamedVersion(root.pendingRestoreId);
             root.pendingRestoreId = "";
             root.pendingRestoreName = "";
         }

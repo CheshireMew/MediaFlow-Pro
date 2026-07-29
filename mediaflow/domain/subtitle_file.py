@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.srt_time import format_srt_timestamp
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
 
@@ -178,9 +179,7 @@ class SubtitleFile:
             fps_numerator=fps_numerator,
             fps_denominator=fps_denominator,
         )
-        temporary = output.with_suffix(output.suffix + ".tmp")
-        temporary.write_text(content, encoding="utf-8-sig")
-        temporary.replace(output)
+        atomic_write_text(output, content, encoding="utf-8-sig")
         return output
 
     @classmethod

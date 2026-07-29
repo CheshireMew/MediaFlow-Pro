@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import pytest
 
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.highlight_service import HighlightService
@@ -26,14 +26,21 @@ from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.translation_cache import TranslationCache
 
+pytestmark = pytest.mark.integration
+
 
 def _translation_service(repository: ProjectRepository) -> TranslationService:
     publication = SubtitlePublicationService(repository)
     return TranslationService(
         repository,
         OpenAIJsonClient,
-        TranslationCache(repository.project_dir),
-        publication.write_document_srt,
+        TranslationCache(
+            RuntimePaths.discover().project_cache_dir(
+                repository.project_dir
+            )
+            / "translations"
+        ),
+        publication,
     )
 
 
@@ -131,14 +138,14 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
             encoding="utf-8",
         )
         with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-            asset = repository.import_external_asset(media, AssetKind.VIDEO)
+            asset = repository.catalog.import_external_asset(media, AssetKind.VIDEO)
             publication = SubtitlePublicationService(repository)
             source = SubtitleAcquisitionService(repository, publication).import_subtitle_file(
                 subtitle,
                 AssetService(repository, MediaProbe()),
             )
-            segments = repository.list_subtitle_segments(source.id)
-            assert repository.get_asset(source.asset_id).kind == AssetKind.SUBTITLE
+            segments = repository.subtitles.list_subtitle_segments(source.id)
+            assert repository.catalog.get_asset(source.asset_id).kind == AssetKind.SUBTITLE
             assert source.media_asset_id == asset.id
             assert [item.text for item in segments] == ["Hello", "World"]
             provider = LlmProviderSettings(
@@ -157,7 +164,7 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                     GlossaryTermSettings(source="Unused", target="未使用"),
                 ],
             )
-            translated_segments = repository.list_subtitle_segments(translated.id)
+            translated_segments = repository.subtitles.list_subtitle_segments(translated.id)
             assert translated.language == "fr"
             assert translated.media_asset_id == asset.id
             assert [item.text for item in translated_segments] == ["译文：Hello", "译文：World"]
@@ -181,7 +188,7 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 ],
             )
             assert len(OpenAICompatibleHandler.requests) == request_count
-            assert [item.text for item in repository.list_subtitle_segments(cached.id)] == [
+            assert [item.text for item in repository.subtitles.list_subtitle_segments(cached.id)] == [
                 "译文：Hello",
                 "译文：World",
             ]
@@ -193,7 +200,7 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 mode="proofread",
             )
             assert proofread.language == "en"
-            assert [item.text for item in repository.list_subtitle_segments(proofread.id)] == [
+            assert [item.text for item in repository.subtitles.list_subtitle_segments(proofread.id)] == [
                 "校对：Hello",
                 "校对：World",
             ]
@@ -204,13 +211,13 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 provider=provider,
                 mode="intelligent",
             )
-            intelligent_segments = repository.list_subtitle_segments(intelligent.id)
+            intelligent_segments = repository.subtitles.list_subtitle_segments(intelligent.id)
             assert [(item.start_frame, item.end_frame, item.text) for item in intelligent_segments] == [
                 (0, 60, "智能合并译文")
             ]
             assert intelligent_segments[0].source_segment_id is None
 
-            repository.save_subtitle_segments(
+            repository.subtitles.save_subtitle_segments(
                 translated.id,
                 [
                     translated_segments[0].model_copy(update={"text": "用户旧译文"}),
@@ -224,12 +231,12 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 target_language="fr",
                 provider=provider,
             )
-            assert [item.text for item in repository.list_subtitle_segments(source.id)] == [
+            assert [item.text for item in repository.subtitles.list_subtitle_segments(source.id)] == [
                 "Hello",
                 "World",
             ]
             assert [
-                item.text for item in repository.list_subtitle_segments(translated.id)
+                item.text for item in repository.subtitles.list_subtitle_segments(translated.id)
             ] == ["译文：Hello", "译文：World"]
 
             _translation_service(repository).translate_selected_to_document(
@@ -240,7 +247,7 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 provider=provider,
                 mode="standard",
             )
-            intelligent_retranslated = repository.list_subtitle_segments(intelligent.id)
+            intelligent_retranslated = repository.subtitles.list_subtitle_segments(intelligent.id)
             assert [item.text for item in intelligent_retranslated] == [
                 "译文：Hello",
                 "译文：World",
@@ -263,13 +270,13 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
             )
             highlight_service.set_selected(candidates[0].id, False)
             highlight_service.analyze_document(translated.id, provider=provider)
-            persisted_candidates = repository.list_highlights(asset.id)
+            persisted_candidates = repository.highlights.list_highlights(asset.id)
             assert len(persisted_candidates) == 1
             assert persisted_candidates[0].title == "用户修改的标题"
             assert persisted_candidates[0].selected is False
             highlight_service.set_selected(candidates[0].id, True)
             sequence = highlight_service.create_short_sequence(candidates[0].id)
-            timeline = repository.load_timeline(sequence.id)
+            timeline = repository.timeline.load_timeline(sequence.id)
             assert timeline.clips[0].asset_id == asset.id
             assert timeline.clips[0].duration == 60
 
@@ -281,7 +288,7 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 mode="intelligent",
             )
             assert [item.id for item in intelligently_edited] == [segments[1].id]
-            assert [item.text for item in repository.list_subtitle_segments(source.id)] == [
+            assert [item.text for item in repository.subtitles.list_subtitle_segments(source.id)] == [
                 "Hello",
                 "译文：World",
             ]
@@ -303,11 +310,11 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                         mode="standard",
                     ),
                 )
-                completed = project_app.tasks.wait(task.id, timeout=10)
+                completed = project_app.wait_for_task(task.id, timeout=10)
                 assert completed.status == TaskStatus.COMPLETED
                 assert completed.artifacts
-                assert (repository.project_dir / completed.artifacts[0]).is_file()
-                assert [item.text for item in repository.list_subtitle_segments(source.id)] == [
+                assert completed.artifacts[0].resolve(repository.project_dir).is_file()
+                assert [item.text for item in repository.subtitles.list_subtitle_segments(source.id)] == [
                     "译文：Hello",
                     "译文：World",
                 ]
@@ -332,8 +339,8 @@ def test_translation_batches_use_concurrency_context_and_single_line_fallback(
         media = tmp_path / "source.mp4"
         media.write_bytes(b"media")
         with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-            asset = repository.import_external_asset(media, AssetKind.VIDEO)
-            project = repository.get_project()
+            asset = repository.catalog.import_external_asset(media, AssetKind.VIDEO)
+            project = repository.catalog.get_project()
             source = SubtitleDocument(project_id=project.id, asset_id=asset.id, language="en")
             segments = [
                 SubtitleSegment(
@@ -344,7 +351,7 @@ def test_translation_batches_use_concurrency_context_and_single_line_fallback(
                 )
                 for index in range(21)
             ]
-            repository.create_subtitle_document(source, segments)
+            repository.subtitles.create_subtitle_document(source, segments)
             provider = LlmProviderSettings(
                 name="Local HTTP provider",
                 base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
@@ -357,7 +364,7 @@ def test_translation_batches_use_concurrency_context_and_single_line_fallback(
                 provider=provider,
             )
             assert OpenAICompatibleHandler.maximum_active_requests >= 2
-            assert [item.text for item in repository.list_subtitle_segments(translated.id)] == [
+            assert [item.text for item in repository.subtitles.list_subtitle_segments(translated.id)] == [
                 f"译文：__slow__ line {index}" for index in range(21)
             ]
             second_batch = next(
@@ -385,7 +392,7 @@ def test_translation_batches_use_concurrency_context_and_single_line_fallback(
                 )
                 for index in range(2)
             ]
-            repository.create_subtitle_document(fallback_source, fallback_segments)
+            repository.subtitles.create_subtitle_document(fallback_source, fallback_segments)
             before = len(OpenAICompatibleHandler.requests)
             fallback_document = _translation_service(repository).translate_document(
                 fallback_source.id,
@@ -393,7 +400,10 @@ def test_translation_batches_use_concurrency_context_and_single_line_fallback(
                 provider=provider,
             )
             assert len(OpenAICompatibleHandler.requests) - before == 3
-            assert [item.text for item in repository.list_subtitle_segments(fallback_document.id)] == [
+            assert [
+                item.text
+                for item in repository.subtitles.list_subtitle_segments(fallback_document.id)
+            ] == [
                 "译文：__force_fallback__ 0",
                 "译文：__force_fallback__ 1",
             ]

@@ -11,8 +11,13 @@ from mediaflow.automation.contracts import AUTOMATION_PROTOCOL, AUTOMATION_VERSI
 from mediaflow.automation.dispatcher import execute_request
 
 
+class JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise ValueError(message)
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = JsonArgumentParser(
         prog="mediaflow-cli",
         description="MediaFlow Pro headless editor interface. All output is JSON.",
     )

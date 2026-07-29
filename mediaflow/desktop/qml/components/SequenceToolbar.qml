@@ -9,6 +9,7 @@ Item {
 
     readonly property string mainSequencePrefix: qsTr("主")
     readonly property string shortSequencePrefix: qsTr("短")
+    property bool actionsEnabled: true
     signal createShortRequested
     signal editProfileRequested
 
@@ -32,17 +33,18 @@ Item {
         return qsTr("序列");
     }
 
-    AppButton {
+    AppMenuButton {
         id: sequenceMenuButton
         objectName: "sequenceMenuButton"
         anchors.fill: parent
-        text: qsTr("序列") + " ▾"
+        text: qsTr("序列")
+        quiet: true
         onClicked: sequenceMenu.open()
         ToolTip.visible: hovered
         ToolTip.text: qsTr("切换序列或管理当前序列")
     }
 
-    Popup {
+    AppPopover {
         id: sequenceMenu
         objectName: "sequenceMenuPopup"
         x: 0
@@ -51,11 +53,6 @@ Item {
         padding: 8
         modal: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: Theme.surfaceFloating
-            border.color: Theme.borderStrong
-            radius: Theme.radiusSmall
-        }
         contentItem: ColumnLayout {
             spacing: 6
             Text {
@@ -92,6 +89,7 @@ Item {
                 objectName: "createShortSequenceButton"
                 Layout.fillWidth: true
                 text: qsTr("新建短视频序列")
+                enabled: root.actionsEnabled
                 onClicked: {
                     root.createShortRequested();
                     sequenceMenu.close();
@@ -112,6 +110,7 @@ Item {
                 objectName: "editSequenceProfileButton"
                 Layout.fillWidth: true
                 text: workspaceController.profileConfirmed ? qsTr("序列设置 · %1 · %2").arg(workspaceController.profileLabel).arg(workspaceController.colorMode === "hdr10_bt2020_pq" ? "HDR10" : "SDR") : qsTr("序列设置")
+                enabled: root.actionsEnabled
                 onClicked: {
                     root.editProfileRequested();
                     sequenceMenu.close();

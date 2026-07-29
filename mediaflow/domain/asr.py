@@ -3,9 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Annotated, Protocol
 
-from pydantic import Field, computed_field, model_validator
+from pydantic import (
+    Field,
+    StringConstraints,
+    computed_field,
+    model_validator,
+)
 
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.progress import OperationProgress
@@ -13,6 +18,13 @@ from mediaflow.domain.project import AssetFingerprint
 from mediaflow.domain.settings import AsrSettings
 
 AsrProgress = Callable[[OperationProgress], None]
+NonEmptyText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+    ),
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,16 +68,16 @@ class TranscriptionRegionPlan(DomainModel):
 
 
 class TranscriptionSourcePlan(DomainModel):
-    asset_id: str
-    asset_name: str
+    asset_id: NonEmptyText
+    asset_name: NonEmptyText
     fingerprint: AssetFingerprint
-    regions: list[TranscriptionRegionPlan]
+    regions: list[TranscriptionRegionPlan] = Field(min_length=1)
 
 
 class TranscriptionPlan(DomainModel):
-    sequence_id: str
-    timeline_signature: str
-    dialogue_track_id: str
+    sequence_id: NonEmptyText
+    timeline_signature: NonEmptyText
+    dialogue_track_id: NonEmptyText
     timeline_start_frame: int = Field(ge=0)
     timeline_end_frame: int = Field(ge=0)
     fps_numerator: int = Field(gt=0)
@@ -77,6 +89,18 @@ class TranscriptionPlan(DomainModel):
     def valid_timeline_range(self) -> TranscriptionPlan:
         if self.timeline_end_frame < self.timeline_start_frame:
             raise ValueError("Transcription timeline range is invalid")
+        if (
+            self.sources
+            and self.timeline_end_frame <= self.timeline_start_frame
+        ):
+            raise ValueError(
+                "Executable transcription range must be positive"
+            )
+        asset_ids = [source.asset_id for source in self.sources]
+        if len(set(asset_ids)) != len(asset_ids):
+            raise ValueError(
+                "Transcription sources must have unique assets"
+            )
         return self
 
     @computed_field

@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import "."
 import "components"
 
-ScrollView {
+AppScrollView {
     id: scrollRoot
     objectName: "audioScroll"
     clip: true
@@ -15,6 +15,8 @@ ScrollView {
         width: scrollRoot.availableWidth
         spacing: 10
         property var taskData: ({})
+        readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+        readonly property bool canStartTasks: Boolean(workspaceController.actionCapabilities.canStartTasks)
         function refreshTask() {
             taskData = taskController.latestCommandTask(
                 "analyze_loudness", workspaceController.activeSequenceId);
@@ -58,6 +60,7 @@ ScrollView {
             Layout.fillWidth: true
             implicitHeight: clipAudioContent.implicitHeight + 22
             visible: timelineController.selectedClipId.length > 0
+            enabled: root.canEdit
             ColumnLayout {
                 id: clipAudioContent
                 anchors.left: parent.left
@@ -134,6 +137,7 @@ ScrollView {
             }
             AppButton {
                 text: qsTr("添加总线")
+                enabled: root.canEdit
                 onClicked: {
                     audioController.addAudioBus(newBusName.text);
                     newBusName.clear();
@@ -168,7 +172,7 @@ ScrollView {
                     }
                     AppButton {
                         text: audioController.audioAnalysisRunning ? qsTr("测量中…") : qsTr("重新测量")
-                        enabled: !audioController.audioAnalysisRunning
+                        enabled: root.canStartTasks && !audioController.audioAnalysisRunning
                         onClicked: audioController.analyzeLoudness()
                     }
                 }
@@ -242,6 +246,7 @@ ScrollView {
                         }
                         AppButton {
                             text: muted ? qsTr("取消静音") : qsTr("静音")
+                            enabled: root.canEdit
                             Accessible.name: muted ? qsTr("取消静音") : qsTr("静音")
                             ToolTip.visible: hovered
                             ToolTip.text: Accessible.name
@@ -249,6 +254,7 @@ ScrollView {
                         }
                         AppButton {
                             text: solo ? qsTr("取消独奏") : qsTr("独奏")
+                            enabled: root.canEdit
                             Accessible.name: solo ? qsTr("取消独奏") : qsTr("独奏")
                             ToolTip.visible: hovered
                             ToolTip.text: Accessible.name
@@ -263,8 +269,9 @@ ScrollView {
                             font.pixelSize: Theme.fontSizeCaption
                             Layout.preferredWidth: 48
                         }
-                        Slider {
+                        AppSlider {
                             Layout.fillWidth: true
+                            enabled: root.canEdit
                             from: -60
                             to: 12
                             value: gainDb
@@ -288,6 +295,7 @@ ScrollView {
                         }
                         AppComboBox {
                             Layout.fillWidth: true
+                            enabled: root.canEdit
                             visible: parentBusId.length > 0
                             model: audioController.audioBusesModel
                             textRole: "displayName"
@@ -297,6 +305,7 @@ ScrollView {
                         }
                         AppComboBox {
                             Layout.preferredWidth: 124
+                            enabled: root.canEdit
                             model: root.channelLayoutOptions
                             textRole: "label"
                             valueRole: "value"
@@ -355,6 +364,7 @@ ScrollView {
                     }
                     AppComboBox {
                         Layout.preferredWidth: 126
+                        enabled: root.canEdit
                         model: audioController.audioBusesModel
                         textRole: "displayName"
                         valueRole: "busId"
@@ -423,12 +433,12 @@ ScrollView {
                 textRole: "label"
                 valueRole: "value"
             }
-            AppButton {
-                text: "+"
+            AppIconButton {
+                iconName: "add"
+                flat: false
                 Accessible.name: qsTr("添加音频效果")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                enabled: audioController.selectedAudioBusId.length > 0
+                toolTipText: Accessible.name
+                enabled: root.canEdit && audioController.selectedAudioBusId.length > 0
                 onClicked: audioController.addAudioEffect(audioController.selectedAudioBusId, effectKind.currentValue)
             }
         }
@@ -443,6 +453,7 @@ ScrollView {
                 id: effectDelegate
                 required property string effectId
                 required property string kind
+                required property string displayName
                 required property int position
                 required property var model
                 width: effectList.width
@@ -454,10 +465,11 @@ ScrollView {
                 RowLayout {
                     anchors.fill: parent
                     anchors.margins: 8
-                    Text {
-                        text: "⋮⋮"
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSizeBodySmall
+                    AppIcon {
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
+                        iconName: "drag"
+                        iconColor: Theme.textMuted
                     }
                     Text {
                         Layout.fillWidth: true
@@ -465,28 +477,29 @@ ScrollView {
                         color: model.enabled ? Theme.text : Theme.textMuted
                         font.pixelSize: Theme.fontSizeCaption
                     }
-                    Button {
-                        text: "↑"
+                    AppIconButton {
+                        iconName: "up"
+                        flat: false
                         Accessible.name: qsTr("上移音频效果")
-                        ToolTip.visible: hovered
-                        ToolTip.text: Accessible.name
-                        enabled: position > 0
+                        toolTipText: Accessible.name
+                        enabled: root.canEdit && position > 0
                         implicitWidth: 28
                         implicitHeight: 26
                         onClicked: audioController.moveAudioEffect(effectId, position - 1)
                     }
-                    Button {
-                        text: "↓"
+                    AppIconButton {
+                        iconName: "down"
+                        flat: false
                         Accessible.name: qsTr("下移音频效果")
-                        ToolTip.visible: hovered
-                        ToolTip.text: Accessible.name
-                        enabled: position + 1 < effectList.count
+                        toolTipText: Accessible.name
+                        enabled: root.canEdit && position + 1 < effectList.count
                         implicitWidth: 28
                         implicitHeight: 26
                         onClicked: audioController.moveAudioEffect(effectId, position + 1)
                     }
-                    Switch {
+                    AppSwitch {
                         checked: model.enabled
+                        enabled: root.canEdit
                         Accessible.name: checked ? qsTr("停用音频效果") : qsTr("启用音频效果")
                         onToggled: audioController.setAudioEffectEnabled(effectId, checked)
                     }
@@ -502,6 +515,7 @@ ScrollView {
                 }
                 MouseArea {
                     id: dragHandle
+                    enabled: root.canEdit
                     width: 30
                     anchors.left: parent.left
                     anchors.top: parent.top
@@ -519,7 +533,7 @@ ScrollView {
             EmptyState {
                 anchors.fill: parent
                 visible: effectList.count === 0
-                iconText: "音"
+                iconName: "audio"
                 title: qsTr("选择一条音频总线")
                 description: qsTr("选择总线后可添加、旁通并配置内置效果。")
             }
@@ -529,6 +543,7 @@ ScrollView {
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(190, parameterList.contentHeight + 58)
             visible: audioController.selectedAudioEffectId.length > 0
+            enabled: root.canEdit
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 8
@@ -568,6 +583,7 @@ ScrollView {
                     delegate: ColumnLayout {
                         id: parameterDelegate
                         required property string key
+                        required property string label
                         required property real minimum
                         required property real maximum
                         required property real step
@@ -592,7 +608,7 @@ ScrollView {
                                 font.pixelSize: Theme.fontSizeCaption
                             }
                         }
-                        Slider {
+                        AppSlider {
                             Layout.fillWidth: true
                             visible: parameterDelegate.valueType === "number"
                             from: parameterDelegate.minimum

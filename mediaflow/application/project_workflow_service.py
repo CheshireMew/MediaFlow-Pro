@@ -64,11 +64,11 @@ class ProjectWorkflowService:
         )
 
     def active_run(self) -> WorkflowRun | None:
-        runs = self.documents.list_workflow_runs(active_only=True)
+        runs = self.documents.catalog.list_workflow_runs(active_only=True)
         return runs[0] if runs else None
 
     def set_project_mode(self, value: bool | None) -> None:
-        self.documents.set_workflow_auto_continue(value)
+        self.documents.catalog.set_workflow_auto_continue(value)
         self.update_settings(self.settings)
 
     def begin_import(
@@ -79,7 +79,8 @@ class ProjectWorkflowService:
         source_task_id: str = "",
     ) -> WorkflowUpdate:
         if source_task_id and any(
-            run.payload.source_task_id == source_task_id for run in self.documents.list_workflow_runs()
+            run.payload.source_task_id == source_task_id
+            for run in self.documents.catalog.list_workflow_runs()
         ):
             return WorkflowUpdate(selected_asset_ids=[asset_id])
         run = self.coordinator.begin(
@@ -108,7 +109,7 @@ class ProjectWorkflowService:
         self.coordinator.mark_running(run_id, task_ids=[task_id])
 
     def cancel(self, run_id: str) -> WorkflowUpdate:
-        run = self.documents.get_workflow_run(run_id)
+        run = self.documents.catalog.get_workflow_run(run_id)
         for task_id in run.payload.task_ids:
             try:
                 task = self.tasks.get(str(task_id))
@@ -119,13 +120,38 @@ class ProjectWorkflowService:
         self.coordinator.cancel(run_id)
         return WorkflowUpdate()
 
+    def skip(self, run_id: str) -> WorkflowUpdate:
+        run = self.documents.catalog.get_workflow_run(run_id)
+        if run.status in {WorkflowStatus.COMPLETED, WorkflowStatus.CANCELLED}:
+            return WorkflowUpdate()
+        skippable = {
+            WorkflowStage.PREPARE_MEDIA,
+            WorkflowStage.TRANSCRIBE,
+            WorkflowStage.TRANSLATE,
+            WorkflowStage.HIGHLIGHT,
+            WorkflowStage.CREATE_SHORTS,
+        }
+        if run.stage not in skippable:
+            raise ValueError(f"当前工作流阶段不能跳过：{run.stage.value}")
+        for task_id in run.payload.task_ids:
+            try:
+                task = self.tasks.get(str(task_id))
+            except KeyError:
+                continue
+            if task.status.is_active:
+                self.tasks.cancel(task.id)
+        advanced = self.coordinator.advance(run.id)
+        return self._continue_if_configured(advanced).merge(
+            WorkflowUpdate(status_message=f"已跳过工作流阶段：{run.stage.value}")
+        )
+
     def continue_run(
         self,
         run_id: str,
         *,
         target_language: str = "",
     ) -> WorkflowUpdate:
-        run = self.documents.get_workflow_run(run_id)
+        run = self.documents.catalog.get_workflow_run(run_id)
         if run.status in {WorkflowStatus.COMPLETED, WorkflowStatus.CANCELLED}:
             return WorkflowUpdate()
         if run.status == WorkflowStatus.RUNNING:
@@ -137,7 +163,7 @@ class ProjectWorkflowService:
         offline = [
             asset_id
             for asset_id in run.asset_ids
-            if self.documents.get_asset(asset_id).status.value == "offline"
+            if self.documents.catalog.get_asset(asset_id).status.value == "offline"
         ]
         if offline:
             self.coordinator.block(run.id, "workflow_offline_assets")
@@ -155,7 +181,7 @@ class ProjectWorkflowService:
         if link is None:
             return WorkflowUpdate()
         try:
-            run = self.documents.get_workflow_run(link.run_id)
+            run = self.documents.catalog.get_workflow_run(link.run_id)
         except KeyError:
             return WorkflowUpdate()
         if run.status != WorkflowStatus.RUNNING or run.stage != link.stage:
@@ -177,7 +203,7 @@ class ProjectWorkflowService:
         return self._stage_handlers[run.stage].complete(self._stage_context(), run, tasks)
 
     def reconcile_interrupted(self) -> None:
-        for run in self.documents.list_workflow_runs(active_only=True):
+        for run in self.documents.catalog.list_workflow_runs(active_only=True):
             if run.status != WorkflowStatus.RUNNING:
                 continue
             task_ids = run.payload.task_ids
@@ -209,6 +235,12 @@ class ProjectWorkflowService:
                 continue
             if existing.status.is_active:
                 self.tasks.cancel(existing.id)
+        stage_attempt = run.payload.stage_attempt + 1
+        attempt_payload = (
+            payload or WorkflowPayloadPatch()
+        ).model_copy(
+            update={"stage_attempt": stage_attempt}
+        )
         task_ids = [
             self._start_task(
                 command.model_copy(
@@ -218,11 +250,22 @@ class ProjectWorkflowService:
                 ),
                 asset_ids,
                 sequence_id=run.sequence_id,
+                idempotency_key=(
+                    f"workflow:{run.id}:{run.stage.value}:"
+                    f"{stage_attempt}:{index}"
+                ),
             ).id
-            for command, asset_ids in specs
+            for index, (command, asset_ids) in enumerate(specs)
         ]
-        self.coordinator.mark_running(run.id, task_ids=task_ids, payload=payload)
-        return WorkflowUpdate()
+        self.coordinator.mark_running(
+            run.id,
+            task_ids=task_ids,
+            payload=attempt_payload,
+        )
+        update = WorkflowUpdate()
+        for task_id in task_ids:
+            update = update.merge(self.handle_task(self.tasks.get(task_id)))
+        return update
 
     def _stage_context(self) -> WorkflowStageContext:
         return WorkflowStageContext(

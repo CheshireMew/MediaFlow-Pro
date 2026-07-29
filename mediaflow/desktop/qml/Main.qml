@@ -10,18 +10,24 @@ ApplicationWindow {
     id: window
     width: 1600
     height: 980
-    minimumWidth: 1180
-    minimumHeight: 720
+    minimumWidth: Screen.desktopAvailableWidth > 0
+        ? Math.min(1180, Screen.desktopAvailableWidth) : 1180
+    minimumHeight: Screen.desktopAvailableHeight > 0
+        ? Math.min(720, Screen.desktopAvailableHeight) : 720
     visible: true
     flags: Qt.Window | Qt.FramelessWindowHint
     title: workspaceController.hasProject ? workspaceController.projectName : "MediaFlow Pro"
     readonly property bool downloadPlanVisible: downloadPlanDialog.visible
+    property bool projectVersionsVisible: false
     readonly property int downloadPlanEntryCount: downloadEntries.count
     readonly property string defaultProjectDirectory: String(
         settingsController.settingsData.defaultProjectDirectory || "")
     readonly property string defaultDownloadDirectory: String(
         settingsController.settingsData.downloadDirectory || "")
     readonly property string downloadDestinationLabel: defaultDownloadDirectory
+    property bool windowStateReady: false
+    property int restorableWidth: 1600
+    property int restorableHeight: 980
     readonly property var downloadResolutionOptions: {
         const options = [{label: qsTr("最佳可用质量"), value: "best"}]
         const heights = taskController.downloadPlanData.available_heights || []
@@ -48,43 +54,84 @@ ApplicationWindow {
         downloadFilename.clear()
         playlistItems.clear()
     }
+    function clampWindowToScreen() {
+        if (visibility !== Window.Windowed)
+            return;
+        const availableWidth = Screen.desktopAvailableWidth > 0
+            ? Screen.desktopAvailableWidth : 1600;
+        const availableHeight = Screen.desktopAvailableHeight > 0
+            ? Screen.desktopAvailableHeight : 980;
+        width = Math.min(availableWidth, Math.max(minimumWidth, width));
+        height = Math.min(availableHeight, Math.max(minimumHeight, height));
+        restorableWidth = width;
+        restorableHeight = height;
+    }
     color: Theme.window
     palette.window: Theme.window
     palette.windowText: Theme.text
-    palette.base: Theme.surfaceRaised
+    palette.base: Theme.field
     palette.alternateBase: Theme.surface
     palette.text: Theme.text
-    palette.button: Theme.surfaceRaised
+    palette.button: Theme.control
     palette.buttonText: Theme.text
     palette.highlight: Theme.accent
-    palette.highlightedText: "white"
-    palette.light: Theme.surfaceHover
-    palette.midlight: Theme.surfaceFloating
-    palette.mid: Theme.borderStrong
+    palette.highlightedText: Theme.onAccent
+    palette.light: Theme.controlHover
+    palette.midlight: Theme.surfaceRaised
+    palette.mid: Theme.border
     palette.dark: Theme.surfaceSunken
-    palette.shadow: "#000000"
-    palette.brightText: Theme.text
+    palette.shadow: Theme.shadow
+    palette.brightText: Theme.textStrong
     palette.link: Theme.accentHover
     palette.linkVisited: Theme.accent
     palette.placeholderText: Theme.textMuted
-    palette.toolTipBase: Theme.surfaceRaised
+    palette.toolTipBase: Theme.popup
     palette.toolTipText: Theme.text
-    palette.disabled.windowText: Theme.textMuted
-    palette.disabled.text: Theme.textMuted
-    palette.disabled.buttonText: Theme.textMuted
+    palette.disabled.windowText: Theme.textDisabled
+    palette.disabled.text: Theme.textDisabled
+    palette.disabled.buttonText: Theme.textDisabled
     Component.onCompleted: {
         const data = settingsController.settingsData
-        width = Math.max(minimumWidth, Number(data.windowWidth || 1600))
-        height = Math.max(minimumHeight, Number(data.windowHeight || 980))
+        const availableWidth = Screen.desktopAvailableWidth > 0
+            ? Screen.desktopAvailableWidth : 1600
+        const availableHeight = Screen.desktopAvailableHeight > 0
+            ? Screen.desktopAvailableHeight : 980
+        restorableWidth = Math.min(
+            availableWidth, Math.max(minimumWidth, Number(data.windowWidth || 1600)))
+        restorableHeight = Math.min(
+            availableHeight, Math.max(minimumHeight, Number(data.windowHeight || 980)))
+        width = restorableWidth
+        height = restorableHeight
+        windowStateReady = true
+        if (Boolean(data.windowMaximized))
+            Qt.callLater(window.showMaximized)
     }
-    onClosing: settingsController.saveWindowSize(width, height)
+    onWidthChanged: {
+        if (windowStateReady && visibility === Window.Windowed)
+            restorableWidth = width;
+    }
+    onHeightChanged: {
+        if (windowStateReady && visibility === Window.Windowed)
+            restorableHeight = height;
+    }
+    onMinimumWidthChanged: {
+        if (windowStateReady)
+            Qt.callLater(clampWindowToScreen);
+    }
+    onMinimumHeightChanged: {
+        if (windowStateReady)
+            Qt.callLater(clampWindowToScreen);
+    }
+    onScreenChanged: Qt.callLater(clampWindowToScreen)
+    onClosing: settingsController.saveWindowState(
+        restorableWidth, restorableHeight, visibility === Window.Maximized)
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
         WindowTitleBar {
             Layout.fillWidth: true
-            Layout.preferredHeight: 42
+            Layout.preferredHeight: 48
             hostWindow: window
         }
         Loader {
@@ -104,16 +151,24 @@ ApplicationWindow {
         onAccepted: settingsController.setDefaultDownloadDirectory(selectedFolder.toLocalFile())
     }
 
-    Dialog {
+    AppDialog {
         id: downloadPlanDialog
+        objectName: "downloadPlanDialog"
         anchors.centerIn: parent
         width: Math.min(900, window.width - 64)
+        height: Math.min(760, window.height - 48)
         modal: true
         title: workspaceController.hasProject ? qsTr("确认下载") : qsTr("视频信息与下载设置")
         standardButtons: Dialog.NoButton
         closePolicy: Popup.NoAutoClose
         onOpened: Qt.callLater(window.syncDownloadFormFromSettings)
-        contentItem: ColumnLayout {
+        contentItem: AppScrollView {
+            id: downloadPlanScroll
+            objectName: "downloadPlanScroll"
+            clip: true
+            contentWidth: availableWidth
+            ColumnLayout {
+            width: downloadPlanScroll.availableWidth
             spacing: 10
             Text {
                 Layout.fillWidth: true
@@ -310,9 +365,14 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     primary: true
                     enabled: taskController.downloadPlanReady
+                        && (workspaceController.hasProject
+                            ? Boolean(workspaceController.actionCapabilities.canStartTasks)
+                            : Boolean(workspaceController.actionCapabilities.canCreateProject))
                     text: workspaceController.hasProject
                           ? qsTr("开始下载") : qsTr("下载并新建项目")
                     onClicked: {
+                        if (!enabled)
+                            return;
                         if (workspaceController.hasProject) {
                             taskController.submitDownloadPlan(
                                 String(downloadResolution.currentValue),
@@ -334,35 +394,57 @@ ApplicationWindow {
                 }
             }
         }
+        }
     }
 
-    Popup {
+    AppPopover {
         id: errorPopup
         x: (window.width - width) / 2
         y: 54
         width: Math.min(560, window.width - 48)
-        height: errorText.implicitHeight + 28
+        height: Math.min(300, Math.max(112, errorText.implicitHeight + 76))
+        danger: true
         modal: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: "#402127"
-            border.color: Theme.danger
-            radius: Theme.radius
+        contentItem: ColumnLayout {
+            spacing: 8
+            AppScrollView {
+                id: errorScroll
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+                Text {
+                    id: errorText
+                    width: errorScroll.availableWidth
+                    color: Theme.textStrong
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontSizeBodySmall
+                    textFormat: Text.PlainText
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: qsTr("复制详情")
+                    onClicked: taskController.copyErrorDetails(errorText.text)
+                }
+                AppButton {
+                    text: qsTr("关闭")
+                    onClicked: errorPopup.close()
+                }
+            }
         }
-        contentItem: Text {
-            id: errorText
-            color: "#ffd8dc"
-            wrapMode: Text.WordWrap
-            font.pixelSize: Theme.fontSizeBodySmall
-            verticalAlignment: Text.AlignVCenter
-        }
-        Timer { id: errorTimer; interval: 5000; onTriggered: errorPopup.close() }
+        Timer { id: errorTimer; interval: 12000; onTriggered: errorPopup.close() }
     }
 
     Connections {
         target: workspaceController
         function onErrorOccurred(message) {
-            errorText.text = message + " [" + workspaceController.lastErrorId + "]"
+            const reference = String(workspaceController.lastErrorId || "")
+            errorText.text = message + (reference.length > 0
+                ? " [" + reference + "]" : "")
             errorPopup.open()
             errorTimer.restart()
         }
@@ -377,8 +459,9 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         z: 900
-        color: "transparent"
-        border.color: window.visibility === Window.Maximized ? "transparent" : Theme.borderStrong
+        color: Theme.transparent
+        border.color: window.visibility === Window.Maximized
+            ? Theme.transparent : Theme.borderStrong
         border.width: 1
     }
 

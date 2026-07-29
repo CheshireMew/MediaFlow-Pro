@@ -8,8 +8,16 @@ Rectangle {
     id: root
     objectName: "downloadProgressBanner"
     visible: taskController.downloadProgressVisible
-    color: "#132b37"
-    border.color: Theme.accent
+    color: Theme.surfaceRaised
+    border.color: Theme.transparent
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 1
+        color: Theme.divider
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -17,11 +25,11 @@ Rectangle {
         anchors.rightMargin: 14
         spacing: 14
 
-        Text {
-            text: "↓"
-            color: Theme.accentHover
-            font.pixelSize: 24
-            font.weight: Font.Bold
+        AppIcon {
+            Layout.preferredWidth: 24
+            Layout.preferredHeight: 24
+            iconName: "download"
+            iconColor: Theme.accentHover
         }
         ColumnLayout {
             Layout.fillWidth: true
@@ -45,7 +53,7 @@ Rectangle {
                     font.pixelSize: Theme.fontSizeCaption
                 }
             }
-            ProgressBar {
+            AppProgressBar {
                 id: downloadProgressBar
                 objectName: "downloadProgressBar"
                 Layout.fillWidth: true
@@ -62,6 +70,7 @@ Rectangle {
         AppButton {
             text: qsTr("取消下载")
             danger: true
+            enabled: workspaceController.actionCapabilities.canManageWorkflow
             onClicked: workspaceController.cancelWorkflow(workspaceController.workflowRunId)
         }
     }

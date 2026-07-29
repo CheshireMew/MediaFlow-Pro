@@ -4,10 +4,10 @@ import ".."
 
 MenuSeparator {
     padding: 2
-    verticalPadding: 7
+    verticalPadding: 6
     contentItem: Rectangle {
         implicitWidth: 208
         implicitHeight: 1
-        color: Theme.borderStrong
+        color: Theme.divider
     }
 }

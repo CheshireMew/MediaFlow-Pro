@@ -116,6 +116,10 @@ class TaskStatus(DomainEnum):
 
     @property
     def is_consumable(self) -> bool:
+        return self.is_terminal
+
+    @property
+    def is_settled(self) -> bool:
         return self.is_terminal or self == TaskStatus.PAUSED
 
     @property

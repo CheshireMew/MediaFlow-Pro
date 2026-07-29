@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from mediaflow.application.ports import AssetServiceDocuments, FingerprintFile, MediaProbePort
+from mediaflow.application.timeline_clock import reframe_timeline_clock
+from mediaflow.application.timeline_validator import TimelineValidator
 from mediaflow.domain.enums import AssetKind, AssetOrigin, AssetStatus
-from mediaflow.domain.project import Asset, ProjectProfile, SequenceInOut
-from mediaflow.domain.timebase import reframe_frames
-from mediaflow.domain.timeline import Clip, ClipAudio, TimelineState, Transition
+from mediaflow.domain.project import Asset, ProjectProfile
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAssetRegistration:
+    candidate: Asset
+    asset: Asset
 
 
 class AssetService:
@@ -31,17 +39,41 @@ class AssetService:
         path: str | Path,
         *,
         expected_kind: AssetKind | None = None,
+        check_cancelled: Callable[[], None] | None = None,
     ) -> Asset:
+        prepared = self.prepare_external(
+            path,
+            expected_kind=expected_kind,
+        )
+        if check_cancelled is not None:
+            check_cancelled()
+        with self.repository.transaction():
+            return self.commit_prepared(prepared)
+
+    def prepare_external(
+        self,
+        path: str | Path,
+        *,
+        expected_kind: AssetKind | None = None,
+    ) -> PreparedAssetRegistration:
         source = Path(path).resolve(strict=True)
-        project = self.repository.get_project()
-        main_sequence = self.repository.get_sequence(project.main_sequence_id)
+        project = self.repository.catalog.get_project()
+        main_sequence = self.repository.catalog.get_sequence(project.main_sequence_id)
         probe = self._media_probe.probe(source, timeline_profile=main_sequence.profile)
         if expected_kind is not None and probe.kind != expected_kind:
             raise ValueError(f"素材类型必须是 {expected_kind.value}，实际识别为 {probe.kind.value}")
-        asset = self.repository.import_external_asset(source, probe.kind)
-        return self.repository.update_asset(asset.model_copy(update={"metadata": probe.metadata}))
+        candidate = self.repository.catalog.prepare_external_asset(
+            source,
+            probe.kind,
+        )
+        asset = candidate.model_copy(update={"metadata": probe.metadata})
+        return PreparedAssetRegistration(candidate=candidate, asset=asset)
 
-    def register_output(self, path: str | Path, origin: AssetOrigin) -> Asset:
+    def prepare_output(
+        self,
+        path: str | Path,
+        origin: AssetOrigin,
+    ) -> PreparedAssetRegistration:
         source = Path(path).resolve(strict=True)
         try:
             source.relative_to(self.repository.project_dir)
@@ -49,27 +81,53 @@ class AssetService:
             managed = False
         else:
             managed = True
-        project = self.repository.get_project()
-        main_sequence = self.repository.get_sequence(project.main_sequence_id)
-        probe = self._media_probe.probe(source, timeline_profile=main_sequence.profile)
-        asset = self.repository.import_external_asset(source, probe.kind)
-        return self.repository.update_asset(
+        project = self.repository.catalog.get_project()
+        main_sequence = self.repository.catalog.get_sequence(project.main_sequence_id)
+        probe = self._media_probe.probe(
+            source,
+            timeline_profile=main_sequence.profile,
+        )
+        candidate = self.repository.catalog.prepare_external_asset(
+            source,
+            probe.kind,
+        )
+        asset = candidate.model_copy(
+            update={
+                "origin": origin,
+                "managed": managed,
+                "metadata": probe.metadata,
+            }
+        )
+        return PreparedAssetRegistration(candidate=candidate, asset=asset)
+
+    def commit_prepared(self, prepared: PreparedAssetRegistration) -> Asset:
+        asset = self.repository.catalog.commit_external_asset(
+            prepared.candidate
+        )
+        if asset.id != prepared.asset.id:
+            raise RuntimeError(
+                f"素材在准备后被另一个操作登记，请重试：{prepared.asset.name}"
+            )
+        return self.repository.catalog.update_asset(
             asset.model_copy(
                 update={
-                    "origin": origin,
-                    "managed": managed,
-                    "metadata": probe.metadata,
+                    "origin": prepared.asset.origin,
+                    "managed": prepared.asset.managed,
+                    "metadata": prepared.asset.metadata,
                 }
             )
         )
 
+    def register_output(self, path: str | Path, origin: AssetOrigin) -> Asset:
+        return self.commit_prepared(self.prepare_output(path, origin))
+
     def refresh_all(self) -> list[Asset]:
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         refreshed: list[Asset] = []
-        for asset in self.repository.list_assets():
-            current = self.repository.refresh_asset_status(asset.id)
-            source = self.repository.resolve_asset_path(current)
+        for asset in self.repository.catalog.list_assets():
+            current = self.repository.catalog.refresh_asset_status(asset.id)
+            source = self.repository.catalog.resolve_asset_path(current)
             if source.is_file() and (
                 current.metadata.duration_frames == 0
                 or (current.kind == AssetKind.VIDEO and not current.metadata.width)
@@ -77,11 +135,11 @@ class AssetService:
                 try:
                     metadata = self._media_probe.probe(source, timeline_profile=profile).metadata
                 except Exception:
-                    current = self.repository.update_asset(
+                    current = self.repository.catalog.update_asset(
                         current.model_copy(update={"status": AssetStatus.ERROR})
                     )
                 else:
-                    current = self.repository.update_asset(
+                    current = self.repository.catalog.update_asset(
                         current.model_copy(update={"metadata": metadata, "status": AssetStatus.ONLINE})
                     )
             refreshed.append(current)
@@ -94,18 +152,18 @@ class AssetService:
         *,
         allow_different_content: bool = False,
     ) -> Asset:
-        asset = self.repository.relink_asset(
+        asset = self.repository.catalog.relink_asset(
             asset_id,
             replacement,
             allow_different_content=allow_different_content,
         )
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         metadata = self._media_probe.probe(
-            self.repository.resolve_asset_path(asset),
+            self.repository.catalog.resolve_asset_path(asset),
             timeline_profile=profile,
         ).metadata
-        return self.repository.update_asset(asset.model_copy(update={"metadata": metadata}))
+        return self.repository.catalog.update_asset(asset.model_copy(update={"metadata": metadata}))
 
     def relink_offline_from_directory(self, directory: str | Path) -> tuple[list[Asset], list[Asset]]:
         """Relink only exact fingerprint matches found below a user-selected directory."""
@@ -116,7 +174,7 @@ class AssetService:
             raise RuntimeError("Batch relink requires a fingerprint provider")
         offline = [
             asset
-            for asset in self.repository.list_assets()
+            for asset in self.repository.catalog.list_assets()
             if asset.status == AssetStatus.OFFLINE and not asset.managed
         ]
         expected_sizes = {asset.fingerprint.size for asset in offline if asset.fingerprint is not None}
@@ -149,14 +207,14 @@ class AssetService:
                 unresolved.append(asset)
                 continue
             matches.sort(key=lambda item: (item.name != asset.name, str(item).lower()))
-            relinked.append(self.repository.relink_asset(asset.id, matches[0]))
+            relinked.append(self.repository.catalog.relink_asset(asset.id, matches[0]))
         return relinked, unresolved
 
     def suggested_profile(self, asset_id: str) -> ProjectProfile | None:
-        asset = self.repository.get_asset(asset_id)
+        asset = self.repository.catalog.get_asset(asset_id)
         if asset.kind != AssetKind.VIDEO:
             return None
-        source = self.repository.resolve_asset_path(asset)
+        source = self.repository.catalog.resolve_asset_path(asset)
         return self._media_probe.probe(source).suggested_profile
 
     def adopt_main_profile_from_video(self, asset_id: str) -> Asset:
@@ -166,15 +224,18 @@ class AssetService:
         main-timeline edits are therefore reframed in the same transaction instead
         of silently changing their wall-clock timing.
         """
-        asset = self.repository.get_asset(asset_id)
+        asset = self.repository.catalog.get_asset(asset_id)
         if asset.kind != AssetKind.VIDEO:
             raise ValueError("Only a video can define the main sequence profile")
-        source = self.repository.resolve_asset_path(asset)
+        source = self.repository.catalog.resolve_asset_path(asset)
         probe = self._media_probe.probe(source)
         if probe.suggested_profile is None:
             raise ValueError("The video does not provide a usable project profile")
-        project = self.repository.get_project()
-        state = self.repository.load_timeline(project.main_sequence_id)
+        project = self.repository.catalog.get_project()
+        source_snapshot = self.repository.timeline.capture_main_frame_clock(
+            project.main_sequence_id
+        )
+        state = source_snapshot.timeline
         profile = probe.suggested_profile
         old_profile = state.sequence.profile
         if profile == old_profile and state.sequence.profile_confirmed:
@@ -182,139 +243,40 @@ class AssetService:
 
         if profile == old_profile:
             state.sequence = state.sequence.model_copy(update={"profile_confirmed": True})
-            self.repository.save_timeline(state)
+            self.repository.timeline.save_timeline(state)
             return asset
 
-        in_out = state.sequence.in_out
-        updated_state = TimelineState(
-            sequence=state.sequence.model_copy(
-                update={
-                    "profile": profile,
-                    "profile_confirmed": True,
-                    "in_out": (
-                        SequenceInOut(
-                            in_frame=reframe_frames(in_out.in_frame, old_profile, profile),
-                            out_frame=max(
-                                reframe_frames(in_out.in_frame, old_profile, profile) + 1,
-                                reframe_frames(in_out.out_frame, old_profile, profile),
-                            ),
-                        )
-                        if in_out is not None
-                        else None
-                    ),
-                }
-            ),
-            tracks=state.tracks,
-            clips=[self._reframe_clip(item, old_profile, profile) for item in state.clips],
-            compounds=state.compounds,
-            transitions=[self._reframe_transition(item, old_profile, profile) for item in state.transitions],
-            markers=[
-                item.model_copy(update={"frame": reframe_frames(item.frame, old_profile, profile)})
-                for item in state.markers
-            ],
-            ranges=[
-                item.model_copy(
-                    update={
-                        "start_frame": reframe_frames(item.start_frame, old_profile, profile),
-                        "end_frame": max(
-                            reframe_frames(item.start_frame, old_profile, profile) + 1,
-                            reframe_frames(item.end_frame, old_profile, profile),
-                        ),
-                    }
-                )
-                for item in state.ranges
-            ],
-            web_states=state.web_states,
+        stored_assets = self.repository.catalog.list_assets()
+        refreshed_metadata = {}
+        for item in stored_assets:
+            item_source = self.repository.catalog.resolve_asset_path(item)
+            if (
+                item.kind in {AssetKind.VIDEO, AssetKind.AUDIO}
+                and item.status == AssetStatus.ONLINE
+                and item_source.is_file()
+            ):
+                refreshed_metadata[item.id] = self._media_probe.probe(
+                    item_source,
+                    timeline_profile=profile,
+                ).metadata
+        change = reframe_timeline_clock(
+            state,
+            stored_assets,
+            profile,
+            asset_source_profile=old_profile,
+            metadata_overrides=refreshed_metadata,
+            invalidate_proxies=True,
         )
-        updated_assets: list[Asset] = []
-        for item in self.repository.list_assets():
-            item_source = self.repository.resolve_asset_path(item)
-            if item_source.is_file():
-                metadata = self._media_probe.probe(item_source, timeline_profile=profile).metadata
-            else:
-                metadata = item.metadata.model_copy(
-                    update={
-                        "duration_frames": reframe_frames(
-                            item.metadata.duration_frames,
-                            old_profile,
-                            profile,
-                        )
-                    }
-                )
-            updated_assets.append(
-                item.model_copy(
-                    update={
-                        "metadata": metadata,
-                        "proxy_path": None,
-                        "sdr_preview_proxy_path": None,
-                    }
-                )
-            )
-
-        self.repository.apply_main_profile_change(
-            updated_state,
-            updated_assets,
+        TimelineValidator(self.repository).validate(
+            change.state,
+            baseline=state,
+            allow_locked_changes=True,
+            assets={item.id: item for item in change.assets},
+        )
+        self.repository.timeline.change_main_frame_clock(
+            source_snapshot,
+            change.state,
+            list(change.assets),
             old_profile=old_profile,
         )
-        return self.repository.get_asset(asset_id)
-
-    @classmethod
-    def _reframe_clip(
-        cls,
-        clip: Clip,
-        old_profile: ProjectProfile,
-        new_profile: ProjectProfile,
-    ) -> Clip:
-        return clip.model_copy(
-            update={
-                "timeline_start": reframe_frames(clip.timeline_start, old_profile, new_profile),
-                "source_in": reframe_frames(clip.source_in, old_profile, new_profile),
-                "duration": max(
-                    1,
-                    reframe_frames(clip.timeline_end, old_profile, new_profile)
-                    - reframe_frames(clip.timeline_start, old_profile, new_profile),
-                ),
-                "audio": ClipAudio(
-                    gain_db=clip.audio.gain_db,
-                    pan=clip.audio.pan,
-                    fade_in_frames=reframe_frames(
-                        clip.audio.fade_in_frames,
-                        old_profile,
-                        new_profile,
-                    ),
-                    fade_out_frames=reframe_frames(
-                        clip.audio.fade_out_frames,
-                        old_profile,
-                        new_profile,
-                    ),
-                ),
-                "transform_keyframes": [
-                    item.model_copy(
-                        update={
-                            "source_frame": reframe_frames(
-                                item.source_frame,
-                                old_profile,
-                                new_profile,
-                            )
-                        }
-                    )
-                    for item in clip.transform_keyframes
-                ],
-            }
-        )
-
-    @classmethod
-    def _reframe_transition(
-        cls,
-        transition: Transition,
-        old_profile: ProjectProfile,
-        new_profile: ProjectProfile,
-    ) -> Transition:
-        return transition.model_copy(
-            update={
-                "duration": max(
-                    1,
-                    reframe_frames(transition.duration, old_profile, new_profile),
-                )
-            }
-        )
+        return self.repository.catalog.get_asset(asset_id)

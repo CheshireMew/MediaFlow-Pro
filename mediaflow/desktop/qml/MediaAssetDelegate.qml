@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import "."
+import "components"
 
 Rectangle {
     id: root
@@ -22,13 +23,41 @@ Rectangle {
     readonly property bool largeThumbnailMode: viewMode === "large_thumbnails"
     readonly property bool hasVisualPreview: status === "online"
         && (kind === "video" || kind === "image") && previewUrl.length > 0
+    readonly property bool canEdit:
+        workspaceController.actionCapabilities.canEdit
     property var draggedAssetIds: mediaController.isAssetSelected(assetId)
         ? mediaController.selectedAssetIds : [assetId]
 
-    radius: listMode ? 4 : 6
+    radius: listMode ? Theme.radiusSmall : Theme.radius
     color: mediaController.isAssetSelected(assetId)
         ? Theme.accentSoft : pointer.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-    border.color: mediaController.isAssetSelected(assetId) ? Theme.accent : Theme.border
+    border.color: mediaController.isAssetSelected(assetId)
+        ? Theme.accent
+        : pointer.containsMouse ? Theme.borderStrong : Theme.borderSubtle
+    border.width: activeFocus ? 2 : 1
+    activeFocusOnTab: true
+    Accessible.name: name
+    Accessible.description: detailLabel()
+    Accessible.role: Accessible.ListItem
+    Accessible.selected: mediaController.isAssetSelected(assetId)
+
+    Keys.onSpacePressed: function (event) {
+        mediaController.selectAsset(
+            root.assetId, (event.modifiers & Qt.ControlModifier) !== 0);
+        event.accepted = true;
+    }
+    Keys.onReturnPressed: function (event) {
+        mediaController.selectAsset(root.assetId, false);
+        if (root.canEdit && root.status === "online")
+            root.addRequested(root.assetId);
+        event.accepted = true;
+    }
+    Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_Menu) {
+            root.contextRequested(root.assetId);
+            event.accepted = true;
+        }
+    }
 
     function kindLabel() {
         if (kind === "video")
@@ -57,12 +86,12 @@ Rectangle {
         y: root.listMode ? Math.round((root.height - height) / 2) : 6
         width: root.listMode ? 36 : root.width - 12
         height: root.listMode ? 22 : root.largeThumbnailMode ? 86 : 52
-        radius: root.listMode ? 3 : 5
+        radius: root.listMode ? 4 : Theme.radiusSmall
         clip: true
-        color: root.kind === "audio" ? "#382d54"
-            : root.kind === "image" ? "#493b27"
-            : root.kind === "subtitle" ? "#3c3155"
-            : root.kind === "web" ? "#214b45" : "#173754"
+        color: root.kind === "audio" ? Theme.audioSoft
+            : root.kind === "image" ? Theme.imageSoft
+            : root.kind === "subtitle" ? Theme.subtitleSoft
+            : root.kind === "web" ? Theme.webSoft : Theme.videoSoft
 
         Image {
             id: previewImage
@@ -76,16 +105,16 @@ Rectangle {
             mipmap: true
             visible: root.hasVisualPreview
         }
-        Text {
+        AppIcon {
             objectName: "assetKindIcon"
             anchors.centerIn: parent
-            text: root.kind === "audio" ? "♫"
-                : root.kind === "image" ? "▧"
-                : root.kind === "subtitle" ? "CC"
-                : root.kind === "web" ? "◇" : "▶"
-            color: Theme.text
-            font.pixelSize: root.listMode ? Theme.fontSizeBodySmall
-                : root.largeThumbnailMode ? 28 : 22
+            width: root.listMode ? 15 : root.largeThumbnailMode ? 30 : 23
+            height: width
+            iconName: root.kind === "audio" ? "audio"
+                : root.kind === "image" ? "image"
+                : root.kind === "subtitle" ? "subtitle"
+                : root.kind === "web" ? "web" : "media"
+            iconColor: Theme.text
             visible: !previewImage.visible || previewImage.status === Image.Error
         }
     }
@@ -129,8 +158,10 @@ Rectangle {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         hoverEnabled: true
         cursorShape: drag.active ? Qt.ClosedHandCursor
-            : root.status === "online" ? Qt.OpenHandCursor : Qt.ArrowCursor
-        drag.target: (pressedButtons & Qt.LeftButton) && root.status === "online"
+            : root.canEdit && root.status === "online"
+            ? Qt.OpenHandCursor : Qt.ArrowCursor
+        drag.target: root.canEdit && (pressedButtons & Qt.LeftButton)
+            && root.status === "online"
             ? root.dragPreview : null
         drag.axis: Drag.XAndYAxis
 
@@ -167,11 +198,14 @@ Rectangle {
         }
         onCanceled: root.dragPreview.dragActive = false
         onDoubleClicked: function (mouse) {
-            if (mouse.button === Qt.LeftButton && root.status === "online")
+            if (root.canEdit && mouse.button === Qt.LeftButton
+                    && root.status === "online")
                 root.addRequested(root.assetId);
         }
 
         ToolTip.visible: containsMouse && !drag.active && root.status === "online"
-        ToolTip.text: qsTr("拖到时间轴；双击则添加到播放头")
+        ToolTip.text: root.canEdit
+            ? qsTr("拖到时间轴；双击则添加到播放头")
+            : qsTr("只读项目中可查看素材，但不能加入时间线")
     }
 }

@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import "."
 import "components"
 
-ScrollView {
+AppScrollView {
     id: transcriptScroll
     objectName: "transcriptPanel"
     clip: true
@@ -228,7 +228,7 @@ ScrollView {
                         ? qsTr("正在转录…") : qsTr("转录当前时间轴")
                     enabled: subtitleController.canTranscribeCurrentSequence
                         && !transcriptScroll.taskActive
-                        && !workspaceController.readOnly
+                        && Boolean(workspaceController.actionCapabilities.canStartTasks)
                     onClicked: subtitleController.transcribeCurrentSequence(
                         String(asrModelSelect.currentValue || ""),
                         String(asrDeviceSelect.currentValue || "auto"),

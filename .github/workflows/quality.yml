@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   python:
-    name: Python 3.12 domain and persistence checks
+    name: Python 3.12 architecture and user-chain checks
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -20,8 +20,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install V2 development dependencies
-        run: python -m pip install ".[dev]"
+          cache-dependency-path: requirements.lock
+      - name: Install the exact reviewed dependency set
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip check
       - name: Lint V2 source and verification scripts
         run: >-
           python -m ruff check
@@ -35,15 +39,18 @@ jobs:
           scripts/verify_real_user_chain.py
           scripts/verify_release_runtime.py
           scripts/verify_ui_matrix.py
-      - name: Run hardware-independent V2 tests
+      - name: Type-check core application and persistence boundaries
+        run: python -m mypy
+      - name: Verify pinned Python license inventory
         run: >-
-          python -m pytest
-          tests/v2/domain
-          tests/v2/application
-          tests/v2/infrastructure/test_project_documents.py
-          tests/v2/infrastructure/test_project_repository.py
-          tests/v2/infrastructure/test_settings_repository.py
-          tests/v2/desktop/test_i18n.py
+          python scripts/verify_license_inventory.py
+          --python-only
+          --output-dir "${{ runner.temp }}"
+      - name: Run hardware-independent V2 tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+        run: python -m pytest tests/v2 -m "not integration and not slow"
 
   native-policy:
     name: Native preview source policy

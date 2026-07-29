@@ -7,6 +7,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 from mediaflow.desktop.presentation_catalogs import (
     transition_options,
 )
+from mediaflow.desktop.session_state import TimelinePlacement
 from mediaflow.domain.effect_registry import transition_is_available
 from mediaflow.domain.enums import (
     ColorMode,
@@ -23,78 +24,59 @@ from mediaflow.domain.timebase import (
 )
 from mediaflow.domain.timeline import ClipAudio, ClipTransform, Transition
 
-from .controller_facet import ControllerFacet
-from .project_controller import _TimelinePlacement
+from .controller_facet import ControllerFacet, report_ui_errors
 
 
 class TimelineController(ControllerFacet):
     projectStateChanged = Signal()
     selectionChanged = Signal()
     historyChanged = Signal()
-    statusChanged = Signal()
     tasksChanged = Signal()
     previewGraphChanged = Signal()
-    profileConfirmationChanged = Signal()
-    settingsChanged = Signal()
-    relinkConfirmationChanged = Signal()
-    audioMetricsChanged = Signal()
-    workflowChanged = Signal()
-    downloadPlanChanged = Signal()
-    runtimeToolsChanged = Signal()
-    waveformDataChanged = Signal(str)
     previewRangeRequested = Signal(int, int)
     exclusiveSelectionRequested = Signal()
     errorOccurred = Signal(str)
-    errorReferenceChanged = Signal()
 
     @Property(QObject, constant=True)
     def tracksModel(self) -> QObject:
-        return self._track_model
+        return self._session.models.tracks
 
     @Property(QObject, constant=True)
     def clipsModel(self) -> QObject:
-        return self._clip_model
+        return self._session.models.clips
 
     @Property(QObject, constant=True)
     def compoundClipsModel(self) -> QObject:
-        return self._compound_clip_model
+        return self._session.models.compound_clips
 
     @Property(QObject, constant=True)
     def transitionsModel(self) -> QObject:
-        return self._transition_model
+        return self._session.models.transitions
 
     @Property(QObject, constant=True)
     def timelineMarkersModel(self) -> QObject:
-        return self._marker_model
+        return self._session.models.markers
 
     @Property(QObject, constant=True)
     def timelineRangesModel(self) -> QObject:
-        return self._range_model
+        return self._session.models.ranges
 
     @Property("QVariantList", notify=projectStateChanged)
     def transitionOptions(self) -> list[dict]:
-        color_mode = self._editor.state.sequence.profile.color_mode if self._editor else ColorMode.SDR_BT709
+        color_mode = (
+            self._session.binding.timeline.state.sequence.profile.color_mode
+            if self._session.binding.timeline
+            else ColorMode.SDR_BT709
+        )
         return transition_options(color_mode)
-
-    @Slot(str, result=bool)
-    def isTransitionAvailable(self, kind: str) -> bool:
-        if not self._editor:
-            return False
-        try:
-            return transition_is_available(
-                TransitionKind(kind),
-                self._editor.state.sequence.profile.color_mode,
-            )
-        except ValueError:
-            return False
 
     @Slot(str, str, int)
     def previewTransitionAfter(self, clip_id: str, kind: str, duration: int) -> None:
         """Compile a temporary transition through the real MLT preview graph."""
         try:
-            if not self._project or not self._editor or not clip_id:
+            if not self._session.binding.current or not self._session.binding.timeline or not clip_id:
                 return
-            state = self._editor.state
+            state = self._session.binding.timeline.state
             left = next(item for item in state.clips if item.id == clip_id)
             right = next(
                 item
@@ -118,99 +100,105 @@ class TimelineController(ControllerFacet):
                 if item.left_clip_id != left.id and item.right_clip_id != right.id
             ]
             state.transitions.append(preview)
-            path = self._api.write_preview_snapshot(
-                self._project.project_dir,
+            path = self._session._api.write_preview_snapshot(
+                self._session.binding.current.project_dir,
                 state,
-                use_proxies=self.settings.preview.preview_quality != "source",
+                use_proxies=self._session.settings.preview.preview_quality != "source",
                 prefer_sdr_preview_proxy=(
                     state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
-                    and not self._hdr_preview_active
+                    and not self._session.presentation.hdr_preview_active
                 ),
             )
-            self._preview_graph_path = str(path)
-            self.previewGraphChanged.emit()
-            self.previewRangeRequested.emit(
+            self._session.presentation.preview_graph_path = str(path)
+            self._session.events.previewGraphChanged.emit()
+            self._session.events.previewRangeRequested.emit(
                 max(0, left.timeline_end - transition_duration),
                 min(state.duration_frames, left.timeline_end + transition_duration),
             )
         except (KeyError, StopIteration, ValueError):
             return
         except Exception as error:
-            self.errorOccurred.emit(str(error))
+            self._session.events.errorOccurred.emit(str(error))
 
     @Slot()
     def clearTransitionPreview(self) -> None:
-        if self._editor and self._editor.state.clips:
-            self._projector.schedule_preview_graph()
+        if self._session.binding.timeline and self._session.binding.timeline.state.clips:
+            self._session.projectors.timeline.schedule_preview_graph()
 
     @Property(bool, notify=tasksChanged)
     def sequenceBoundaryAnalysisRunning(self) -> bool:
-        if not self._tasks or not self._active_sequence_id:
+        if not self._session.binding.current or not self._session.binding.active_sequence_id:
             return False
         return any(
             isinstance(task.command, AnalyzeSequenceBoundsCommand)
-            and task.command.sequence_id == self._active_sequence_id
+            and task.command.sequence_id == self._session.binding.active_sequence_id
             and task.status.is_active
-            for task in self._task_view.values()
+            for task in self._session.task_state.items.values()
         )
 
     @Property(str, notify=selectionChanged)
     def selectedClipId(self) -> str:
-        if self._selected_compound_id:
+        if self._session.selection.compound_id:
             return ""
-        return self._selected_clip_ids[-1] if self._selected_clip_ids else ""
+        return self._session.selection.clip_ids[-1] if self._session.selection.clip_ids else ""
 
     @Property("QVariantList", notify=selectionChanged)
     def selectedClipIds(self) -> list[str]:
-        return list(self._selected_clip_ids)
+        return list(self._session.selection.clip_ids)
 
     @Property(str, notify=selectionChanged)
     def selectedCompoundId(self) -> str:
-        return self._selected_compound_id
+        return self._session.selection.compound_id
 
     @Property(str, notify=selectionChanged)
     def selectedTransitionId(self) -> str:
-        return self._selected_transition_id
+        return self._session.selection.transition_id
 
     @Property(str, notify=selectionChanged)
     def selectedMarkerId(self) -> str:
-        return self._selected_marker_id
+        return self._session.selection.marker_id
 
     @Property(str, notify=selectionChanged)
     def selectedRangeId(self) -> str:
-        return self._selected_range_id
+        return self._session.selection.range_id
 
     @Property(int, notify=selectionChanged)
     def rangeInFrame(self) -> int:
-        return -1 if self._range_in_frame is None else self._range_in_frame
+        return (
+            -1 if self._session.selection.range_in_frame is None else self._session.selection.range_in_frame
+        )
 
     @Property("QVariantMap", notify=selectionChanged)
     def selectedTransitionData(self) -> dict:
-        row = self._transition_model.findRow("transitionId", self._selected_transition_id)
-        return self._transition_model.get(row)
+        row = self._session.models.transitions.findRow("transitionId", self._session.selection.transition_id)
+        return self._session.models.transitions.get(row)
 
     @Property("QVariantMap", notify=selectionChanged)
     def selectedClipData(self) -> dict:
-        row = self._clip_model.findRow("clipId", self.selectedClipId)
-        return self._clip_model.get(row)
+        row = self._session.models.clips.findRow("clipId", self.selectedClipId)
+        return self._session.models.clips.get(row)
 
     @Property("QVariantMap", notify=selectionChanged)
     def selectedCompoundData(self) -> dict:
-        row = self._compound_clip_model.findRow("compoundId", self._selected_compound_id)
-        return self._compound_clip_model.get(row)
+        row = self._session.models.compound_clips.findRow("compoundId", self._session.selection.compound_id)
+        return self._session.models.compound_clips.get(row)
 
     @Property(bool, notify=selectionChanged)
     def canCreateCompoundClip(self) -> bool:
-        if not self._editor or self._selected_compound_id or len(self._selected_clip_ids) < 2:
+        if (
+            not self._session.binding.timeline
+            or self._session.selection.compound_id
+            or len(self._session.selection.clip_ids) < 2
+        ):
             return False
-        selected_ids = set(self._selected_clip_ids)
+        selected_ids = set(self._session.selection.clip_ids)
         if any(
             selected_ids.intersection(item.clip_ids)
-            for item in self._editor.state.compounds
+            for item in self._session.binding.timeline.state.compounds
         ):
             return False
         selected = sorted(
-            (clip for clip in self._editor.state.clips if clip.id in selected_ids),
+            (clip for clip in self._session.binding.timeline.state.clips if clip.id in selected_ids),
             key=lambda clip: (clip.timeline_start, clip.id),
         )
         return (
@@ -224,74 +212,79 @@ class TimelineController(ControllerFacet):
 
     @Property(bool, notify=historyChanged)
     def canUndo(self) -> bool:
-        return bool(self._editor and self._editor.can_undo)
+        return bool(self._session.binding.timeline and self._session.binding.timeline.can_undo)
 
     @Property(bool, notify=historyChanged)
     def canRedo(self) -> bool:
-        return bool(self._editor and self._editor.can_redo)
+        return bool(self._session.binding.timeline and self._session.binding.timeline.can_redo)
 
     @Slot(str)
     @Slot(str, bool)
     def selectClip(self, clip_id: str, toggle: bool = False) -> None:
-        self._selected_compound_id = ""
-        self._selected_clip_ids = self._updated_selection(
-            self._selected_clip_ids,
+        self._session.selection.compound_id = ""
+        self._session.selection.clip_ids = self._session._updated_selection(
+            self._session.selection.clip_ids,
             clip_id,
             toggle=toggle,
         )
-        self._selected_transition_id = ""
-        self.selectionChanged.emit()
+        self._session.selection.transition_id = ""
+        self._session.events.selectionChanged.emit()
 
     @Slot(str)
     def selectCompoundClip(self, compound_id: str) -> None:
-        if not self._editor:
+        if not self._session.binding.timeline:
             return
         try:
-            compound = next(item for item in self._editor.state.compounds if item.id == compound_id)
+            compound = next(
+                item for item in self._session.binding.timeline.state.compounds if item.id == compound_id
+            )
         except StopIteration:
             return
-        self._selected_compound_id = compound.id
-        self._selected_clip_ids = list(compound.clip_ids)
-        self._selected_transition_id = ""
-        self._selected_marker_id = ""
-        self._selected_range_id = ""
-        self.selectionChanged.emit()
+        self._session.selection.compound_id = compound.id
+        self._session.selection.clip_ids = list(compound.clip_ids)
+        self._session.selection.transition_id = ""
+        self._session.selection.marker_id = ""
+        self._session.selection.range_id = ""
+        self._session.events.selectionChanged.emit()
 
     @Slot(str, result=bool)
     def isClipSelected(self, clip_id: str) -> bool:
-        return clip_id in self._selected_clip_ids
+        return clip_id in self._session.selection.clip_ids
 
     @Slot()
     def selectAllClips(self) -> None:
-        self._selected_clip_ids = [clip.id for clip in self._editor.state.clips] if self._editor else []
-        self._selected_compound_id = ""
-        self._selected_transition_id = ""
-        self._selected_marker_id = ""
-        self._selected_range_id = ""
-        self.selectionChanged.emit()
+        self._session.selection.clip_ids = (
+            [clip.id for clip in self._session.binding.timeline.state.clips]
+            if self._session.binding.timeline
+            else []
+        )
+        self._session.selection.compound_id = ""
+        self._session.selection.transition_id = ""
+        self._session.selection.marker_id = ""
+        self._session.selection.range_id = ""
+        self._session.events.selectionChanged.emit()
 
     @Slot()
     def clearSelection(self) -> None:
-        self._selected_clip_ids = []
-        self._selected_compound_id = ""
-        self._selected_transition_id = ""
-        self._selected_marker_id = ""
-        self._selected_range_id = ""
-        self.selectionChanged.emit()
+        self._session.selection.clip_ids = []
+        self._session.selection.compound_id = ""
+        self._session.selection.transition_id = ""
+        self._session.selection.marker_id = ""
+        self._session.selection.range_id = ""
+        self._session.events.selectionChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def addTrack(self, kind: str) -> None:
-        try:
-            self._require_writable()
-            track_kind = TrackKind(kind)
-            self._add_timeline_track(track_kind)
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        track_kind = TrackKind(kind)
+        self._session.timeline_assets.add_timeline_track(track_kind)
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot("QVariantList", str, int, int, float, int, bool, bool)
+    @report_ui_errors
     def dropAssets(
         self,
         asset_ids: list[object],
@@ -303,24 +296,22 @@ class TimelineController(ControllerFacet):
         snap_enabled: bool,
         force_new_track: bool,
     ) -> None:
-        try:
-            self._require_writable()
-            self._queue_assets_for_timeline(
-                [str(asset_id) for asset_id in asset_ids],
-                _TimelinePlacement(
-                    track_id=track_id,
-                    track_position=track_position if track_position >= 0 else None,
-                    start_frame=max(0, start_frame),
-                    pixels_per_frame=pixels_per_frame,
-                    playhead_frame=playhead_frame,
-                    snap_enabled=snap_enabled,
-                    force_new_track=force_new_track,
-                ),
-            )
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.timeline_assets.queue_for_timeline(
+            [str(asset_id) for asset_id in asset_ids],
+            TimelinePlacement(
+                track_id=track_id,
+                track_position=track_position if track_position >= 0 else None,
+                start_frame=max(0, start_frame),
+                pixels_per_frame=pixels_per_frame,
+                playhead_frame=playhead_frame,
+                snap_enabled=snap_enabled,
+                force_new_track=force_new_track,
+            ),
+        )
 
     @Slot("QVariantList", str, int, int, float, int, bool, bool)
+    @report_ui_errors
     def importFilesToTimeline(
         self,
         path_urls: list[object],
@@ -332,23 +323,21 @@ class TimelineController(ControllerFacet):
         snap_enabled: bool,
         force_new_track: bool,
     ) -> None:
-        try:
-            self._import_media_paths(
-                path_urls,
-                placement=_TimelinePlacement(
-                    track_id=track_id,
-                    track_position=track_position if track_position >= 0 else None,
-                    start_frame=max(0, start_frame),
-                    pixels_per_frame=pixels_per_frame,
-                    playhead_frame=playhead_frame,
-                    snap_enabled=snap_enabled,
-                    force_new_track=force_new_track,
-                ),
-            )
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session.timeline_assets.import_media_paths(
+            path_urls,
+            placement=TimelinePlacement(
+                track_id=track_id,
+                track_position=track_position if track_position >= 0 else None,
+                start_frame=max(0, start_frame),
+                pixels_per_frame=pixels_per_frame,
+                playhead_frame=playhead_frame,
+                snap_enabled=snap_enabled,
+                force_new_track=force_new_track,
+            ),
+        )
 
     @Slot(str, bool, bool, bool, bool, str)
+    @report_ui_errors
     def updateTrack(
         self,
         track_id: str,
@@ -358,43 +347,84 @@ class TimelineController(ControllerFacet):
         solo: bool,
         audio_bus_id: str,
     ) -> None:
-        try:
-            self._require_writable()
-            self._editor.set_track_state(
-                track_id,
-                enabled=enabled,
-                locked=locked,
-                muted=muted,
-                solo=solo,
-                audio_bus_id=audio_bus_id or None,
-            )
-            self._projector.refresh_timeline()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.set_track_state(
+            track_id,
+            enabled=enabled,
+            locked=locked,
+            muted=muted,
+            solo=solo,
+            audio_bus_id=audio_bus_id or None,
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.historyChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def setPrimaryDialogueTrack(self, track_id: str) -> None:
-        try:
-            self._require_writable()
-            self._editor.set_primary_dialogue_track(track_id)
-            self._projector.refresh_timeline()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.set_primary_dialogue_track(track_id)
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.historyChanged.emit()
 
     @Slot(str, int)
+    @report_ui_errors
     def moveTrack(self, track_id: str, position: int) -> None:
+        self._session._require_writable()
+        self._session.binding.timeline.move_track(track_id, position)
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.historyChanged.emit()
+
+    @Slot(str, int, int, bool, result="QVariantMap")
+    def previewClipMove(
+        self,
+        clip_id: str,
+        start_frame: int,
+        requested_track_position: int,
+        from_linked_audio: bool,
+    ) -> dict:
+        tracks = sorted(self._session.binding.timeline.state.tracks, key=lambda item: item.position)
+        if not 0 <= requested_track_position < len(tracks):
+            return {"accepted": False}
+        requested = tracks[requested_track_position]
+        if from_linked_audio:
+            requested = next(
+                (
+                    track
+                    for track in tracks
+                    if track.kind == TrackKind.VIDEO and track.linked_audio_track_id == requested.id
+                ),
+                None,
+            )
+            if requested is None:
+                return {"accepted": False}
+        selected_ids = (
+            self._session.selection.clip_ids if clip_id in self._session.selection.clip_ids else [clip_id]
+        )
         try:
-            self._require_writable()
-            self._editor.move_track(track_id, position)
-            self._projector.refresh_timeline()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+            self._session.binding.timeline.preview_move_clips(
+                selected_ids,
+                primary_clip_id=clip_id,
+                timeline_start=max(0, start_frame),
+                track_id=requested.id,
+            )
+        except (KeyError, PermissionError, ValueError):
+            return {"accepted": False}
+        positions = {track.id: position for position, track in enumerate(tracks)}
+        audio_position = (
+            positions.get(requested.linked_audio_track_id, -1) if requested.kind == TrackKind.VIDEO else -1
+        )
+        return {
+            "accepted": True,
+            "trackId": requested.id,
+            "trackPosition": positions[requested.id],
+            "audioTrackPosition": audio_position,
+            "trackKind": requested.kind.value,
+        }
 
     @Slot(str, int, str)
     @Slot(str, int, str, float, int, bool)
+    @report_ui_errors
     def moveClip(
         self,
         clip_id: str,
@@ -404,345 +434,297 @@ class TimelineController(ControllerFacet):
         playhead_frame: int = 0,
         snap_enabled: bool = True,
     ) -> None:
-        try:
-            self._require_writable()
-            selected_ids = self._selected_clip_ids if clip_id in self._selected_clip_ids else [clip_id]
-            targets = self._timeline_snap_targets(selected_ids, playhead_frame) if snap_enabled else []
-            tolerance = self._snap_tolerance_frames(pixels_per_frame) if snap_enabled else 0
-            if len(selected_ids) > 1:
-                source = next(item for item in self._editor.state.clips if item.id == clip_id)
-                self._editor.move_clips(
-                    selected_ids,
-                    primary_clip_id=clip_id,
-                    timeline_start=max(0, start_frame),
-                    track_id=track_id or source.track_id,
-                    snap_targets=targets,
-                    snap_tolerance_frames=tolerance,
-                )
-            else:
-                self._editor.move_clip(
-                    clip_id,
-                    timeline_start=max(0, start_frame),
-                    track_id=track_id or None,
-                    snap_targets=targets,
-                    snap_tolerance_frames=tolerance,
-                )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        selected_ids = (
+            self._session.selection.clip_ids if clip_id in self._session.selection.clip_ids else [clip_id]
+        )
+        targets = self._session._timeline_snap_targets(selected_ids, playhead_frame) if snap_enabled else []
+        tolerance = self._session._snap_tolerance_frames(pixels_per_frame) if snap_enabled else 0
+        if len(selected_ids) > 1:
+            source = next(item for item in self._session.binding.timeline.state.clips if item.id == clip_id)
+            self._session.binding.timeline.move_clips(
+                selected_ids,
+                primary_clip_id=clip_id,
+                timeline_start=max(0, start_frame),
+                track_id=track_id or source.track_id,
+                snap_targets=targets,
+                snap_tolerance_frames=tolerance,
+            )
+        else:
+            self._session.binding.timeline.move_clip(
+                clip_id,
+                timeline_start=max(0, start_frame),
+                track_id=track_id or None,
+                snap_targets=targets,
+                snap_tolerance_frames=tolerance,
+            )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.historyChanged.emit()
 
     @Slot(str, float, int)
+    @report_ui_errors
     def duplicateClip(self, clip_id: str, pixels_per_frame: float, playhead_frame: int) -> None:
-        try:
-            self._require_writable()
-            source = next(item for item in self._editor.state.clips if item.id == clip_id)
-            copied = self._editor.copy_clip(
-                clip_id,
-                timeline_start=source.timeline_end,
-                snap_targets=self._timeline_snap_targets([clip_id], playhead_frame),
-                snap_tolerance_frames=self._snap_tolerance_frames(pixels_per_frame),
-            )
-            self._selected_clip_ids = [copied.id]
-            self._selected_compound_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        source = next(item for item in self._session.binding.timeline.state.clips if item.id == clip_id)
+        copied = self._session.binding.timeline.copy_clip(
+            clip_id,
+            timeline_start=source.timeline_end,
+            snap_targets=self._session._timeline_snap_targets([clip_id], playhead_frame),
+            snap_tolerance_frames=self._session._snap_tolerance_frames(pixels_per_frame),
+        )
+        self._session.selection.clip_ids = [copied.id]
+        self._session.selection.compound_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str, int)
+    @report_ui_errors
     def splitClip(self, clip_id: str, frame: int) -> None:
-        try:
-            self._require_writable()
-            _, right = self._editor.split_clip(clip_id, frame)
-            self._selected_clip_ids = [right.id]
-            self._selected_compound_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        _, right = self._session.binding.timeline.split_clip(clip_id, frame)
+        self._session.selection.clip_ids = [right.id]
+        self._session.selection.compound_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def detachClipAudio(self, clip_id: str) -> None:
-        try:
-            self._require_writable()
-            video, _audio = self._editor.detach_clip_audio(clip_id)
-            self._selected_clip_ids = [video.id]
-            self._selected_compound_id = ""
-            self._projector.refresh_timeline()
-            self._projector.schedule_preview_graph()
-            self.exclusiveSelectionRequested.emit()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-            self._set_status(
-                "已解除视音频绑定；当前仅选中视频。点击空白处或按 Esc 可清除选择"
-            )
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
-
-    @Slot(str, bool)
-    def deleteClip(self, clip_id: str, ripple: bool = False) -> None:
-        try:
-            self._require_writable()
-            self._editor.delete_clip(clip_id, ripple=ripple)
-            self._selected_clip_ids = [value for value in self._selected_clip_ids if value != clip_id]
-            self._selected_compound_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        video, _audio = self._session.binding.timeline.detach_clip_audio(clip_id)
+        self._session.selection.clip_ids = [video.id]
+        self._session.selection.compound_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.schedule_preview_graph()
+        self.exclusiveSelectionRequested.emit()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
+        self._session._set_status("已解除视音频绑定；当前仅选中视频。点击空白处或按 Esc 可清除选择")
 
     @Slot(bool)
+    @report_ui_errors
     def deleteSelectedClips(self, ripple: bool = False) -> None:
-        try:
-            self._require_writable()
-            if not self._selected_clip_ids:
-                return
-            self._editor.delete_clips(self._selected_clip_ids, ripple=ripple)
-            self._selected_clip_ids = []
-            self._selected_compound_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        if not self._session.selection.clip_ids:
+            return
+        self._session.binding.timeline.delete_clips(self._session.selection.clip_ids, ripple=ripple)
+        self._session.selection.clip_ids = []
+        self._session.selection.compound_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot()
+    @report_ui_errors
     def createCompoundClip(self) -> None:
-        try:
-            self._require_writable()
-            compound = self._editor.create_compound_clip(self._selected_clip_ids)
-            self._selected_compound_id = compound.id
-            self._selected_clip_ids = list(compound.clip_ids)
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-            self._set_status("已创建复合片段")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        compound = self._session.binding.timeline.create_compound_clip(self._session.selection.clip_ids)
+        self._session.selection.compound_id = compound.id
+        self._session.selection.clip_ids = list(compound.clip_ids)
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
+        self._session._set_status("已创建复合片段")
 
     @Slot()
+    @report_ui_errors
     def dissolveSelectedCompoundClip(self) -> None:
-        try:
-            self._require_writable()
-            if not self._selected_compound_id:
-                return
-            selected_ids = list(self._selected_clip_ids)
-            self._editor.dissolve_compound_clip(self._selected_compound_id)
-            self._selected_compound_id = ""
-            self._selected_clip_ids = selected_ids
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-            self._set_status("已解除复合片段")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        if not self._session.selection.compound_id:
+            return
+        selected_ids = list(self._session.selection.clip_ids)
+        self._session.binding.timeline.dissolve_compound_clip(self._session.selection.compound_id)
+        self._session.selection.compound_id = ""
+        self._session.selection.clip_ids = selected_ids
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
+        self._session._set_status("已解除复合片段")
 
     @Slot(str, str, int)
     def addTransitionAfter(self, clip_id: str, kind: str, duration: int) -> None:
         try:
-            self._require_writable()
-            state = self._editor.state
+            self._session._require_writable()
+            state = self._session.binding.timeline.state
             left = next(clip for clip in state.clips if clip.id == clip_id)
             right = next(
                 clip
                 for clip in state.clips_for_track(left.track_id)
                 if clip.timeline_start == left.timeline_end
             )
-            transition = self._editor.create_transition(
+            transition = self._session.binding.timeline.create_transition(
                 left.id,
                 right.id,
                 TransitionKind(kind),
                 max(1, duration),
             )
-            self._selected_transition_id = transition.id
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-            self._set_status("转场已添加")
+            self._session.selection.transition_id = transition.id
+            self._session.projectors.timeline.refresh_timeline()
+            self._session.events.selectionChanged.emit()
+            self._session.events.historyChanged.emit()
+            self._session._set_status("转场已添加")
         except StopIteration:
-            self.errorOccurred.emit("所选片段后没有同轨道的相邻片段")
+            self._session.events.errorOccurred.emit("所选片段后没有同轨道的相邻片段")
         except Exception as error:
-            self.errorOccurred.emit(str(error))
+            self._session.events.errorOccurred.emit(str(error))
 
     @Slot(str)
     def selectTransition(self, transition_id: str) -> None:
-        self._selected_transition_id = transition_id
-        self._selected_clip_ids = []
-        self._selected_compound_id = ""
-        self.selectionChanged.emit()
+        self._session.selection.transition_id = transition_id
+        self._session.selection.clip_ids = []
+        self._session.selection.compound_id = ""
+        self._session.events.selectionChanged.emit()
 
     @Slot(str)
     def selectTimelineRange(self, range_id: str) -> None:
-        self._selected_range_id = range_id
-        self.selectionChanged.emit()
+        self._session.selection.range_id = range_id
+        self._session.events.selectionChanged.emit()
 
     @Slot(str, str, int)
+    @report_ui_errors
     def updateTransition(self, transition_id: str, kind: str, duration: int) -> None:
-        try:
-            self._require_writable()
-            self._editor.update_transition(
-                transition_id,
-                kind=TransitionKind(kind),
-                duration=max(1, duration),
-            )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.update_transition(
+            transition_id,
+            kind=TransitionKind(kind),
+            duration=max(1, duration),
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def removeTransition(self, transition_id: str) -> None:
-        try:
-            self._require_writable()
-            self._editor.remove_transition(transition_id)
-            self._selected_transition_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.remove_transition(transition_id)
+        self._session.selection.transition_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(int)
+    @report_ui_errors
     def addTimelineMarker(self, frame: int) -> None:
-        try:
-            self._require_writable()
-            marker = self._editor.add_marker(max(0, frame), f"标记 {len(self._editor.state.markers) + 1}")
-            self._selected_marker_id = marker.id
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        marker = self._session.binding.timeline.add_marker(
+            max(0, frame), f"标记 {len(self._session.binding.timeline.state.markers) + 1}"
+        )
+        self._session.selection.marker_id = marker.id
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def removeTimelineMarker(self, marker_id: str) -> None:
-        try:
-            self._require_writable()
-            self._editor.remove_marker(marker_id)
-            self._selected_marker_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.remove_marker(marker_id)
+        self._session.selection.marker_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(int)
     def setRangeIn(self, frame: int) -> None:
-        self._range_in_frame = max(0, frame)
-        self.selectionChanged.emit()
+        self._session.selection.range_in_frame = max(0, frame)
+        self._session.events.selectionChanged.emit()
 
     @Slot(int)
+    @report_ui_errors
     def setSequenceInPoint(self, frame: int) -> None:
-        try:
-            self._require_writable()
-            out_frame = self.sequenceOutFrame
-            self._editor.set_sequence_in_out(max(0, frame), out_frame)
-            self._finish_sequence_in_out_edit("已设置序列入点")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        in_out = self._session.binding.timeline.state.sequence.in_out
+        out_frame = in_out.out_frame if in_out else max(1, frame + 1)
+        self._session.binding.timeline.set_sequence_in_out(max(0, frame), out_frame)
+        self._session._finish_sequence_in_out_edit("已设置序列入点")
 
     @Slot(int)
+    @report_ui_errors
     def setSequenceOutPoint(self, frame: int) -> None:
-        try:
-            self._require_writable()
-            in_frame = self.sequenceInFrame
-            self._editor.set_sequence_in_out(in_frame, max(1, frame))
-            self._finish_sequence_in_out_edit("已设置序列出点")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        in_out = self._session.binding.timeline.state.sequence.in_out
+        in_frame = in_out.in_frame if in_out else 0
+        self._session.binding.timeline.set_sequence_in_out(in_frame, max(1, frame))
+        self._session._finish_sequence_in_out_edit("已设置序列出点")
 
     @Slot(int, int)
+    @report_ui_errors
     def setSequenceInOut(self, in_frame: int, out_frame: int) -> None:
-        try:
-            self._require_writable()
-            self._editor.set_sequence_in_out(in_frame, out_frame)
-            self._finish_sequence_in_out_edit("已调整序列入出点")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.set_sequence_in_out(in_frame, out_frame)
+        self._session._finish_sequence_in_out_edit("已调整序列入出点")
 
     @Slot()
+    @report_ui_errors
     def clearSequenceInOut(self) -> None:
-        try:
-            self._require_writable()
-            self._editor.clear_sequence_in_out()
-            self._finish_sequence_in_out_edit("已清除序列入出点")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.clear_sequence_in_out()
+        self._session._finish_sequence_in_out_edit("已清除序列入出点")
 
     @Slot(int)
+    @report_ui_errors
     def commitTimelineRange(self, frame: int) -> None:
-        try:
-            self._require_writable()
-            if self._range_in_frame is None:
-                raise ValueError("请先设置选区入点")
-            start_frame, end_frame = sorted((self._range_in_frame, max(0, frame)))
-            if start_frame == end_frame:
-                raise ValueError("选区必须包含至少一帧")
-            item = self._editor.add_range(
-                start_frame,
-                end_frame,
-                f"选区 {len(self._editor.state.ranges) + 1}",
-            )
-            self._selected_range_id = item.id
-            self._range_in_frame = None
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        if self._session.selection.range_in_frame is None:
+            raise ValueError("请先设置选区入点")
+        start_frame, end_frame = sorted((self._session.selection.range_in_frame, max(0, frame)))
+        if start_frame == end_frame:
+            raise ValueError("选区必须包含至少一帧")
+        item = self._session.binding.timeline.add_range(
+            start_frame,
+            end_frame,
+            f"选区 {len(self._session.binding.timeline.state.ranges) + 1}",
+        )
+        self._session.selection.range_id = item.id
+        self._session.selection.range_in_frame = None
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def removeTimelineRange(self, range_id: str) -> None:
-        try:
-            self._require_writable()
-            self._editor.remove_range(range_id)
-            self._selected_range_id = ""
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.remove_range(range_id)
+        self._session.selection.range_id = ""
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str)
+    @report_ui_errors
     def createShortFromRange(self, range_id: str) -> None:
-        try:
-            self._require_writable()
-            sequence = self._project.sequences.create_short_from_range(
-                self._active_sequence_id,
-                range_id,
-            )
-            self._active_sequence_id = sequence.id
-            self._editor = self._project.timeline(sequence.id)
-            self._selected_range_id = ""
-            self._projector.refresh_all()
-            self._set_status("已从时间线选区创建短视频序列")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        sequence = self._session.binding.current.create_short_from_range(
+            self._session.binding.active_sequence_id,
+            range_id,
+        )
+        self._session.binding.active_sequence_id = sequence.id
+        self._session.binding.timeline = self._session.binding.current.timeline(sequence.id)
+        self._session.selection.range_id = ""
+        self._session.projectors.refresh_active_sequence(refresh_sequences=True)
+        self._session._set_status("已从时间线选区创建短视频序列")
 
     @Slot(str, int, int)
+    @report_ui_errors
     def trimClip(self, clip_id: str, source_in: int, duration: int) -> None:
-        try:
-            self._require_writable()
-            clip = next(item for item in self._editor.state.clips if item.id == clip_id)
-            self._editor.trim_clip(
-                clip_id,
-                timeline_start=clip.timeline_start,
-                source_in=max(0, source_in),
-                duration=max(1, duration),
-            )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        clip = next(item for item in self._session.binding.timeline.state.clips if item.id == clip_id)
+        self._session.binding.timeline.trim_clip(
+            clip_id,
+            timeline_start=clip.timeline_start,
+            source_in=max(0, source_in),
+            duration=max(1, duration),
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str, int, int, bool)
+    @report_ui_errors
     def trimClipEdges(
         self,
         clip_id: str,
@@ -750,54 +732,48 @@ class TimelineController(ControllerFacet):
         duration: int,
         trim_left: bool,
     ) -> None:
-        try:
-            self._require_writable()
-            clip = next(item for item in self._editor.state.clips if item.id == clip_id)
-            source_in = clip.source_in
-            if trim_left:
-                delta = timeline_start - clip.timeline_start
-                source_delta = source_frames_for_timeline_frames(
-                    delta,
-                    clip.speed_numerator,
-                    clip.speed_denominator,
-                )
-                source_in = (
-                    clip.source_in + source_delta
-                    if clip.speed_numerator > 0
-                    else clip.source_in - source_delta
-                )
-            self._editor.trim_clip(
-                clip_id,
-                timeline_start=max(0, timeline_start),
-                source_in=max(0, source_in),
-                duration=max(1, duration),
+        self._session._require_writable()
+        clip = next(item for item in self._session.binding.timeline.state.clips if item.id == clip_id)
+        source_in = clip.source_in
+        if trim_left:
+            delta = timeline_start - clip.timeline_start
+            source_delta = source_frames_for_timeline_frames(
+                delta,
+                clip.speed_numerator,
+                clip.speed_denominator,
             )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+            source_in = (
+                clip.source_in + source_delta if clip.speed_numerator > 0 else clip.source_in - source_delta
+            )
+        self._session.binding.timeline.trim_clip(
+            clip_id,
+            timeline_start=max(0, timeline_start),
+            source_in=max(0, source_in),
+            duration=max(1, duration),
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str, float, bool)
+    @report_ui_errors
     def setClipSpeed(self, clip_id: str, speed: float, pitch_compensation: bool) -> None:
-        try:
-            self._require_writable()
-            if abs(speed) < 0.25 or abs(speed) > 4.0:
-                raise ValueError("速度必须在 0.25×～4× 或 -0.25×～-4×之间")
-            fraction = Fraction(str(speed)).limit_denominator(1000)
-            self._editor.set_clip_speed(
-                clip_id,
-                speed_numerator=fraction.numerator,
-                speed_denominator=fraction.denominator,
-                pitch_compensation=pitch_compensation,
-            )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        if abs(speed) < 0.25 or abs(speed) > 4.0:
+            raise ValueError("速度必须在 0.25×～4× 或 -0.25×～-4×之间")
+        fraction = Fraction(str(speed)).limit_denominator(1000)
+        self._session.binding.timeline.set_clip_speed(
+            clip_id,
+            speed_numerator=fraction.numerator,
+            speed_denominator=fraction.denominator,
+            pitch_compensation=pitch_compensation,
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot(str, float, float, float, float, float, float, float, float, float, float)
+    @report_ui_errors
     def setClipTransform(
         self,
         clip_id: str,
@@ -812,55 +788,54 @@ class TimelineController(ControllerFacet):
         crop_bottom: float,
         opacity: float,
     ) -> None:
-        try:
-            self._require_writable()
-            self._editor.set_clip_transform(
-                clip_id,
-                ClipTransform(
-                    x=x,
-                    y=y,
-                    scale_x=max(0.01, scale_x),
-                    scale_y=max(0.01, scale_y),
-                    rotation=rotation,
-                    crop_left=crop_left,
-                    crop_top=crop_top,
-                    crop_right=crop_right,
-                    crop_bottom=crop_bottom,
-                    opacity=opacity,
-                ),
-            )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.set_clip_transform(
+            clip_id,
+            ClipTransform(
+                x=x,
+                y=y,
+                scale_x=max(0.01, scale_x),
+                scale_y=max(0.01, scale_y),
+                rotation=rotation,
+                crop_left=crop_left,
+                crop_top=crop_top,
+                crop_right=crop_right,
+                crop_bottom=crop_bottom,
+                opacity=opacity,
+            ),
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     def _selected_video_clip(self):
-        if not self._editor or len(self._selected_clip_ids) != 1:
+        if not self._session.binding.timeline or len(self._session.selection.clip_ids) != 1:
             raise ValueError("请先选择一个视频片段")
-        clip = next(item for item in self._editor.state.clips if item.id == self._selected_clip_ids[0])
-        asset = self._documents.get_asset(clip.asset_id)
+        clip = next(
+            item
+            for item in self._session.binding.timeline.state.clips
+            if item.id == self._session.selection.clip_ids[0]
+        )
+        asset = self._session.binding.current.get_asset(clip.asset_id)
         if asset.kind.value != "video":
             raise ValueError("此操作只适用于视频片段")
         return clip
 
     @Slot(float)
+    @report_ui_errors
     def detectScenesSelected(self, threshold: float = 0.35) -> None:
-        try:
-            self._require_writable()
-            clip = self._selected_video_clip()
-            self._start_task(
-                AnalyzeScenesCommand(
-                    sequence_id=self._active_sequence_id,
-                    clip_id=clip.id,
-                    threshold=threshold,
-                ),
-                [clip.asset_id],
-                sequence_id=self._active_sequence_id,
-            )
-            self._set_status("正在检测场景切点")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        clip = self._selected_video_clip()
+        self._session.tasks.start(
+            AnalyzeScenesCommand(
+                sequence_id=self._session.binding.active_sequence_id,
+                clip_id=clip.id,
+                threshold=threshold,
+            ),
+            [clip.asset_id],
+            sequence_id=self._session.binding.active_sequence_id,
+        )
+        self._session._set_status("正在检测场景切点")
 
     @Slot()
     def autoReframeSelected(self) -> None:
@@ -870,24 +845,23 @@ class TimelineController(ControllerFacet):
     def trackSubjectSelected(self) -> None:
         self._start_subject_tracking("subject_tracking")
 
+    @report_ui_errors
     def _start_subject_tracking(self, mode: str) -> None:
-        try:
-            self._require_writable()
-            clip = self._selected_video_clip()
-            self._start_task(
-                TrackSubjectCommand(
-                    sequence_id=self._active_sequence_id,
-                    clip_id=clip.id,
-                    mode=mode,
-                ),
-                [clip.asset_id],
-                sequence_id=self._active_sequence_id,
-            )
-            self._set_status("正在分析画面主体")
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        clip = self._selected_video_clip()
+        self._session.tasks.start(
+            TrackSubjectCommand(
+                sequence_id=self._session.binding.active_sequence_id,
+                clip_id=clip.id,
+                mode=mode,
+            ),
+            [clip.asset_id],
+            sequence_id=self._session.binding.active_sequence_id,
+        )
+        self._session._set_status("正在分析画面主体")
 
     @Slot(str, float, float, int, int)
+    @report_ui_errors
     def setClipAudio(
         self,
         clip_id: str,
@@ -896,70 +870,63 @@ class TimelineController(ControllerFacet):
         fade_in_frames: int,
         fade_out_frames: int,
     ) -> None:
-        try:
-            self._require_writable()
-            self._editor.set_clip_audio(
-                clip_id,
-                ClipAudio(
-                    gain_db=max(-60.0, min(24.0, gain_db)),
-                    pan=pan,
-                    fade_in_frames=max(0, fade_in_frames),
-                    fade_out_frames=max(0, fade_out_frames),
-                ),
-            )
-            self._projector.refresh_timeline()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        self._session.binding.timeline.set_clip_audio(
+            clip_id,
+            ClipAudio(
+                gain_db=max(-60.0, min(24.0, gain_db)),
+                pan=pan,
+                fade_in_frames=max(0, fade_in_frames),
+                fade_out_frames=max(0, fade_out_frames),
+            ),
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot()
+    @report_ui_errors
     def undo(self) -> None:
-        try:
-            self._editor.undo()
-            self._projector.refresh_assets()
-            self._projector.refresh_sequences()
-            self._projector.refresh_timeline()
-            self._projector.refresh_documents()
-            self._projector.refresh_preview_subtitles()
-            self._projector.schedule_preview_graph()
-            self.projectStateChanged.emit()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session.binding.timeline.undo()
+        self._session.projectors.assets.refresh_assets()
+        self._session.projectors.timeline.refresh_sequences()
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.subtitles.refresh_documents()
+        self._session.projectors.timeline.refresh_preview_subtitles()
+        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.events.projectStateChanged.emit()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot()
+    @report_ui_errors
     def redo(self) -> None:
-        try:
-            self._editor.redo()
-            self._projector.refresh_assets()
-            self._projector.refresh_sequences()
-            self._projector.refresh_timeline()
-            self._projector.refresh_documents()
-            self._projector.refresh_preview_subtitles()
-            self._projector.schedule_preview_graph()
-            self.projectStateChanged.emit()
-            self.selectionChanged.emit()
-            self.historyChanged.emit()
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session.binding.timeline.redo()
+        self._session.projectors.assets.refresh_assets()
+        self._session.projectors.timeline.refresh_sequences()
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.subtitles.refresh_documents()
+        self._session.projectors.timeline.refresh_preview_subtitles()
+        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.events.projectStateChanged.emit()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
 
     @Slot()
+    @report_ui_errors
     def analyzeSequenceBoundaries(self) -> None:
-        try:
-            self._require_writable()
-            if not self._editor.state.clips:
-                raise ValueError("请先向时间线添加媒体")
-            if self.sequenceBoundaryAnalysisRunning:
-                raise RuntimeError("当前序列正在分析入出点")
-            snapshot_hash = self._project.sequence_boundary_snapshot_hash(self._active_sequence_id)
-            self._start_task(
-                AnalyzeSequenceBoundsCommand(
-                    sequence_id=self._active_sequence_id,
-                    snapshot_hash=snapshot_hash,
-                ),
-                sequence_id=self._active_sequence_id,
-            )
-        except Exception as error:
-            self.errorOccurred.emit(str(error))
+        self._session._require_writable()
+        if not self._session.binding.timeline.state.clips:
+            raise ValueError("请先向时间线添加媒体")
+        if self.sequenceBoundaryAnalysisRunning:
+            raise RuntimeError("当前序列正在分析入出点")
+        snapshot_hash = self._session.binding.current.sequence_boundary_snapshot_hash(
+            self._session.binding.active_sequence_id
+        )
+        self._session.tasks.start(
+            AnalyzeSequenceBoundsCommand(
+                sequence_id=self._session.binding.active_sequence_id,
+                snapshot_hash=snapshot_hash,
+            ),
+            sequence_id=self._session.binding.active_sequence_id,
+        )

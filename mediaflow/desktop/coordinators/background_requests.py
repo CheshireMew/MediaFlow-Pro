@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import logging
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+
+from PySide6.QtCore import QObject, Signal, Slot
+
+from .base import SessionCoordinator
+
+logger = logging.getLogger(__name__)
+
+
+class _BackgroundBridge(QObject):
+    resultReceived = Signal(object)
+
+
+class BackgroundRequests(SessionCoordinator):
+    def __init__(self, session):
+        super().__init__(session)
+        self._executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="mediaflow-desktop-io",
+        )
+        self.preview_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="mediaflow-preview-compile",
+        )
+        self._bridge = _BackgroundBridge(session)
+        self._bridge.resultReceived.connect(self._on_result)
+
+    def submit(
+        self,
+        kind: str,
+        request_id: object,
+        operation,
+        *,
+        executor: ThreadPoolExecutor | None = None,
+        publish_result: bool = True,
+    ) -> Future | None:
+        if self._session.requests.shutting_down:
+            return None
+        worker = executor or self._executor
+        future = worker.submit(operation)
+        if publish_result:
+            future.add_done_callback(
+                lambda completed: self._publish_result(
+                    kind,
+                    request_id,
+                    completed,
+                )
+            )
+        return future
+
+    def _publish_result(
+        self,
+        kind: str,
+        request_id: object,
+        completed: Future,
+    ) -> None:
+        try:
+            result = completed.result()
+        except Exception as error:
+            payload = (kind, request_id, None, error)
+        else:
+            payload = (kind, request_id, result, None)
+        if not self._session.requests.shutting_down:
+            self._bridge.resultReceived.emit(payload)
+
+    def shutdown(self) -> None:
+        # Workers may own independent SQLite connections while compiling a
+        # preview or preparing thumbnails. Shutdown is the lifetime boundary
+        # for those connections, so returning while a worker is still alive
+        # would leave the project database locked on Windows.
+        self.preview_executor.shutdown(wait=True, cancel_futures=True)
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def raise_if_shutting_down(self) -> None:
+        if self._session.requests.shutting_down:
+            raise CancelledError("Desktop background requests are shutting down")
+
+    @Slot(object)
+    def _on_result(self, payload: object) -> None:
+        try:
+            kind, request_id, result, error = payload
+        except (TypeError, ValueError):
+            return
+        if kind == "recent_projects":
+            if request_id != self._session.requests.recent_id:
+                return
+            if error:
+                self._session.events.errorOccurred.emit(f"读取最近项目失败：{error}")
+            else:
+                self._session.projectors.workspace.apply_recent_projects(result)
+            return
+        if kind == "video_encoders":
+            if request_id != self._session.requests.encoder_id:
+                return
+            if error:
+                self._session.events.errorOccurred.emit(f"检测编码器失败：{error}")
+            else:
+                self._session.presentation.video_encoder_options = list(result)
+                self._session.events.settingsChanged.emit()
+            return
+        if kind == "download_plan":
+            if request_id != self._session.download_state.request_id:
+                return
+            self._session.download_state.busy = False
+            if error:
+                self._session.download_state.plan = None
+                self._session.download_state.selected_entries = set()
+                self._session.projectors.tasks.refresh_download_entries()
+                self._session.events.downloadPlanChanged.emit()
+                self._session.events.errorOccurred.emit(f"读取视频信息失败：{error}")
+            else:
+                self._session._set_download_plan(result)
+            return
+        if kind == "waveform":
+            self._session.asset_state.waveform_pending.discard(request_id)
+            generation, asset_id, path_value = request_id
+            if generation != self._session.binding.generation:
+                return
+            if error:
+                logger.warning(
+                    "Failed to preload waveform (asset=%s, path=%s): %s",
+                    asset_id,
+                    path_value,
+                    error,
+                )
+                return
+            modified, waveform = result
+            self._session.asset_state.waveform_cache[asset_id] = (path_value, modified, waveform)
+            self._session.events.waveformDataChanged.emit(asset_id)
+            return
+        if kind == "asset_thumbnails":
+            if request_id != self._session.asset_state.thumbnail_pending_request:
+                return
+            self._session.asset_state.thumbnail_pending_request = None
+            generation, _thumbnail_request_id, _project_path = request_id
+            if generation != self._session.binding.generation:
+                return
+            if error:
+                logger.warning("Failed to prepare asset thumbnails: %s", error)
+            else:
+                self._session.projectors.assets.apply_asset_thumbnails(result)
+            if self._session.asset_state.thumbnail_refresh_requested:
+                self._session.asset_state.thumbnail_refresh_requested = False
+                assets = self._session.binding.current.list_assets() if self._session.binding.current else []
+                self._session.projectors.assets.request_asset_thumbnails(assets)
+            return
+        if kind == "audio_metrics":
+            generation, metrics_request_id, sequence_id = request_id
+            if (
+                generation != self._session.binding.generation
+                or metrics_request_id != self._session.requests.audio_metrics_id
+                or sequence_id != self._session.binding.active_sequence_id
+            ):
+                return
+            if error:
+                logger.warning(
+                    "Failed to read loudness metrics (sequence=%s): %s",
+                    sequence_id,
+                    error,
+                )
+                metrics = {}
+            else:
+                metrics = dict(result)
+            if metrics != self._session.presentation.audio_metrics:
+                self._session.presentation.audio_metrics = metrics
+            self._session.events.audioMetricsChanged.emit()
+            return
+        if kind == "project_close":
+            close_id, project_path = request_id
+            if close_id != self._session.requests.project_close_id:
+                return
+            self._session.requests.project_close_future = None
+            self._session.projectors.workspace.refresh_recent_projects()
+            if error:
+                self._session.requests.closing_project_error = str(error)
+                self._session.events.errorOccurred.emit(f"关闭项目时释放资源失败：{error}")
+            else:
+                self._session.requests.closing_project = None
+                self._session.requests.closing_project_error = ""
+                self._session._set_status(f"项目已关闭：{project_path}")
+            self._session.events.projectStateChanged.emit()
+            return
+        if kind != "preview":
+            return
+        generation, preview_request_id, sequence_id = request_id
+        if (
+            generation != self._session.binding.generation
+            or preview_request_id != self._session.requests.preview_id
+            or sequence_id != self._session.binding.active_sequence_id
+        ):
+            return
+        if error:
+            self._session.events.errorOccurred.emit(f"预览图编译失败：{error}")
+            return
+        self._session.presentation.preview_graph_path = str(result)
+        self._session.events.previewGraphChanged.emit()
+        if self._session.presentation.pending_preview_range is not None:
+            start_frame, end_frame = self._session.presentation.pending_preview_range
+            self._session.presentation.pending_preview_range = None
+            self._session.events.previewRangeRequested.emit(start_frame, end_frame)

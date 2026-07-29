@@ -10,13 +10,13 @@ MenuItem {
     readonly property string shortcutText: shortcutSeparatorIndex < 0
         ? "" : text.slice(shortcutSeparatorIndex + 1)
     implicitWidth: Math.max(220, implicitContentWidth + leftPadding + rightPadding)
-    implicitHeight: 40
+    implicitHeight: Theme.controlHeight
     leftPadding: control.checkable ? 38 : 12
     rightPadding: control.subMenu ? 34 : 12
-    font.pixelSize: Theme.fontSizeBodyLarge
+    font.pixelSize: Theme.fontSizeBody
 
     contentItem: Item {
-        readonly property color textColor: control.enabled ? Theme.text : Theme.textMuted
+        readonly property color textColor: control.enabled ? Theme.text : Theme.textDisabled
         implicitWidth: label.implicitWidth
             + (shortcut.visible ? shortcut.implicitWidth + 32 : 0)
         implicitHeight: Math.max(label.implicitHeight, shortcut.implicitHeight)
@@ -36,27 +36,31 @@ MenuItem {
             anchors.verticalCenter: parent.verticalCenter
             visible: control.shortcutText.length > 0
             text: control.shortcutText
-            color: parent.textColor
-            font: control.font
+            color: control.enabled ? Theme.textMuted : Theme.textDisabled
+            font.family: Theme.monoFontFamily
+            font.pixelSize: Theme.fontSizeCaption
         }
     }
 
-    indicator: Text {
+    indicator: AppIcon {
         x: 12
         y: Math.round((control.height - height) / 2)
         visible: control.checkable
-        text: control.checked ? "✓" : ""
-        color: control.enabled ? Theme.text : Theme.textMuted
-        font: control.font
+        width: 14
+        height: 14
+        iconName: "check"
+        iconColor: control.enabled ? Theme.accent : Theme.textDisabled
+        opacity: control.checked ? 1 : 0
     }
 
-    arrow: Text {
+    arrow: AppIcon {
         x: control.width - width - 12
         y: Math.round((control.height - height) / 2)
         visible: control.subMenu
-        text: "›"
-        color: control.enabled ? Theme.textMuted : Theme.borderStrong
-        font: control.font
+        width: 14
+        height: 14
+        iconName: "chevron-right"
+        iconColor: control.enabled ? Theme.textMuted : Theme.textDisabled
     }
 
     background: Rectangle {
@@ -67,12 +71,16 @@ MenuItem {
         radius: Theme.radiusSmall
         color: {
             if (control.down)
-                return Theme.accentSoft
+                return Theme.controlPressed
             if (control.highlighted)
-                return Theme.surfaceHover
-            return "transparent"
+                return Theme.controlHover
+            return Theme.transparent
         }
-        border.color: control.visualFocus ? Theme.accent : "transparent"
+        border.color: control.visualFocus ? Theme.focusColor : Theme.transparent
         border.width: control.visualFocus ? 1 : 0
+
+        Behavior on color {
+            ColorAnimation { duration: Theme.durationFast }
+        }
     }
 }

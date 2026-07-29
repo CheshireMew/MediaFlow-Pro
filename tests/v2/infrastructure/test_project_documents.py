@@ -17,8 +17,8 @@ def test_source_translation_and_sequence_placement_keep_stable_links(tmp_path: P
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"media")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = repository.import_external_asset(source_file, AssetKind.VIDEO)
-        project = repository.get_project()
+        asset = repository.catalog.import_external_asset(source_file, AssetKind.VIDEO)
+        project = repository.catalog.get_project()
         source_document = SubtitleDocument(
             project_id=project.id,
             asset_id=asset.id,
@@ -38,7 +38,7 @@ def test_source_translation_and_sequence_placement_keep_stable_links(tmp_path: P
                 text="World",
             ),
         ]
-        repository.create_subtitle_document(source_document, source_segments)
+        repository.subtitles.create_subtitle_document(source_document, source_segments)
 
         translation = SubtitleDocument(
             project_id=project.id,
@@ -57,30 +57,33 @@ def test_source_translation_and_sequence_placement_keep_stable_links(tmp_path: P
             )
             for segment, text in zip(source_segments, ["你好", "世界"], strict=True)
         ]
-        repository.create_subtitle_document(translation, translated_segments)
+        repository.subtitles.create_subtitle_document(translation, translated_segments)
 
         subtitle_track = TimelineEditor(repository, project.main_sequence_id).add_track(
             TrackKind.SUBTITLE
         )
-        placements = repository.place_subtitle_document(translation.id, subtitle_track.id)
+        placements = repository.subtitles.place_subtitle_document(translation.id, subtitle_track.id)
 
-        assert [item.source_segment_id for item in repository.list_subtitle_segments(translation.id)] == [
+        assert [
+            item.source_segment_id
+            for item in repository.subtitles.list_subtitle_segments(translation.id)
+        ] == [
             source_segments[0].id,
             source_segments[1].id,
         ]
         assert [item.start_frame for item in placements] == [0, 31]
-        assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
+        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 2
 
-        overridden = repository.update_subtitle_placement_text(placements[0].id, "您好")
+        overridden = repository.subtitles.update_subtitle_placement_text(placements[0].id, "您好")
         assert overridden.text_override == "您好"
-        assert repository.list_subtitle_segments(translation.id)[0].text == "你好"
+        assert repository.subtitles.list_subtitle_segments(translation.id)[0].text == "你好"
 
-        updated_segment = repository.apply_subtitle_placement_to_document(
+        updated_segment = repository.subtitles.apply_subtitle_placement_to_document(
             placements[0].id,
             "你好呀",
         )
         assert updated_segment.text == "你好呀"
-        assert repository.list_subtitle_placements(subtitle_track.id)[0].text_override is None
+        assert repository.subtitles.list_subtitle_placements(subtitle_track.id)[0].text_override is None
 
 
 def test_subtitle_placement_can_be_clipped_and_offset_for_a_short_sequence(
@@ -89,19 +92,19 @@ def test_subtitle_placement_can_be_clipped_and_offset_for_a_short_sequence(
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"media")
     with ProjectRepository.create(tmp_path / "ShortProject", "ShortProject") as repository:
-        asset = repository.import_external_asset(media, AssetKind.VIDEO)
-        project = repository.get_project()
+        asset = repository.catalog.import_external_asset(media, AssetKind.VIDEO)
+        project = repository.catalog.get_project()
         document = SubtitleDocument(project_id=project.id, asset_id=asset.id, language="en")
         segments = [
             SubtitleSegment(document_id=document.id, start_frame=0, end_frame=30, text="before"),
             SubtitleSegment(document_id=document.id, start_frame=40, end_frame=70, text="inside"),
             SubtitleSegment(document_id=document.id, start_frame=80, end_frame=120, text="after"),
         ]
-        repository.create_subtitle_document(document, segments)
-        short = repository.create_short_sequence("Short")
+        repository.subtitles.create_subtitle_document(document, segments)
+        short = repository.catalog.create_short_sequence("Short")
         subtitle_track = TimelineEditor(repository, short.id).add_track(TrackKind.SUBTITLE)
 
-        placements = repository.place_subtitle_document(
+        placements = repository.subtitles.place_subtitle_document(
             document.id,
             subtitle_track.id,
             offset_frames=-30,
@@ -117,13 +120,13 @@ def test_subtitle_placement_can_be_clipped_and_offset_for_a_short_sequence(
 
 def test_audio_bus_rejects_cycle_and_effect_chain_is_ordered(tmp_path: Path) -> None:
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        sequence_id = repository.get_project().main_sequence_id
-        buses = repository.list_audio_buses(sequence_id)
+        sequence_id = repository.catalog.get_project().main_sequence_id
+        buses = repository.audio.list_audio_buses(sequence_id)
         master, dialogue = buses[0], buses[1]
         with pytest.raises(ValueError, match="cycle"):
-            repository.save_audio_bus(master.model_copy(update={"parent_bus_id": dialogue.id}))
+            repository.audio.save_audio_bus(master.model_copy(update={"parent_bus_id": dialogue.id}))
 
-        repository.save_audio_effect(
+        repository.audio.save_audio_effect(
             AudioEffect(
                 bus_id=dialogue.id,
                 kind=AudioEffectKind.COMPRESSOR,
@@ -131,7 +134,7 @@ def test_audio_bus_rejects_cycle_and_effect_chain_is_ordered(tmp_path: Path) -> 
                 parameters={"threshold_db": -18},
             )
         )
-        repository.save_audio_effect(
+        repository.audio.save_audio_effect(
             AudioEffect(
                 bus_id=dialogue.id,
                 kind=AudioEffectKind.PARAMETRIC_EQ,
@@ -139,14 +142,14 @@ def test_audio_bus_rejects_cycle_and_effect_chain_is_ordered(tmp_path: Path) -> 
                 parameters={"low_db": 2},
             )
         )
-        assert [effect.kind for effect in repository.list_audio_effects(dialogue.id)] == [
+        assert [effect.kind for effect in repository.audio.list_audio_effects(dialogue.id)] == [
             AudioEffectKind.PARAMETRIC_EQ,
             AudioEffectKind.COMPRESSOR,
         ]
-        effects = list(reversed(repository.list_audio_effects(dialogue.id)))
+        effects = list(reversed(repository.audio.list_audio_effects(dialogue.id)))
         reordered = [effect.model_copy(update={"position": index}) for index, effect in enumerate(effects)]
-        repository.save_audio_effect_chain(dialogue.id, reordered)
-        assert [effect.kind for effect in repository.list_audio_effects(dialogue.id)] == [
+        repository.audio.save_audio_effect_chain(dialogue.id, reordered)
+        assert [effect.kind for effect in repository.audio.list_audio_effects(dialogue.id)] == [
             AudioEffectKind.COMPRESSOR,
             AudioEffectKind.PARAMETRIC_EQ,
         ]
@@ -164,8 +167,8 @@ def test_highlight_candidates_are_project_data_not_task_only_output(tmp_path: Pa
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"media")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = repository.import_external_asset(source_file, AssetKind.VIDEO)
-        project = repository.get_project()
+        asset = repository.catalog.import_external_asset(source_file, AssetKind.VIDEO)
+        project = repository.catalog.get_project()
         candidate = HighlightCandidate(
             project_id=project.id,
             asset_id=asset.id,
@@ -175,8 +178,8 @@ def test_highlight_candidates_are_project_data_not_task_only_output(tmp_path: Pa
             reason="信息密度高且可以独立成段",
             score=0.93,
         )
-        repository.save_highlights([candidate])
-        persisted = repository.list_highlights(asset.id)
+        repository.highlights.save_highlights([candidate])
+        persisted = repository.highlights.list_highlights(asset.id)
         assert persisted == [candidate]
 
 
@@ -186,8 +189,8 @@ def test_manual_highlight_selection_edit_and_short_draft_share_one_persisted_can
     source_file = tmp_path / "source.mp4"
     source_file.write_bytes(b"media")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = repository.import_external_asset(source_file, AssetKind.VIDEO)
-        project = repository.get_project()
+        asset = repository.catalog.import_external_asset(source_file, AssetKind.VIDEO)
+        project = repository.catalog.get_project()
         document = SubtitleDocument(
             project_id=project.id,
             asset_id=asset.id,
@@ -199,7 +202,7 @@ def test_manual_highlight_selection_edit_and_short_draft_share_one_persisted_can
             end_frame=500,
             text="候选字幕",
         )
-        repository.create_subtitle_document(document, [segment])
+        repository.subtitles.create_subtitle_document(document, [segment])
         service = HighlightService(repository)
         candidate = service.add_manual_candidate(
             asset.id,
@@ -218,14 +221,14 @@ def test_manual_highlight_selection_edit_and_short_draft_share_one_persisted_can
         )
         first = service.create_short_sequence(updated.id)
         second = service.create_short_sequence(updated.id)
-        persisted = repository.list_highlights(asset.id)[0]
-        timeline = repository.load_timeline(first.id)
+        persisted = repository.highlights.list_highlights(asset.id)[0]
+        timeline = repository.timeline.load_timeline(first.id)
         subtitle_track = next(track for track in timeline.tracks if track.kind == TrackKind.SUBTITLE)
 
         assert first.id == second.id == persisted.sequence_id
-        assert len(repository.list_sequences()) == 2
+        assert len(repository.catalog.list_sequences()) == 2
         assert [(clip.source_in, clip.duration) for clip in timeline.clips] == [(150, 240)]
-        assert repository.list_subtitle_placements(subtitle_track.id)
+        assert repository.subtitles.list_subtitle_placements(subtitle_track.id)
 
         service.update_candidate(
             candidate.id,
@@ -233,7 +236,7 @@ def test_manual_highlight_selection_edit_and_short_draft_share_one_persisted_can
             end_frame=360,
             title="再次修改",
         )
-        synced = repository.load_timeline(first.id)
+        synced = repository.timeline.load_timeline(first.id)
         assert [(clip.source_in, clip.duration) for clip in synced.clips] == [(180, 180)]
 
 
@@ -247,10 +250,10 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
         source.write_bytes(b"media")
 
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        first_asset = repository.import_external_asset(first_video, AssetKind.VIDEO)
-        second_asset = repository.import_external_asset(second_video, AssetKind.VIDEO)
-        audio_asset = repository.import_external_asset(mixed_audio, AssetKind.AUDIO)
-        project = repository.get_project()
+        first_asset = repository.catalog.import_external_asset(first_video, AssetKind.VIDEO)
+        second_asset = repository.catalog.import_external_asset(second_video, AssetKind.VIDEO)
+        audio_asset = repository.catalog.import_external_asset(mixed_audio, AssetKind.AUDIO)
+        project = repository.catalog.get_project()
         sequence_id = project.main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
@@ -283,7 +286,7 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
                 media_kind=ClipMediaKind.AUDIO_ONLY,
             ),
         ]
-        repository.save_timeline(state)
+        repository.timeline.save_timeline(state)
         document = SubtitleDocument(
             project_id=project.id,
             asset_id=audio_asset.id,
@@ -296,8 +299,8 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
             end_frame=80,
             text="来自整个时间轴的字幕",
         )
-        repository.create_subtitle_document(document, [segment])
-        repository.place_subtitle_document(
+        repository.subtitles.create_subtitle_document(document, [segment])
+        repository.subtitles.place_subtitle_document(
             document.id,
             subtitle_track.id,
             follow_clips=False,
@@ -333,12 +336,12 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
         )
         assert [item.asset_id for item in candidate] == [first_asset.id]
         short = service.create_short_sequence(candidate[0].id)
-        short_state = repository.load_timeline(short.id)
+        short_state = repository.timeline.load_timeline(short.id)
         short_subtitle_track = next(
             track for track in short_state.tracks if track.kind == TrackKind.SUBTITLE
         )
 
-        assert len(repository.list_sequences()) == 2
+        assert len(repository.catalog.list_sequences()) == 2
         assert {
             clip.asset_id: (clip.timeline_start, clip.source_in, clip.duration)
             for clip in short_state.clips
@@ -349,7 +352,7 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
         }
         assert [
             (placement.start_frame, placement.end_frame)
-            for placement in repository.list_subtitle_placements(short_subtitle_track.id)
+            for placement in repository.subtitles.list_subtitle_placements(short_subtitle_track.id)
         ] == [(0, 60)]
 
         service.update_candidate(
@@ -358,7 +361,7 @@ def test_sequence_transcript_highlight_copies_and_resyncs_the_multitrack_timelin
             end_frame=70,
             title="更新后的时间轴高光",
         )
-        synced = repository.load_timeline(short.id)
+        synced = repository.timeline.load_timeline(short.id)
         assert {
             clip.asset_id: (clip.timeline_start, clip.source_in, clip.duration)
             for clip in synced.clips

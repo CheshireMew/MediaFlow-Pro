@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mediaflow.domain.settings import GlobalSettings, default_media_root, default_project_root
+from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.translation import TranslationMode
 
 
@@ -82,12 +82,15 @@ class SettingsForm(BaseModel):
         candidate = settings.model_copy(deep=True)
         candidate.ui.language = self.language
         candidate.ui.theme = self.theme
-        project_directory = self.default_project_directory.strip() or default_project_root()
+        project_directory = (
+            self.default_project_directory.strip()
+            or settings.ui.default_project_directory
+        )
         candidate.ui.default_project_directory = str(Path(project_directory).expanduser().resolve())
         candidate.ui.default_import_directory = self.default_import_directory.strip() or None
         candidate.workflow.auto_continue = self.auto_continue
         candidate.download.resolution = self.download_resolution
-        directory = self.download_directory.strip() or default_media_root()
+        directory = self.download_directory.strip() or settings.download.output_directory
         candidate.download.output_directory = str(Path(directory).expanduser().resolve())
         candidate.download.proxy = self.download_proxy.strip() or None
         candidate.download.cookie_file = self.cookie_file.strip() or None
@@ -120,6 +123,7 @@ def settings_data(settings: GlobalSettings) -> dict:
         **SettingsForm.from_settings(settings).model_dump(by_alias=True),
         "windowWidth": settings.ui.window_width,
         "windowHeight": settings.ui.window_height,
+        "windowMaximized": settings.ui.window_maximized,
         "leftPanelWidth": settings.ui.left_panel_width,
         "timelineHeight": settings.ui.timeline_height,
         "assetViewMode": settings.ui.asset_view_mode,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -68,13 +69,15 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkey
         assert _process_until(lambda: len(controllers.workspace.projectVersions) == 1)
         snapshot = Path(controllers.workspace.projectVersions[0]["snapshotPath"])
         if not snapshot.is_absolute():
-            snapshot = controllers.session._documents.project_dir / snapshot
+            snapshot = controllers.session.binding.current.project_dir / snapshot
         assert snapshot.is_file()
         assert QMetaObject.invokeMethod(versions_dialog, "close")
 
         source = tmp_path / "scene.mp4"
         generate_black_intro_video(source, RuntimePaths.discover())
-        controllers.media.importMedia(QUrl.fromLocalFile(str(source)).toString())
+        controllers.media.importFiles(
+            [QUrl.fromLocalFile(str(source))]
+        )
         assert _process_until(lambda: controllers.media.assetsModel.rowCount() == 1)
         asset_id = controllers.media.assetsModel.get(0)["assetId"]
         controllers.timeline.dropAssets([asset_id], "", -1, 0, 3.0, 0, True, False)
@@ -112,7 +115,20 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkey
         assert fcpxml_button is not None and fcpxml_button.isVisible()
         fcpxml = tmp_path / "extension-ui.fcpxml"
         controllers.export.exportFcpxml(QUrl.fromLocalFile(str(fcpxml)).toString())
-        assert fcpxml.is_file() and "<asset-clip" in fcpxml.read_text(encoding="utf-8")
+        assert fcpxml.is_file()
+        root = ET.parse(fcpxml).getroot()
+        resource = root.find("./resources/asset")
+        assert resource is not None
+        assert resource.find("media-rep") is not None
+        if resource.attrib.get("hasAudio") == "1":
+            linked_clip = root.find(".//asset-clip")
+            assert linked_clip is not None
+            assert linked_clip.attrib["ref"] == resource.attrib["id"]
+        else:
+            video_component = root.find(".//clip/video")
+            assert video_component is not None
+            assert video_component.attrib["ref"] == resource.attrib["id"]
+            assert root.find(".//asset-clip") is None
 
         screenshot = tmp_path / "extension-entrypoints.png"
         rendered = window.grabWindow()
@@ -122,3 +138,10 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkey
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         QCoreApplication.processEvents()
+
+    project_database = tmp_path / "Extension UI" / "project.mfp"
+    release_probe = project_database.with_suffix(
+        ".mfp.release-check"
+    )
+    project_database.replace(release_probe)
+    release_probe.replace(project_database)

@@ -5,13 +5,13 @@ import ".."
 Menu {
     id: control
     margins: 6
-    padding: 4
+    padding: 5
     delegate: AppMenuItem {}
     background: Rectangle {
         implicitWidth: 220
-        implicitHeight: 40
+        implicitHeight: Theme.controlHeight
         radius: Theme.radiusSmall
-        color: Theme.surfaceFloating
+        color: Theme.popup
         border.color: Theme.borderStrong
         border.width: 1
     }

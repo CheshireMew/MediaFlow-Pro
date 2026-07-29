@@ -156,6 +156,55 @@ class Clip(DomainModel):
     def timeline_end(self) -> int:
         return self.timeline_start + self.duration
 
+    def validate_source_range(
+        self,
+        asset_kind: AssetKind,
+        source_duration_frames: int,
+    ) -> None:
+        """Validate the exact source interval consumed by this timeline clip.
+
+        Still images and editable web media intentionally have an unbounded
+        presentation duration. Timed media with unknown metadata is accepted
+        until probing completes, but every known duration is enforced here.
+        """
+        maximum_duration = self.maximum_timeline_duration(
+            asset_kind,
+            source_duration_frames,
+        )
+        if maximum_duration is None:
+            return
+        if self.duration > maximum_duration:
+            direction = "reverse" if self.speed_numerator < 0 else "forward"
+            raise ValueError(
+                f"Clip source range exceeds the {source_duration_frames}-frame asset "
+                f"while playing {direction}"
+            )
+
+    def maximum_timeline_duration(
+        self,
+        asset_kind: AssetKind,
+        source_duration_frames: int,
+    ) -> int | None:
+        """Return the exact largest timeline duration available from the source.
+
+        Images and editable web media are presentation sources and therefore
+        unbounded. A non-positive timed-media duration remains unknown until
+        probing completes. Every known timed source uses this same calculation
+        for validation and frame-clock migration.
+        """
+
+        if asset_kind in {AssetKind.IMAGE, AssetKind.WEB} or source_duration_frames <= 0:
+            return None
+        if self.source_in >= source_duration_frames:
+            return 0
+        available_source_frames = (
+            source_duration_frames - self.source_in
+            if self.speed_numerator > 0
+            else self.source_in + 1
+        )
+        speed = Fraction(abs(self.speed_numerator), self.speed_denominator)
+        return available_source_frames * speed.denominator // speed.numerator
+
 
 class Transition(DomainModel):
     id: str = Field(default_factory=new_id)
@@ -216,3 +265,35 @@ class TimelineState(DomainModel):
             (clip for clip in self.clips if clip.track_id == track_id),
             key=lambda clip: (clip.timeline_start, clip.id),
         )
+
+    def effective_tracks(self, kind: TrackKind) -> list[Track]:
+        """Return the enabled tracks of one kind after applying kind-local solo."""
+        candidates = [
+            track
+            for track in sorted(self.tracks, key=lambda item: (item.position, item.id))
+            if track.kind == kind and track.enabled
+        ]
+        soloed = [track for track in candidates if track.solo]
+        return soloed or candidates
+
+
+class TimelineRevisionConflict(RuntimeError):
+    """A timeline mutation was based on a sequence revision that is no longer current."""
+
+    def __init__(self, sequence_id: str, *, expected: int, actual: int):
+        self.sequence_id = sequence_id
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Timeline changed while editing sequence {sequence_id}: "
+            f"expected revision {expected}, current revision {actual}"
+        )
+
+
+class TimelineMergeConflict(RuntimeError):
+    """Two concurrent mutations changed the same timeline entity."""
+
+    def __init__(self, entity: str, entity_id: str):
+        self.entity = entity
+        self.entity_id = entity_id
+        super().__init__(f"Concurrent timeline edits conflict on {entity} {entity_id}")

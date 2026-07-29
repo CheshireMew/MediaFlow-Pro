@@ -3,19 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
+from mediaflow.atomic_file import atomic_write_text
+
 
 class TranslationCache:
-    """Project-local cache for validated, timing-preserving translation batches."""
+    """Machine-local cache for validated, timing-preserving translation batches."""
 
     SCHEMA_VERSION = 1
     MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
-    def __init__(self, project_dir: Path):
-        self.directory = project_dir / "cache" / "translations"
+    def __init__(self, directory: Path):
+        self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def get(self, request: dict[str, Any]) -> list[str] | None:
@@ -42,12 +43,10 @@ class TranslationCache:
             "texts": texts,
         }
         destination = self._path(request)
-        temporary = destination.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-        temporary.write_text(
+        atomic_write_text(
+            destination,
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
         )
-        temporary.replace(destination)
 
     def _path(self, request: dict[str, Any]) -> Path:
         canonical = json.dumps(

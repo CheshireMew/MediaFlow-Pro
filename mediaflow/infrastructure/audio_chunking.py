@@ -3,17 +3,15 @@ from __future__ import annotations
 import json
 import re
 import statistics
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.infrastructure.process_observers import (
-    FfmpegProgressObserver,
-    ffmpeg_progress_command,
-)
+from mediaflow.domain.storage_names import require_windows_interop_path
+from mediaflow.infrastructure.cache_manager import CacheManager
+from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable, run_cancellable_streaming
+from mediaflow.infrastructure.subprocess_runner import run_cancellable
 
 
 class AudioPreparationService:
@@ -22,6 +20,7 @@ class AudioPreparationService:
 
     def __init__(self, paths: RuntimePaths | None = None):
         self.paths = paths or RuntimePaths.discover()
+        self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def prepare_for_asr(
         self,
@@ -32,7 +31,9 @@ class AudioPreparationService:
         check_cancelled: Callable[[], None] | None = None,
         progress: Callable[[OperationProgress], None] | None = None,
     ) -> Path:
-        source = Path(media_path).resolve(strict=True)
+        source = require_windows_interop_path(
+            Path(media_path).resolve(strict=True)
+        )
         if progress:
             progress(OperationProgress.indeterminate("preparing_asr_audio_probe"))
         channels, source_duration = self._probe_audio(source)
@@ -59,59 +60,53 @@ class AudioPreparationService:
                 if self._is_strongly_antiphase(phase_values)
                 else "pan=mono|c0=0.5*c0+0.5*c1"
             )
-        output = self.paths.runtime_dir / "cache" / "asr-inputs" / "runs" / str(uuid.uuid4()) / "input.wav"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            str(self.paths.ffmpeg),
-            "-y",
-            "-hide_banner",
-            "-v",
-            "error",
-            "-i",
-            str(source),
-            "-ss",
-            f"{start:.6f}",
-            "-t",
-            f"{duration:.6f}",
-            "-map",
-            "0:a:0",
-            "-vn",
-        ]
-        if audio_filter:
-            command.extend(["-af", audio_filter])
-        else:
-            command.extend(["-ac", "1"])
-        command.extend(["-ar", "16000", "-c:a", "pcm_s16le", str(output)])
-        observer = (
-            FfmpegProgressObserver(
-                duration,
-                lambda position: progress(
-                    OperationProgress.determinate(
-                        "preparing_asr_audio",
-                        completed=position,
-                        total=duration,
-                        unit="media_seconds",
+        cache = CacheManager(self.paths.runtime_dir / "cache")
+        run_dir = cache.create_run("asr-inputs")
+        try:
+            output = require_windows_interop_path(run_dir / "input.wav")
+            command = [
+                "-y",
+                "-v",
+                "error",
+                "-i",
+                str(source),
+                "-ss",
+                f"{start:.6f}",
+                "-t",
+                f"{duration:.6f}",
+                "-map",
+                "0:a:0",
+                "-vn",
+            ]
+            if audio_filter:
+                command.extend(["-af", audio_filter])
+            else:
+                command.extend(["-ac", "1"])
+            command.extend(["-ar", "16000", "-c:a", "pcm_s16le", str(output)])
+            result = self.ffmpeg.run_progress(
+                command,
+                total_seconds=duration,
+                on_position=(
+                    lambda position: progress(
+                        OperationProgress.determinate(
+                            "preparing_asr_audio",
+                            completed=position,
+                            total=duration,
+                            unit="media_seconds",
+                        )
                     )
-                )
-                if progress
-                else None,
+                    if progress
+                    else None
+                ),
+                check_cancelled=check_cancelled,
             )
-            if duration > 0
-            else None
-        )
-        if observer is None and progress:
-            progress(OperationProgress.indeterminate("preparing_asr_audio"))
-        result = run_cancellable_streaming(
-            ffmpeg_progress_command(command),
-            on_stderr_line=observer,
-            check_cancelled=check_cancelled,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
-            detail = str(result.stderr or "FFmpeg 没有生成 ASR 输入").strip()
-            raise RuntimeError(f"准备 ASR 音频失败：{detail}")
-        return output
+            if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
+                detail = str(result.stderr or "FFmpeg 没有生成 ASR 输入").strip()
+                raise RuntimeError(f"准备 ASR 音频失败：{detail}")
+            return output
+        except BaseException:
+            cache.cleanup_run(run_dir)
+            raise
 
     def _probe_audio(self, source: Path) -> tuple[int, float]:
         result = run_cancellable(
@@ -168,7 +163,7 @@ class AudioPreparationService:
         analysis_completed = 0.0
         for relative_start, window_duration in windows:
             start = source_start + relative_start
-            command = [str(self.paths.ffmpeg), "-hide_banner", "-v", "error"]
+            command = ["-v", "error"]
             if start > 0:
                 command.extend(["-ss", f"{start:.3f}"])
             command.extend(["-i", str(source)])
@@ -206,18 +201,14 @@ class AudioPreparationService:
                         )
                     )
 
-                observer = FfmpegProgressObserver(
-                    measured_duration,
-                    report_channel_analysis,
-                )
+                on_position = report_channel_analysis
             else:
-                observer = None
-            result = run_cancellable_streaming(
-                ffmpeg_progress_command(command),
-                on_stderr_line=observer,
+                on_position = None
+            result = self.ffmpeg.run_progress(
+                command,
+                total_seconds=measured_duration,
+                on_position=on_position,
                 check_cancelled=check_cancelled,
-                encoding="utf-8",
-                errors="replace",
             )
             if result.returncode != 0:
                 raise RuntimeError(str(result.stderr or "立体声相位检测失败").strip())
@@ -246,9 +237,12 @@ class AudioPreparationService:
 class AudioChunkingService:
     def __init__(self, paths: RuntimePaths | None = None):
         self.paths = paths or RuntimePaths.discover()
+        self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def duration_seconds(self, media_path: str | Path) -> float:
-        source = Path(media_path).resolve(strict=True)
+        source = require_windows_interop_path(
+            Path(media_path).resolve(strict=True)
+        )
         result = run_cancellable(
             [
                 str(self.paths.ffprobe),
@@ -279,39 +273,36 @@ class AudioChunkingService:
         check_cancelled: Callable[[], None] | None = None,
         progress: Callable[[OperationProgress], None] | None = None,
     ) -> list[tuple[float, float]]:
-        source = Path(media_path).resolve(strict=True)
-        command = [
-                str(self.paths.ffmpeg),
-                "-hide_banner",
-                "-v",
-                "info",
-                "-i",
-                str(source),
-                "-af",
-                f"silencedetect=noise={threshold_db:g}dB:d={minimum_duration:g}",
-                "-f",
-                "null",
-                "-",
-            ]
-        observer = FfmpegProgressObserver(
-            duration_seconds,
-            lambda position: progress(
-                OperationProgress.determinate(
-                    "asr_silence_detection",
-                    completed=position,
-                    total=duration_seconds,
-                    unit="media_seconds",
-                )
-            )
-            if progress
-            else None,
+        source = require_windows_interop_path(
+            Path(media_path).resolve(strict=True)
         )
-        result = run_cancellable_streaming(
-            ffmpeg_progress_command(command),
-            on_stderr_line=observer,
+        command = [
+            "-v",
+            "info",
+            "-i",
+            str(source),
+            "-af",
+            f"silencedetect=noise={threshold_db:g}dB:d={minimum_duration:g}",
+            "-f",
+            "null",
+            "-",
+        ]
+        result = self.ffmpeg.run_progress(
+            command,
+            total_seconds=duration_seconds,
+            on_position=(
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        "asr_silence_detection",
+                        completed=position,
+                        total=duration_seconds,
+                        unit="media_seconds",
+                    )
+                )
+                if progress
+                else None
+            ),
             check_cancelled=check_cancelled,
-            encoding="utf-8",
-            errors="replace",
         )
         if result.returncode != 0:
             raise RuntimeError(str(result.stderr or "静音检测失败").strip())
@@ -372,73 +363,84 @@ class AudioChunkingService:
         check_cancelled: Callable[[], None] | None = None,
         progress: Callable[[OperationProgress], None] | None = None,
     ) -> list[tuple[Path, float]]:
-        source = Path(media_path).resolve(strict=True)
-        output_dir = self.paths.runtime_dir / "cache" / "asr-chunks" / "runs" / str(uuid.uuid4())
-        output_dir.mkdir(parents=True, exist_ok=True)
-        chunks: list[tuple[Path, float]] = []
-        starts = [0.0, *split_points]
-        ends = [*split_points, total_duration]
-        for index, (start, end) in enumerate(zip(starts, ends, strict=True)):
-            output = output_dir / f"chunk-{index:03d}.wav"
-            command = [
-                str(self.paths.ffmpeg),
-                "-y",
-                "-hide_banner",
-                "-v",
-                "error",
-                "-ss",
-                f"{start:.6f}",
-                "-i",
-                str(source),
-            ]
-            chunk_duration = end - start
-            command.extend(["-t", f"{chunk_duration:.6f}"])
-            command.extend(
-                [
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "16000",
-                    "-c:a",
-                    "pcm_s16le",
-                    str(output),
-                ]
-            )
-            if progress is not None:
-
-                def report_chunk_extraction(
-                    position: float,
-                    measured_total: float = chunk_duration,
-                    completed_before: float = start,
-                ) -> None:
-                    progress(
-                        OperationProgress.determinate(
-                            "asr_chunk_extracting",
-                            completed=min(
-                                total_duration,
-                                completed_before + min(position, measured_total),
-                            ),
-                            total=total_duration,
-                            unit="media_seconds",
-                        )
-                    )
-
-                observer = FfmpegProgressObserver(
-                    chunk_duration,
-                    report_chunk_extraction,
+        source = require_windows_interop_path(
+            Path(media_path).resolve(strict=True)
+        )
+        cache = CacheManager(self.paths.runtime_dir / "cache")
+        output_dir = cache.create_run("asr-chunks")
+        try:
+            chunks: list[tuple[Path, float]] = []
+            starts = [0.0, *split_points]
+            ends = [*split_points, total_duration]
+            for index, (start, end) in enumerate(
+                zip(starts, ends, strict=True)
+            ):
+                output = require_windows_interop_path(
+                    output_dir / f"chunk-{index:03d}.wav"
                 )
-            else:
-                observer = None
-            result = run_cancellable_streaming(
-                ffmpeg_progress_command(command),
-                on_stderr_line=observer,
-                check_cancelled=check_cancelled,
-                encoding="utf-8",
-                errors="replace",
-            )
-            if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
-                detail = str(result.stderr or "FFmpeg 没有生成音频分块").strip()
-                raise RuntimeError(f"ASR 音频分块失败：{detail}")
-            chunks.append((output, start))
-        return chunks
+                command = [
+                    "-y",
+                    "-v",
+                    "error",
+                    "-ss",
+                    f"{start:.6f}",
+                    "-i",
+                    str(source),
+                ]
+                chunk_duration = end - start
+                command.extend(["-t", f"{chunk_duration:.6f}"])
+                command.extend(
+                    [
+                        "-vn",
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "16000",
+                        "-c:a",
+                        "pcm_s16le",
+                        str(output),
+                    ]
+                )
+                if progress is not None:
+
+                    def report_chunk_extraction(
+                        position: float,
+                        measured_total: float = chunk_duration,
+                        completed_before: float = start,
+                    ) -> None:
+                        progress(
+                            OperationProgress.determinate(
+                                "asr_chunk_extracting",
+                                completed=min(
+                                    total_duration,
+                                    completed_before
+                                    + min(position, measured_total),
+                                ),
+                                total=total_duration,
+                                unit="media_seconds",
+                            )
+                        )
+
+                    on_position = report_chunk_extraction
+                else:
+                    on_position = None
+                result = self.ffmpeg.run_progress(
+                    command,
+                    total_seconds=chunk_duration,
+                    on_position=on_position,
+                    check_cancelled=check_cancelled,
+                )
+                if (
+                    result.returncode != 0
+                    or not output.is_file()
+                    or output.stat().st_size == 0
+                ):
+                    detail = str(
+                        result.stderr or "FFmpeg 没有生成音频分块"
+                    ).strip()
+                    raise RuntimeError(f"ASR 音频分块失败：{detail}")
+                chunks.append((output, start))
+            return chunks
+        except BaseException:
+            cache.cleanup_run(output_dir)
+            raise

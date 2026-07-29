@@ -3,7 +3,8 @@ import QtQuick.Layouts
 import ".."
 
 Item {
-    property string iconText: "＋"
+    id: root
+    property string iconName: "project"
     property string title: "暂无内容"
     property string description: ""
     property bool iconVisible: true
@@ -20,22 +21,52 @@ Item {
         width: Math.min(contentMaximumWidth, Math.max(0, parent.width - 32))
         spacing: 10
 
-        Rectangle {
+        Item {
             visible: iconVisible
             Layout.alignment: Qt.AlignHCenter
-            width: 48
-            height: 48
-            radius: 14
-            color: Theme.surfaceRaised
-            border.color: Theme.border
-            Text {
+            implicitWidth: 56
+            implicitHeight: 52
+
+            Rectangle {
+                anchors.fill: parent
+                radius: Theme.radius
+                color: Theme.surfaceRaised
+                border.color: Theme.border
+            }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.leftMargin: 7
+                anchors.topMargin: 7
+                width: 13
+                height: 2
+                radius: 1
+                color: Theme.accent
+            }
+
+            AppIcon {
                 anchors.centerIn: parent
-                text: iconText
-                color: Theme.textMuted
-                font.pixelSize: 24
+                width: 24
+                height: 24
+                iconName: root.iconName
+                iconColor: Theme.textSubtle
+                strokeWidth: 1.8
+            }
+
+            Rectangle {
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: 7
+                anchors.bottomMargin: 7
+                width: 5
+                height: 5
+                radius: 3
+                color: Theme.cut
             }
         }
         Text {
+            objectName: "emptyStateTitle"
             Layout.fillWidth: true
             text: title
             color: Theme.text
@@ -44,6 +75,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
         }
         Text {
+            objectName: "emptyStateDescription"
             Layout.fillWidth: true
             text: description
             color: Theme.textMuted

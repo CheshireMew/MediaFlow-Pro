@@ -25,7 +25,7 @@ class WorkflowCoordinator:
         global_auto_continue: bool,
     ):
         self.repository = repository
-        project = repository.get_project()
+        project = repository.catalog.get_project()
         self.auto_continue = (
             project.workflow_auto_continue
             if project.workflow_auto_continue is not None
@@ -41,8 +41,8 @@ class WorkflowCoordinator:
         payload: WorkflowPayload | None = None,
         running: bool = False,
     ) -> WorkflowRun:
-        project = self.repository.get_project()
-        return self.repository.save_workflow_run(
+        project = self.repository.catalog.get_project()
+        return self.repository.catalog.save_workflow_run(
             WorkflowRun(
                 project_id=project.id,
                 sequence_id=sequence_id,
@@ -62,11 +62,11 @@ class WorkflowCoordinator:
         task_ids: list[str],
         payload: WorkflowPayloadPatch | None = None,
     ) -> WorkflowRun:
-        run = self.repository.get_workflow_run(run_id)
+        run = self.repository.catalog.get_workflow_run(run_id)
         merged = (
             (payload or WorkflowPayloadPatch()).apply(run.payload).model_copy(update={"task_ids": task_ids})
         )
-        return self.repository.save_workflow_run(
+        return self.repository.catalog.save_workflow_run(
             run.model_copy(
                 update={
                     "status": WorkflowStatus.RUNNING,
@@ -83,11 +83,11 @@ class WorkflowCoordinator:
         asset_ids: list[str] | None = None,
         payload: WorkflowPayloadPatch | None = None,
     ) -> WorkflowRun:
-        run = self.repository.get_workflow_run(run_id)
+        run = self.repository.catalog.get_workflow_run(run_id)
         next_stage = _NEXT_STAGE[run.stage]
         merged = (payload or WorkflowPayloadPatch()).apply(run.payload).model_copy(update={"task_ids": []})
         if next_stage == WorkflowStage.COMPLETE:
-            return self.repository.save_workflow_run(
+            return self.repository.catalog.save_workflow_run(
                 run.model_copy(
                     update={
                         "asset_ids": asset_ids if asset_ids is not None else run.asset_ids,
@@ -98,7 +98,7 @@ class WorkflowCoordinator:
                     }
                 )
             )
-        return self.repository.save_workflow_run(
+        return self.repository.catalog.save_workflow_run(
             run.model_copy(
                 update={
                     "asset_ids": asset_ids if asset_ids is not None else run.asset_ids,
@@ -111,8 +111,8 @@ class WorkflowCoordinator:
         )
 
     def block(self, run_id: str, message_code: str) -> WorkflowRun:
-        run = self.repository.get_workflow_run(run_id)
-        return self.repository.save_workflow_run(
+        run = self.repository.catalog.get_workflow_run(run_id)
+        return self.repository.catalog.save_workflow_run(
             run.model_copy(
                 update={
                     "status": WorkflowStatus.BLOCKED,
@@ -122,8 +122,8 @@ class WorkflowCoordinator:
         )
 
     def await_confirmation(self, run_id: str) -> WorkflowRun:
-        run = self.repository.get_workflow_run(run_id)
-        return self.repository.save_workflow_run(
+        run = self.repository.catalog.get_workflow_run(run_id)
+        return self.repository.catalog.save_workflow_run(
             run.model_copy(
                 update={
                     "status": WorkflowStatus.AWAITING_CONFIRMATION,
@@ -133,8 +133,8 @@ class WorkflowCoordinator:
         )
 
     def cancel(self, run_id: str) -> WorkflowRun:
-        run = self.repository.get_workflow_run(run_id)
-        return self.repository.save_workflow_run(
+        run = self.repository.catalog.get_workflow_run(run_id)
+        return self.repository.catalog.save_workflow_run(
             run.model_copy(
                 update={
                     "status": WorkflowStatus.CANCELLED,

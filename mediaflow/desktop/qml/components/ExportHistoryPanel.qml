@@ -68,6 +68,16 @@ Panel {
                             font.pixelSize: 10
                             elide: Text.ElideRight
                         }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: Boolean(modelData.encoderFallbackUsed)
+                            text: qsTr("硬件编码失败，已从 %1 切换为 %2")
+                                .arg(modelData.requestedVideoCodec)
+                                .arg(modelData.actualVideoCodec)
+                            color: Theme.warning
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
+                        }
                     }
                     AppButton {
                         text: qsTr("成片")

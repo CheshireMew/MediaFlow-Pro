@@ -40,8 +40,6 @@ signals:
     void durationChanged(int duration, quint64 requestId);
     void playingChanged(bool playing, quint64 requestId);
     void droppedFramesChanged(int droppedFrames, quint64 requestId);
-    void clockDriftChanged(double milliseconds, quint64 requestId);
-    void audioClockActiveChanged(bool active, quint64 requestId);
     void errorOccurred(const QString &message, quint64 requestId);
 
 private:
@@ -182,8 +180,6 @@ private:
     bool m_playing = false;
     bool m_sourceHdr = false;
     bool m_outputHdr = false;
-    bool m_audioClockActive = false;
-    double m_clockDriftMs = 0.0;
     int m_previewWidth = 960;
     int m_previewHeight = 540;
     std::atomic<int> m_frameDuration{0};

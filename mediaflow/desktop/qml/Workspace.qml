@@ -8,16 +8,53 @@ Rectangle {
     id: root
     objectName: "workspace"
     color: Theme.window
-    property string activeMode: "media"
+    property string activeMode: workspaceController.workspaceModes.length > 0
+        ? String(workspaceController.workspaceModes[0].key) : ""
     property var exportPreviewOptions: ({})
-    readonly property int workspaceNavigationHeight: 50
-    readonly property int workspaceBannerHeight: taskController.downloadProgressVisible ? 64 : 0
+    readonly property int workspaceNavigationHeight: 54
+    readonly property int workspaceBannerHeight:
+        taskController.downloadProgressVisible || workflowBanner.visible ? 64 : 0
     readonly property Item focusedItem: root.Window.window
         ? root.Window.window.activeFocusItem : null
     readonly property bool textInputActive: focusedItem instanceof TextInput
         || focusedItem instanceof TextEdit
+    readonly property bool modalOpen: settingsDialog.opened
+        || profileDialog.opened
+        || sequenceProfileDialog.opened
+        || Boolean(mediaPanelLoader.item && mediaPanelLoader.item.modalOpen)
+        || Boolean(taskCenterPanelLoader.item
+            && taskCenterPanelLoader.item.modalOpen)
+        || Boolean(root.Window.window
+            && (root.Window.window.downloadPlanVisible
+                || root.Window.window.projectVersionsVisible))
+    readonly property bool shortcutsEnabled: !root.textInputActive
+        && !Boolean(webEditorLoader.item
+            && webEditorLoader.item.webInputActive)
+        && !root.modalOpen
+    readonly property bool canEdit:
+        workspaceController.actionCapabilities.canEdit
     property real toolPanelWidth: Math.max(340, settingsController.settingsData.leftPanelWidth || 360)
     property real timelinePanelHeight: Math.max(210, settingsController.settingsData.timelineHeight || 330)
+
+    function panelIndexForMode(modeKey) {
+        const modes = workspaceController.workspaceModes;
+        let panelObjectName = "";
+        for (let modeIndex = 0; modeIndex < modes.length; ++modeIndex) {
+            if (String(modes[modeIndex].key) === String(modeKey)) {
+                panelObjectName = String(modes[modeIndex].panelObjectName);
+                break;
+            }
+        }
+        if (!panelObjectName)
+            return 0;
+        const panels = toolStack.children;
+        for (let panelIndex = 0; panelIndex < panels.length; ++panelIndex) {
+            if (String(panels[panelIndex].panelObjectName) === panelObjectName)
+                return panelIndex;
+        }
+        return 0;
+    }
+
     function toggleFullscreen() {
         previewViewport.toggleFullscreen();
     }
@@ -48,6 +85,14 @@ Rectangle {
 
     function persistPanelLayout() {
         settingsController.savePanelLayout(Math.round(toolPanelWidth), Math.round(timelinePanelHeight));
+    }
+
+    function openMediaImportDialog() {
+        root.activeMode = "media";
+        Qt.callLater(function () {
+            if (mediaPanelLoader.item)
+                mediaPanelLoader.item.openImportDialog();
+        });
     }
 
     Connections {
@@ -83,6 +128,14 @@ Rectangle {
             Layout.preferredHeight: visible ? 64 : 0
         }
 
+        WorkflowBanner {
+            id: workflowBanner
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? 64 : 0
+            onOpenSettingsRequested: settingsDialog.open()
+            onOpenExportRequested: root.activeMode = "export"
+        }
+
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -99,56 +152,99 @@ Rectangle {
                     Layout.preferredWidth: root.toolPanelWidth
                     Layout.fillHeight: true
                     color: Theme.surface
-                    border.color: Theme.border
-                    StackLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        currentIndex: root.activeMode === "media" ? 0
-                            : root.activeMode === "transcript" ? 1
-                            : root.activeMode === "highlight" ? 2
-                            : root.activeMode === "edit" ? 3
-                            : root.activeMode === "audio" ? 4
-                            : root.activeMode === "export" ? 5 : 6
+                    border.width: 0
 
-                        MediaPanel {
-                            id: mediaPanel
-                            dragPreview: mediaDragPreview
-                            playheadFrame: timeline.visiblePlayheadFrame
-                            pixelsPerFrame: timeline.pixelsPerFrame
-                            snapEnabled: timeline.snapEnabled
-                        }
-                        TranscriptWorkspace {
-                            playheadFrame: previewViewport.position
-                            playbackActive: previewViewport.playing
-                            onImportRequested: {
-                                root.activeMode = "media";
-                                mediaPanel.openImportDialog();
-                            }
-                            onSeekRequested: function (frame) {
-                                previewViewport.seek(frame);
-                            }
-                        }
-                        HighlightPanel {
-                            playheadFrame: previewViewport.position
-                        }
-                        EditPanel { playheadFrame: previewViewport.position }
-                        AudioPanel {}
-                        ExportPanel {
-                            id: exportPanel
-                            onPreviewConfigurationChanged: function (options) {
-                                root.exportPreviewOptions = options;
+                    StackLayout {
+                        id: toolStack
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+                        anchors.topMargin: 14
+                        anchors.bottomMargin: 14
+                        currentIndex: root.panelIndexForMode(root.activeMode)
+
+                        Loader {
+                            id: mediaPanelLoader
+                            property string panelObjectName: "mediaPanel"
+                            active: root.activeMode === "media"
+                                || status === Loader.Ready
+                            sourceComponent: MediaPanel {
+                                dragPreview: mediaDragPreview
+                                playheadFrame: timeline.visiblePlayheadFrame
+                                pixelsPerFrame: timeline.pixelsPerFrame
+                                snapEnabled: timeline.snapEnabled
                             }
                         }
-                        TaskCenterPanel {}
+                        Loader {
+                            property string panelObjectName: "transcriptWorkspace"
+                            active: root.activeMode === "transcript"
+                                || status === Loader.Ready
+                            sourceComponent: TranscriptWorkspace {
+                                playheadFrame: previewViewport.position
+                                playbackActive: previewViewport.playing
+                                onImportRequested: root.openMediaImportDialog()
+                                onSeekRequested: function (frame) {
+                                    previewViewport.seek(frame);
+                                }
+                            }
+                        }
+                        Loader {
+                            property string panelObjectName: "highlightPanel"
+                            active: root.activeMode === "highlight"
+                                || status === Loader.Ready
+                            sourceComponent: HighlightPanel {
+                                playheadFrame: previewViewport.position
+                            }
+                        }
+                        Loader {
+                            property string panelObjectName: "editPanel"
+                            active: root.activeMode === "edit"
+                                || status === Loader.Ready
+                            sourceComponent: EditPanel {
+                                playheadFrame: previewViewport.position
+                            }
+                        }
+                        Loader {
+                            property string panelObjectName: "audioScroll"
+                            active: root.activeMode === "audio"
+                                || status === Loader.Ready
+                            sourceComponent: AudioPanel {}
+                        }
+                        Loader {
+                            property string panelObjectName: "exportPanel"
+                            active: root.activeMode === "export"
+                                || status === Loader.Ready
+                            sourceComponent: ExportPanel {
+                                onPreviewConfigurationChanged: function (options) {
+                                    root.exportPreviewOptions = options;
+                                }
+                            }
+                        }
+                        Loader {
+                            id: taskCenterPanelLoader
+                            property string panelObjectName: "taskCenterPanel"
+                            active: root.activeMode === "tasks"
+                                || status === Loader.Ready
+                            sourceComponent: TaskCenterPanel {}
+                        }
                     }
                 }
 
                 Rectangle {
                     id: leftResizeHandle
-                    Layout.preferredWidth: 6
+                    Layout.preferredWidth: 8
                     Layout.fillHeight: true
-                    color: leftDrag.active ? Theme.accent : Theme.border
+                    color: Theme.window
                     property real startWidth: 0
+
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: leftDrag.active ? 2 : 1
+                        color: leftDrag.active ? Theme.accent : Theme.divider
+                    }
+
                     DragHandler {
                         id: leftDrag
                         target: null
@@ -196,21 +292,35 @@ Rectangle {
                     }
                 }
 
-                WebEditorCanvas {
+                Loader {
+                    id: webEditorLoader
+                    objectName: "webEditorLoader"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: 260
                     visible: root.activeMode === "edit" && webController.isWebClip && webController.editMode
-                    playheadFrame: previewViewport.position
+                    active: visible || status === Loader.Ready
+                    sourceComponent: WebEditorCanvas {
+                        playheadFrame: previewViewport.position
+                    }
                 }
             }
 
-            Rectangle {
-                id: timelineResizeHandle
-                Layout.fillWidth: true
-                Layout.preferredHeight: 6
-                color: timelineDrag.active ? Theme.accent : Theme.border
+                Rectangle {
+                    id: timelineResizeHandle
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 8
+                    color: Theme.window
                 property real startHeight: 0
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: timelineDrag.active ? 2 : 1
+                    color: timelineDrag.active ? Theme.accent : Theme.divider
+                }
+
                 DragHandler {
                     id: timelineDrag
                     target: null
@@ -233,6 +343,7 @@ Rectangle {
                 Layout.preferredHeight: root.timelinePanelHeight
                 Layout.minimumHeight: 210
                 playheadFrame: previewViewport.position
+                shortcutsEnabled: root.shortcutsEnabled
                 onPlayheadScrubbingChanged: {
                     if (timeline.playheadScrubbing)
                         root.beginPreviewScrub();
@@ -287,7 +398,7 @@ Rectangle {
         anchors.centerIn: parent
     }
 
-    Dialog {
+    AppDialog {
         id: profileDialog
         anchors.centerIn: parent
         implicitWidth: 460
@@ -306,204 +417,8 @@ Rectangle {
         }
     }
 
-    Dialog {
+    SequenceProfileDialog {
         id: sequenceProfileDialog
-        anchors.centerIn: parent
-        implicitWidth: 440
-        width: 440
-        modal: true
-        title: qsTr("序列配置")
-        standardButtons: Dialog.Save | Dialog.Cancel
-        onOpened: {
-            profileWidth.text = String(workspaceController.profileWidth);
-            profileHeight.text = String(workspaceController.profileHeight);
-            for (var index = 0; index < frameRate.model.length; ++index) {
-                var item = frameRate.model[index];
-                if (item.n === workspaceController.profileFpsNumerator && item.d === workspaceController.profileFpsDenominator) {
-                    frameRate.currentIndex = index;
-                    break;
-                }
-            }
-            colorProfile.currentIndex = workspaceController.colorMode === "hdr10_bt2020_pq" ? 1 : 0;
-            for (var channelIndex = 0; channelIndex < audioChannels.model.length; ++channelIndex) {
-                if (audioChannels.model[channelIndex].value === workspaceController.profileAudioChannels) {
-                    audioChannels.currentIndex = channelIndex;
-                    break;
-                }
-            }
-        }
-        onAccepted: {
-            var fps = frameRate.model[frameRate.currentIndex];
-            var color = colorProfile.model[colorProfile.currentIndex];
-            var channels = audioChannels.model[audioChannels.currentIndex];
-            workspaceController.updateSequenceProfile(Number(profileWidth.text), Number(profileHeight.text), fps.n, fps.d, color.value, channels.value);
-        }
-        contentItem: ColumnLayout {
-            spacing: 10
-            Text {
-                text: qsTr("画布比例")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-            }
-            AppComboBox {
-                Layout.fillWidth: true
-                textRole: "label"
-                model: [
-                    {
-                        label: "16:9 · 1920×1080",
-                        width: 1920,
-                        height: 1080
-                    },
-                    {
-                        label: "9:16 · 1080×1920",
-                        width: 1080,
-                        height: 1920
-                    },
-                    {
-                        label: "1:1 · 1080×1080",
-                        width: 1080,
-                        height: 1080
-                    },
-                    {
-                        label: "4:5 · 1080×1350",
-                        width: 1080,
-                        height: 1350
-                    }
-                ]
-                onActivated: function (index) {
-                    profileWidth.text = String(model[index].width);
-                    profileHeight.text = String(model[index].height);
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                AppTextField {
-                    id: profileWidth
-                    Layout.fillWidth: true
-                    validator: IntValidator {
-                        bottom: 16
-                        top: 16384
-                    }
-                    placeholderText: qsTr("宽度")
-                }
-                Text {
-                    text: "×"
-                    color: Theme.textMuted
-                }
-                AppTextField {
-                    id: profileHeight
-                    Layout.fillWidth: true
-                    validator: IntValidator {
-                        bottom: 16
-                        top: 16384
-                    }
-                    placeholderText: qsTr("高度")
-                }
-            }
-            Text {
-                text: qsTr("帧率")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-            }
-            AppComboBox {
-                id: frameRate
-                Layout.fillWidth: true
-                textRole: "label"
-                model: [
-                    {
-                        label: "23.976 fps",
-                        n: 24000,
-                        d: 1001
-                    },
-                    {
-                        label: "24 fps",
-                        n: 24,
-                        d: 1
-                    },
-                    {
-                        label: "25 fps",
-                        n: 25,
-                        d: 1
-                    },
-                    {
-                        label: "29.97 fps",
-                        n: 30000,
-                        d: 1001
-                    },
-                    {
-                        label: "30 fps",
-                        n: 30,
-                        d: 1
-                    },
-                    {
-                        label: "50 fps",
-                        n: 50,
-                        d: 1
-                    },
-                    {
-                        label: "59.94 fps",
-                        n: 60000,
-                        d: 1001
-                    },
-                    {
-                        label: "60 fps",
-                        n: 60,
-                        d: 1
-                    }
-                ]
-                currentIndex: 4
-            }
-            Text {
-                text: qsTr("色彩与输出声道")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                AppComboBox {
-                    id: colorProfile
-                    Layout.fillWidth: true
-                    textRole: "label"
-                    model: [
-                        {
-                            label: "SDR · BT.709",
-                            value: "sdr_bt709"
-                        },
-                        {
-                            label: "HDR10 · BT.2020 · PQ",
-                            value: "hdr10_bt2020_pq"
-                        }
-                    ]
-                }
-                AppComboBox {
-                    id: audioChannels
-                    Layout.fillWidth: true
-                    textRole: "label"
-                    model: [
-                        {
-                            label: qsTr("单声道"),
-                            value: 1
-                        },
-                        {
-                            label: qsTr("立体声"),
-                            value: 2
-                        },
-                        {
-                            label: "5.1",
-                            value: 6
-                        }
-                    ]
-                    currentIndex: 1
-                }
-            }
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("修改帧率会按实际时长重新换算片段、转场和字幕；预览缓存会按需重建。")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeCaption
-                wrapMode: Text.WordWrap
-            }
-        }
     }
 
     Connections {
@@ -518,31 +433,29 @@ Rectangle {
 
     Shortcut {
         sequence: "Ctrl+I"
-        enabled: !root.textInputActive && !workspaceController.readOnly
-        onActivated: {
-            root.activeMode = "media";
-            mediaPanel.openImportDialog();
-        }
+        enabled: root.shortcutsEnabled && root.canEdit
+        onActivated: root.openMediaImportDialog()
     }
     Shortcut {
         sequence: "Ctrl+M"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: root.activeMode = "export"
     }
     Shortcut {
         sequence: "Space"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         autoRepeat: false
         onActivated: previewViewport.playing || previewViewport.playbackRequested
             ? previewViewport.pause() : root.playPreview()
     }
     Shortcut {
         sequence: "F11"
+        enabled: root.shortcutsEnabled
         onActivated: root.toggleFullscreen()
     }
     Shortcut {
         sequence: "J"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: {
             previewViewport.playbackRate = previewViewport.playing && previewViewport.playbackRate < 0
                 ? Math.max(-4, previewViewport.playbackRate * 2) : -1.0;
@@ -551,12 +464,12 @@ Rectangle {
     }
     Shortcut {
         sequence: "K"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: previewViewport.pause()
     }
     Shortcut {
         sequence: "L"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: {
             previewViewport.playbackRate = previewViewport.playing && previewViewport.playbackRate > 0
                 ? Math.min(4, previewViewport.playbackRate * 2) : 1.0;
@@ -565,44 +478,51 @@ Rectangle {
     }
     Shortcut {
         sequence: "S"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: timeline.snapEnabled = !timeline.snapEnabled
     }
     Shortcut {
         sequence: "Ctrl+K"
-        enabled: !root.textInputActive && timelineController.selectedClipId.length > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.selectedClipId.length > 0
         onActivated: timelineController.splitClip(
             timelineController.selectedClipId, previewViewport.position)
     }
     Shortcut {
         sequence: "Ctrl+B"
-        enabled: !root.textInputActive && timelineController.selectedClipId.length > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.selectedClipId.length > 0
         onActivated: timelineController.splitClip(
             timelineController.selectedClipId, previewViewport.position)
     }
     Shortcut {
         sequence: "Delete"
-        enabled: !root.textInputActive && timelineController.selectedClipIds.length > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.selectedClipIds.length > 0
         onActivated: timelineController.deleteSelectedClips(false)
     }
     Shortcut {
         sequence: "Shift+Delete"
-        enabled: !root.textInputActive && timelineController.selectedClipIds.length > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.selectedClipIds.length > 0
         onActivated: timelineController.deleteSelectedClips(true)
     }
     Shortcut {
         sequence: "Ctrl+Z"
-        enabled: !root.textInputActive && timelineController.canUndo
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.canUndo
         onActivated: timelineController.undo()
     }
     Shortcut {
         sequences: ["Ctrl+Y", "Ctrl+Shift+Z"]
-        enabled: !root.textInputActive && timelineController.canRedo
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.canRedo
         onActivated: timelineController.redo()
     }
     Shortcut {
         sequence: "Ctrl+D"
-        enabled: !root.textInputActive && timelineController.selectedClipId.length > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && timelineController.selectedClipId.length > 0
         onActivated: timelineController.duplicateClip(
             timelineController.selectedClipId,
             timeline.pixelsPerFrame,
@@ -610,66 +530,73 @@ Rectangle {
     }
     Shortcut {
         sequence: "Ctrl+A"
-        enabled: !root.textInputActive && timelineController.clipsModel.rowCount() > 0
+        enabled: root.shortcutsEnabled
+            && timelineController.clipsModel.rowCount() > 0
         onActivated: timelineController.selectAllClips()
     }
     Shortcut {
         sequence: "Ctrl+Shift+A"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: timeline.clearTimelineSelection()
     }
     Shortcut {
         sequence: "Escape"
-        enabled: !root.textInputActive && timelineController.selectedClipIds.length > 0
+        enabled: root.shortcutsEnabled
+            && timelineController.selectedClipIds.length > 0
         onActivated: timeline.clearTimelineSelection()
     }
     Shortcut {
         sequence: "I"
-        enabled: !root.textInputActive && workspaceController.timelineDurationFrames > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && workspaceController.timelineDurationFrames > 0
         onActivated: timelineController.setSequenceInPoint(previewViewport.position)
     }
     Shortcut {
         sequence: "O"
-        enabled: !root.textInputActive && workspaceController.timelineDurationFrames > 0
+        enabled: root.shortcutsEnabled && root.canEdit
+            && workspaceController.timelineDurationFrames > 0
         onActivated: timelineController.setSequenceOutPoint(previewViewport.position)
     }
     Shortcut {
         sequence: "Ctrl+Shift+X"
-        enabled: !root.textInputActive && workspaceController.hasSequenceInOut
+        enabled: root.shortcutsEnabled && root.canEdit
+            && workspaceController.hasSequenceInOut
         onActivated: timelineController.clearSequenceInOut()
     }
     Shortcut {
         sequence: "Left"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: previewViewport.seek(previewViewport.position - 1)
     }
     Shortcut {
         sequence: "Right"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: previewViewport.seek(previewViewport.position + 1)
     }
     Shortcut {
         sequence: "Home"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: previewViewport.seek(0)
     }
     Shortcut {
         sequence: "End"
-        enabled: !root.textInputActive && workspaceController.timelineDurationFrames > 0
+        enabled: root.shortcutsEnabled
+            && workspaceController.timelineDurationFrames > 0
         onActivated: previewViewport.seek(workspaceController.timelineDurationFrames - 1)
     }
     Shortcut {
         sequence: "\\"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled
         onActivated: timeline.fitTimeline()
     }
     Shortcut {
         sequence: "Ctrl+S"
+        enabled: root.shortcutsEnabled && root.canEdit
         onActivated: workspaceController.saveProject()
     }
     Shortcut {
         sequence: "M"
-        enabled: !root.textInputActive
+        enabled: root.shortcutsEnabled && root.canEdit
         onActivated: timelineController.addTimelineMarker(previewViewport.position)
     }
 }

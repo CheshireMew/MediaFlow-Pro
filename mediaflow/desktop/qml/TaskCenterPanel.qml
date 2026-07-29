@@ -7,8 +7,11 @@ import "components"
 Item {
     id: root
     objectName: "taskCenterPanel"
+    readonly property bool canManageTasks:
+        workspaceController.actionCapabilities.canManageTasks
+    readonly property bool modalOpen: cancelAllDialog.opened
 
-    Dialog {
+    AppDialog {
         id: cancelAllDialog
         objectName: "cancelAllTasksDialog"
         anchors.centerIn: parent
@@ -16,7 +19,7 @@ Item {
         modal: true
         title: qsTr("取消全部任务？")
         standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: taskController.cancelAllTasks()
+        onAccepted: if (root.canManageTasks) taskController.cancelAllTasks()
         contentItem: Text {
             width: cancelAllDialog.availableWidth
             text: qsTr("正在运行和等待中的任务都会取消；已经生成的结果不会删除。")
@@ -47,20 +50,23 @@ Item {
             AppButton {
                 objectName: "pauseActiveTasksButton"
                 Layout.fillWidth: true
-                enabled: taskController.inFlightTaskCount > 0
+                enabled: root.canManageTasks
+                    && taskController.inFlightTaskCount > 0
                 text: qsTr("暂停进行中")
                 onClicked: taskController.pauseAllTasks()
             }
             AppButton {
                 Layout.fillWidth: true
-                enabled: taskController.activeTaskCount > 0
+                enabled: root.canManageTasks
+                    && taskController.activeTaskCount > 0
                 danger: true
                 text: qsTr("全部取消")
                 onClicked: cancelAllDialog.open()
             }
             AppButton {
                 Layout.fillWidth: true
-                enabled: taskController.terminalTaskCount > 0
+                enabled: root.canManageTasks
+                    && taskController.terminalTaskCount > 0
                 text: qsTr("清理已结束")
                 onClicked: taskController.clearTaskHistory()
             }
@@ -77,6 +83,7 @@ Item {
             delegate: Panel {
                 required property string displayName
                 required property string configurationLabel
+                required property bool encoderFallbackUsed
                 required property string commandType
                 required property string kind
                 required property string status
@@ -96,17 +103,19 @@ Item {
                 required property var artifacts
                 required property var executionTrace
                 property bool traceExpanded: false
+                property bool errorExpanded: false
                 readonly property bool compactCompleted: status === "completed"
-                    && error.length === 0 && !traceExpanded
+                    && error.length === 0 && !encoderFallbackUsed && !traceExpanded
                 readonly property bool userOpenableArtifact: commandType !== "generate_proxy"
                     && commandType !== "generate_waveform"
                 width: taskList.width
-                height: (compactCompleted ? 94 : error.length > 0 ? 166 : 142)
-                    + (!compactCompleted && configurationLabel.length > 0 ? 24 : 0)
-                    + (traceExpanded ? 30 + executionTrace.length * 25 : 0)
+                height: taskContent.implicitHeight + 24
 
                 ColumnLayout {
-                    anchors.fill: parent
+                    id: taskContent
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
                     anchors.margins: 12
                     spacing: 7
                     RowLayout {
@@ -125,7 +134,7 @@ Item {
                             font.pixelSize: Theme.fontSizeCaption
                         }
                     }
-                    ProgressBar {
+                    AppProgressBar {
                         Layout.fillWidth: true
                         visible: !compactCompleted
                         from: 0
@@ -166,23 +175,28 @@ Item {
                         text: error
                         color: Theme.danger
                         font.pixelSize: Theme.fontSizeCaption
-                        elide: Text.ElideRight
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: errorExpanded ? 1000 : 2
+                        elide: errorExpanded ? Text.ElideNone : Text.ElideRight
                     }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 6
                         AppButton {
                             visible: status === "running"
+                            enabled: root.canManageTasks
                             text: qsTr("暂停")
                             onClicked: taskController.pauseTask(taskId)
                         }
                         AppButton {
                             visible: status === "paused"
+                            enabled: root.canManageTasks
                             text: qsTr("继续")
                             onClicked: taskController.resumeTask(taskId)
                         }
                         AppButton {
                             visible: status === "pending" || status === "running" || status === "paused"
+                            enabled: root.canManageTasks
                             text: qsTr("取消")
                             onClicked: taskController.cancelTask(taskId)
                         }
@@ -196,11 +210,13 @@ Item {
                         }
                         AppButton {
                             visible: status === "failed" || status === "cancelled"
+                            enabled: root.canManageTasks
                             text: qsTr("重试")
                             onClicked: taskController.retryTask(taskId)
                         }
                         AppButton {
                             visible: status === "completed" || status === "failed" || status === "cancelled"
+                            enabled: root.canManageTasks
                             text: qsTr("从列表移除")
                             onClicked: taskController.removeTask(taskId)
                         }
@@ -208,6 +224,16 @@ Item {
                             visible: executionTrace && executionTrace.length > 0
                             text: traceExpanded ? qsTr("收起执行记录") : qsTr("执行记录")
                             onClicked: traceExpanded = !traceExpanded
+                        }
+                        AppButton {
+                            visible: error.length > 0
+                            text: errorExpanded ? qsTr("收起错误") : qsTr("错误详情")
+                            onClicked: errorExpanded = !errorExpanded
+                        }
+                        AppButton {
+                            visible: error.length > 0
+                            text: qsTr("复制错误")
+                            onClicked: taskController.copyErrorDetails(error)
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -220,12 +246,15 @@ Item {
                             RowLayout {
                                 required property var modelData
                                 Layout.fillWidth: true
-                                Text {
-                                    text: modelData.status === "success" ? "✓"
-                                        : modelData.status === "failed" ? "!" : "×"
-                                    color: modelData.status === "success" ? Theme.success
+                                AppIcon {
+                                    Layout.preferredWidth: 14
+                                    Layout.preferredHeight: 14
+                                    iconName: modelData.status === "success"
+                                        ? "check"
+                                        : modelData.status === "failed" ? "warning" : "close"
+                                    iconColor: modelData.status === "success"
+                                        ? Theme.success
                                         : modelData.status === "failed" ? Theme.danger : Theme.warning
-                                    font.pixelSize: Theme.fontSizeCaption
                                 }
                                 Text {
                                     Layout.fillWidth: true
@@ -255,7 +284,7 @@ Item {
             EmptyState {
                 anchors.fill: parent
                 visible: taskList.count === 0
-                iconText: "✓"
+                iconName: "check"
                 title: qsTr("没有后台任务")
                 description: qsTr("下载、预览准备、字幕、翻译和导出进度会显示在这里。")
             }

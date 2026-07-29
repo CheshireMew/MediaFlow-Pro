@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 import os
 import subprocess
 import time
 from pathlib import Path
+
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,6 +23,8 @@ from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
 
 def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(tmp_path: Path) -> None:
     paths = RuntimePaths.discover()
@@ -34,7 +36,7 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(tmp_pat
 
     with ProjectRepository.create(tmp_path / "Native Project", "Native Project") as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
-        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,
@@ -278,16 +280,11 @@ ApplicationWindow {
 
         preview.play()
         deadline = time.monotonic() + 4
-        while time.monotonic() < deadline and (
-            preview.property("position") < 5
-            or not preview.property("audioClockActive")
-        ):
+        while time.monotonic() < deadline and preview.property("position") < 5:
             QCoreApplication.processEvents()
             time.sleep(0.01)
         assert preview.property("position") >= 5
         assert preview.property("droppedFrames") == 0
-        assert preview.property("audioClockActive") is True
-        assert abs(float(preview.property("clockDriftMs"))) <= 5.0
         preview.pause()
         preview.setProperty("source", "")
         assert preview.property("playing") is False
@@ -350,7 +347,7 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(tmp_path
         assert audio_asset.kind == AssetKind.AUDIO and audio_asset.metadata.has_audio
         assert image_asset.kind == AssetKind.IMAGE
 
-        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         audio_track = editor.add_track(TrackKind.AUDIO)
         specifications = [
@@ -448,7 +445,7 @@ def test_native_preview_tone_maps_hdr_graph_on_sdr_output(tmp_path: Path) -> Non
 
     with ProjectRepository.create(tmp_path / "HDR Preview", "HDR Preview", profile) as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
-        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,

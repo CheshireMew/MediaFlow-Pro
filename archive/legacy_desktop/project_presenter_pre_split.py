@@ -27,7 +27,6 @@ from mediaflow.domain.task_commands import RenderWebClipCommand, TranscribeSeque
 from mediaflow.domain.timebase import (
     seconds_to_frames,
 )
-from mediaflow.domain.timeline import compatible_track_kinds
 from mediaflow.infrastructure.web_render_service import WebRenderCache
 
 logger = logging.getLogger(__name__)
@@ -40,24 +39,15 @@ class ProjectPresentationProjector:
     """Project persisted state into desktop list models and preview artifacts."""
 
     def __init__(self, session: ProjectSession):
-        object.__setattr__(self, "_session", session)
-
-    def __getattr__(self, name: str):
-        return getattr(self._session, name)
-
-    def __setattr__(self, name: str, value) -> None:
-        if name == "_session" or not name.startswith("_"):
-            object.__setattr__(self, name, value)
-        else:
-            setattr(self._session, name, value)
+        self._session = session
 
     def refresh_runtime_tool_status(self, *, preserve_cuda: bool = True) -> None:
         cuda = {
-            key: self._runtime_tool_status.get(key, "")
+            key: self._session.runtime_state.status.get(key, "")
             for key in ("cudaStatus", "cudaSummary", "gpuName", "driverVersion")
         }
-        self._runtime_tool_status = {
-            **self._api.runtime_tool_status(),
+        self._session.runtime_state.status = {
+            **self._session._api.runtime_tool_status(),
             **(cuda if preserve_cuda else {}),
             "busy": False,
             "progressMode": "indeterminate",
@@ -65,67 +55,72 @@ class ProjectPresentationProjector:
             "message": "",
             "operation": "",
         }
-        self.runtimeToolsChanged.emit()
+        self._session.events.runtimeToolsChanged.emit()
 
     def refresh_recent_projects(self) -> None:
-        self._recent_request_id += 1
-        request_id = self._recent_request_id
-        paths = list(self.settings.ui.recent_project_paths)
-        self._submit_background(
+        self._session.requests.recent_id += 1
+        request_id = self._session.requests.recent_id
+        paths = list(self._session.settings.ui.recent_project_paths)
+        self._session._submit_background(
             "recent_projects",
             request_id,
-            lambda: self._api.recent_projects(paths),
+            lambda: self._session._api.recent_projects(paths),
         )
 
     def apply_recent_projects(self, snapshot) -> None:
-        self._home_summary = snapshot.totals
+        self._session.presentation.home_summary = snapshot.totals
         items = []
         for item in snapshot.items:
             cover_path = item.get("coverPath", "")
             row = {key: value for key, value in item.items() if key != "coverPath"}
             row["coverUrl"] = QUrl.fromLocalFile(cover_path).toString() if cover_path else ""
             items.append(row)
-        self._recent_project_model.set_items(items)
-        self.projectStateChanged.emit()
+        self._session.models.recent_projects.set_items(items)
+        self._session.events.projectStateChanged.emit()
 
     def discover_video_encoders(self) -> None:
-        self._encoder_request_id += 1
-        request_id = self._encoder_request_id
-        self._submit_background(
+        self._session.requests.encoder_id += 1
+        request_id = self._session.requests.encoder_id
+        self._session._submit_background(
             "video_encoders",
             request_id,
-            self._api.discover_video_encoder_options,
+            self._session._api.discover_video_encoder_options,
         )
 
     def refresh_all(self) -> None:
         self.refresh_assets()
         self.refresh_sequences()
-        self.refresh_timeline()
         self.refresh_tasks()
+        self.refresh_active_sequence(refresh_sequences=False)
+        self._session.events.workflowChanged.emit()
+
+    def refresh_active_sequence(self, *, refresh_sequences: bool = False) -> None:
+        if refresh_sequences:
+            self.refresh_sequences()
+        self.refresh_timeline()
         self.refresh_documents()
         self.refresh_highlights()
         self.refresh_audio_buses()
         self.refresh_audio_metrics()
         self.refresh_preview_subtitles()
-        self.projectStateChanged.emit()
-        self.historyChanged.emit()
-        self.workflowChanged.emit()
+        self._session.events.projectStateChanged.emit()
+        self._session.events.historyChanged.emit()
 
     def refresh_assets(self) -> None:
-        if not self._documents:
-            self._asset_model.set_items([])
+        if not self._session.binding.current:
+            self._session.models.assets.set_items([])
             return
-        assets = self._documents.list_assets()
+        assets = self._session.binding.current.list_assets()
         available_ids = {asset.id for asset in assets}
-        self._asset_thumbnail_paths = {
+        self._session.asset_state.thumbnail_paths = {
             asset_id: path
-            for asset_id, path in self._asset_thumbnail_paths.items()
+            for asset_id, path in self._session.asset_state.thumbnail_paths.items()
             if asset_id in available_ids
         }
         transcript_terms: dict[str, list[str]] = {}
-        for document in self._documents.list_subtitle_documents():
+        for document in self._session.binding.current.list_subtitle_documents():
             text = " ".join(
-                segment.text for segment in self._documents.list_subtitle_segments(document.id)
+                segment.text for segment in self._session.binding.current.list_subtitle_segments(document.id)
             )
             for asset_id in {document.asset_id, document.media_asset_id} - {None}:
                 transcript_terms.setdefault(asset_id, []).append(text)
@@ -141,8 +136,8 @@ class ProjectPresentationProjector:
                 "width": asset.metadata.width or 0,
                 "height": asset.metadata.height or 0,
                 "previewUrl": (
-                    QUrl.fromLocalFile(self._asset_thumbnail_paths[asset.id]).toString()
-                    if asset.id in self._asset_thumbnail_paths
+                    QUrl.fromLocalFile(self._session.asset_state.thumbnail_paths[asset.id]).toString()
+                    if asset.id in self._session.asset_state.thumbnail_paths
                     else ""
                 ),
                 "proxyReady": bool(asset.proxy_path),
@@ -154,11 +149,11 @@ class ProjectPresentationProjector:
             }
             for asset in assets
         ]
-        self._asset_model.set_items(rows)
+        self._session.models.assets.set_items(rows)
         for asset in assets:
             self.request_waveform_data(asset.id, asset.waveform_path)
-        self._selected_asset_ids = [
-            asset_id for asset_id in self._selected_asset_ids if asset_id in available_ids
+        self._session.selection.asset_ids = [
+            asset_id for asset_id in self._session.selection.asset_ids if asset_id in available_ids
         ]
         self.request_asset_thumbnails(assets)
 
@@ -173,81 +168,80 @@ class ProjectPresentationProjector:
         ]
         if asset.metadata.width and asset.metadata.height:
             terms.append(
-                "横屏 landscape"
-                if asset.metadata.width >= asset.metadata.height
-                else "竖屏 portrait"
+                "横屏 landscape" if asset.metadata.width >= asset.metadata.height else "竖屏 portrait"
             )
         terms.extend(transcript_terms)
         return " ".join(term for term in terms if term).casefold()
 
     def request_asset_thumbnails(self, assets) -> None:
-        if not self._project or not any(
-            asset.status.value == "online" and asset.kind.value in {"video", "image"}
-            for asset in assets
+        if not self._session.binding.current or not any(
+            asset.status.value == "online" and asset.kind.value in {"video", "image"} for asset in assets
         ):
             return
-        if self._asset_thumbnail_pending_request is not None:
-            self._asset_thumbnail_refresh_requested = True
+        if self._session.asset_state.thumbnail_pending_request is not None:
+            self._session.asset_state.thumbnail_refresh_requested = True
             return
-        self._asset_thumbnail_request_id += 1
+        self._session.asset_state.thumbnail_request_id += 1
         request_id = (
-            self._session_generation,
-            self._asset_thumbnail_request_id,
-            str(self._project.project_dir),
+            self._session.binding.generation,
+            self._session.asset_state.thumbnail_request_id,
+            str(self._session.binding.current.project_dir),
         )
-        project_dir = self._project.project_dir
-        self._asset_thumbnail_pending_request = request_id
-        self._submit_background(
+        project_dir = self._session.binding.current.project_dir
+        self._session.asset_state.thumbnail_pending_request = request_id
+        self._session._submit_background(
             "asset_thumbnails",
             request_id,
-            lambda: self._api.asset_thumbnail_paths(project_dir),
+            lambda: self._session._api.asset_thumbnail_paths(project_dir),
         )
 
     def apply_asset_thumbnails(self, paths: dict[str, str]) -> None:
-        self._asset_thumbnail_paths = dict(paths)
-        if not self._documents:
+        self._session.asset_state.thumbnail_paths = dict(paths)
+        if not self._session.binding.current:
             return
-        assets = self._documents.list_assets()
+        assets = self._session.binding.current.list_assets()
         rows = []
         for asset in assets:
-            current = self._asset_model.get(self._asset_model.findRow("assetId", asset.id))
+            current = self._session.models.assets.get(
+                self._session.models.assets.findRow("assetId", asset.id)
+            )
             if not current:
                 continue
             current["previewUrl"] = (
-                QUrl.fromLocalFile(self._asset_thumbnail_paths[asset.id]).toString()
-                if asset.id in self._asset_thumbnail_paths
+                QUrl.fromLocalFile(self._session.asset_state.thumbnail_paths[asset.id]).toString()
+                if asset.id in self._session.asset_state.thumbnail_paths
                 else ""
             )
             rows.append(current)
-        self._asset_model.set_items(rows)
+        self._session.models.assets.set_items(rows)
 
     def request_waveform_data(self, asset_id: str, waveform_path: str | None) -> None:
-        if not waveform_path or not self._documents:
-            self._waveform_cache.pop(asset_id, None)
+        if not waveform_path or not self._session.binding.current:
+            self._session.asset_state.waveform_cache.pop(asset_id, None)
             return
         path = Path(waveform_path)
         if not path.is_absolute():
-            path = self._documents.project_dir / path
+            path = self._session.binding.current.project_dir / path
         path_value = str(path.resolve())
-        cached = self._waveform_cache.get(asset_id)
+        cached = self._session.asset_state.waveform_cache.get(asset_id)
         if cached and cached[0] == path_value:
             return
-        request_id = (self._session_generation, asset_id, path_value)
-        if request_id in self._waveform_pending:
+        request_id = (self._session.binding.generation, asset_id, path_value)
+        if request_id in self._session.asset_state.waveform_pending:
             return
-        self._waveform_pending.add(request_id)
+        self._session.asset_state.waveform_pending.add(request_id)
 
         def load() -> tuple[int, dict]:
             modified = path.stat().st_mtime_ns
             return modified, json.loads(path.read_text(encoding="utf-8"))
 
-        self._submit_background("waveform", request_id, load)
+        self._session._submit_background("waveform", request_id, load)
 
     def refresh_sequences(self) -> None:
-        if not self._documents:
-            self._sequence_model.set_items([])
+        if not self._session.binding.current:
+            self._session.models.sequences.set_items([])
             return
-        self._sequence_model.set_items(
+        self._session.models.sequences.set_items(
             [
                 {
                     "sequenceId": sequence.id,
@@ -256,7 +250,7 @@ class ProjectPresentationProjector:
                     "profile": f"{sequence.profile.width}×{sequence.profile.height}",
                     "colorMode": sequence.profile.color_mode.value,
                 }
-                for sequence in self._documents.list_sequences()
+                for sequence in self._session.binding.current.list_sequences()
             ]
         )
 
@@ -276,25 +270,23 @@ class ProjectPresentationProjector:
         return clip_positions
 
     def refresh_timeline(self) -> None:
-        if not self._editor or not self._documents:
-            self._track_model.set_items([])
-            self._clip_model.set_items([])
-            self._compound_clip_model.set_items([])
-            self._transition_model.set_items([])
-            self._marker_model.set_items([])
-            self._range_model.set_items([])
+        if not self._session.binding.timeline or not self._session.binding.current:
+            self._session.models.tracks.set_items([])
+            self._session.models.clips.set_items([])
+            self._session.models.compound_clips.set_items([])
+            self._session.models.transitions.set_items([])
+            self._session.models.markers.set_items([])
+            self._session.models.ranges.set_items([])
             return
-        state = self._editor.state
-        assets = {asset.id: asset for asset in self._documents.list_assets()}
+        state = self._session.binding.timeline.state
+        assets = {asset.id: asset for asset in self._session.binding.current.list_assets()}
         tracks_by_id = {track.id: track for track in state.tracks}
         track_positions = {track.id: index for index, track in enumerate(state.tracks)}
         audio_lane_positions = self._audio_lane_projection(state)
         compound_by_clip_id = {
-            clip_id: compound.id
-            for compound in state.compounds
-            for clip_id in compound.clip_ids
+            clip_id: compound.id for compound in state.compounds for clip_id in compound.clip_ids
         }
-        self._track_model.set_items(
+        self._session.models.tracks.set_items(
             [
                 {
                     "trackId": track.id,
@@ -329,9 +321,6 @@ class ProjectPresentationProjector:
                 "mediaKind": clip.media_kind.value,
                 "assetKind": assets[clip.asset_id].kind.value,
                 "trackKind": tracks_by_id[clip.track_id].kind.value,
-                "allowedTrackKinds": [
-                    kind.value for kind in compatible_track_kinds(clip.media_kind)
-                ],
                 "hasAudio": assets[clip.asset_id].metadata.has_audio,
                 "audioTrackPosition": audio_lane_positions.get(clip.id, -1),
                 "waveformReady": bool(assets[clip.asset_id].waveform_path),
@@ -358,7 +347,7 @@ class ProjectPresentationProjector:
             }
             for clip in state.clips
         ]
-        self._clip_model.set_items(clip_rows)
+        self._session.models.clips.set_items(clip_rows)
         clips_by_id = {clip.id: clip for clip in state.clips}
         compound_rows = []
         for compound in state.compounds:
@@ -380,16 +369,16 @@ class ProjectPresentationProjector:
                     "hasAudio": any(assets[clip.asset_id].metadata.has_audio for clip in members),
                 }
             )
-        self._compound_clip_model.set_items(compound_rows)
+        self._session.models.compound_clips.set_items(compound_rows)
         available_clip_ids = {item["clipId"] for item in clip_rows}
-        self._selected_clip_ids = [
-            clip_id for clip_id in self._selected_clip_ids if clip_id in available_clip_ids
+        self._session.selection.clip_ids = [
+            clip_id for clip_id in self._session.selection.clip_ids if clip_id in available_clip_ids
         ]
         available_compound_ids = {item["compoundId"] for item in compound_rows}
-        if self._selected_compound_id not in available_compound_ids:
-            self._selected_compound_id = ""
+        if self._session.selection.compound_id not in available_compound_ids:
+            self._session.selection.compound_id = ""
         clips = clips_by_id
-        self._transition_model.set_items(
+        self._session.models.transitions.set_items(
             [
                 {
                     "transitionId": item.id,
@@ -409,7 +398,7 @@ class ProjectPresentationProjector:
                 for item in state.transitions
             ]
         )
-        self._marker_model.set_items(
+        self._session.models.markers.set_items(
             [
                 {
                     "markerId": item.id,
@@ -420,7 +409,7 @@ class ProjectPresentationProjector:
                 for item in state.markers
             ]
         )
-        self._range_model.set_items(
+        self._session.models.ranges.set_items(
             [
                 {
                     "rangeId": item.id,
@@ -436,12 +425,12 @@ class ProjectPresentationProjector:
 
     def refresh_tasks(self) -> None:
         tasks = sorted(
-            self._task_view.values(),
+            self._session.task_state.items.values(),
             key=lambda task: (task.created_at, task.id),
         )
         pending_ids = [task.id for task in tasks if task.status == TaskStatus.PENDING]
         queue_positions = {task_id: position for position, task_id in enumerate(pending_ids, start=1)}
-        self._task_model.set_items(
+        self._session.models.tasks.set_items(
             [
                 {
                     "taskId": task.id,
@@ -474,7 +463,10 @@ class ProjectPresentationProjector:
                     "inputAssetIds": list(task.input_asset_ids),
                     "contextId": self._task_context_id(task.command),
                     "error": task.error or "",
-                    "artifacts": task.artifacts,
+                    "artifacts": [
+                        str(item.resolve(self._session.binding.current.project_dir))
+                        for item in task.artifacts
+                    ],
                     "executionTrace": [
                         {
                             "step": task_message_label(item.step),
@@ -489,15 +481,15 @@ class ProjectPresentationProjector:
                 for task in reversed(tasks)
             ]
         )
-        self.tasksChanged.emit()
+        self._session.events.tasksChanged.emit()
 
     def refresh_documents(self) -> None:
-        if not self._documents:
-            self._document_model.set_items([])
-            self._segment_model.set_items([])
+        if not self._session.binding.current:
+            self._session.models.documents.set_items([])
+            self._session.models.segments.set_items([])
             return
-        documents = self._documents.list_subtitle_documents()
-        self._document_model.set_items(
+        documents = self._session.binding.current.list_subtitle_documents()
+        self._session.models.documents.set_items(
             [
                 {
                     "documentId": document.id,
@@ -507,27 +499,25 @@ class ProjectPresentationProjector:
                     "language": document.language,
                     "isSource": document.is_source,
                     "sourceDocumentId": document.source_document_id or "",
-                    "segmentCount": self._documents.subtitle_segment_summary(
-                        document.id
-                    )[0],
+                    "segmentCount": self._session.binding.current.subtitle_segment_summary(document.id)[0],
                 }
                 for document in documents
             ]
         )
-        if self._selected_document_id and all(
-            document.id != self._selected_document_id for document in documents
+        if self._session.selection.document_id and all(
+            document.id != self._session.selection.document_id for document in documents
         ):
-            self._selected_document_id = ""
+            self._session.selection.document_id = ""
         self.refresh_segments()
 
     def refresh_segments(self) -> None:
-        if not self._documents or not self._selected_document_id:
-            self._segment_model.set_items([])
-            self._selected_subtitle_segment_ids = []
+        if not self._session.binding.current or not self._session.selection.document_id:
+            self._session.models.segments.set_items([])
+            self._session.selection.subtitle_segment_ids = []
             return
-        segments = self._documents.list_subtitle_segments(self._selected_document_id)
-        project = self._documents.get_project()
-        profile = self._documents.get_sequence(project.main_sequence_id).profile
+        segments = self._session.binding.current.list_subtitle_segments(self._session.selection.document_id)
+        project = self._session.binding.current.get_project()
+        profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
         tolerance = max(
             1,
             seconds_to_frames(0.05, profile.fps_numerator, profile.fps_denominator),
@@ -548,22 +538,26 @@ class ProjectPresentationProjector:
             }
             for segment in segments
         ]
-        self._segment_model.set_items(rows)
+        self._session.models.segments.set_items(rows)
         available = {row["segmentId"] for row in rows}
-        self._selected_subtitle_segment_ids = [
-            segment_id for segment_id in self._selected_subtitle_segment_ids if segment_id in available
+        self._session.selection.subtitle_segment_ids = [
+            segment_id
+            for segment_id in self._session.selection.subtitle_segment_ids
+            if segment_id in available
         ]
 
     def refresh_highlights(self) -> None:
-        if not self._documents:
-            self._highlight_model.set_items([])
+        if not self._session.binding.current:
+            self._session.models.highlights.set_items([])
             return
-        candidates = self._documents.list_highlights(self.selectedAssetId or None)
+        selected_asset_id = (
+            self._session.selection.asset_ids[0] if self._session.selection.asset_ids else None
+        )
+        candidates = self._session.binding.current.list_highlights(selected_asset_id)
         documents = {
-            document.id: document
-            for document in self._documents.list_subtitle_documents()
+            document.id: document for document in self._session.binding.current.list_subtitle_documents()
         }
-        self._highlight_model.set_items(
+        self._session.models.highlights.set_items(
             [
                 {
                     "highlightId": item.id,
@@ -571,9 +565,7 @@ class ProjectPresentationProjector:
                     "documentId": item.document_id or "",
                     "sequenceId": item.sequence_id or "",
                     "sourceSequenceId": (
-                        documents[item.document_id].sequence_id or ""
-                        if item.document_id in documents
-                        else ""
+                        documents[item.document_id].sequence_id or "" if item.document_id in documents else ""
                     ),
                     "startFrame": item.start_frame,
                     "endFrame": item.end_frame,
@@ -587,10 +579,10 @@ class ProjectPresentationProjector:
         )
 
     def refresh_audio_buses(self) -> None:
-        if not self._documents or not self._active_sequence_id:
-            self._audio_bus_model.set_items([])
+        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+            self._session.models.audio_buses.set_items([])
             return
-        self._audio_bus_model.set_items(
+        self._session.models.audio_buses.set_items(
             [
                 {
                     "busId": bus.id,
@@ -602,22 +594,29 @@ class ProjectPresentationProjector:
                     "solo": bus.solo,
                     "channelLayout": bus.channel_layout,
                 }
-                for bus in self._documents.list_audio_buses(self._active_sequence_id)
+                for bus in self._session.binding.current.list_audio_buses(
+                    self._session.binding.active_sequence_id
+                )
             ]
         )
-        bus_ids = {bus.id for bus in self._documents.list_audio_buses(self._active_sequence_id)}
-        if self._selected_audio_bus_id not in bus_ids:
-            self._selected_audio_bus_id = ""
+        bus_ids = {
+            bus.id
+            for bus in self._session.binding.current.list_audio_buses(
+                self._session.binding.active_sequence_id
+            )
+        }
+        if self._session.selection.audio_bus_id not in bus_ids:
+            self._session.selection.audio_bus_id = ""
         self.refresh_audio_effects()
 
     def refresh_audio_effects(self) -> None:
-        if not self._documents or not self._selected_audio_bus_id:
-            self._audio_effect_model.set_items([])
-            self._selected_audio_effect_id = ""
+        if not self._session.binding.current or not self._session.selection.audio_bus_id:
+            self._session.models.audio_effects.set_items([])
+            self._session.selection.audio_effect_id = ""
             self.refresh_audio_effect_parameters()
             return
-        effects = self._documents.list_audio_effects(self._selected_audio_bus_id)
-        self._audio_effect_model.set_items(
+        effects = self._session.binding.current.list_audio_effects(self._session.selection.audio_bus_id)
+        self._session.models.audio_effects.set_items(
             [
                 {
                     "effectId": effect.id,
@@ -631,24 +630,30 @@ class ProjectPresentationProjector:
                 for effect in effects
             ]
         )
-        if self._selected_audio_effect_id not in {effect.id for effect in effects}:
-            self._selected_audio_effect_id = ""
+        if self._session.selection.audio_effect_id not in {effect.id for effect in effects}:
+            self._session.selection.audio_effect_id = ""
         self.refresh_audio_effect_parameters()
 
     def refresh_audio_effect_parameters(self) -> None:
-        if not self._documents or not self._selected_audio_bus_id or not self._selected_audio_effect_id:
-            self._audio_effect_parameter_model.set_items([])
+        if (
+            not self._session.binding.current
+            or not self._session.selection.audio_bus_id
+            or not self._session.selection.audio_effect_id
+        ):
+            self._session.models.audio_effect_parameters.set_items([])
             return
         try:
             effect = next(
                 effect
-                for effect in self._documents.list_audio_effects(self._selected_audio_bus_id)
-                if effect.id == self._selected_audio_effect_id
+                for effect in self._session.binding.current.list_audio_effects(
+                    self._session.selection.audio_bus_id
+                )
+                if effect.id == self._session.selection.audio_effect_id
             )
         except StopIteration:
-            self._audio_effect_parameter_model.set_items([])
+            self._session.models.audio_effect_parameters.set_items([])
             return
-        self._audio_effect_parameter_model.set_items(
+        self._session.models.audio_effect_parameters.set_items(
             [
                 {
                     **spec,
@@ -659,110 +664,114 @@ class ProjectPresentationProjector:
         )
 
     def refresh_audio_metrics(self) -> None:
-        self._audio_metrics_request_id += 1
-        request_id = self._audio_metrics_request_id
-        if not self._documents or not self._active_sequence_id:
-            self._audio_metrics = {}
-            self.audioMetricsChanged.emit()
+        self._session.requests.audio_metrics_id += 1
+        request_id = self._session.requests.audio_metrics_id
+        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+            self._session.presentation.audio_metrics = {}
+            self._session.events.audioMetricsChanged.emit()
             return
-        generation = self._session_generation
-        project_dir = self._documents.project_dir
-        sequence_id = self._active_sequence_id
-        self._submit_background(
+        generation = self._session.binding.generation
+        project_dir = self._session.binding.current.project_dir
+        sequence_id = self._session.binding.active_sequence_id
+        self._session._submit_background(
             "audio_metrics",
             (generation, request_id, sequence_id),
-            lambda: self._api.read_loudness_metrics(project_dir, sequence_id),
+            lambda: self._session._api.read_loudness_metrics(project_dir, sequence_id),
         )
 
     def schedule_preview_graph(self) -> None:
-        if not self._documents or not self._editor or not self._editor.state.clips:
-            if self._preview_graph_path:
-                self._preview_graph_path = ""
-                self.previewGraphChanged.emit()
+        if (
+            not self._session.binding.current
+            or not self._session.binding.timeline
+            or not self._session.binding.timeline.state.clips
+        ):
+            if self._session.presentation.preview_graph_path:
+                self._session.presentation.preview_graph_path = ""
+                self._session.events.previewGraphChanged.emit()
             return
-        self._preview_timer.start()
+        self._session._preview_timer.start()
 
     @Slot()
     def compile_preview_graph(self) -> None:
-        if not self._project or not self._editor:
+        if not self._session.binding.current or not self._session.binding.timeline:
             return
-        state = self._editor.state
+        state = self._session.binding.timeline.state
         if not state.clips:
             return
-        assets = {asset.id: asset for asset in self._documents.list_assets()}
+        assets = {asset.id: asset for asset in self._session.binding.current.list_assets()}
         missing_web_clips = [
             clip
             for clip in state.clips
             if assets[clip.asset_id].kind == AssetKind.WEB
-            and not WebRenderCache(self._documents).target(state, clip, assets[clip.asset_id]).path.is_file()
+            and not WebRenderCache(self._session.binding.current)
+            .target(state, clip, assets[clip.asset_id])
+            .path.is_file()
         ]
         if missing_web_clips:
             active_clip_ids = {
                 task.command.clip_id
-                for task in self._task_view.values()
+                for task in self._session.task_state.items.values()
                 if isinstance(task.command, RenderWebClipCommand) and task.status.is_active
             }
             for clip in missing_web_clips:
                 if clip.id not in active_clip_ids:
-                    self._create_task(
+                    self._session._create_task(
                         RenderWebClipCommand(sequence_id=state.sequence.id, clip_id=clip.id),
                         [clip.asset_id],
                         sequence_id=state.sequence.id,
                     )
             return
-        self._preview_request_id += 1
-        request_id = self._preview_request_id
-        generation = self._session_generation
-        project_dir = self._project.project_dir
-        use_proxies = self.settings.preview.preview_quality != "source"
+        self._session.requests.preview_id += 1
+        request_id = self._session.requests.preview_id
+        generation = self._session.binding.generation
+        project_dir = self._session.binding.current.project_dir
+        use_proxies = self._session.settings.preview.preview_quality != "source"
         prefer_sdr_preview_proxy = (
-            state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ and not self._hdr_preview_active
+            state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
+            and not self._session.presentation.hdr_preview_active
         )
-        self._submit_background(
+        if (
+            self._session.requests.preview_future is not None
+            and not self._session.requests.preview_future.running()
+        ):
+            self._session.requests.preview_future.cancel()
+        self._session.requests.preview_future = self._session._submit_background(
             "preview",
             (generation, request_id, state.sequence.id),
-            lambda: self._api.write_preview_snapshot(
+            lambda: self._session._api.write_preview_snapshot(
                 project_dir,
                 state,
                 use_proxies=use_proxies,
                 prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
             ),
-            executor=self._preview_executor,
+            executor=self._session._preview_executor,
         )
 
     def refresh_preview_subtitles(self) -> None:
-        self._preview_subtitles = []
-        self._preview_subtitles_by_track = {}
-        if not self._documents or not self._active_sequence_id:
-            self._subtitle_placement_model.set_items([])
+        self._session.presentation.preview_subtitles = []
+        self._session.presentation.preview_subtitles_by_track = {}
+        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+            self._session.models.subtitle_placements.set_items([])
             return
-        state = self._documents.load_timeline(self._active_sequence_id)
-        tracks = [
-            track
-            for track in state.tracks
-            if track.kind == TrackKind.SUBTITLE and track.enabled
-        ]
+        state = self._session.binding.current.load_timeline(self._session.binding.active_sequence_id)
+        tracks = [track for track in state.tracks if track.kind == TrackKind.SUBTITLE and track.enabled]
         if not tracks:
-            self._subtitle_placement_model.set_items([])
+            self._session.models.subtitle_placements.set_items([])
             return
         segments = {
             segment.id: segment
-            for document in self._documents.list_subtitle_documents()
-            for segment in self._documents.list_subtitle_segments(document.id)
+            for document in self._session.binding.current.list_subtitle_documents()
+            for segment in self._session.binding.current.list_subtitle_segments(document.id)
         }
         audio_lane_positions = self._audio_lane_projection(state)
         default_audio_position = next(
-            (
-                index
-                for index, track in enumerate(state.tracks)
-                if track.kind == TrackKind.AUDIO
-            ),
+            (index for index, track in enumerate(state.tracks) if track.kind == TrackKind.AUDIO),
             -1,
         )
         placement_rows = []
         for track in tracks:
             track_subtitles: list[tuple[int, int, str]] = []
-            for placement in self._documents.list_subtitle_placements(track.id):
+            for placement in self._session.binding.current.list_subtitle_placements(track.id):
                 segment = segments.get(placement.segment_id)
                 if segment:
                     text = placement.text_override or segment.text
@@ -786,15 +795,17 @@ class ProjectPresentationProjector:
                         }
                     )
                     if track.id == tracks[0].id:
-                        self._preview_subtitles.append((placement.start_frame, placement.end_frame, text))
+                        self._session.presentation.preview_subtitles.append(
+                            (placement.start_frame, placement.end_frame, text)
+                        )
                     track_subtitles.append((placement.start_frame, placement.end_frame, text))
             track_subtitles.sort(key=lambda item: (item[0], item[1]))
-            self._preview_subtitles_by_track[track.id] = track_subtitles
-        self._preview_subtitles.sort(key=lambda item: (item[0], item[1]))
-        self._subtitle_placement_model.set_items(placement_rows)
+            self._session.presentation.preview_subtitles_by_track[track.id] = track_subtitles
+        self._session.presentation.preview_subtitles.sort(key=lambda item: (item[0], item[1]))
+        self._session.models.subtitle_placements.set_items(placement_rows)
         placement_ids = {item["placementId"] for item in placement_rows}
-        if self._selected_subtitle_placement_id not in placement_ids:
-            self._selected_subtitle_placement_id = ""
+        if self._session.selection.subtitle_placement_id not in placement_ids:
+            self._session.selection.subtitle_placement_id = ""
 
     @staticmethod
     def _task_context_id(command: object) -> str:
@@ -805,8 +816,8 @@ class ProjectPresentationProjector:
         return ""
 
     def refresh_settings_models(self) -> None:
-        active_id = self.settings.active_llm_provider_id
-        self._llm_provider_model.set_items(
+        active_id = self._session.settings.active_llm_provider_id
+        self._session.models.llm_providers.set_items(
             [
                 {
                     "providerId": provider.id,
@@ -817,13 +828,13 @@ class ProjectPresentationProjector:
                     "enabled": provider.enabled,
                     "active": provider.id == active_id,
                 }
-                for provider in self.settings.llm_providers
+                for provider in self._session.settings.llm_providers
             ]
         )
-        provider_ids = {item.id for item in self.settings.llm_providers}
-        if self._selected_llm_provider_id not in provider_ids:
-            self._selected_llm_provider_id = ""
-        self._glossary_model.set_items(
+        provider_ids = {item.id for item in self._session.settings.llm_providers}
+        if self._session.selection.llm_provider_id not in provider_ids:
+            self._session.selection.llm_provider_id = ""
+        self._session.models.glossary.set_items(
             [
                 {
                     "termId": term.id,
@@ -832,15 +843,15 @@ class ProjectPresentationProjector:
                     "note": term.note,
                     "category": term.category,
                 }
-                for term in self.settings.translation.glossary_terms
+                for term in self._session.settings.translation.glossary_terms
             ]
         )
-        term_ids = {item.id for item in self.settings.translation.glossary_terms}
-        if self._selected_glossary_term_id not in term_ids:
-            self._selected_glossary_term_id = ""
+        term_ids = {item.id for item in self._session.settings.translation.glossary_terms}
+        if self._session.selection.glossary_term_id not in term_ids:
+            self._session.selection.glossary_term_id = ""
 
     def refresh_download_entries(self) -> None:
-        self._download_entry_model.set_items(
+        self._session.models.download_entries.set_items(
             [
                 {
                     "entryIndex": entry.index,
@@ -851,8 +862,10 @@ class ProjectPresentationProjector:
                     "uploader": entry.uploader,
                     "available": entry.available,
                     "unavailableReason": entry.unavailable_reason,
-                    "selected": entry.index in self._download_entry_selection,
+                    "selected": entry.index in self._session.download_state.selected_entries,
                 }
-                for entry in (self._download_plan.entries if self._download_plan else [])
+                for entry in (
+                    self._session.download_state.plan.entries if self._session.download_state.plan else []
+                )
             ]
         )

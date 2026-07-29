@@ -5,7 +5,7 @@ import QtQuick.Dialogs
 import "."
 import "components"
 
-ScrollView {
+AppScrollView {
     id: subtitleScroll
     objectName: "subtitlePanel"
     clip: true
@@ -52,6 +52,36 @@ ScrollView {
         property bool showSearch: false
         property var searchMatches: []
         property int searchMatchIndex: -1
+        property var segmentDrafts: ({})
+        property bool loadingSegmentDraft: false
+        property string loadedSegmentId: ""
+        readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+
+        function segmentDraftKey(segmentId) {
+            return String(subtitleController.selectedDocumentId || "") + "\u001f" + String(segmentId || "");
+        }
+
+        function storeSelectedSegmentDraft() {
+            const segmentId = String(subtitleController.selectedSubtitleSegmentId || "");
+            if (loadingSegmentDraft || segmentId.length === 0 || loadedSegmentId !== segmentId)
+                return;
+            const next = Object.assign({}, segmentDrafts);
+            next[segmentDraftKey(segmentId)] = {
+                "startFrame": segmentStart.value,
+                "endFrame": segmentEnd.value,
+                "text": segmentText.text
+            };
+            segmentDrafts = next;
+        }
+
+        function clearSelectedSegmentDraft(segmentId) {
+            const key = segmentDraftKey(segmentId);
+            if (segmentDrafts[key] === undefined)
+                return;
+            const next = Object.assign({}, segmentDrafts);
+            delete next[key];
+            segmentDrafts = next;
+        }
 
         function refreshSearch() {
             root.searchMatches = subtitleController.findSubtitleMatches(findText.text, matchCase.checked);
@@ -70,11 +100,18 @@ ScrollView {
         }
 
         function loadSelectedSegment() {
+            const segmentId = String(subtitleController.selectedSubtitleSegmentId || "");
             const data = subtitleController.selectedSubtitleSegmentData;
-            segmentStart.value = Number(data.startFrame || 0);
-            segmentEnd.value = Number(data.endFrame || 1);
-            segmentText.text = data.text || "";
+            const draft = segmentDrafts[segmentDraftKey(segmentId)];
+            loadingSegmentDraft = true;
+            loadedSegmentId = segmentId;
+            segmentStart.value = Number(draft ? draft.startFrame : data.startFrame || 0);
+            segmentEnd.value = Number(draft ? draft.endFrame : data.endFrame || 1);
+            segmentText.text = draft ? String(draft.text || "") : String(data.text || "");
+            loadingSegmentDraft = false;
         }
+
+        Component.onCompleted: Qt.callLater(loadSelectedSegment)
 
         Connections {
             target: subtitleController
@@ -156,7 +193,7 @@ ScrollView {
             EmptyState {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 120
-                iconText: "字"
+                iconName: "subtitle"
                 title: qsTr("还没有字幕文档")
                 description: qsTr("识别当前时间轴的声音，或导入已有的 SRT、WebVTT、ASS 字幕。")
             }
@@ -165,24 +202,26 @@ ScrollView {
                 Layout.fillWidth: true
                 primary: true
                 text: qsTr("识别时间轴声音")
+                enabled: Boolean(workspaceController.actionCapabilities.canStartTasks)
                 onClicked: subtitleScroll.modeRequested("transcript")
             }
             AppButton {
                 objectName: "subtitleImportFileButton"
                 Layout.fillWidth: true
                 text: qsTr("导入字幕文件")
+                enabled: Boolean(workspaceController.actionCapabilities.canImport)
                 onClicked: subtitleScroll.importRequested()
             }
         }
 
-        TabBar {
+        AppTabBar {
             id: subtitleTabs
             Layout.fillWidth: true
             visible: documentList.count > 0
-            TabButton {
+            AppTabButton {
                 text: qsTr("文档编辑")
             }
-            TabButton {
+            AppTabButton {
                 text: qsTr("序列字幕")
             }
         }
@@ -201,25 +240,25 @@ ScrollView {
                     Layout.fillWidth: true
                     AppButton {
                         text: qsTr("添加")
-                        enabled: subtitleController.selectedDocumentId.length > 0
+                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
                         onClicked: subtitleController.addSubtitleSegment()
                     }
                     AppButton {
                         text: qsTr("合并")
-                        enabled: subtitleController.selectedSubtitleSegmentIds.length >= 2
+                        enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length >= 2
                         onClicked: subtitleController.mergeSelectedSubtitleSegments()
                     }
                     AppButton {
                         text: qsTr("删除")
-                        enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                        enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
                         onClicked: subtitleController.deleteSelectedSubtitleSegments()
                     }
                     Item {
                         Layout.fillWidth: true
                     }
-                    AppButton {
+                    AppMenuButton {
                         id: subtitleMoreButton
-                        text: qsTr("更多") + " ▾"
+                        text: qsTr("更多")
                         onClicked: subtitleMoreMenu.open()
                         AppMenu {
                             id: subtitleMoreMenu
@@ -236,17 +275,17 @@ ScrollView {
                             AppMenuSeparator {}
                             AppMenuItem {
                                 text: qsTr("翻译所选")
-                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
                                 onTriggered: subtitleController.translateSelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("复制 SRT")
-                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
                                 onTriggered: subtitleController.copySelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("粘贴替换")
-                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 0
+                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
                                 onTriggered: subtitleController.pasteReplaceSelectedSubtitleSegments()
                             }
                             AppMenuItem {
@@ -298,7 +337,7 @@ ScrollView {
                             AppButton {
                                 text: qsTr("全部替换")
                                 primary: true
-                                enabled: findText.text.length > 0 && root.searchMatches.length > 0
+                                enabled: root.canEdit && findText.text.length > 0 && root.searchMatches.length > 0
                                 onClicked: {
                                     subtitleController.replaceSubtitleText(findText.text, replaceText.text, matchCase.checked);
                                     root.searchMatches = subtitleController.findSubtitleMatches(findText.text, matchCase.checked);
@@ -326,7 +365,7 @@ ScrollView {
                             AppButton {
                                 text: qsTr("替换当前")
                                 primary: true
-                                enabled: root.searchMatchIndex >= 0
+                                enabled: root.canEdit && root.searchMatchIndex >= 0
                                 onClicked: {
                                     const match = root.searchMatches[root.searchMatchIndex];
                                     subtitleController.replaceSubtitleMatch(String(match.segmentId), Number(match.start), Number(match.end), findText.text, replaceText.text, matchCase.checked);
@@ -371,12 +410,12 @@ ScrollView {
                     }
                     AppButton {
                         text: qsTr("智能拆分")
-                        enabled: subtitleController.selectedDocumentId.length > 0
+                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
                         onClicked: subtitleController.smartSplitSubtitleDocument(smartSplitLimit.value)
                     }
                     AppButton {
                         text: qsTr("修复重叠")
-                        enabled: subtitleController.selectedDocumentId.length > 0
+                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
                         onClicked: subtitleController.fixSubtitleOverlaps()
                     }
                 }
@@ -396,7 +435,7 @@ ScrollView {
                         required property string text
                         required property bool hasOverlap
                         width: segmentList.width
-                        height: segmentText.implicitHeight + 31
+                        height: segmentPreviewText.implicitHeight + 31
                         radius: Theme.radiusSmall
                         color: subtitleController.isSubtitleSegmentSelected(segmentId) ? Theme.accentSoft : segmentMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
                         border.color: hasOverlap ? Theme.danger : subtitleController.isSubtitleSegmentSelected(segmentId) ? Theme.accent : Theme.border
@@ -412,7 +451,7 @@ ScrollView {
                                 font.family: Theme.monoFontFamily
                             }
                             Text {
-                                id: segmentText
+                                id: segmentPreviewText
                                 Layout.fillWidth: true
                                 text: parent.parent.text
                                 color: Theme.text
@@ -451,6 +490,7 @@ ScrollView {
                             AppMenuSeparator {}
                             AppMenuItem {
                                 text: qsTr("翻译所选字幕")
+                                enabled: root.canEdit
                                 onTriggered: subtitleController.translateSelectedSubtitleSegments()
                             }
                             AppMenuItem {
@@ -459,17 +499,18 @@ ScrollView {
                             }
                             AppMenuItem {
                                 text: qsTr("合并所选字幕")
-                                enabled: subtitleController.selectedSubtitleSegmentIds.length > 1
+                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 1
                                 onTriggered: subtitleController.mergeSelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("按中点拆分")
-                                enabled: subtitleController.selectedSubtitleSegmentIds.length === 1
+                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length === 1
                                 onTriggered: subtitleController.splitSubtitleSegment(segmentId, -1)
                             }
                             AppMenuSeparator {}
                             AppMenuItem {
                                 text: qsTr("删除所选字幕")
+                                enabled: root.canEdit
                                 onTriggered: subtitleController.deleteSelectedSubtitleSegments()
                             }
                         }
@@ -477,7 +518,7 @@ ScrollView {
                     EmptyState {
                         anchors.fill: parent
                         visible: segmentList.count === 0
-                        iconText: "字"
+                        iconName: "subtitle"
                         title: qsTr("还没有字幕")
                         description: qsTr("转录媒体或导入 SRT 后，可以在这里逐条编辑。")
                     }
@@ -500,10 +541,13 @@ ScrollView {
                             }
                             AppSpinBox {
                                 id: segmentStart
+                                objectName: "subtitleSegmentStartEditor"
                                 Layout.fillWidth: true
                                 from: 0
                                 to: 2147483647
                                 editable: true
+                                enabled: root.canEdit
+                                onValueModified: root.storeSelectedSegmentDraft()
                             }
                             Text {
                                 text: qsTr("结束帧")
@@ -512,10 +556,13 @@ ScrollView {
                             }
                             AppSpinBox {
                                 id: segmentEnd
+                                objectName: "subtitleSegmentEndEditor"
                                 Layout.fillWidth: true
                                 from: 1
                                 to: 2147483647
                                 editable: true
+                                enabled: root.canEdit
+                                onValueModified: root.storeSelectedSegmentDraft()
                             }
                         }
                         RowLayout {
@@ -523,45 +570,58 @@ ScrollView {
                             AppButton {
                                 Layout.fillWidth: true
                                 text: qsTr("播放头设为开始")
-                                onClicked: segmentStart.value = Math.min(
-                                    subtitleScroll.playheadFrame,
-                                    segmentEnd.value - 1
-                                )
+                                enabled: root.canEdit
+                                onClicked: {
+                                    segmentStart.value = Math.min(
+                                        subtitleScroll.playheadFrame,
+                                        segmentEnd.value - 1);
+                                    root.storeSelectedSegmentDraft();
+                                }
                             }
                             AppButton {
                                 Layout.fillWidth: true
                                 text: qsTr("播放头设为结束")
-                                onClicked: segmentEnd.value = Math.max(
-                                    subtitleScroll.playheadFrame,
-                                    segmentStart.value + 1
-                                )
+                                enabled: root.canEdit
+                                onClicked: {
+                                    segmentEnd.value = Math.max(
+                                        subtitleScroll.playheadFrame,
+                                        segmentStart.value + 1);
+                                    root.storeSelectedSegmentDraft();
+                                }
                             }
                         }
-                        TextArea {
+                        AppTextArea {
                             id: segmentText
+                            objectName: "subtitleSegmentTextEditor"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            color: Theme.text
                             wrapMode: TextEdit.Wrap
-                            selectByMouse: true
-                            background: Rectangle {
-                                color: Theme.window
-                                border.color: segmentText.activeFocus ? Theme.accent : Theme.border
-                                radius: Theme.radiusSmall
-                            }
+                            readOnly: !root.canEdit
+                            onTextChanged: root.storeSelectedSegmentDraft()
                         }
                         RowLayout {
                             Layout.fillWidth: true
                             AppButton {
                                 Layout.fillWidth: true
                                 text: qsTr("按中点拆分")
+                                enabled: root.canEdit
                                 onClicked: subtitleController.splitSubtitleSegment(subtitleController.selectedSubtitleSegmentId, -1)
                             }
                             AppButton {
                                 Layout.fillWidth: true
                                 primary: true
+                                objectName: "subtitleSegmentSaveButton"
                                 text: qsTr("保存修改")
-                                onClicked: subtitleController.updateSubtitleSegment(subtitleController.selectedSubtitleSegmentId, segmentStart.value, segmentEnd.value, segmentText.text)
+                                enabled: root.canEdit
+                                onClicked: {
+                                    const segmentId = String(subtitleController.selectedSubtitleSegmentId || "");
+                                    if (subtitleController.updateSubtitleSegment(
+                                            segmentId, segmentStart.value,
+                                            segmentEnd.value, segmentText.text)) {
+                                        root.clearSelectedSegmentDraft(segmentId);
+                                        Qt.callLater(root.loadSelectedSegment);
+                                    }
+                                }
                             }
                         }
                     }
@@ -585,7 +645,7 @@ ScrollView {
                     AppButton {
                         text: qsTr("放入当前序列")
                         primary: true
-                        enabled: subtitleController.selectedDocumentId.length > 0
+                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
                         onClicked: subtitleController.placeSubtitleDocument(subtitleController.selectedDocumentId)
                     }
                 }
@@ -639,7 +699,7 @@ ScrollView {
                     EmptyState {
                         anchors.fill: parent
                         visible: placementList.count === 0
-                        iconText: "轨"
+                        iconName: "subtitle"
                         title: qsTr("序列中还没有字幕")
                         description: qsTr("选择字幕文档并放入当前序列。")
                     }
@@ -652,18 +712,13 @@ ScrollView {
                         anchors.fill: parent
                         anchors.margins: 8
                         spacing: 6
-                        TextArea {
+                        AppTextArea {
                             id: placementText
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             text: subtitleController.selectedSubtitlePlacementData.text || ""
-                            color: Theme.text
                             wrapMode: TextEdit.Wrap
-                            background: Rectangle {
-                                color: Theme.window
-                                border.color: Theme.border
-                                radius: Theme.radiusSmall
-                            }
+                            readOnly: !root.canEdit
                         }
                         RowLayout {
                             Layout.fillWidth: true
@@ -671,11 +726,13 @@ ScrollView {
                                 Layout.fillWidth: true
                                 primary: true
                                 text: qsTr("保存为序列覆盖")
+                                enabled: root.canEdit
                                 onClicked: subtitleController.updateSubtitlePlacementText(subtitleController.selectedSubtitlePlacementId, placementText.text, false)
                             }
                             AppButton {
                                 Layout.fillWidth: true
                                 text: qsTr("应用到文档")
+                                enabled: root.canEdit
                                 onClicked: subtitleController.updateSubtitlePlacementText(subtitleController.selectedSubtitlePlacementId, placementText.text, true)
                             }
                         }

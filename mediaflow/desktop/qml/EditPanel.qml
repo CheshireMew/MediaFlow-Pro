@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import "."
 import "components"
 
-ScrollView {
+AppScrollView {
     id: editScroll
     objectName: "editPanel"
     clip: true
@@ -16,6 +16,32 @@ ScrollView {
         width: editScroll.availableWidth
         spacing: 10
         property var transitionOptions: timelineController.transitionOptions
+        property string loadedTransitionId: ""
+        readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+
+        function loadSelectedTransition() {
+            const transitionId = String(timelineController.selectedTransitionId || "");
+            if (transitionId.length === 0) {
+                loadedTransitionId = "";
+                return;
+            }
+            if (transitionId === loadedTransitionId
+                    && (transitionKind.activeFocus || transitionDuration.activeFocus))
+                return;
+            const data = timelineController.selectedTransitionData;
+            transitionKind.currentIndex = Math.max(
+                0, transitionKind.indexOfValue(String(data.kind || "dissolve")));
+            transitionDuration.value = Number(data.durationFrames || 15);
+            loadedTransitionId = transitionId;
+        }
+
+        Component.onCompleted: Qt.callLater(loadSelectedTransition)
+
+        Connections {
+            target: timelineController
+            function onSelectionChanged() { root.loadSelectedTransition(); }
+            function onHistoryChanged() { root.loadSelectedTransition(); }
+        }
 
         WebLayerPanel { playheadFrame: editScroll.playheadFrame }
 
@@ -24,6 +50,7 @@ ScrollView {
             Layout.fillWidth: true
             implicitHeight: compoundContent.implicitHeight + 22
             visible: timelineController.selectedCompoundId.length > 0
+            enabled: root.canEdit
             ColumnLayout {
                 id: compoundContent
                 anchors.left: parent.left
@@ -69,6 +96,7 @@ ScrollView {
             Layout.fillWidth: true
             implicitHeight: timingContent.implicitHeight + 22
             visible: timelineController.selectedClipId.length > 0 && !webController.isWebClip
+            enabled: root.canEdit
             ColumnLayout {
                 id: timingContent
                 anchors.left: parent.left
@@ -109,7 +137,7 @@ ScrollView {
                         model: [-4, -2, -1, -0.5, -0.25, 0.25, 0.5, 1, 1.5, 2, 4]
                         currentIndex: Math.max(0, model.indexOf(timelineController.selectedClipData.speed ?? 1))
                     }
-                    Switch {
+                    AppSwitch {
                         id: pitch
                         text: qsTr("保音高")
                         checked: timelineController.selectedClipData.pitchCompensation ?? true
@@ -143,6 +171,7 @@ ScrollView {
             Layout.fillWidth: true
             implicitHeight: transformContent.implicitHeight + 22
             visible: timelineController.selectedClipId.length > 0 && !webController.isWebClip
+            enabled: root.canEdit
             ColumnLayout {
                 id: transformContent
                 anchors.left: parent.left
@@ -310,13 +339,25 @@ ScrollView {
             Repeater {
                 model: root.transitionOptions
                 Rectangle {
+                    id: resourceCard
                     required property var modelData
                     Layout.fillWidth: true
                     Layout.preferredHeight: 104
                     radius: Theme.radiusSmall
                     color: resourceMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-                    border.color: resourceMouse.containsMouse ? Theme.accent : Theme.border
-                    opacity: timelineController.selectedClipId.length > 0 ? 1 : 0.55
+                    border.color: activeFocus || resourceMouse.containsMouse ? Theme.accent : Theme.border
+                    border.width: activeFocus ? 2 : 1
+                    enabled: root.canEdit
+                        && timelineController.selectedClipId.length > 0
+                    opacity: enabled ? 1 : 0.55
+                    activeFocusOnTab: true
+                    function activateResource() {
+                        if (root.canEdit && timelineController.selectedClipId.length > 0)
+                            timelineController.addTransitionAfter(
+                                timelineController.selectedClipId,
+                                modelData.value,
+                                Number(modelData.defaultDurationFrames));
+                    }
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -338,12 +379,19 @@ ScrollView {
                                 color: Theme.accentSoft
                                 Behavior on width { NumberAnimation { duration: 220 } }
                             }
-                            Text {
+                            AppIcon {
                                 anchors.centerIn: parent
-                                text: modelData.previewDirection === "zoom" ? "◎"
-                                    : modelData.previewDirection === "black" ? "■" : "A  →  B"
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontSizeCaption
+                                width: 18
+                                height: 18
+                                iconName: modelData.previewDirection === "zoom"
+                                    ? "transition-zoom"
+                                    : modelData.previewDirection === "black"
+                                    ? "transition-black"
+                                    : modelData.previewDirection === "left"
+                                    ? "chevron-left"
+                                    : modelData.previewDirection === "right"
+                                    ? "chevron-right" : "transition"
+                                iconColor: Theme.textSubtle
                             }
                         }
                         Text {
@@ -367,11 +415,19 @@ ScrollView {
                     Accessible.name: modelData.label
                     Accessible.description: modelData.description
                     Accessible.role: Accessible.Button
+                    Keys.onReturnPressed: function (event) {
+                        resourceCard.activateResource();
+                        event.accepted = true;
+                    }
+                    Keys.onSpacePressed: function (event) {
+                        resourceCard.activateResource();
+                        event.accepted = true;
+                    }
                     MouseArea {
                         id: resourceMouse
                         anchors.fill: parent
                         hoverEnabled: true
-                        enabled: timelineController.selectedClipId.length > 0
+                        enabled: resourceCard.enabled
                         onEntered: timelineController.previewTransitionAfter(
                             timelineController.selectedClipId,
                             modelData.value,
@@ -389,6 +445,7 @@ ScrollView {
             Layout.fillWidth: true
             implicitHeight: 176
             visible: timelineController.selectedTransitionId.length > 0
+            enabled: root.canEdit
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 10
@@ -401,18 +458,18 @@ ScrollView {
                 }
                 AppComboBox {
                     id: transitionKind
+                    objectName: "selectedTransitionKind"
                     Layout.fillWidth: true
                     textRole: "label"
                     valueRole: "value"
                     model: root.transitionOptions
-                    Component.onCompleted: currentIndex = Math.max(0, indexOfValue(timelineController.selectedTransitionData.kind || "dissolve"))
                 }
                 AppSpinBox {
                     id: transitionDuration
+                    objectName: "selectedTransitionDuration"
                     Layout.fillWidth: true
                     from: 1
                     to: 300
-                    value: timelineController.selectedTransitionData.durationFrames || 15
                     editable: true
                 }
                 RowLayout {
@@ -438,7 +495,7 @@ ScrollView {
             visible: timelineController.selectedClipId.length === 0
                 && timelineController.selectedCompoundId.length === 0
                 && timelineController.selectedTransitionId.length === 0
-            iconText: "剪"
+            iconName: "cut"
             title: qsTr("选择时间线片段")
             description: qsTr("选择后可以编辑画面、裁剪速度并添加转场。")
         }

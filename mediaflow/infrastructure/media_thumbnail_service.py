@@ -6,9 +6,15 @@ import re
 import subprocess
 from pathlib import Path
 
+from mediaflow.atomic_file import native_temporary_sibling
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.project import Asset
+from mediaflow.domain.storage_names import (
+    content_addressed_child_path,
+    require_windows_interop_path,
+)
 
+from .ffmpeg_runner import FfmpegRunner
 from .project_repository import ProjectRepository
 from .runtime_paths import RuntimePaths
 
@@ -16,10 +22,11 @@ from .runtime_paths import RuntimePaths
 class MediaThumbnailService:
     """Create cached, display-ready thumbnails for visual project assets."""
 
-    CACHE_VERSION = 2
+    CACHE_VERSION = 3
 
     def __init__(self, paths: RuntimePaths):
         self.paths = paths
+        self.ffmpeg = FfmpegRunner(paths.ffmpeg)
 
     def thumbnail_for(
         self,
@@ -44,6 +51,11 @@ class MediaThumbnailService:
                         str(self.CACHE_VERSION),
                         asset.id,
                         asset.kind.value,
+                        (
+                            asset.fingerprint.edge_sha256
+                            if asset.fingerprint is not None
+                            else ""
+                        ),
                         str(source),
                         str(source_stat.st_size),
                         str(source_stat.st_mtime_ns),
@@ -51,18 +63,36 @@ class MediaThumbnailService:
                         str(height),
                     )
                 ).encode("utf-8")
-            ).hexdigest()[:24]
-            thumbnail_dir = repository.project_dir / "cache" / "media-thumbnails"
-            destination = thumbnail_dir / f"{signature}.jpg"
+            ).hexdigest()
+            thumbnail_dir = (
+                self.paths.project_cache_dir(repository.project_dir)
+                / "thumbnails"
+            )
+            destination = content_addressed_child_path(
+                thumbnail_dir,
+                f"thumbnail:{signature}",
+                namespace="t",
+                suffix=".jpg",
+            )
             if destination.is_file() and destination.stat().st_size > 0:
                 return destination.resolve()
 
             thumbnail_dir.mkdir(parents=True, exist_ok=True)
-            if asset.kind == AssetKind.VIDEO:
-                created = self._render_video(source, destination, width, height)
-            else:
-                created = self._render_frame(source, destination, width, height)
-            return destination.resolve() if created else None
+            temporary = native_temporary_sibling(
+                destination,
+                label="thumbnail",
+            )
+            try:
+                if asset.kind == AssetKind.VIDEO:
+                    created = self._render_video(source, temporary, width, height)
+                else:
+                    created = self._render_frame(source, temporary, width, height)
+                if not created:
+                    return None
+                temporary.replace(destination)
+                return destination.resolve()
+            finally:
+                temporary.unlink(missing_ok=True)
         except (OSError, subprocess.SubprocessError):
             return None
 
@@ -103,9 +133,7 @@ class MediaThumbnailService:
         seek_seconds: float = 0,
     ) -> bool:
         command = [
-            str(self.paths.ffmpeg),
             "-y",
-            "-hide_banner",
             "-loglevel",
             "error",
             "-i",
@@ -127,20 +155,15 @@ class MediaThumbnailService:
                 str(destination),
             ]
         )
-        result = subprocess.run(
+        result = self.ffmpeg.run(
             command,
-            capture_output=True,
             timeout=20,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return result.returncode == 0 and destination.is_file() and destination.stat().st_size > 0
 
     def _first_visible_time(self, source: Path) -> float:
-        result = subprocess.run(
+        result = self.ffmpeg.run(
             [
-                str(self.paths.ffmpeg),
-                "-hide_banner",
                 "-loglevel",
                 "info",
                 "-i",
@@ -156,12 +179,9 @@ class MediaThumbnailService:
                 "null",
                 os.devnull,
             ],
-            capture_output=True,
             timeout=20,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        match = re.search(rb"black_start:0(?:\.0+)?\s+black_end:([0-9.]+)", result.stderr)
+        match = re.search(r"black_start:0(?:\.0+)?\s+black_end:([0-9.]+)", result.stderr)
         return float(match.group(1)) if match else 0
 
     @staticmethod
@@ -173,7 +193,7 @@ class MediaThumbnailService:
 
     @staticmethod
     def _visual_source(repository: ProjectRepository, asset: Asset) -> Path | None:
-        original = repository.resolve_asset_path(asset)
+        original = repository.catalog.resolve_asset_path(asset)
         candidates = [original]
         if asset.kind == AssetKind.VIDEO:
             for proxy_value in (asset.sdr_preview_proxy_path, asset.proxy_path):
@@ -185,4 +205,5 @@ class MediaThumbnailService:
                     if not proxy.is_absolute()
                     else proxy.resolve()
                 )
-        return next((candidate for candidate in candidates if candidate.is_file()), None)
+        source = next((candidate for candidate in candidates if candidate.is_file()), None)
+        return require_windows_interop_path(source) if source is not None else None

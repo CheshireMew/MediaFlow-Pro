@@ -32,7 +32,7 @@ class ProjectCoverService:
 
     @staticmethod
     def _first_video_asset(repository: ProjectRepository) -> Asset | None:
-        for asset in repository.list_assets():
+        for asset in repository.catalog.list_assets():
             if asset.kind != AssetKind.VIDEO and not asset.metadata.has_video:
                 continue
             return asset

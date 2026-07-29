@@ -1,11 +1,18 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
+import sys
 import time
-from datetime import datetime
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,13 +21,15 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickWindow
 from shiboken6 import getCppPointer, wrapInstance
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.desktop.app import configure_application_font, create_engine
-from mediaflow.domain.enums import AssetKind, TrackKind
+from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind
 from mediaflow.domain.project import MediaMetadata
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.timeline import Clip
+from mediaflow.domain.timeline import Clip, Track
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from scripts.run_artifacts import verification_run
 
 CLIP_COUNT = 500
 SUBTITLE_COUNT = 5_000
@@ -60,8 +69,8 @@ def create_fixture(root: Path) -> Path:
     if generated.returncode != 0:
         raise RuntimeError(generated.stderr.decode(errors="replace"))
     with ProjectRepository.create(project_dir, "Large Project") as repository:
-        asset = repository.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.update_asset(
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.catalog.update_asset(
             asset.model_copy(
                 update={
                     "metadata": MediaMetadata(
@@ -75,10 +84,21 @@ def create_fixture(root: Path) -> Path:
                 }
             )
         )
-        project = repository.get_project()
-        state = repository.load_timeline(project.main_sequence_id)
-        video_track = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
-        subtitle_track = next(track for track in state.tracks if track.kind == TrackKind.SUBTITLE)
+        project = repository.catalog.get_project()
+        state = repository.timeline.load_timeline(project.main_sequence_id)
+        video_track = Track(
+            sequence_id=project.main_sequence_id,
+            name="Video 1",
+            kind=TrackKind.VIDEO,
+            position=0,
+        )
+        subtitle_track = Track(
+            sequence_id=project.main_sequence_id,
+            name="Subtitles 1",
+            kind=TrackKind.SUBTITLE,
+            position=1,
+        )
+        state.tracks = [video_track, subtitle_track]
         state.clips = [
             Clip(
                 track_id=video_track.id,
@@ -86,10 +106,11 @@ def create_fixture(root: Path) -> Path:
                 timeline_start=index * 10,
                 source_in=index * 10,
                 duration=10,
+                media_kind=ClipMediaKind.VIDEO_ONLY,
             )
             for index in range(CLIP_COUNT)
         ]
-        repository.save_timeline(state)
+        repository.timeline.save_timeline(state)
         document = SubtitleDocument(
             project_id=project.id,
             asset_id=asset.id,
@@ -104,8 +125,8 @@ def create_fixture(root: Path) -> Path:
             )
             for index in range(SUBTITLE_COUNT)
         ]
-        repository.create_subtitle_document(document, segments)
-        placements = repository.place_subtitle_document(
+        repository.subtitles.create_subtitle_document(document, segments)
+        placements = repository.subtitles.place_subtitle_document(
             document.id,
             subtitle_track.id,
             follow_clips=True,
@@ -116,32 +137,58 @@ def create_fixture(root: Path) -> Path:
 
 
 def verify(root: Path) -> dict:
-    root.mkdir(parents=True, exist_ok=False)
     project_dir = create_fixture(root)
-    os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(root / "runtime")
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
-    engine, controller = create_engine(app)
+    engine, controllers = create_engine(app)
     try:
         started = time.perf_counter()
-        controller.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
+        controllers.workspace.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
         for _ in range(12):
             QCoreApplication.processEvents()
         open_seconds = time.perf_counter() - started
-        if not controller.hasProject:
+        if not controllers.workspace.hasProject:
             raise RuntimeError("The large project did not open")
-        if controller.clipsModel.rowCount() != CLIP_COUNT:
-            raise RuntimeError(f"Only {controller.clipsModel.rowCount()} clips reached the QML model")
-        if controller.subtitleTextAtFrame(SUBTITLE_COUNT - 1) != f"字幕 {SUBTITLE_COUNT}":
+        if controllers.timeline.clipsModel.rowCount() != CLIP_COUNT:
+            raise RuntimeError(
+                f"Only {controllers.timeline.clipsModel.rowCount()} clips reached the QML model"
+            )
+        if (
+            controllers.subtitles.subtitleTextAtFrame(SUBTITLE_COUNT - 1)
+            != f"字幕 {SUBTITLE_COUNT}"
+        ):
             raise RuntimeError("The final subtitle did not reach the preview consumer")
 
-        last_clip_id = controller.clipsModel.get(CLIP_COUNT - 1)["clipId"]
+        last_clip_id = controllers.timeline.clipsModel.get(CLIP_COUNT - 1)["clipId"]
         started = time.perf_counter()
-        controller.moveClip(last_clip_id, SUBTITLE_COUNT, "")
+        controllers.timeline.moveClip(last_clip_id, SUBTITLE_COUNT, "")
         edit_seconds = time.perf_counter() - started
-        persisted = controller.clipsModel.get(CLIP_COUNT - 1)
-        if persisted["startFrame"] != SUBTITLE_COUNT:
-            raise RuntimeError("The measured edit was not persisted and reflected in the model")
+        projected = controllers.timeline.clipsModel.get(CLIP_COUNT - 1)
+        if projected["startFrame"] != SUBTITLE_COUNT:
+            raise RuntimeError("The measured edit did not reach the QML model")
+        sequence_id = controllers.workspace.activeSequenceId
+        with ProjectRepository.open(
+            project_dir,
+            writable=False,
+        ) as persisted_repository:
+            persisted_state = persisted_repository.timeline.load_timeline(
+                sequence_id
+            )
+        persisted_clip = next(
+            (
+                clip
+                for clip in persisted_state.clips
+                if clip.id == last_clip_id
+            ),
+            None,
+        )
+        if (
+            persisted_clip is None
+            or persisted_clip.timeline_start != SUBTITLE_COUNT
+        ):
+            raise RuntimeError(
+                "The measured edit reached the model but not persistent storage"
+            )
 
         window = engine.rootObjects()[0]
         quick_window = wrapInstance(getCppPointer(window)[0], QQuickWindow)
@@ -155,26 +202,33 @@ def verify(root: Path) -> dict:
             "open_limit_seconds": OPEN_LIMIT_SECONDS,
             "edit_seconds": edit_seconds,
             "edit_limit_seconds": EDIT_LIMIT_SECONDS,
+            "persisted_edit_start_frame": persisted_clip.timeline_start,
             "open_passed": open_seconds < OPEN_LIMIT_SECONDS,
             "edit_passed": edit_seconds < EDIT_LIMIT_SECONDS,
             "screenshot": str(screenshot),
             "project": str(project_dir),
         }
         report_path = root / "performance-report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
         if not report["open_passed"] or not report["edit_passed"]:
             raise RuntimeError(json.dumps(report, ensure_ascii=False, indent=2))
         return {**report, "report": str(report_path)}
     finally:
-        controller.shutdown()
+        controllers.shutdown()
         engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         QCoreApplication.processEvents()
 
 
-def main() -> None:
-    root = Path("D:/Tools/MediaFlow/test-runs") / ("performance-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
-    print(json.dumps(verify(root), ensure_ascii=False, indent=2))
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path)
+    arguments = parser.parse_args(argv)
+    with verification_run(
+        "performance",
+        explicit_root=arguments.root,
+    ) as run_dir:
+        print(json.dumps(verify(run_dir), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

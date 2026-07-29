@@ -77,7 +77,16 @@ MediaFlow Pro/
 
 ```powershell
 py -3.12 -m venv D:\Tools\MediaFlow\.venv
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pip install -e ".[dev,build]"
+$env:PIP_CACHE_DIR = "D:\Tools\MediaFlow\pip-cache"
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
+```
+
+`pyproject.toml` 只声明直接依赖，`requirements.lock` 是开发、测试和构建环境实际安装版本的唯一清单。修改依赖后，使用锁文件中固定的 `pip-tools` 重新生成并审查完整依赖图：
+
+```powershell
+$env:PIP_CACHE_DIR = "D:\Tools\MediaFlow\pip-cache"
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m piptools compile pyproject.toml --extra dev --extra build --generate-hashes --resolver backtracking --allow-unsafe --strip-extras --output-file requirements.lock
 ```
 
 原生预览插件要求 MSVC 2022、完整 Qt 6.11.1 SDK 以及 CMake/Ninja。默认路径可通过脚本参数覆盖：
@@ -133,7 +142,7 @@ AI 文字剪辑使用 `transcript.get`、`transcript.edit.preview`、`transcript
 
 ### 可编辑网页素材
 
-MediaFlow 可导入带 `editable-media.json` 和 `window.editableMedia` 运行接口的本地网页包。网页包保存结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁；浏览器缓存、PNG、GIF、透明视频和普通视频都是派生结果。桌面界面与 CLI 读写同一状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。
+MediaFlow 可导入 `editable-media` v3 本地网页包。网页包用 `window.editableMedia` 暴露结构化编辑状态，并用 `window.__hf.duration/seek(seconds)` 暴露唯一的确定性逐帧边界；MediaFlow 自己启动 Chromium、逐帧读取当前项目状态、生成缓存，再用 FFmpeg/MLT 输出 PNG、GIF、透明视频、普通视频或完整时间线成片，不依赖 HyperFrames。网页包保存组件结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁。桌面界面与 CLI 读写同一项目状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。
 
 相关能力可从 `mediaflow-cli describe` 读取，包括 `web.import`、`web.clip.keyframe.*`、`web.clip.theme.update`、`web.clip.layout.select`、`web.clip.data.*`、`web.clip.diff`、`web.batch.create`、`web.asset.rebind` 和 `web.clip.export`。远程网址、登录态网页和任意 DOM/CSS 可视化开发不属于该边界。
 

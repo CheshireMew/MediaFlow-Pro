@@ -1,4 +1,5 @@
 import QtQuick
+import ".."
 
 Canvas {
     id: root
@@ -12,6 +13,8 @@ Canvas {
     required property var viewport
     required property real pixelsPerFrame
     required property real clipContentX
+    property bool emphasized: false
+    readonly property color strokeColor: emphasized ? Theme.waveform : Theme.waveformMuted
 
     readonly property real viewportLeft: Math.max(3, viewport.contentX - clipContentX)
     readonly property real viewportRight: Math.min(
@@ -29,13 +32,14 @@ Canvas {
     width: Math.max(0, viewportRight - viewportLeft)
     height: parent ? parent.height - 6 : 0
     visible: width > 0 && waveformReady
-    opacity: 0.72
+    opacity: emphasized ? 0.94 : 0.82
 
     onWidthChanged: requestPaint()
     onXChanged: requestPaint()
     onRelativeStartFrameChanged: requestPaint()
     onVisibleDurationFramesChanged: requestPaint()
     onWaveformReadyChanged: requestPaint()
+    onStrokeColorChanged: requestPaint()
 
     Connections {
         target: mediaController
@@ -55,7 +59,7 @@ Canvas {
         if (!peaks || peaks.length < 2)
             return
         var count = peaks.length / 2
-        context.strokeStyle = "rgba(255,255,255,0.92)"
+        context.strokeStyle = strokeColor
         context.lineWidth = 1
         context.beginPath()
         for (var i = 0; i < count; ++i) {

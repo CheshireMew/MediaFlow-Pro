@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mediaflow.domain.enums import AssetKind, ColorMode
 from mediaflow.domain.project import MediaMetadata, ProjectProfile
+from mediaflow.domain.storage_names import require_windows_interop_path
 from mediaflow.domain.timebase import seconds_to_frames
 
 from .runtime_paths import RuntimePaths
@@ -25,7 +26,9 @@ class MediaProbe:
         self.paths = paths or RuntimePaths.discover()
 
     def probe(self, path: str | Path, *, timeline_profile: ProjectProfile | None = None) -> ProbeResult:
-        source = Path(path).resolve(strict=True)
+        source = require_windows_interop_path(
+            Path(path).resolve(strict=True)
+        )
         result = subprocess.run(
             [
                 str(self.paths.ffprobe),

@@ -22,6 +22,7 @@ class DictListModel(QAbstractListModel):
         self._roles = roles
         self._role_numbers = {Qt.UserRole + index + 1: role for index, role in enumerate(roles)}
         self._items: list[dict[str, Any]] = []
+        self._key_rows: dict[str, int] = {}
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {number: QByteArray(name.encode("utf-8")) for number, name in self._role_numbers.items()}
@@ -60,12 +61,14 @@ class DictListModel(QAbstractListModel):
             if items:
                 self.beginInsertRows(QModelIndex(), 0, len(items) - 1)
                 self._items = list(items)
+                self._rebuild_key_rows()
                 self.endInsertRows()
             return
         if not set(before_keys).intersection(after_keys):
             self._reset_items(items)
             return
 
+        self._key_rows = {}
         wanted = set(after_keys)
         for row in range(len(self._items) - 1, -1, -1):
             if self._items[row].get(key_role) not in wanted:
@@ -99,6 +102,7 @@ class DictListModel(QAbstractListModel):
                 self._items.insert(destination, self._items.pop(source))
                 self.endMoveRows()
 
+        self._rebuild_key_rows()
         role_by_name = {name: number for number, name in self._role_numbers.items()}
         for row, after in enumerate(items):
             before = self._items[row]
@@ -113,14 +117,28 @@ class DictListModel(QAbstractListModel):
     def _reset_items(self, items: list[dict[str, Any]]) -> None:
         self.beginResetModel()
         self._items = list(items)
+        self._rebuild_key_rows()
         self.endResetModel()
+
+    def _rebuild_key_rows(self) -> None:
+        key_role = self._roles[0]
+        self._key_rows = {
+            str(item[key_role]): row
+            for row, item in enumerate(self._items)
+        }
 
     @Slot(int, result="QVariantMap")
     def get(self, row: int) -> dict[str, Any]:
         return dict(self._items[row]) if 0 <= row < len(self._items) else {}
 
+    @Slot(result="QVariantList")
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._items]
+
     @Slot(str, str, result=int)
     def findRow(self, role: str, value: str) -> int:
+        if role == self._roles[0] and self._key_rows:
+            return self._key_rows.get(str(value), -1)
         for index, item in enumerate(self._items):
             if str(item.get(role)) == value:
                 return index
@@ -293,7 +311,6 @@ class ClipListModel(DictListModel):
                 "mediaKind",
                 "assetKind",
                 "trackKind",
-                "allowedTrackKinds",
                 "hasAudio",
                 "audioTrackPosition",
                 "waveformReady",
@@ -410,6 +427,7 @@ class TaskListModel(DictListModel):
                 "taskId",
                 "displayName",
                 "configurationLabel",
+                "encoderFallbackUsed",
                 "commandType",
                 "kind",
                 "status",

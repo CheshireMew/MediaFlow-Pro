@@ -182,9 +182,9 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         visible: root.videoEnabled
-        AppTextField { id: fpsNumerator; Layout.fillWidth: true; text: String(workspaceController.profileFpsNumerator); placeholderText: "FPS num" }
+        AppTextField { id: fpsNumerator; Layout.fillWidth: true; text: String(workspaceController.profileFpsNumerator); placeholderText: qsTr("FPS 分子") }
         Text { text: "/"; color: Theme.textMuted }
-        AppTextField { id: fpsDenominator; Layout.fillWidth: true; text: String(workspaceController.profileFpsDenominator); placeholderText: "FPS den" }
+        AppTextField { id: fpsDenominator; Layout.fillWidth: true; text: String(workspaceController.profileFpsDenominator); placeholderText: qsTr("FPS 分母") }
     }
     AppTextField { id: targetBitrate; Layout.fillWidth: true; visible: root.videoEnabled; text: "0"; placeholderText: qsTr("目标码率 kbps（0=质量模式）") }
     AppTextField { id: maxBitrate; Layout.fillWidth: true; visible: root.videoEnabled; text: "0"; placeholderText: qsTr("最大码率 kbps（0=不限）") }
@@ -199,8 +199,8 @@ ColumnLayout {
             textRole: "text"
             valueRole: "value"
             model: [
-                {text: "Mono", value: 1},
-                {text: "Stereo", value: 2},
+                {text: qsTr("单声道"), value: 1},
+                {text: qsTr("立体声"), value: 2},
                 {text: "5.1", value: 6}
             ]
             currentIndex: 1

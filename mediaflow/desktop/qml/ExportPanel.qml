@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import "."
 import "components"
@@ -13,6 +12,9 @@ ColumnLayout {
     property var taskData: ({})
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
+    readonly property bool canStartTasks: Boolean(workspaceController.actionCapabilities.canStartTasks)
+    readonly property bool canExportSequence: root.canStartTasks
+        && exportController.canExportSequence
     signal previewConfigurationChanged(var options)
     spacing: 10
 
@@ -59,24 +61,11 @@ ColumnLayout {
         function onTasksChanged() { root.refreshTask(); }
     }
 
-    FileDialog {
-        id: saveDialog
-        title: qsTr("导出序列")
-        fileMode: FileDialog.SaveFile
-        defaultSuffix: root.selectedFormat().suffix
-        nameFilters: [root.selectedFormat().filter]
-        onAccepted: exportController.exportSequenceWithOptions(
-            root.selectedFormat().value,
-            selectedFile.toString(),
-            exportSettings.exportOptions())
-    }
-    FileDialog {
-        id: fcpxmlDialog
-        title: qsTr("导出 FCPXML")
-        fileMode: FileDialog.SaveFile
-        defaultSuffix: "fcpxml"
-        nameFilters: [qsTr("Final Cut Pro XML (*.fcpxml)")]
-        onAccepted: exportController.exportFcpxml(selectedFile.toString())
+    ExportFileDialogs {
+        id: exportFileDialogs
+        format: root.selectedFormat()
+        options: exportSettings.exportOptions()
+        actionsEnabled: root.canExportSequence
     }
 
     ExportSequenceSummary {
@@ -87,24 +76,33 @@ ColumnLayout {
         Layout.fillWidth: true
         formats: root.formats
         taskActive: root.taskActive
+        actionsEnabled: root.canExportSequence
         defaultDirectory: exportController.defaultExportDirectory
-        onExportRequested: exportController.exportSequenceToDefaultLocation(
-            root.selectedFormat().value,
-            root.selectedFormat().suffix,
-            exportSettings.exportOptions())
-        onSaveAsRequested: saveDialog.open()
+        onExportRequested: {
+            if (root.canExportSequence)
+                exportController.exportSequenceToDefaultLocation(
+                    root.selectedFormat().value,
+                    root.selectedFormat().suffix,
+                    exportSettings.exportOptions());
+        }
+        onSaveAsRequested: {
+            if (root.canExportSequence)
+                exportFileDialogs.openSequenceDialog();
+        }
     }
     AppButton {
         objectName: "exportFcpxmlButton"
         Layout.fillWidth: true
         text: qsTr("导出 FCPXML（Final Cut Pro / DaVinci Resolve）")
-        onClicked: fcpxmlDialog.open()
+        enabled: root.canExportSequence
+        onClicked: exportFileDialogs.openFcpxmlDialog()
     }
-    ScrollView {
+    AppScrollView {
         id: settingsScroll
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
+        contentWidth: availableWidth
         ColumnLayout {
             width: settingsScroll.availableWidth
             spacing: 10

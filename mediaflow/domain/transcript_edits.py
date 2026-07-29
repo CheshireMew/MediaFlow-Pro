@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 
 from .model_base import DomainModel
+from .project import ProjectProfile
 from .project_records import ProjectVersionRecord
 from .subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 
@@ -98,16 +99,29 @@ class TranscriptEditImpact(DomainModel):
 
 
 class TranscriptEditPlan(DomainModel):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     sequence_id: str
     document_id: str
     expected_content_revision: int = Field(ge=0)
+    main_profile: ProjectProfile
+    sequence_profile: ProjectProfile
     selections: list[TranscriptEditSelection] = Field(min_length=1)
     resolved_selections: list[TranscriptResolvedSelection] = Field(min_length=1)
-    intervals: list[TranscriptFrameInterval] = Field(min_length=1)
+    subtitle_intervals: list[TranscriptFrameInterval] = Field(min_length=1)
+    timeline_intervals: list[TranscriptFrameInterval] = Field(min_length=1)
     impact: TranscriptEditImpact
     warnings: list[str] = Field(default_factory=list)
     plan_digest: str
+
+    @field_serializer("main_profile", "sequence_profile")
+    def serialize_profile(
+        self,
+        value: ProjectProfile,
+    ) -> dict:
+        return value.model_dump(
+            mode="json",
+            exclude_computed_fields=True,
+        )
 
 
 class TranscriptEditResult(DomainModel):

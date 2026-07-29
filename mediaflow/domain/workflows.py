@@ -22,6 +22,7 @@ class WorkflowPayload(DomainModel):
     highlight_ids_before: list[str] = Field(default_factory=list)
     highlight_candidate_ids: list[str] = Field(default_factory=list)
     short_sequence_ids: list[str] = Field(default_factory=list)
+    stage_attempt: int = Field(default=0, ge=0)
 
 
 class WorkflowPayloadPatch(DomainModel):
@@ -35,6 +36,7 @@ class WorkflowPayloadPatch(DomainModel):
     highlight_ids_before: list[str] | None = None
     highlight_candidate_ids: list[str] | None = None
     short_sequence_ids: list[str] | None = None
+    stage_attempt: int | None = Field(default=None, ge=0)
 
     def apply(self, payload: WorkflowPayload) -> WorkflowPayload:
         return payload.model_copy(update=self.model_dump(exclude_none=True))

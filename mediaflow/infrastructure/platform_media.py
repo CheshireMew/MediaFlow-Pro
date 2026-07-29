@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -25,13 +26,29 @@ class PlatformMediaResolver:
 
     _BILIBILI_ID = re.compile(r"(BV[a-zA-Z0-9]{10}|av\d+)")
     _MEDIA_MARKERS = (".mp4", ".m3u8", "aweme/v1/play", "video_id=")
-    def analyze(self, url: str, *, proxy: str | None = None) -> DownloadPlan | None:
+
+    def analyze(
+        self,
+        url: str,
+        *,
+        proxy: str | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> DownloadPlan | None:
+        self._checkpoint(check_cancelled)
         if "bilibili.com/video/" in url:
-            result = self._analyze_bilibili(url, proxy=proxy)
+            result = self._analyze_bilibili(
+                url,
+                proxy=proxy,
+                check_cancelled=check_cancelled,
+            )
             if result:
                 return result
         if self._requires_browser_resolution(url):
-            resolved = self.resolve_download(url)
+            resolved = self.resolve_download(
+                url,
+                proxy=proxy,
+                check_cancelled=check_cancelled,
+            )
             if resolved:
                 title = resolved.title or "Platform video"
                 media_id = self._platform_id(url)
@@ -53,12 +70,30 @@ class PlatformMediaResolver:
                 )
         return None
 
-    def resolve_download(self, url: str) -> ResolvedPlatformMedia | None:
+    def resolve_download(
+        self,
+        url: str,
+        *,
+        proxy: str | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> ResolvedPlatformMedia | None:
+        self._checkpoint(check_cancelled)
         if not self._requires_browser_resolution(url):
             return None
-        return self._sniff_browser_media(url)
+        return self._sniff_browser_media(
+            url,
+            proxy=proxy,
+            check_cancelled=check_cancelled,
+        )
 
-    def _analyze_bilibili(self, url: str, *, proxy: str | None) -> DownloadPlan | None:
+    def _analyze_bilibili(
+        self,
+        url: str,
+        *,
+        proxy: str | None,
+        check_cancelled: Callable[[], None] | None,
+    ) -> DownloadPlan | None:
+        self._checkpoint(check_cancelled)
         match = self._BILIBILI_ID.search(url)
         if not match:
             return None
@@ -74,6 +109,7 @@ class PlatformMediaResolver:
                 payload = json.loads(response.read().decode("utf-8"))
         except (OSError, ValueError):
             return None
+        self._checkpoint(check_cancelled)
         if payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
             return None
         return self._bilibili_plan(url, payload["data"])
@@ -168,7 +204,15 @@ class PlatformMediaResolver:
         return ""
 
     @classmethod
-    def _sniff_browser_media(cls, url: str, *, timeout: float = 15.0) -> ResolvedPlatformMedia | None:
+    def _sniff_browser_media(
+        cls,
+        url: str,
+        *,
+        timeout: float = 15.0,
+        proxy: str | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> ResolvedPlatformMedia | None:
+        cls._checkpoint(check_cancelled)
         try:
             executable = find_chromium_executable()
         except FileNotFoundError:
@@ -197,15 +241,19 @@ class PlatformMediaResolver:
 
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(
-                    executable_path=str(executable),
-                    headless=True,
-                    args=[
+                deadline = time.monotonic() + timeout
+                launch_options: dict[str, Any] = {
+                    "executable_path": str(executable),
+                    "headless": True,
+                    "args": [
                         "--disable-blink-features=AutomationControlled",
                         "--disable-dev-shm-usage",
                         "--disable-renderer-backgrounding",
                     ],
-                )
+                }
+                if proxy:
+                    launch_options["proxy"] = {"server": proxy}
+                browser = playwright.chromium.launch(**launch_options)
                 context = browser.new_context(
                     locale="zh-CN",
                     timezone_id="Asia/Shanghai",
@@ -221,12 +269,18 @@ class PlatformMediaResolver:
                 )
                 page = context.new_page()
                 page.on("request", capture)
+                cls._checkpoint(check_cancelled)
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=int(timeout * 1000))
+                    remaining = max(0.001, deadline - time.monotonic())
+                    page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=max(1, int(remaining * 1000)),
+                    )
                 except PlaywrightError:
                     pass
-                deadline = time.monotonic() + timeout
                 while found_url is None and time.monotonic() < deadline:
+                    cls._checkpoint(check_cancelled)
                     try:
                         page.evaluate(
                             """
@@ -239,7 +293,10 @@ class PlatformMediaResolver:
                         )
                     except PlaywrightError:
                         pass
-                    page.wait_for_timeout(500)
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0:
+                        page.wait_for_timeout(min(500, max(1, int(remaining * 1000))))
+                cls._checkpoint(check_cancelled)
                 try:
                     title = page.evaluate(
                         "document.querySelector('meta[property=\"og:title\"]')?.content || document.title"
@@ -254,6 +311,11 @@ class PlatformMediaResolver:
             return None
         cleaned_title = cls._clean_title(title)
         return ResolvedPlatformMedia(url, found_url, cleaned_title, platform)
+
+    @staticmethod
+    def _checkpoint(check_cancelled: Callable[[], None] | None) -> None:
+        if check_cancelled is not None:
+            check_cancelled()
 
     @staticmethod
     def _clean_title(title: str | None) -> str | None:

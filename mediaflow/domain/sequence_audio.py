@@ -15,7 +15,7 @@ from mediaflow.domain.asr import (
 )
 from mediaflow.domain.audio import AudioBus
 from mediaflow.domain.enums import ClipMediaKind, TrackKind
-from mediaflow.domain.project import Asset
+from mediaflow.domain.project import Asset, ProjectProfile
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.timebase import seconds_to_frames
 from mediaflow.domain.timeline import Clip, TimelineState
@@ -78,6 +78,30 @@ def audio_clips_for_track(state: TimelineState, audio_track_id: str) -> list[Cli
     )
 
 
+def output_audio_clips_for_track(
+    state: TimelineState,
+    audio_track_id: str,
+) -> list[Clip]:
+    """Return clips whose audio remains visible in the effective output graph.
+
+    Independent audio follows its audio track. Linked A/V additionally follows
+    the source video track's enabled, solo and mute state, so hidden picture
+    never leaks audio while the video producer itself remains available.
+    """
+
+    audible_video_track_ids = {
+        track.id
+        for track in state.effective_tracks(TrackKind.VIDEO)
+        if not track.muted
+    }
+    return [
+        clip
+        for clip in audio_clips_for_track(state, audio_track_id)
+        if clip.media_kind == ClipMediaKind.AUDIO_ONLY
+        or clip.track_id in audible_video_track_ids
+    ]
+
+
 def select_dialogue_transcription_sources(
     state: TimelineState,
     assets: dict[str, Asset],
@@ -115,15 +139,24 @@ def build_dialogue_transcription_plan(
     assets: dict[str, Asset],
     asr: AsrSettings,
     *,
+    project_profile: ProjectProfile,
     start_frame: int = 0,
     end_frame: int | None = None,
 ) -> TranscriptionPlan:
+    assets = {
+        asset_id: asset.in_frame_clock(project_profile, state.sequence.profile)
+        for asset_id, asset in assets.items()
+    }
     selection = select_dialogue_transcription_sources(
         state,
         assets,
         start_frame=start_frame,
         end_frame=end_frame,
     )
+    if any(clip.speed_numerator <= 0 for clip in selection.clips):
+        raise ValueError(
+            "主要对白轨包含倒放片段；倒放语音不能用源素材字幕映射"
+        )
     start = max(0, int(start_frame))
     end = state.duration_frames if end_frame is None else min(
         state.duration_frames,
@@ -278,10 +311,6 @@ def project_dialogue_transcript(
     fps_numerator = state.sequence.profile.fps_numerator
     fps_denominator = state.sequence.profile.fps_denominator
     for clip in clips:
-        if clip.speed_numerator <= 0:
-            raise ValueError(
-                "主要对白轨包含倒放片段；倒放语音不能用源素材字幕映射"
-            )
         transcript = transcripts.get(clip.asset_id)
         if transcript is None:
             raise ValueError(f"素材缺少转录结果：{clip.asset_id}")
@@ -393,10 +422,10 @@ def _map_source_range_to_clip(
     end = min(Fraction(source_end), clip_source_end)
     if end <= start:
         return None
-    timeline_start = clip.timeline_start + _round_fraction(
+    timeline_start = clip.timeline_start + _floor_fraction(
         (start - clip_source_start) / speed
     )
-    timeline_end = clip.timeline_start + _round_fraction(
+    timeline_end = clip.timeline_start + _ceil_fraction(
         (end - clip_source_start) / speed
     )
     timeline_start = max(start_frame, clip.timeline_start, timeline_start)
@@ -404,11 +433,6 @@ def _map_source_range_to_clip(
     if timeline_end <= timeline_start:
         return None
     return timeline_start, timeline_end
-
-
-def _round_fraction(value: Fraction) -> int:
-    quotient, remainder = divmod(value.numerator, value.denominator)
-    return quotient + (1 if remainder * 2 >= value.denominator else 0)
 
 
 def _floor_fraction(value: Fraction) -> int:
@@ -471,19 +495,16 @@ def select_audible_sequence_audio(
             cursor = by_id.get(cursor.parent_bus_id or "")
         return False
 
-    solo_track_ids = {track.id for track in state.tracks if track.solo}
     track_ids: list[str] = []
     asset_ids: list[str] = []
-    for track in sorted(state.tracks, key=lambda item: (item.position, item.id)):
-        if track.kind != TrackKind.AUDIO or not track.enabled or track.muted:
-            continue
-        if solo_track_ids and track.id not in solo_track_ids:
+    for track in state.effective_tracks(TrackKind.AUDIO):
+        if track.muted:
             continue
         if not bus_reaches_master(track.audio_bus_id or master.id):
             continue
         audible_assets = [
             clip.asset_id
-            for clip in audio_clips_for_track(state, track.id)
+            for clip in output_audio_clips_for_track(state, track.id)
             if clip.timeline_start < end
             and clip.timeline_end > start
             and clip.asset_id in assets

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import sys
+import time
 from contextlib import contextmanager
 from ctypes import WinDLL, create_unicode_buffer
 from pathlib import Path
@@ -10,14 +12,32 @@ from pathlib import Path
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 from PySide6.QtCore import QCoreApplication, QSettings, QTranslator, QUrl
-from PySide6.QtGui import QColorSpace, QFontDatabase, QGuiApplication, QSurfaceFormat
+from PySide6.QtGui import QColorSpace, QFontDatabase, QGuiApplication, QIcon, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.infrastructure.font_assets import register_application_fonts
+from mediaflow.infrastructure.settings_repository import SettingsLoadResult, SettingsRepository
+
+STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
+STARTUP_READY_SCHEMA_VERSION = 1
+
+
+def _monospace_font_family() -> str:
+    for family in (
+        "Cascadia Mono",
+        "Consolas",
+        "Menlo",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+    ):
+        if QFontDatabase.hasFamily(family):
+            return family
+    return QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
 
 
 @contextmanager
@@ -43,14 +63,18 @@ def create_engine(
     app: QGuiApplication,
     application: EditorApplication | None = None,
 ) -> tuple[QQmlApplicationEngine, EditorControllers]:
-    engine = QQmlApplicationEngine()
+    engine = QQmlApplicationEngine(app)
     qml_errors: list[str] = []
     engine.warnings.connect(lambda warnings: qml_errors.extend(item.toString() for item in warnings))
     api = application or EditorApplication()
     if api.native_qml_root is None:
         raise RuntimeError("MediaFlow Native preview is not built. Run scripts/build_native.ps1 first.")
     engine.addImportPath(str(api.native_qml_root))
-    controllers = EditorControllers(app, application=api)
+    controllers = EditorControllers(engine, application=api)
+    engine.rootContext().setContextProperty(
+        "applicationMonospaceFontFamily",
+        _monospace_font_family(),
+    )
     language = controllers.session.settings.ui.language
     if language != "zh_CN":
         translation = QTranslator(app)
@@ -72,6 +96,35 @@ def create_engine(
             f"Failed to load QML application: {qml_path}" + (f"\n{details}" if details else "")
         )
     return engine, controllers
+
+
+def publish_startup_ready(
+    engine: QQmlApplicationEngine,
+) -> Path | None:
+    """Publish opt-in evidence that the real QML root processed initial events."""
+
+    configured = os.environ.get(STARTUP_READY_PATH_ENV, "").strip()
+    if not configured:
+        return None
+    roots = engine.rootObjects()
+    if not roots:
+        raise RuntimeError("Cannot publish startup readiness without a QML root")
+    QCoreApplication.processEvents()
+    ready_path = Path(configured).expanduser().resolve()
+    atomic_write_text(
+        ready_path,
+        json.dumps(
+            {
+                "schema_version": STARTUP_READY_SCHEMA_VERSION,
+                "pid": os.getpid(),
+                "ready_at_ns": time.time_ns(),
+                "root_object_count": len(roots),
+                "event_loop_processed": True,
+            },
+            separators=(",", ":"),
+        ),
+    )
+    return ready_path
 
 
 def configure_application_font(app: QGuiApplication) -> str:
@@ -104,13 +157,88 @@ def configure_application_font(app: QGuiApplication) -> str:
     return font.family()
 
 
+def configure_application_icon(app: QGuiApplication) -> Path:
+    icon_path = Path(__file__).resolve().parents[1] / "resources" / "branding" / "mediaflow-mark.svg"
+    icon = QIcon(str(icon_path))
+    if icon.isNull():
+        raise RuntimeError(f"Failed to load application icon: {icon_path}")
+    app.setWindowIcon(icon)
+    return icon_path
+
+
+def create_desktop_application(argv: list[str] | None = None) -> QApplication:
+    return QApplication(sys.argv if argv is None else argv)
+
+
+def _saved_runtime_directory() -> Path | None:
+    bootstrap = QSettings("MediaFlow Pro", "MediaFlow Pro Bootstrap")
+    saved_value = str(bootstrap.value("runtimeDirectory", "")).strip()
+    if not saved_value:
+        return None
+    saved = Path(saved_value).expanduser()
+    return saved.resolve() if saved.is_dir() else None
+
+
+def startup_settings_path() -> Path | None:
+    configured_settings = os.environ.get("MEDIAFLOW_SETTINGS_PATH")
+    if configured_settings:
+        return Path(configured_settings).expanduser().resolve()
+    configured_runtime = os.environ.get("MEDIAFLOW_RUNTIME_DIR")
+    if configured_runtime:
+        runtime_directory = Path(configured_runtime).expanduser().resolve()
+    elif Path("D:/").exists():
+        runtime_directory = Path("D:/Tools/MediaFlow/runtime")
+    else:
+        runtime_directory = _saved_runtime_directory()
+    return (
+        (runtime_directory / "settings.json").resolve()
+        if runtime_directory is not None
+        else None
+    )
+
+
+def load_startup_settings(settings_path: Path | None) -> SettingsLoadResult:
+    if settings_path is None:
+        return SettingsLoadResult(SettingsRepository.default_settings())
+    return SettingsRepository(settings_path).load_recovering_invalid()
+
+
+def configure_startup_surface(
+    settings: SettingsLoadResult | Path | None,
+) -> bool:
+    loaded = (
+        settings
+        if isinstance(settings, SettingsLoadResult)
+        else load_startup_settings(settings)
+    )
+    preview = loaded.settings.preview
+    if preview.hdr_preview:
+        surface_format = QSurfaceFormat.defaultFormat()
+        surface_format.setColorSpace(QColorSpace(QColorSpace.SRgbLinear))
+        QSurfaceFormat.setDefaultFormat(surface_format)
+    return preview.hdr_preview
+
+
+def show_startup_settings_recovery(settings: SettingsLoadResult) -> bool:
+    if not settings.recovered:
+        return False
+    QMessageBox.warning(
+        None,
+        "MediaFlow Pro",
+        "设置文件无法读取，已原样移到归档目录：\n"
+        f"{settings.archived_path}\n\n"
+        "本次将使用默认设置继续启动。\n"
+        f"原因：{settings.error}",
+    )
+    return True
+
+
 def ensure_runtime_directory() -> bool:
     if os.environ.get("MEDIAFLOW_RUNTIME_DIR") or Path("D:/").exists():
         return True
-    bootstrap = QSettings("MediaFlow Pro", "MediaFlow Pro Bootstrap")
-    saved = Path(str(bootstrap.value("runtimeDirectory", ""))).expanduser()
-    if saved.is_dir():
-        os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(saved.resolve())
+    saved = _saved_runtime_directory()
+    if saved is not None:
+        os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(saved)
         return True
     selected = QFileDialog.getExistingDirectory(
         None,
@@ -127,6 +255,7 @@ def ensure_runtime_directory() -> bool:
         return False
     runtime_directory = Path(selected).resolve()
     os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(runtime_directory)
+    bootstrap = QSettings("MediaFlow Pro", "MediaFlow Pro Bootstrap")
     bootstrap.setValue("runtimeDirectory", str(runtime_directory))
     bootstrap.sync()
     return True
@@ -134,24 +263,32 @@ def ensure_runtime_directory() -> bool:
 
 def main() -> int:
     multiprocessing.freeze_support()
-    QtWebEngineQuick.initialize()
     QCoreApplication.setOrganizationName("MediaFlow Pro")
     QCoreApplication.setApplicationName("MediaFlow Pro")
     QCoreApplication.setApplicationVersion("2.0.0")
-    app = QGuiApplication(sys.argv)
+    settings_path = startup_settings_path()
+    startup_settings = load_startup_settings(settings_path)
+    configure_startup_surface(startup_settings)
+    if settings_path is None:
+        print(
+            "MediaFlow Pro: no runtime directory is known before the first-launch chooser; "
+            "using the HDR-capable default surface for this launch.",
+            file=sys.stderr,
+        )
+    QtWebEngineQuick.initialize()
+    app = create_desktop_application()
     if not ensure_runtime_directory():
         return 2
+    show_startup_settings_recovery(startup_settings)
     # Runtime discovery is deliberately after the desktop fallback above. This
     # keeps machines without D: usable instead of failing before the chooser can
     # be shown.
     api = EditorApplication()
-    if api.settings.preview.hdr_preview:
-        surface_format = QSurfaceFormat.defaultFormat()
-        surface_format.setColorSpace(QColorSpace(QColorSpace.SRgbLinear))
-        QSurfaceFormat.setDefaultFormat(surface_format)
     configure_application_font(app)
+    configure_application_icon(app)
     app.setDesktopFileName("MediaFlow Pro")
     engine, controllers = create_engine(app, api)
+    publish_startup_ready(engine)
     app.aboutToQuit.connect(controllers.shutdown)
     if len(sys.argv) > 1:
         controllers.workspace.openProject(QUrl.fromLocalFile(sys.argv[1]).toString())

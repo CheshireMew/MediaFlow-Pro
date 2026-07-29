@@ -11,7 +11,7 @@ Panel {
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
     readonly property bool compactCompleted: taskData.status === "completed"
-        && !taskData.error
+        && !taskData.error && !Boolean(taskData.encoderFallbackUsed)
 
     visible: Boolean(taskData.taskId)
     implicitHeight: content.implicitHeight + 20
@@ -48,7 +48,7 @@ Panel {
                 font.pixelSize: Theme.fontSizeCaption
             }
         }
-        ProgressBar {
+        AppProgressBar {
             Layout.fillWidth: true
             visible: !root.compactCompleted
             from: 0
@@ -90,7 +90,7 @@ Panel {
             font.pixelSize: Theme.fontSizeCaption
             wrapMode: Text.WordWrap
         }
-        ProgressBar {
+        AppProgressBar {
             Layout.fillWidth: true
             visible: !root.compactCompleted
                 && Boolean(root.taskData.hasOverallProgress)
@@ -104,6 +104,7 @@ Panel {
             AppButton {
                 Layout.fillWidth: true
                 visible: root.taskActive
+                enabled: workspaceController.actionCapabilities.canManageTasks
                 danger: true
                 text: qsTr("取消")
                 onClicked: taskController.cancelTask(root.taskData.taskId)
@@ -112,6 +113,7 @@ Panel {
                 Layout.fillWidth: true
                 visible: root.taskData.status === "failed"
                     || root.taskData.status === "cancelled"
+                enabled: workspaceController.actionCapabilities.canManageTasks
                 text: qsTr("重试")
                 onClicked: taskController.retryTask(root.taskData.taskId)
             }

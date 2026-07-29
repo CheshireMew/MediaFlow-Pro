@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def runtime_directory() -> Path:
+    configured = os.environ.get("MEDIAFLOW_RUNTIME_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    drive = Path("D:/")
+    if not drive.exists():
+        raise RuntimeError("D: drive is unavailable. Set MEDIAFLOW_RUNTIME_DIR to a non-system drive.")
+    return Path("D:/Tools/MediaFlow/runtime")
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,9 +25,18 @@ class RuntimePaths:
     melt: Path | None = None
     native_qml: Path | None = None
 
+    def project_cache_dir(self, project_dir: str | Path) -> Path:
+        """Return the machine-local cache root for one project location."""
+
+        normalized = str(Path(project_dir).expanduser().resolve()).casefold()
+        identity = hashlib.sha256(
+            normalized.encode("utf-8")
+        ).hexdigest()[:24]
+        return self.runtime_dir / "cache" / "projects" / identity
+
     @classmethod
     def discover(cls) -> RuntimePaths:
-        runtime_dir = cls._runtime_dir()
+        runtime_dir = runtime_directory()
         ffmpeg = cls._tool("MEDIAFLOW_FFMPEG", runtime_dir / "deps/ffmpeg/bin/ffmpeg.exe", "ffmpeg")
         ffprobe = cls._tool("MEDIAFLOW_FFPROBE", runtime_dir / "deps/ffmpeg/bin/ffprobe.exe", "ffprobe")
         system_melt = shutil.which("melt")
@@ -43,16 +63,6 @@ class RuntimePaths:
             melt=melt,
             native_qml=native_qml,
         )
-
-    @staticmethod
-    def _runtime_dir() -> Path:
-        configured = os.environ.get("MEDIAFLOW_RUNTIME_DIR")
-        if configured:
-            return Path(configured).expanduser().resolve()
-        drive = Path("D:/")
-        if not drive.exists():
-            raise RuntimeError("D: drive is unavailable. Set MEDIAFLOW_RUNTIME_DIR to a non-system drive.")
-        return Path("D:/Tools/MediaFlow/runtime")
 
     @classmethod
     def _tool(cls, variable: str, bundled: Path, command: str) -> Path:

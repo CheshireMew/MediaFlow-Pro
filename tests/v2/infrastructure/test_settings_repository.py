@@ -9,10 +9,9 @@ from mediaflow.domain.settings import (
     GlossaryTermSettings,
     LlmProviderSettings,
     SubtitleStylePresetSettings,
-    default_media_root,
-    default_project_root,
 )
 from mediaflow.infrastructure.settings_repository import SETTINGS_SCHEMA_VERSION, SettingsRepository
+from mediaflow.infrastructure.storage_paths import default_media_root, default_project_root
 
 
 def test_default_repository_honors_isolated_settings_path(
@@ -173,6 +172,9 @@ def test_version_ten_settings_separate_media_and_project_roots(
     assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
     assert loaded.ui.default_project_directory == default_project_root()
     assert loaded.download.output_directory == default_media_root()
+    assert not Path(default_project_root()).exists()
+    assert not Path(default_media_root()).exists()
+    SettingsRepository.prepare_storage(loaded)
     assert Path(default_project_root()).is_dir()
     assert Path(default_media_root()).is_dir()
     assert Path(default_project_root()).parent == application_directory
@@ -251,3 +253,37 @@ def test_concurrent_settings_writer_is_rejected_instead_of_losing_updates(tmp_pa
     persisted = SettingsRepository(path).load()
     assert persisted.ui.theme == "high_contrast"
     assert persisted.ui.language == "zh_CN"
+
+
+def test_invalid_settings_recovery_never_archives_a_concurrent_valid_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_bytes(b"{invalid-json")
+    replacement = GlobalSettings()
+    replacement.ui.language = "en"
+    replacement_payload = replacement.model_dump_json(indent=2)
+    repository = SettingsRepository(path)
+    archive_invalid = repository._archive_invalid_file
+    concurrent_write_done = False
+
+    def write_valid_settings_before_archive(expected_digest: str) -> Path:
+        nonlocal concurrent_write_done
+        if not concurrent_write_done:
+            path.write_text(replacement_payload, encoding="utf-8")
+            concurrent_write_done = True
+        return archive_invalid(expected_digest)
+
+    monkeypatch.setattr(
+        repository,
+        "_archive_invalid_file",
+        write_valid_settings_before_archive,
+    )
+    result = repository.load_recovering_invalid()
+
+    assert concurrent_write_done is True
+    assert result.recovered is False
+    assert result.settings.ui.language == "en"
+    assert path.read_text(encoding="utf-8") == replacement_payload
+    assert not (tmp_path / "archive").exists()

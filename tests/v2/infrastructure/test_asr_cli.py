@@ -5,10 +5,14 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from mediaflow.application.asset_service import AssetService
+from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
-from mediaflow.domain.enums import TaskStatus, TrackKind
+from mediaflow.domain.enums import AssetKind, TaskStatus, TrackKind
 from mediaflow.domain.progress import OperationProgress
+from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings, GlobalSettings
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
@@ -19,7 +23,11 @@ from mediaflow.infrastructure.asr_engine import (
     FasterWhisperProcessEngine,
     create_asr_pipeline,
 )
-from mediaflow.infrastructure.audio_chunking import AudioPreparationService
+from mediaflow.infrastructure.audio_chunking import (
+    AudioChunkingService,
+    AudioPreparationService,
+)
+from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -58,22 +66,77 @@ def _generate_audio(path: Path, paths: RuntimePaths, *, duration_seconds: int = 
     assert result.returncode == 0, result.stderr.decode(errors="replace")
 
 
+def _cache_runs(paths: RuntimePaths, category: str) -> list[Path]:
+    runs = paths.runtime_dir / "cache" / category / "runs"
+    return sorted(item for item in runs.iterdir()) if runs.is_dir() else []
+
+
 def _transcription_command(
     repository: ProjectRepository,
     sequence_id: str,
     settings: AsrSettings,
 ) -> TranscribeSequenceCommand:
-    state = repository.load_timeline(sequence_id)
+    state = repository.timeline.load_timeline(sequence_id)
     duration = state.duration_frames
     bounds = state.sequence.in_out
     plan = build_dialogue_transcription_plan(
         state,
-        {asset.id: asset for asset in repository.list_assets()},
+        {asset.id: asset for asset in repository.catalog.list_assets()},
         settings,
+        project_profile=repository.catalog.get_sequence(
+            repository.catalog.get_project().main_sequence_id
+        ).profile,
         start_frame=min(duration, bounds.in_frame) if bounds else 0,
         end_frame=min(duration, bounds.out_frame) if bounds else duration,
     )
     return TranscribeSequenceCommand(plan=plan)
+
+
+def test_transcription_plan_uses_the_sequence_frame_clock(tmp_path: Path) -> None:
+    main_profile = ProjectProfile(fps_numerator=25, fps_denominator=1)
+    source = tmp_path / "clock-audio.wav"
+    source.write_bytes(b"clock-audio")
+    with ProjectRepository.create(
+        tmp_path / "Transcription Clock",
+        "Transcription Clock",
+        main_profile,
+    ) as repository:
+        asset = repository.catalog.import_external_asset(source, AssetKind.AUDIO)
+        asset = repository.catalog.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": asset.metadata.model_copy(
+                        update={"duration_frames": 25, "has_audio": True}
+                    )
+                }
+            )
+        )
+        short = repository.catalog.create_short_sequence(
+            "30 fps short",
+            main_profile.model_copy(update={"fps_numerator": 30}),
+        )
+        editor = TimelineEditor(repository, short.id)
+        audio_track = editor.add_track(TrackKind.AUDIO)
+        editor.add_clip(
+            track_id=audio_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+
+        plan = build_dialogue_transcription_plan(
+            editor.state,
+            {asset.id: asset},
+            AsrSettings(),
+            project_profile=main_profile,
+        )
+        assert len(plan.sources) == 1
+        assert [
+            (region.start_frame, region.end_frame)
+            for region in plan.sources[0].regions
+        ] == [(0, 30)]
+        assert plan.recognition_seconds == 1.0
 
 
 def test_built_in_pipeline_uses_the_shared_long_audio_chunk_orchestrator(
@@ -130,7 +193,7 @@ print('100%', flush=True)
         paths=paths,
     )
     try:
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -140,7 +203,7 @@ print('100%', flush=True)
             source_in=0,
             duration=asset.metadata.duration_frames,
         )
-        project.tasks.events.subscribe(
+        project.subscribe_task_events(
             lambda event: progress.append(
                 OperationProgress.model_validate(event.payload["progress"])
             ),
@@ -151,13 +214,13 @@ print('100%', flush=True)
             [asset.id],
             sequence_id=sequence_id,
         )
-        completed = project.tasks.wait(task.id, timeout=10)
-        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+        completed = project.wait_for_task(task.id, timeout=10)
+        documents = repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
         assert completed.status == TaskStatus.COMPLETED
         assert len(documents) == 1
         document = documents[0]
-        segments = repository.list_subtitle_segments(document.id)
-        words = repository.list_subtitle_words(document.id)
+        segments = repository.subtitles.list_subtitle_segments(document.id)
+        words = repository.subtitles.list_subtitle_words(document.id)
         generated = list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
         assert [segment.text for segment in segments] == ["CLI producer output"]
         assert (segments[0].start_frame, segments[0].end_frame) == (3, 27)
@@ -278,7 +341,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -295,22 +358,22 @@ print('100%', flush=True)
             [asset.id],
             sequence_id=sequence_id,
         )
-        completed = project.tasks.wait(task.id, timeout=10)
-        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+        completed = project.wait_for_task(task.id, timeout=10)
+        documents = repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
         assert completed.status == TaskStatus.COMPLETED
         assert len(documents) == 1
-        assert len(repository.list_subtitle_segments(documents[0].id)) == 2
+        assert len(repository.subtitles.list_subtitle_segments(documents[0].id)) == 2
         subtitle_track = next(
-            track for track in repository.load_timeline(sequence_id).tracks
+            track for track in repository.timeline.load_timeline(sequence_id).tracks
             if track.kind == TrackKind.SUBTITLE
         )
-        assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
+        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 2
         removed_timeline_mix = repository.project_dir / "generated" / "audio" / (
             f"{sequence_id}-transcription.wav"
         )
         assert not removed_timeline_mix.exists()
         assert completed.artifacts
-        assert (repository.project_dir / completed.artifacts[0]).is_file()
+        assert completed.artifacts[0].resolve(repository.project_dir).is_file()
         assert documents[0].purpose == "sequence_transcript"
         assert (tmp_path / "task-calls.txt").read_text(
             encoding="utf-8"
@@ -321,13 +384,13 @@ print('100%', flush=True)
             [asset.id],
             sequence_id=sequence_id,
         )
-        repeated_completed = project.tasks.wait(repeated.id, timeout=10)
-        repeated_documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+        repeated_completed = project.wait_for_task(repeated.id, timeout=10)
+        repeated_documents = repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
 
         assert repeated_completed.status == TaskStatus.COMPLETED
         assert [document.id for document in repeated_documents] == [documents[0].id]
-        assert len(repository.list_subtitle_segments(documents[0].id)) == 2
-        assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
+        assert len(repository.subtitles.list_subtitle_segments(documents[0].id)) == 2
+        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 2
         assert (tmp_path / "task-calls.txt").read_text(
             encoding="utf-8"
         ).splitlines() == ["tiny"]
@@ -371,7 +434,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -387,9 +450,9 @@ print('100%', flush=True)
             [asset.id],
             sequence_id=sequence_id,
         )
-        completed = project.tasks.wait(task.id, timeout=10)
-        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
-        segments = repository.list_subtitle_segments(documents[0].id)
+        completed = project.wait_for_task(task.id, timeout=10)
+        documents = repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
+        segments = repository.subtitles.list_subtitle_segments(documents[0].id)
         removed_timeline_mix = repository.project_dir / "generated" / "audio" / (
             f"{sequence_id}-transcription.wav"
         )
@@ -401,7 +464,7 @@ print('100%', flush=True)
         ]
         assert not removed_timeline_mix.exists()
         assert completed.artifacts
-        assert (repository.project_dir / completed.artifacts[0]).is_file()
+        assert completed.artifacts[0].resolve(repository.project_dir).is_file()
     finally:
         project.close()
 
@@ -453,7 +516,7 @@ print('100%', flush=True)
     second_asset = assets.import_external(second_source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         dialogue_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -483,17 +546,17 @@ print('100%', flush=True)
             [first_asset.id, second_asset.id],
             sequence_id=sequence_id,
         )
-        completed = project.tasks.wait(task.id, timeout=10)
+        completed = project.wait_for_task(task.id, timeout=10)
 
         assert completed.status == TaskStatus.COMPLETED
         document = next(
             item
-            for item in repository.list_subtitle_documents(sequence_id=sequence_id)
+            for item in repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
             if item.purpose == "sequence_transcript"
         )
         assert [
             (item.start_frame, item.end_frame, item.text)
-            for item in repository.list_subtitle_segments(document.id)
+            for item in repository.subtitles.list_subtitle_segments(document.id)
         ] == [
             (3, 12, "source-1"),
             (63, 72, "source-2"),
@@ -501,24 +564,24 @@ print('100%', flush=True)
         ]
         subtitle_track = next(
             track
-            for track in repository.load_timeline(sequence_id).tracks
+            for track in repository.timeline.load_timeline(sequence_id).tracks
             if track.kind == TrackKind.SUBTITLE
         )
         assert [
             (item.start_frame, item.end_frame)
-            for item in repository.list_subtitle_placements(subtitle_track.id)
+            for item in repository.subtitles.list_subtitle_placements(subtitle_track.id)
         ] == [(3, 12), (63, 72), (120, 129)]
         assert (tmp_path / "multi-source-calls.txt").read_text(
             encoding="utf-8"
         ).splitlines() == ["source-1", "source-2"]
-        assert (repository.project_dir / completed.artifacts[0]).is_file()
+        assert completed.artifacts[0].resolve(repository.project_dir).is_file()
 
         repeated = project.start_task(
             _transcription_command(repository, sequence_id, settings.asr),
             [first_asset.id, second_asset.id],
             sequence_id=sequence_id,
         )
-        assert project.tasks.wait(repeated.id, timeout=10).status == TaskStatus.COMPLETED
+        assert project.wait_for_task(repeated.id, timeout=10).status == TaskStatus.COMPLETED
         assert (tmp_path / "multi-source-calls.txt").read_text(
             encoding="utf-8"
         ).splitlines() == ["source-1", "source-2"]
@@ -568,7 +631,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         dialogue_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -595,7 +658,7 @@ print('100%', flush=True)
         ] == [(45, 105), (165, 225)]
         assert command.plan.recognition_seconds == 4.0
 
-        completed = project.tasks.wait(
+        completed = project.wait_for_task(
             project.start_task(
                 command,
                 [asset.id],
@@ -606,12 +669,12 @@ print('100%', flush=True)
         assert completed.status == TaskStatus.COMPLETED
         document = next(
             item
-            for item in repository.list_subtitle_documents(sequence_id=sequence_id)
+            for item in repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
             if item.purpose == "sequence_transcript"
         )
         assert [
             (item.start_frame, item.end_frame, item.text)
-            for item in repository.list_subtitle_segments(document.id)
+            for item in repository.subtitles.list_subtitle_segments(document.id)
         ] == [
             (3, 12, "region-1"),
             (33, 42, "region-2"),
@@ -619,12 +682,7 @@ print('100%', flush=True)
         prepared_inputs = list(
             (paths.runtime_dir / "cache" / "asr-inputs" / "runs").rglob("input.wav")
         )
-        assert len(prepared_inputs) == 2
-        durations = [
-            AudioPreparationService(paths)._probe_audio(path)[1]
-            for path in prepared_inputs
-        ]
-        assert all(1.95 <= duration <= 2.05 for duration in durations)
+        assert prepared_inputs == []
         assert (tmp_path / "region-only-calls.txt").read_text(
             encoding="utf-8"
         ).splitlines() == ["region-1", "region-2"]
@@ -705,8 +763,7 @@ marker.unlink()
     )
     chunk_files = list((paths.runtime_dir / "cache" / "asr-chunks" / "runs").rglob("*.wav"))
 
-    assert len(chunk_files) == 3
-    assert all(path.stat().st_size > 1000 for path in chunk_files)
+    assert chunk_files == []
     assert [round(segment.start_seconds, 1) for segment in result.segments] == [0.1, 1.1, 2.1]
     assert [round(segment.end_seconds, 1) for segment in result.segments] == [0.4, 1.4, 2.4]
     assert any(item.message_code == "asr_silence_detection" for item in progress)
@@ -790,13 +847,13 @@ active.unlink()
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
         task_progress: list[OperationProgress] = []
-        project.tasks.events.subscribe(
+        project.subscribe_task_events(
             lambda event: task_progress.append(
                 OperationProgress.model_validate(event.payload["progress"])
             ),
             include_snapshot=False,
         )
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -806,7 +863,7 @@ active.unlink()
             source_in=0,
             duration=asset.metadata.duration_frames,
         )
-        completed = project.tasks.wait(
+        completed = project.wait_for_task(
             project.start_task(
                 _transcription_command(repository, sequence_id, settings.asr),
                 [asset.id],
@@ -822,10 +879,10 @@ active.unlink()
         ).read_text(encoding="utf-8") == "yes"
         document = next(
             item
-            for item in repository.list_subtitle_documents(sequence_id=sequence_id)
+            for item in repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
             if item.purpose == "sequence_transcript"
         )
-        segments = repository.list_subtitle_segments(document.id)
+        segments = repository.subtitles.list_subtitle_segments(document.id)
         assert len(segments) == 2
         assert [segment.text for segment in segments] == [
             "Long chunk",
@@ -876,45 +933,145 @@ def test_audio_preparation_preserves_strongly_antiphase_stereo_signal(
     assert generated.returncode == 0, generated.stderr.decode(errors="replace")
 
     prepared = AudioPreparationService(paths).prepare_for_asr(source)
-    probe = subprocess.run(
-        [
-            str(paths.ffprobe),
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=channels,sample_rate,codec_name",
-            "-of",
-            "json",
-            str(prepared),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert probe.returncode == 0, probe.stderr
-    stream = json.loads(probe.stdout)["streams"][0]
-    assert stream == {"codec_name": "pcm_s16le", "sample_rate": "16000", "channels": 1}
+    try:
+        probe = subprocess.run(
+            [
+                str(paths.ffprobe),
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=channels,sample_rate,codec_name",
+                "-of",
+                "json",
+                str(prepared),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert probe.returncode == 0, probe.stderr
+        stream = json.loads(probe.stdout)["streams"][0]
+        assert stream == {
+            "codec_name": "pcm_s16le",
+            "sample_rate": "16000",
+            "channels": 1,
+        }
 
-    volume = subprocess.run(
-        [
-            str(paths.ffmpeg),
-            "-hide_banner",
-            "-i",
-            str(prepared),
-            "-af",
-            "volumedetect",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+        volume = subprocess.run(
+            [
+                str(paths.ffmpeg),
+                "-hide_banner",
+                "-i",
+                str(prepared),
+                "-af",
+                "volumedetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert volume.returncode == 0, volume.stderr
+        match = __import__("re").search(
+            r"mean_volume:\s*(-?[0-9.]+) dB",
+            volume.stderr,
+        )
+        assert match and float(match.group(1)) > -10.0
+    finally:
+        CacheManager(paths.runtime_dir / "cache").cleanup_run(prepared.parent)
+
+
+def test_audio_preparation_probe_failure_does_not_allocate_a_cache_run(
+    tmp_path: Path,
+) -> None:
+    paths = _runtime_paths(tmp_path)
+    source = tmp_path / "not-media.bin"
+    source.write_bytes(b"not a media stream")
+
+    with pytest.raises(RuntimeError):
+        AudioPreparationService(paths).prepare_for_asr(source)
+
+    assert _cache_runs(paths, "asr-inputs") == []
+
+
+def test_audio_preparation_encoding_failure_removes_its_cache_run(
+    tmp_path: Path,
+) -> None:
+    paths = _runtime_paths(tmp_path)
+    source = tmp_path / "source.wav"
+    _generate_audio(source, paths)
+    broken_paths = RuntimePaths(
+        runtime_dir=paths.runtime_dir,
+        ffmpeg=paths.ffprobe,
+        ffprobe=paths.ffprobe,
+        melt=paths.melt,
+        native_qml=paths.native_qml,
     )
-    assert volume.returncode == 0, volume.stderr
-    match = __import__("re").search(r"mean_volume:\s*(-?[0-9.]+) dB", volume.stderr)
-    assert match and float(match.group(1)) > -10.0
+
+    with pytest.raises(RuntimeError, match="准备 ASR 音频失败"):
+        AudioPreparationService(broken_paths).prepare_for_asr(source)
+
+    assert _cache_runs(paths, "asr-inputs") == []
+
+
+def test_audio_preparation_cancellation_removes_its_cache_run(
+    tmp_path: Path,
+) -> None:
+    class Cancelled(BaseException):
+        pass
+
+    paths = _runtime_paths(tmp_path)
+    source = tmp_path / "source.wav"
+    _generate_audio(source, paths, duration_seconds=3)
+    observed_run = False
+
+    def cancel_after_process_start() -> None:
+        nonlocal observed_run
+        observed_run = bool(_cache_runs(paths, "asr-inputs"))
+        raise Cancelled
+
+    with pytest.raises(Cancelled):
+        AudioPreparationService(paths).prepare_for_asr(
+            source,
+            check_cancelled=cancel_after_process_start,
+        )
+
+    assert observed_run
+    assert _cache_runs(paths, "asr-inputs") == []
+
+
+def test_audio_chunking_mid_run_failure_removes_all_generated_chunks(
+    tmp_path: Path,
+) -> None:
+    paths = _runtime_paths(tmp_path)
+    source = tmp_path / "source.wav"
+    _generate_audio(source, paths, duration_seconds=3)
+    observed_first_chunk = False
+
+    def fail_during_second_chunk(progress: OperationProgress) -> None:
+        nonlocal observed_first_chunk
+        if progress.message_code != "asr_chunk_extracting":
+            return
+        observed_first_chunk = any(
+            run.joinpath("chunk-000.wav").is_file()
+            for run in _cache_runs(paths, "asr-chunks")
+        )
+        if progress.completed is not None and progress.completed > 1.0:
+            raise RuntimeError("injected second chunk failure")
+
+    with pytest.raises(RuntimeError, match="injected second chunk failure"):
+        AudioChunkingService(paths).extract_chunks(
+            source,
+            [1.0, 2.0],
+            total_duration=3.0,
+            progress=fail_during_second_chunk,
+        )
+
+    assert observed_first_chunk
+    assert _cache_runs(paths, "asr-chunks") == []

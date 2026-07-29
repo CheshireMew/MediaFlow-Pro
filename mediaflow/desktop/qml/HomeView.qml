@@ -9,6 +9,9 @@ Rectangle {
     id: root
     objectName: "homeView"
     color: Theme.window
+    readonly property bool modalOpen: createProjectDialog.opened
+        || openFolderDialog.visible
+        || Boolean(root.Window.window && root.Window.window.downloadPlanVisible)
 
     Timer {
         id: downloadUrlPersistenceTimer
@@ -18,6 +21,8 @@ Rectangle {
     }
 
     function createProject() {
+        if (!workspaceController.actionCapabilities.canCreateProject)
+            return;
         workspaceController.createProjectInDefaultDirectory(createProjectNameField.text.trim())
         if (workspaceController.hasProject) {
             createProjectNameField.clear()
@@ -26,11 +31,15 @@ Rectangle {
     }
 
     Shortcut {
-        sequence: StandardKey.New
+        sequences: [StandardKey.New]
+        enabled: !root.modalOpen
+            && workspaceController.actionCapabilities.canCreateProject
         onActivated: createProjectDialog.open()
     }
     Shortcut {
-        sequence: StandardKey.Open
+        sequences: [StandardKey.Open]
+        enabled: !root.modalOpen
+            && workspaceController.actionCapabilities.canOpenProject
         onActivated: openFolderDialog.open()
     }
 
@@ -41,7 +50,7 @@ Rectangle {
             workspaceController.openProject(selectedFolder.toString())
         }
     }
-    Dialog {
+    AppDialog {
         id: createProjectDialog
         objectName: "createProjectDialog"
         anchors.centerIn: parent
@@ -77,6 +86,7 @@ Rectangle {
                     objectName: "confirmCreateProjectButton"
                     primary: true
                     text: qsTr("创建项目")
+                    enabled: workspaceController.actionCapabilities.canCreateProject
                     onClicked: root.createProject()
                 }
             }
@@ -90,7 +100,7 @@ Rectangle {
         contentWidth: width
         contentHeight: Math.max(height, homeContent.y + homeContent.implicitHeight + 36)
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: AppScrollBar { policy: ScrollBar.AsNeeded }
 
         ColumnLayout {
             id: homeContent
@@ -100,22 +110,76 @@ Rectangle {
             y: 34
             spacing: 20
 
+            Panel {
+                objectName: "projectClosingPanel"
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? 72 : 0
+                visible: workspaceController.projectReleasePending
+                level: 1
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    AppBusyIndicator {
+                        running: workspaceController.projectClosing
+                        visible: running
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                    }
+                    AppIcon {
+                        visible: workspaceController.projectCloseFailed
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                        iconName: "warning"
+                        iconColor: Theme.danger
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: workspaceController.projectCloseFailed
+                            ? qsTr("上一个项目的资源未完全释放，文件仍保持占用。请等待任务停稳后重试关闭。")
+                            : qsTr("正在关闭上一个项目并释放文件，完成后即可重新打开项目。")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSizeBodySmall
+                        wrapMode: Text.WordWrap
+                        ToolTip.visible: closingPathHover.hovered
+                            && workspaceController.closingProjectPath.length > 0
+                        ToolTip.text: workspaceController.projectCloseError.length > 0
+                            ? workspaceController.closingProjectPath + "\n"
+                                + workspaceController.projectCloseError
+                            : workspaceController.closingProjectPath
+                        HoverHandler { id: closingPathHover }
+                    }
+                    AppButton {
+                        objectName: "retryProjectCloseButton"
+                        text: qsTr("重试关闭")
+                        visible: workspaceController.actionCapabilities.canRetryProjectClose
+                        enabled: visible
+                        onClicked: workspaceController.retryProjectClose()
+                    }
+                }
+            }
+
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 18
 
-                Button {
+                AbstractButton {
                     id: createHero
                     objectName: "homeCreateHero"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 190
+                    Layout.preferredHeight: 228
                     padding: 0
                     hoverEnabled: true
                     focusPolicy: Qt.StrongFocus
                     Accessible.name: qsTr("新建项目")
                     Accessible.description: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
-                    scale: down ? 0.997 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 80 } }
+                    scale: down ? 0.998 : 1.0
+                    enabled: workspaceController.actionCapabilities.canCreateProject
+                    Behavior on scale {
+                        NumberAnimation {
+                            duration: Theme.durationFast
+                            easing.type: Easing.OutCubic
+                        }
+                    }
                     onClicked: createProjectDialog.open()
 
                     HoverHandler {
@@ -126,74 +190,155 @@ Rectangle {
                         radius: Theme.radiusLarge
                         clip: true
                         border.width: createHero.activeFocus ? 2 : 1
-                        border.color: createHero.activeFocus || createHero.hovered ? Theme.accent : "#34536a"
+                        color: Theme.surfaceRaised
+                        border.color: createHero.activeFocus || createHero.hovered
+                            ? Theme.borderStrong : Theme.border
                         gradient: Gradient {
                             orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#26364e" }
-                            GradientStop { position: 0.48; color: "#15515a" }
-                            GradientStop { position: 1.0; color: "#171b24" }
+                            GradientStop {
+                                position: 0.0
+                                color: createHero.hovered
+                                    ? Theme.surfaceFloating : Theme.surfaceRaised
+                            }
+                            GradientStop {
+                                position: 1.0
+                                color: createHero.hovered
+                                    ? Theme.accentSoft : Theme.surfaceRaised
+                            }
                         }
 
-                        Rectangle {
-                            width: 360
-                            height: 360
-                            x: -110
-                            y: -210
-                            radius: 180
-                            color: "#6c4a82"
-                            opacity: 0.22
+                        Behavior on color {
+                            ColorAnimation { duration: Theme.duration }
                         }
-                        Rectangle {
-                            width: 420
-                            height: 420
-                            anchors.right: parent.right
-                            anchors.rightMargin: -140
-                            anchors.verticalCenter: parent.verticalCenter
-                            radius: 210
-                            color: "#0b6972"
-                            opacity: 0.18
+                        Behavior on border.color {
+                            ColorAnimation { duration: Theme.durationFast }
                         }
                     }
 
                     contentItem: Item {
-                        ColumnLayout {
-                            anchors.centerIn: parent
-                            width: Math.min(900, parent.width - 96)
-                            spacing: 14
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 16
-                                Rectangle {
-                                    id: createHeroIcon
-                                    objectName: "createProjectHeroIcon"
-                                    implicitWidth: 58
-                                    implicitHeight: 58
-                                    radius: 16
-                                    color: "#e8f5f5"
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 42
+                            anchors.rightMargin: 34
+                            anchors.topMargin: 28
+                            anchors.bottomMargin: 28
+                            spacing: 34
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 760
+                                Layout.fillHeight: true
+                                spacing: 10
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 9
+                                    BrandMark {
+                                        Layout.preferredWidth: 27
+                                        Layout.preferredHeight: 27
+                                    }
                                     Text {
-                                        anchors.centerIn: parent
-                                        text: "+"
-                                        color: "#173441"
-                                        font.pixelSize: 32
-                                        font.weight: Font.Bold
+                                        text: "MediaFlow"
+                                        color: Theme.text
+                                        font.pixelSize: Theme.fontSizeTitleSmall
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 0.2
+                                    }
+                                    Text {
+                                        text: "PRO"
+                                        color: Theme.accent
+                                        font.family: Theme.monoFontFamily
+                                        font.pixelSize: Theme.fontSizeCaption
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 1.4
+                                    }
+                                    Rectangle {
+                                        Layout.preferredWidth: 34
+                                        Layout.preferredHeight: 1
+                                        color: Theme.borderStrong
+                                    }
+                                    Text {
+                                        text: "LOCAL PROJECT · VERIFIED OUTPUT"
+                                        color: Theme.textMuted
+                                        font.family: Theme.monoFontFamily
+                                        font.pixelSize: Theme.fontSizeCaption
+                                        font.letterSpacing: 0.8
                                     }
                                 }
+
                                 Text {
-                                    id: createHeroTitle
-                                    objectName: "createProjectHeroTitle"
-                                    text: qsTr("新建项目")
-                                    color: "white"
-                                    font.pixelSize: Theme.fontSizeDisplay + 6
-                                    font.weight: Font.Bold
+                                    Layout.fillWidth: true
+                                    text: qsTr("从素材到成片，流程清楚，结果可控。")
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontSizeDisplay
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
+                                    color: Theme.textSubtle
+                                    font.pixelSize: Theme.fontSizeBodyLarge
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Item { Layout.fillHeight: true }
+
+                                RowLayout {
+                                    spacing: 14
+                                    Rectangle {
+                                        id: createHeroIcon
+                                        objectName: "createProjectHeroIcon"
+                                        implicitWidth: 58
+                                        implicitHeight: 58
+                                        radius: Theme.radius
+                                        color: Theme.accent
+                                        AppIcon {
+                                            anchors.centerIn: parent
+                                            width: 24
+                                            height: 24
+                                            iconName: "add"
+                                            iconColor: Theme.onAccent
+                                            strokeWidth: 2
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        spacing: 2
+                                        Text {
+                                            id: createHeroTitle
+                                            objectName: "createProjectHeroTitle"
+                                            text: qsTr("新建项目")
+                                            color: Theme.text
+                                            font.pixelSize: Theme.fontSizeDisplay + 6
+                                            font.weight: Font.DemiBold
+                                        }
+                                        Text {
+                                            text: "CTRL + N"
+                                            color: Theme.accent
+                                            font.family: Theme.monoFontFamily
+                                            font.pixelSize: Theme.fontSizeCaption
+                                            font.letterSpacing: 1
+                                        }
+                                    }
                                 }
                             }
-                            Text {
+
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.fillHeight: true
+                                color: Theme.divider
+                            }
+
+                            Item {
+                                id: signalMap
                                 Layout.fillWidth: true
-                                text: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
-                                color: "#c5d1dc"
-                                font.pixelSize: Theme.fontSizeBodyLarge
-                                horizontalAlignment: Text.AlignHCenter
-                                wrapMode: Text.WordWrap
+                                Layout.preferredWidth: 500
+                                Layout.fillHeight: true
+
+                                SignalMapArtwork {
+                                    anchors.fill: parent
+                                }
                             }
                         }
                     }
@@ -233,7 +378,8 @@ Rectangle {
                                         downloadUrlPersistenceTimer.stop()
                                         settingsController.setLastDownloadUrl(text)
                                         if (text.trim().length > 0
-                                                && !taskController.downloadAnalysisBusy)
+                                                && !taskController.downloadAnalysisBusy
+                                                && workspaceController.actionCapabilities.canCreateProject)
                                             taskController.analyzeDownloadUrl(text.trim())
                                     }
                                 }
@@ -255,6 +401,7 @@ Rectangle {
                                           : qsTr("下载并新建项目")
                                     enabled: downloadUrlField.text.trim().length > 0
                                              && !taskController.downloadAnalysisBusy
+                                             && workspaceController.actionCapabilities.canCreateProject
                                     onClicked: {
                                         downloadUrlPersistenceTimer.stop()
                                         settingsController.setLastDownloadUrl(downloadUrlField.text)
@@ -292,6 +439,7 @@ Rectangle {
                                 objectName: "openExistingProjectButton"
                                 Layout.fillWidth: true
                                 text: qsTr("打开已有项目")
+                                enabled: workspaceController.actionCapabilities.canOpenProject
                                 onClicked: openFolderDialog.open()
                             }
                         }
@@ -303,12 +451,17 @@ Rectangle {
             id: recentSection
             objectName: "homeRecentSection"
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(380, root.height - 420)
+            Layout.preferredHeight: Math.max(380, root.height - 458)
             level: 1
+            color: Theme.transparent
+            border.color: Theme.transparent
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 16
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 8
+                anchors.bottomMargin: 0
                 spacing: 14
 
                 RowLayout {
@@ -353,11 +506,11 @@ Rectangle {
                         || workspaceController.homeSummary.failedTaskCount > 0
                         || workspaceController.homeSummary.offlineAssetCount > 0
                         || workspaceController.homeSummary.pendingWorkflowCount > 0
-                    radius: 18
-                    color: "#191f26"
+                    radius: Theme.radius
+                    color: Theme.surface
                     border.color: workspaceController.homeSummary.failedTaskCount > 0
                         || workspaceController.homeSummary.offlineAssetCount > 0
-                        ? "#74542f" : Theme.border
+                        ? Theme.warning : Theme.borderSubtle
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: 14
@@ -394,7 +547,7 @@ Rectangle {
                     boundsBehavior: Flickable.StopAtBounds
                     reuseItems: true
                     model: workspaceController.recentProjectsModel
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    ScrollBar.vertical: AppScrollBar { policy: ScrollBar.AsNeeded }
                     delegate: Rectangle {
                         objectName: "recentProjectCard"
                         required property string name
@@ -424,24 +577,31 @@ Rectangle {
                         x: 6
                         width: recentList.cellWidth - 12
                         height: recentList.cellHeight - 12
-                        radius: 11
-                        color: Theme.surface
+                        radius: Theme.radius
+                        color: Theme.surfaceRaised
                         border.color: !available ? Theme.danger
-                            : activeFocus || recentMouse.containsMouse ? Theme.accent : Theme.border
+                            : activeFocus ? Theme.accent
+                            : recentMouse.containsMouse ? Theme.borderStrong : Theme.border
                         border.width: activeFocus ? 2 : 1
                         opacity: available ? 1.0 : 0.7
                         clip: true
-                        scale: recentMouse.containsMouse && available ? 1.012 : 1.0
+                        scale: recentMouse.containsMouse && available ? 1.008 : 1.0
                         z: recentMouse.containsMouse ? 2 : 0
                         activeFocusOnTab: available
+                            && workspaceController.actionCapabilities.canOpenProject
                         Accessible.name: qsTr("项目 %1").arg(name)
                         Accessible.role: Accessible.Button
-                        Keys.onReturnPressed: if (available) workspaceController.openProject(path)
-                        Keys.onSpacePressed: if (available) workspaceController.openProject(path)
+                        Keys.onReturnPressed: if (available
+                                && workspaceController.actionCapabilities.canOpenProject)
+                            workspaceController.openProject(path)
+                        Keys.onSpacePressed: if (available
+                                && workspaceController.actionCapabilities.canOpenProject)
+                            workspaceController.openProject(path)
                         MouseArea {
                             id: recentMouse
                             anchors.fill: parent
                             enabled: available
+                                && workspaceController.actionCapabilities.canOpenProject
                             hoverEnabled: true
                             cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                             onClicked: workspaceController.openProject(path)
@@ -459,62 +619,36 @@ Rectangle {
                             anchors.top: parent.top
                             anchors.margins: 6
                             height: Math.round(width * 3 / 4)
-                            radius: 9
+                            radius: Theme.radiusSmall
                             color: Theme.surfaceSunken
                             clip: true
 
                             Rectangle {
                                 anchors.fill: parent
-                                gradient: Gradient {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop { position: 0.0; color: "#233650" }
-                                    GradientStop { position: 0.55; color: "#16454e" }
-                                    GradientStop { position: 1.0; color: "#20202d" }
+                                color: Theme.timelineBackground
+
+                                SignalMapArtwork {
+                                    anchors.fill: parent
+                                    anchors.margins: 18
+                                    opacity: 0.78
+                                    compact: true
                                 }
-                                Rectangle {
-                                    width: parent.width * 0.58
-                                    height: width
-                                    x: -width * 0.32
-                                    y: -height * 0.58
-                                    radius: width / 2
-                                    color: "#815b91"
-                                    opacity: 0.20
-                                }
-                                Rectangle {
-                                    width: parent.width * 0.66
-                                    height: width
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: -width * 0.35
-                                    anchors.bottom: parent.bottom
-                                    anchors.bottomMargin: -height * 0.55
-                                    radius: width / 2
-                                    color: "#13828a"
-                                    opacity: 0.18
-                                }
+
                                 Column {
                                     anchors.centerIn: parent
-                                    spacing: 8
-                                    Rectangle {
+                                    spacing: 9
+                                    BrandMark {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        width: 46
-                                        height: 46
-                                        radius: 14
-                                        color: "#e8f5f5"
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: "M"
-                                            color: "#173441"
-                                            font.pixelSize: 22
-                                            font.weight: Font.Bold
-                                        }
+                                        width: 42
+                                        height: 42
                                     }
                                     Text {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        text: "MEDIAFLOW"
-                                        color: "#d9e6ea"
-                                        opacity: 0.72
+                                        text: "MEDIAFLOW · PROJECT"
+                                        color: Theme.textSubtle
                                         font.pixelSize: Theme.fontSizeCaption
-                                        font.letterSpacing: 1.5
+                                        font.family: Theme.monoFontFamily
+                                        font.letterSpacing: 1.1
                                     }
                                 }
                             }
@@ -537,8 +671,8 @@ Rectangle {
                                 visible: projectCover.status === Image.Ready
                                 gradient: Gradient {
                                     orientation: Gradient.Vertical
-                                    GradientStop { position: 0.55; color: "#00000000" }
-                                    GradientStop { position: 1.0; color: "#72000000" }
+                                    GradientStop { position: 0.55; color: Theme.transparent }
+                                    GradientStop { position: 1.0; color: Theme.shadow }
                                 }
                             }
 
@@ -548,14 +682,15 @@ Rectangle {
                                 height: 48
                                 radius: 24
                                 visible: recentMouse.containsMouse && available
-                                color: "#d9eaf2f7"
-                                border.color: "#5fffffff"
-                                Text {
+                                color: Theme.accent
+                                border.color: Theme.accentHover
+                                AppIcon {
                                     anchors.centerIn: parent
                                     anchors.horizontalCenterOffset: 1
-                                    text: "▶"
-                                    color: "#14202a"
-                                    font.pixelSize: 18
+                                    width: 18
+                                    height: 18
+                                    iconName: "play"
+                                    iconColor: Theme.onAccent
                                 }
                             }
 
@@ -563,19 +698,31 @@ Rectangle {
                                 anchors.top: parent.top
                                 anchors.right: parent.right
                                 anchors.margins: 10
-                                implicitWidth: openLabel.implicitWidth + 16
+                                implicitWidth: openContent.implicitWidth + 16
                                 implicitHeight: 26
                                 radius: 13
-                                color: "#b8181d23"
-                                border.color: "#34ffffff"
+                                color: Theme.overlay
+                                border.color: Theme.borderStrong
                                 visible: recentMouse.containsMouse || !available
-                                Text {
-                                    id: openLabel
+                                Row {
+                                    id: openContent
                                     anchors.centerIn: parent
-                                    text: available ? qsTr("打开 ›") : qsTr("离线")
-                                    color: available ? Theme.text : Theme.danger
-                                    font.pixelSize: Theme.fontSizeCaption
-                                    font.weight: Font.DemiBold
+                                    spacing: 4
+                                    Text {
+                                        id: openLabel
+                                        text: available ? qsTr("打开") : qsTr("离线")
+                                        color: available ? Theme.text : Theme.danger
+                                        font.pixelSize: Theme.fontSizeCaption
+                                        font.weight: Font.DemiBold
+                                    }
+                                    AppIcon {
+                                        visible: available
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 11
+                                        height: 11
+                                        iconName: "chevron-right"
+                                        iconColor: Theme.text
+                                    }
                                 }
                             }
                         }
@@ -657,7 +804,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     visible: recentList.count === 0
-                    iconText: "▣"
+                    iconName: "project"
                     title: qsTr("还没有最近项目")
                     description: qsTr("创建第一个项目后，下载、字幕、短视频和导出结果都会集中保存在项目目录中。")
                     contentMaximumWidth: 320

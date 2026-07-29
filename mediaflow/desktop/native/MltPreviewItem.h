@@ -25,8 +25,6 @@ class MltPreviewItem : public QQuickItem
     Q_PROPERTY(QString errorString READ errorString NOTIFY errorStringChanged)
     Q_PROPERTY(bool hdrEnabled READ hdrEnabled WRITE setHdrEnabled NOTIFY hdrEnabledChanged)
     Q_PROPERTY(bool hdrActive READ hdrActive NOTIFY hdrActiveChanged)
-    Q_PROPERTY(double clockDriftMs READ clockDriftMs NOTIFY clockDriftChanged)
-    Q_PROPERTY(bool audioClockActive READ audioClockActive NOTIFY audioClockActiveChanged)
 
 public:
     explicit MltPreviewItem(QQuickItem *parent = nullptr);
@@ -50,8 +48,6 @@ public:
     bool hdrEnabled() const { return m_hdrEnabled; }
     void setHdrEnabled(bool value);
     bool hdrActive() const { return m_hdrActive; }
-    double clockDriftMs() const { return m_clockDriftMs; }
-    bool audioClockActive() const { return m_audioClockActive; }
 
     Q_INVOKABLE void play();
     Q_INVOKABLE void playRange(int startFrame, int endFrame);
@@ -72,8 +68,6 @@ signals:
     void errorStringChanged();
     void hdrEnabledChanged();
     void hdrActiveChanged();
-    void clockDriftChanged();
-    void audioClockActiveChanged();
 
     void openRequested(
         const QString &graphPath,
@@ -120,8 +114,6 @@ private:
     QString m_errorString;
     bool m_hdrEnabled = false;
     bool m_hdrActive = false;
-    double m_clockDriftMs = 0.0;
-    bool m_audioClockActive = false;
     QImage m_frame;
     QImage m_pendingFrame;
     int m_pendingPosition = 0;

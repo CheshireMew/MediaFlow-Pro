@@ -10,7 +10,7 @@ from typing import TypeVar
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.export_catalog import default_export_preset
 from mediaflow.application.highlight_service import HighlightService
-from mediaflow.application.ports import TaskHandlerDocuments
+from mediaflow.application.ports import TaskExecutionRuntime, TaskHandlerDocuments
 from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
 from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
@@ -48,29 +48,7 @@ from mediaflow.domain.task_commands import (
     TranslateDocumentCommand,
     TranslateSegmentsCommand,
 )
-from mediaflow.domain.timeline import TimelineMarker
-from mediaflow.infrastructure.asr_engine import create_asr_pipeline
-from mediaflow.infrastructure.cookie_store import CookieStore
-from mediaflow.infrastructure.export_quality import ExportQualityService
-from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
-from mediaflow.infrastructure.llm_client import OpenAIJsonClient
-from mediaflow.infrastructure.mlt import (
-    LoudnessAnalysisService,
-    MltExportService,
-    SequenceBoundaryAnalysisService,
-    TimelineCompiler,
-)
-from mediaflow.infrastructure.proxy_service import ProxyService
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.translation_cache import TranslationCache
-from mediaflow.infrastructure.visual_analysis import (
-    SceneDetectionService,
-    SubjectMotionService,
-    write_visual_analysis,
-)
-from mediaflow.infrastructure.waveform_service import WaveformService
-from mediaflow.infrastructure.web_render_service import WebRenderService
-from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+from mediaflow.domain.tasks import ArtifactReference
 
 CommandT = TypeVar("CommandT", bound=CommandModel)
 
@@ -82,31 +60,25 @@ class ProjectTaskHandlers:
         self,
         documents: TaskHandlerDocuments,
         assets: AssetService,
-        paths: RuntimePaths,
-        cookies: CookieStore,
+        runtime: TaskExecutionRuntime,
         subtitle_acquisition: SubtitleAcquisitionService,
         subtitle_editing: SubtitleEditingService,
         subtitle_publication: SubtitlePublicationService,
+        highlights: HighlightService,
+        translations: TranslationService,
         settings: Callable[[], GlobalSettings],
         active_llm_provider: Callable[[], LlmProviderSettings],
     ):
         self.documents = documents
         self.assets = assets
-        self.paths = paths
-        self.cookies = cookies
+        self.runtime = runtime
         self.subtitle_acquisition = subtitle_acquisition
         self.subtitle_editing = subtitle_editing
         self.subtitle_publication = subtitle_publication
         self.settings = settings
         self.active_llm_provider = active_llm_provider
-        self.highlights = HighlightService(documents, OpenAIJsonClient)
-        self.translations = TranslationService(
-            documents,
-            OpenAIJsonClient,
-            TranslationCache(documents.project_dir),
-            self.subtitle_publication.write_document_srt,
-        )
-        self.web_renderer = WebRenderService(documents, paths)
+        self.highlights = highlights
+        self.translations = translations
 
     def register_with(self, tasks: TaskService) -> None:
         tasks.register(TaskKind.ANALYZE, self.analyze)
@@ -119,41 +91,42 @@ class ProjectTaskHandlers:
         tasks.register(TaskKind.TRANSLATE, self.translate)
         tasks.register(TaskKind.HIGHLIGHT, self.highlight)
         tasks.register(TaskKind.WEB_RENDER, self.render_web_clip)
+        tasks.resume_interrupted()
 
-    def render_web_clip(self, context: TaskContext) -> list[str]:
+    def render_web_clip(self, context: TaskContext) -> list[ArtifactReference]:
         command = context.task.command
         if not isinstance(command, (RenderWebClipCommand, ExportWebClipCommand)):
             raise TypeError(f"Unexpected web render command: {type(command).__name__}")
-        state = self.documents.load_timeline(command.sequence_id)
+        state = self.documents.timeline.load_timeline(command.sequence_id)
         context.report(OperationProgress.indeterminate("web_render_preparing"))
         if isinstance(command, ExportWebClipCommand):
             output = Path(
-                self.web_renderer.export_clip(
+                self.runtime.render_web_export(
                     state,
                     command.clip_id,
                     command.output_path,
                     command.format,
                     time_ms=command.time_ms,
                     background=command.background,
-                    overwrite=command.overwrite,
+                    overwrite=command.overwrite or context.recovered,
                     progress=context.report,
                     check_cancelled=context.cancellation.raise_if_requested,
                 ).output_path
             )
         else:
-            output = self.web_renderer.render_clip(
+            output = self.runtime.render_web_clip(
                 state,
                 command.clip_id,
                 progress=context.report,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
-        return [str(output)]
+        return [self._artifact(output)]
 
     @property
     def project_dir(self) -> Path:
         return self.documents.project_dir
 
-    def import_asset(self, context: TaskContext) -> list[str]:
+    def import_asset(self, context: TaskContext) -> list[ArtifactReference]:
         command = context.task.command
         if not isinstance(command, ImportAssetCommand):
             raise TypeError(f"Unexpected import command: {type(command).__name__}")
@@ -165,58 +138,54 @@ class ProjectTaskHandlers:
                 language=command.language,
                 media_asset_id=command.media_asset_id,
             )
-            asset = self.documents.get_asset(document.asset_id)
+            asset = self.documents.catalog.get_asset(document.asset_id)
         else:
             asset = self.assets.import_external(
                 command.source_path,
                 expected_kind=(AssetKind.IMAGE if command.purpose == "watermark" else None),
             )
         context.report(OperationProgress.indeterminate("import_registering"))
-        return [asset.path]
+        return [self._artifact(asset.path)]
 
-    def proxy(self, context: TaskContext) -> list[str]:
+    def proxy(self, context: TaskContext) -> list[ArtifactReference]:
         command = self._command(context, GenerateProxyCommand)
-        asset = self.documents.get_asset(command.asset_id)
-        sequence_id = context.task.sequence_id or self.documents.get_project().main_sequence_id
-        sequence = self.documents.get_sequence(sequence_id)
-        updated = ProxyService(self.documents, self.paths).generate(
+        asset = self.documents.catalog.get_asset(command.asset_id)
+        sequence_id = context.task.sequence_id or self.documents.catalog.get_project().main_sequence_id
+        sequence = self.documents.catalog.get_sequence(sequence_id)
+        updated = self.runtime.generate_proxy(
             asset,
             sequence.profile,
             progress=context.report,
             check_cancelled=context.cancellation.raise_if_requested,
         )
-        return [path for path in (updated.proxy_path, updated.sdr_preview_proxy_path) if path]
+        return self._artifacts(updated.proxy_path, updated.sdr_preview_proxy_path)
 
-    def waveform(self, context: TaskContext) -> list[str]:
+    def waveform(self, context: TaskContext) -> list[ArtifactReference]:
         command = self._command(context, GenerateWaveformCommand)
-        asset = self.documents.get_asset(command.asset_id)
-        sequence_id = context.task.sequence_id or self.documents.get_project().main_sequence_id
-        profile = self.documents.get_sequence(sequence_id).profile
-        updated = WaveformService(self.documents, self.paths).generate(
+        asset = self.documents.catalog.get_asset(command.asset_id)
+        sequence_id = context.task.sequence_id or self.documents.catalog.get_project().main_sequence_id
+        profile = self.documents.catalog.get_sequence(sequence_id).profile
+        updated = self.runtime.generate_waveform(
             asset,
             duration_seconds=asset.metadata.duration_frames / profile.fps,
             progress=context.report,
             check_cancelled=context.cancellation.raise_if_requested,
         )
-        return [updated.waveform_path] if updated.waveform_path else []
+        return self._artifacts(updated.waveform_path)
 
-    def download(self, context: TaskContext) -> list[str]:
+    def download(self, context: TaskContext) -> list[ArtifactReference]:
         command = self._command(context, DownloadMediaCommand)
         settings = self.settings().download
         request = command.request
-        managed_cookie = self.cookies.resolve_for_url(request.entry.page_url)
-        cookie_file = settings.cookie_file or (str(managed_cookie) if managed_cookie is not None else None)
-        paths = YtDlpDownloadService().download(
+        paths = self.runtime.download_media(
             request,
-            cookie_file=cookie_file,
-            browser_cookies=None if cookie_file else settings.browser_cookies,
-            proxy=settings.proxy,
+            settings,
             progress=context.report,
         )
         context.report(OperationProgress.indeterminate("download_registering"))
         existing = {
-            self.documents.resolve_asset_path(asset).resolve(): asset
-            for asset in self.documents.list_assets()
+            self.documents.catalog.resolve_asset_path(asset).resolve(): asset
+            for asset in self.documents.catalog.list_assets()
         }
         assets = [
             existing.get(path.resolve()) or self.assets.register_output(path, AssetOrigin.DOWNLOAD)
@@ -225,45 +194,43 @@ class ProjectTaskHandlers:
         for asset in assets:
             if asset.kind == AssetKind.SUBTITLE and Path(asset.path).suffix.lower() == ".srt":
                 self.subtitle_acquisition.create_document_from_subtitle_asset(asset.id)
-        return [asset.path for asset in assets]
+        return [self._artifact(asset.path) for asset in assets]
 
-    def export(self, context: TaskContext) -> list[str]:
+    def export(self, context: TaskContext) -> list[ArtifactReference]:
         command = context.task.command
         if isinstance(command, ExportHighlightsCommand):
             return self._export_highlights(context, command)
         if isinstance(command, ExportSequenceCommand):
-            state = self.documents.load_timeline(command.sequence_id)
+            state = self.documents.timeline.load_timeline(command.sequence_id)
             content_revision = self.documents.content_revision()
             preset = command.preset or default_export_preset(
                 command.format,
                 state.sequence.profile.color_mode,
                 state.sequence.profile.fps,
             )
-            self.web_renderer.ensure_sequence(
+            self.runtime.ensure_web_sequence(
                 state,
                 progress=context.report,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
-            result = MltExportService(TimelineCompiler(self.documents), self.paths).export(
+            result = self.runtime.export_sequence(
                 state,
                 preset,
                 command.output_path,
                 progress=context.report,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
-            quality, report_path = ExportQualityService(
-                self.project_dir,
-                self.paths,
-            ).analyze(
+            quality, report_path = self.runtime.analyze_export_quality(
                 state,
                 preset,
                 result,
+                report_id=context.task.id,
                 progress=context.report,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
-            self.documents.save_export_history(
+            self.documents.records.save_export_history(
                 ExportHistoryRecord(
-                    id=quality.id,
+                    id=context.task.id,
                     task_id=context.task.id,
                     sequence_id=command.sequence_id,
                     output_path=str(result.output_path),
@@ -273,33 +240,35 @@ class ProjectTaskHandlers:
                     content_revision=content_revision,
                 )
             )
-            return [
-                str(result.output_path),
-                *(str(path) for path in result.subtitle_files),
-                str(report_path),
+            return self._artifacts(
+                result.output_path,
+                *result.subtitle_files,
+                report_path,
                 *quality.proof_frames,
-            ]
+            )
         raise TypeError(f"Unexpected export command: {type(command).__name__}")
 
     def _export_highlights(
         self,
         context: TaskContext,
         command: ExportHighlightsCommand,
-    ) -> list[str]:
+    ) -> list[ArtifactReference]:
         output_dir = Path(command.output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
-        candidates = {candidate.id: candidate for candidate in self.documents.list_highlights()}
-        artifacts: list[str] = []
+        candidates = {
+            candidate.id: candidate
+            for candidate in self.documents.highlights.list_highlights()
+        }
+        artifacts: list[ArtifactReference] = []
         service = self.highlights
-        exporter = MltExportService(TimelineCompiler(self.documents), self.paths)
         for index, candidate_id in enumerate(command.candidate_ids, start=1):
             context.cancellation.raise_if_requested()
             candidate = candidates.get(candidate_id)
             if candidate is None:
                 raise KeyError(candidate_id)
             sequence = service.create_short_sequence(candidate.id)
-            state = self.documents.load_timeline(sequence.id)
-            self.web_renderer.ensure_sequence(
+            state = self.documents.timeline.load_timeline(sequence.id)
+            self.runtime.ensure_web_sequence(
                 state,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
@@ -312,7 +281,8 @@ class ProjectTaskHandlers:
                 (
                     track
                     for track in state.tracks
-                    if track.kind == TrackKind.SUBTITLE and self.documents.list_subtitle_placements(track.id)
+                    if track.kind == TrackKind.SUBTITLE
+                    and self.documents.subtitles.list_subtitle_placements(track.id)
                 ),
                 None,
             )
@@ -325,14 +295,16 @@ class ProjectTaskHandlers:
             )
             safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", candidate.title).strip(" ._")
             filename = f"{index:02d}-{safe_title or 'clip'}-{candidate.id[:8]}.{preset.container}"
-            result = exporter.export(
+            result = self.runtime.export_sequence(
                 state,
                 preset,
                 output_dir / filename,
                 progress=context.report,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
-            artifacts.extend([str(result.output_path), *(str(path) for path in result.subtitle_files)])
+            artifacts.extend(
+                self._artifacts(result.output_path, *result.subtitle_files)
+            )
             context.report(
                 OperationProgress.determinate(
                     "clip_export_items",
@@ -343,13 +315,13 @@ class ProjectTaskHandlers:
             )
         return artifacts
 
-    def transcribe(self, context: TaskContext) -> list[str]:
+    def transcribe(self, context: TaskContext) -> list[ArtifactReference]:
         command = self._command(context, TranscribeSequenceCommand)
         plan = command.plan
         if not plan.sources or plan.recognition_seconds <= 0:
             raise ValueError("转录计划没有可识别的源音频区间")
-        state = self.documents.load_timeline(plan.sequence_id)
-        assets = {asset.id: asset for asset in self.documents.list_assets()}
+        state = self.documents.timeline.load_timeline(plan.sequence_id)
+        assets = {asset.id: asset for asset in self.documents.catalog.list_assets()}
         current_plan = build_dialogue_transcription_plan(
             state,
             assets,
@@ -371,9 +343,8 @@ class ProjectTaskHandlers:
             raise ValueError(
                 "主要对白轨包含倒放片段；请改为正向播放或移出主要对白轨"
             )
-        pipeline = create_asr_pipeline(
+        pipeline = self.runtime.create_asr_pipeline(
             plan.asr,
-            self.paths,
             check_cancelled=context.cancellation.raise_if_requested,
         )
         transcripts: dict[str, AsrResult] = {}
@@ -384,8 +355,8 @@ class ProjectTaskHandlers:
             asset = assets.get(source_plan.asset_id)
             if asset is None:
                 raise RuntimeError(f"转录计划中的素材已经不存在：{source_plan.asset_name}")
-            source_path = self.documents.resolve_asset_path(asset)
-            if not fingerprint_matches(source_path, source_plan.fingerprint):
+            source_path = self.documents.catalog.resolve_asset_path(asset)
+            if not self.runtime.fingerprint_matches(source_path, source_plan.fingerprint):
                 raise RuntimeError(
                     f"源素材在转录任务创建后已发生变化：{source_plan.asset_name}"
                 )
@@ -508,10 +479,10 @@ class ProjectTaskHandlers:
                     )
                 ),
             )
-        latest_state = self.documents.load_timeline(plan.sequence_id)
+        latest_state = self.documents.timeline.load_timeline(plan.sequence_id)
         latest_plan = build_dialogue_transcription_plan(
             latest_state,
-            {asset.id: asset for asset in self.documents.list_assets()},
+            {asset.id: asset for asset in self.documents.catalog.list_assets()},
             plan.asr,
             start_frame=plan.timeline_start_frame,
             end_frame=plan.timeline_end_frame,
@@ -563,8 +534,8 @@ class ProjectTaskHandlers:
         subtitle_asset = next(
             (
                 asset
-                for asset in self.documents.list_assets()
-                if self.documents.resolve_asset_path(asset).resolve()
+                for asset in self.documents.catalog.list_assets()
+                if self.documents.catalog.resolve_asset_path(asset).resolve()
                 == resolved_output
             ),
             None,
@@ -575,9 +546,9 @@ class ProjectTaskHandlers:
                 AssetOrigin.GENERATED,
             )
         else:
-            subtitle_asset = self.documents.update_asset(
+            subtitle_asset = self.documents.catalog.update_asset(
                 subtitle_asset.model_copy(
-                    update={"fingerprint": fingerprint_file(output)}
+                    update={"fingerprint": self.runtime.fingerprint_file(output)}
                 )
             )
         languages = {
@@ -606,18 +577,18 @@ class ProjectTaskHandlers:
                 self.documents,
                 command.sequence_id,
             ).add_track(TrackKind.SUBTITLE)
-        self.documents.place_subtitle_document(
+        self.documents.subtitles.place_subtitle_document(
             document.id,
             subtitle_track.id,
             follow_clips=False,
         )
         self.subtitle_publication.write_document_srt(document.id, output)
-        self.documents.update_asset(
+        self.documents.catalog.update_asset(
             subtitle_asset.model_copy(
-                update={"fingerprint": fingerprint_file(output)}
+                update={"fingerprint": self.runtime.fingerprint_file(output)}
             )
         )
-        return [str(output.relative_to(self.project_dir).as_posix())]
+        return [self._artifact(output)]
 
     @staticmethod
     def _region_transcript_signature(
@@ -668,7 +639,7 @@ class ProjectTaskHandlers:
             ),
         )
 
-    def translate(self, context: TaskContext) -> list[str]:
+    def translate(self, context: TaskContext) -> list[ArtifactReference]:
         command = context.task.command
         settings = self.settings()
         service = self.translations
@@ -707,14 +678,15 @@ class ProjectTaskHandlers:
                 glossary=settings.translation.glossary_terms,
                 progress=context.report,
                 check_cancelled=context.cancellation.raise_if_requested,
+                operation_id=context.task.id,
             )
             document_id = document.id
         else:
             raise TypeError(f"Unexpected translation command: {type(command).__name__}")
         output = self.subtitle_publication.write_document_srt(document_id)
-        return [str(output.relative_to(self.project_dir).as_posix())]
+        return [self._artifact(output)]
 
-    def highlight(self, context: TaskContext) -> list[str]:
+    def highlight(self, context: TaskContext) -> list[ArtifactReference]:
         command = self._command(context, AnalyzeHighlightsCommand)
         self.highlights.analyze_document(
             command.document_id,
@@ -723,63 +695,51 @@ class ProjectTaskHandlers:
         )
         return []
 
-    def analyze(self, context: TaskContext) -> list[str]:
+    def analyze(self, context: TaskContext) -> list[ArtifactReference]:
         command = context.task.command
         if isinstance(command, AnalyzeDownloadCommand):
             return self._analyze_download(context, command)
         if isinstance(command, AnalyzeSequenceBoundsCommand):
-            state = self.documents.load_timeline(command.sequence_id)
-            _analysis, result_path = SequenceBoundaryAnalysisService(
-                TimelineCompiler(self.documents),
-                self.paths,
-            ).analyze(
+            state = self.documents.timeline.load_timeline(command.sequence_id)
+            _analysis, result_path = self.runtime.analyze_sequence_bounds(
                 state,
                 expected_snapshot_hash=command.snapshot_hash,
                 check_cancelled=context.cancellation.raise_if_requested,
                 progress=context.report,
             )
-            return [str(result_path.relative_to(self.project_dir).as_posix())]
+            return [self._artifact(result_path)]
         if isinstance(command, AnalyzeLoudnessCommand):
-            state = self.documents.load_timeline(command.sequence_id)
-            _metrics, result_path = LoudnessAnalysisService(
-                TimelineCompiler(self.documents),
-                self.paths,
-            ).analyze(
+            state = self.documents.timeline.load_timeline(command.sequence_id)
+            _metrics, result_path = self.runtime.analyze_loudness(
                 state,
                 check_cancelled=context.cancellation.raise_if_requested,
                 progress=context.report,
             )
-            return [str(result_path.relative_to(self.project_dir).as_posix())]
+            return [self._artifact(result_path)]
         if isinstance(command, AnalyzeScenesCommand):
-            state = self.documents.load_timeline(command.sequence_id)
+            state = self.documents.timeline.load_timeline(command.sequence_id)
             clip = next(item for item in state.clips if item.id == command.clip_id)
-            asset = self.documents.get_asset(clip.asset_id)
+            asset = self.documents.catalog.get_asset(clip.asset_id)
             if asset.kind != AssetKind.VIDEO:
                 raise ValueError("场景检测只适用于视频片段")
             context.report(OperationProgress.indeterminate("scene_detection_preparing"))
-            frames = SceneDetectionService(self.paths).detect(
-                self.documents.resolve_asset_path(asset),
+            frames = self.runtime.detect_scenes(
+                self.documents.catalog.resolve_asset_path(asset),
                 clip,
                 state.sequence.profile,
                 threshold=command.threshold,
                 check_cancelled=context.cancellation.raise_if_requested,
                 progress=context.report,
             )
-            marker_prefix = f"场景切点 · {clip.id[:8]} · "
-            state.markers = [
-                marker for marker in state.markers if not marker.name.startswith(marker_prefix)
-            ]
-            state.markers.extend(
-                TimelineMarker(
-                    sequence_id=command.sequence_id,
-                    frame=frame,
-                    name=f"{marker_prefix}{index}",
-                    color="#ff9f43",
-                )
-                for index, frame in enumerate(frames, start=1)
+            TimelineEditor(
+                self.documents,
+                command.sequence_id,
+            ).replace_scene_markers(
+                clip.id,
+                frames,
+                expected_clip=clip,
             )
-            self.documents.save_timeline(state)
-            result_path = write_visual_analysis(
+            result_path = self.runtime.write_visual_analysis(
                 self.project_dir / "generated" / "visual-analysis" / f"{context.task.id}.json",
                 {
                     "type": "scene_detection",
@@ -790,16 +750,16 @@ class ProjectTaskHandlers:
                 },
             )
             context.report(OperationProgress.indeterminate("scene_detection_saving"))
-            return [str(result_path.relative_to(self.project_dir).as_posix())]
+            return [self._artifact(result_path)]
         if isinstance(command, TrackSubjectCommand):
-            state = self.documents.load_timeline(command.sequence_id)
+            state = self.documents.timeline.load_timeline(command.sequence_id)
             clip = next(item for item in state.clips if item.id == command.clip_id)
-            asset = self.documents.get_asset(clip.asset_id)
+            asset = self.documents.catalog.get_asset(clip.asset_id)
             if asset.kind != AssetKind.VIDEO:
                 raise ValueError("自动构图和主体跟踪只适用于视频片段")
             context.report(OperationProgress.indeterminate("subject_tracking_preparing"))
-            keyframes = SubjectMotionService().analyze(
-                self.documents.resolve_asset_path(asset),
+            keyframes = self.runtime.track_subject(
+                self.documents.catalog.resolve_asset_path(asset),
                 clip,
                 state.sequence.profile,
                 mode=command.mode,
@@ -809,8 +769,9 @@ class ProjectTaskHandlers:
             TimelineEditor(self.documents, command.sequence_id).set_clip_transform_keyframes(
                 clip.id,
                 keyframes,
+                expected_clip=clip,
             )
-            result_path = write_visual_analysis(
+            result_path = self.runtime.write_visual_analysis(
                 self.project_dir / "generated" / "visual-analysis" / f"{context.task.id}.json",
                 {
                     "type": command.mode,
@@ -820,26 +781,28 @@ class ProjectTaskHandlers:
                 },
             )
             context.report(OperationProgress.indeterminate("subject_tracking_saving"))
-            return [str(result_path.relative_to(self.project_dir).as_posix())]
+            return [self._artifact(result_path)]
         raise TypeError(f"Unexpected analysis command: {type(command).__name__}")
 
     def _analyze_download(
         self,
         context: TaskContext,
         command: AnalyzeDownloadCommand,
-    ) -> list[str]:
+    ) -> list[ArtifactReference]:
         context.report(OperationProgress.indeterminate("download_analyzing"))
         settings = self.settings().download
-        plan = YtDlpDownloadService.analyze_configured(
-            command.url,
-            settings=settings,
-            cookies=self.cookies,
-        )
+        plan = self.runtime.analyze_download(command.url, settings)
         destination = self.project_dir / "cache" / "download-analysis" / f"{context.task.id}.json"
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         context.report(OperationProgress.indeterminate("download_analysis_saving"))
-        return [str(destination.relative_to(self.project_dir).as_posix())]
+        return [self._artifact(destination)]
+
+    def _artifact(self, value: str | Path) -> ArtifactReference:
+        return ArtifactReference.from_path(self.project_dir, value)
+
+    def _artifacts(self, *values: str | Path | None) -> list[ArtifactReference]:
+        return [self._artifact(value) for value in values if value]
 
     @staticmethod
     def _command(context: TaskContext, expected: type[CommandT]) -> CommandT:

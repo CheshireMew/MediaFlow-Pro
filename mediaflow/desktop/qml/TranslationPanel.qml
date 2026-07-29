@@ -11,11 +11,14 @@ ColumnLayout {
     property var comparisonData: ({})
     property var taskData: ({})
     property var selectedRowIds: []
+    property var translationDrafts: ({})
+    property string observedDocumentId: ""
     property int sectionIndex: 0
     property bool showSectionTabs: true
     readonly property bool hasDocuments: sourceDocument.count > 0
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
+    readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
     signal modeRequested(string mode)
     signal importRequested
 
@@ -43,10 +46,57 @@ ColumnLayout {
             sourceDocument.currentIndex = row;
     }
 
+    function translationDraftKey(targetDocumentId, targetSegmentId) {
+        return String(targetDocumentId || "") + "\u001f" + String(targetSegmentId || "");
+    }
+
+    function translationDraftText(row) {
+        const key = translationDraftKey(
+            comparisonData.targetDocumentId, row.targetSegmentId);
+        return translationDrafts[key] === undefined
+            ? String(row.targetText || "") : String(translationDrafts[key]);
+    }
+
+    function storeTranslationDraft(targetDocumentId, targetSegmentId, text) {
+        if (!targetSegmentId)
+            return;
+        const next = Object.assign({}, translationDrafts);
+        next[translationDraftKey(targetDocumentId, targetSegmentId)] = String(text);
+        translationDrafts = next;
+    }
+
+    function clearTranslationDraft(targetDocumentId, targetSegmentId) {
+        const key = translationDraftKey(targetDocumentId, targetSegmentId);
+        if (translationDrafts[key] === undefined)
+            return;
+        const next = Object.assign({}, translationDrafts);
+        delete next[key];
+        translationDrafts = next;
+    }
+
+    function reconcileTranslationDrafts(data) {
+        const rows = data.rows || [];
+        const next = Object.assign({}, translationDrafts);
+        let changed = false;
+        for (let index = 0; index < rows.length; ++index) {
+            const row = rows[index];
+            const key = translationDraftKey(data.targetDocumentId, row.targetSegmentId);
+            if (row.targetSegmentId && next[key] !== undefined
+                    && String(next[key]) === String(row.targetText || "")) {
+                delete next[key];
+                changed = true;
+            }
+        }
+        if (changed)
+            translationDrafts = next;
+    }
+
     function refreshComparison() {
         const documentId = String(subtitleController.selectedDocumentId || "");
-        comparisonData = subtitleController.translationComparison(
+        const refreshed = subtitleController.translationComparison(
             documentId, String(targetLanguage.currentValue || ""));
+        reconcileTranslationDrafts(refreshed);
+        comparisonData = refreshed;
         const contextId = String(comparisonData.sourceDocumentId || documentId);
         taskData = taskController.latestTask("translate", contextId);
     }
@@ -92,7 +142,10 @@ ColumnLayout {
         termCategory.text = data.category || "general";
     }
 
-    Component.onCompleted: syncDefaults()
+    Component.onCompleted: {
+        observedDocumentId = String(subtitleController.selectedDocumentId || "");
+        syncDefaults();
+    }
     Connections {
         target: settingsController
         function onSettingsChanged() {
@@ -105,7 +158,11 @@ ColumnLayout {
     Connections {
         target: subtitleController
         function onSelectionChanged() {
-            root.selectedRowIds = [];
+            const documentId = String(subtitleController.selectedDocumentId || "");
+            if (documentId !== root.observedDocumentId) {
+                root.selectedRowIds = [];
+                root.observedDocumentId = documentId;
+            }
             root.syncDocumentSelector();
             root.refreshComparison();
         }
@@ -116,7 +173,7 @@ ColumnLayout {
         function onTasksChanged() { root.refreshComparison(); }
     }
 
-    TabBar {
+    AppTabBar {
         id: translationTabs
         Layout.fillWidth: true
         visible: root.showSectionTabs
@@ -125,10 +182,10 @@ ColumnLayout {
             if (root.showSectionTabs)
                 root.sectionIndex = currentIndex;
         }
-        TabButton {
+        AppTabButton {
             text: qsTr("翻译")
         }
-        TabButton {
+        AppTabButton {
             text: qsTr("术语库")
         }
     }
@@ -150,21 +207,23 @@ ColumnLayout {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 68
                     iconVisible: false
-                    iconText: "译"
+                    iconName: "translate"
                     title: qsTr("还没有可翻译的字幕")
                     description: qsTr("先识别时间轴声音，或导入已有字幕，再生成译文。")
                 }
                 AppButton {
                     objectName: "translationStartTranscriptionButton"
                     Layout.fillWidth: true
-                    primary: true
-                    text: qsTr("识别时间轴声音")
+                primary: true
+                text: qsTr("识别时间轴声音")
+                enabled: Boolean(workspaceController.actionCapabilities.canStartTasks)
                     onClicked: root.modeRequested("transcript")
                 }
                 AppButton {
                     objectName: "translationImportFileButton"
-                    Layout.fillWidth: true
-                    text: qsTr("导入字幕文件")
+                Layout.fillWidth: true
+                text: qsTr("导入字幕文件")
+                enabled: Boolean(workspaceController.actionCapabilities.canImport)
                     onClicked: root.importRequested()
                 }
                 Item { Layout.fillHeight: true }
@@ -212,7 +271,7 @@ ColumnLayout {
                     primary: true
                     text: translationMode.currentValue === "proofread"
                         ? qsTr("校对整篇") : qsTr("翻译整篇")
-                    enabled: Boolean(root.comparisonData.sourceDocumentId)
+                    enabled: root.canEdit && Boolean(root.comparisonData.sourceDocumentId)
                         && !root.taskActive
                         && (translationMode.currentValue === "proofread"
                             || targetLanguage.currentValue.length > 0)
@@ -224,7 +283,7 @@ ColumnLayout {
                 AppButton {
                     objectName: "translateSelectedRowsButton"
                     text: qsTr("重译所选 %1").arg(root.selectedRowIds.length)
-                    enabled: root.selectedRowIds.length > 0
+                    enabled: root.canEdit && root.selectedRowIds.length > 0
                         && Boolean(root.comparisonData.targetDocumentId)
                         && !root.taskActive
                     onClicked: subtitleController.translateComparisonSegments(
@@ -276,6 +335,7 @@ ColumnLayout {
                     AppButton {
                         visible: Boolean(root.comparisonData.targetDocumentId)
                         text: qsTr("放入序列")
+                        enabled: root.canEdit
                         onClicked: subtitleController.placeSubtitleDocument(
                             root.comparisonData.targetDocumentId)
                     }
@@ -312,7 +372,7 @@ ColumnLayout {
                         spacing: 6
                         RowLayout {
                             Layout.fillWidth: true
-                            CheckBox {
+                            AppCheckBox {
                                 checked: root.rowSelected(comparisonRow.modelData.rowId)
                                 onClicked: root.toggleRow(comparisonRow.modelData.rowId)
                             }
@@ -339,22 +399,22 @@ ColumnLayout {
                             font.pixelSize: Theme.fontSizeBodySmall
                             wrapMode: Text.WordWrap
                         }
-                        TextArea {
+                        AppTextArea {
                             id: targetEditor
                             objectName: "translationTargetEditor"
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(48, implicitHeight)
-                            text: comparisonRow.modelData.targetText || ""
+                            text: root.translationDraftText(comparisonRow.modelData)
                             placeholderText: qsTr("尚未生成译文")
-                            enabled: Boolean(comparisonRow.modelData.targetSegmentId)
-                            color: Theme.text
-                            wrapMode: TextEdit.Wrap
-                            background: Rectangle {
-                                color: Theme.window
-                                border.color: targetEditor.activeFocus
-                                    ? Theme.accent : Theme.border
-                                radius: Theme.radiusSmall
+                            enabled: root.canEdit && Boolean(comparisonRow.modelData.targetSegmentId)
+                            onTextChanged: {
+                                if (activeFocus)
+                                    root.storeTranslationDraft(
+                                        root.comparisonData.targetDocumentId,
+                                        comparisonRow.modelData.targetSegmentId,
+                                        text);
                             }
+                            wrapMode: TextEdit.Wrap
                         }
                         RowLayout {
                             Layout.fillWidth: true
@@ -363,11 +423,21 @@ ColumnLayout {
                                 objectName: "translationSaveSegmentButton"
                                 visible: Boolean(comparisonRow.modelData.targetSegmentId)
                                 text: qsTr("保存译文")
-                                enabled: targetEditor.text !== comparisonRow.modelData.targetText
-                                onClicked: subtitleController.updateTranslationSegment(
-                                    root.comparisonData.targetDocumentId,
-                                    comparisonRow.modelData.targetSegmentId,
-                                    targetEditor.text)
+                                enabled: root.canEdit
+                                    && targetEditor.text !== comparisonRow.modelData.targetText
+                                onClicked: {
+                                    const targetDocumentId = String(
+                                        root.comparisonData.targetDocumentId || "");
+                                    const targetSegmentId = String(
+                                        comparisonRow.modelData.targetSegmentId || "");
+                                    if (subtitleController.updateTranslationSegment(
+                                            targetDocumentId, targetSegmentId,
+                                            targetEditor.text)) {
+                                        root.clearTranslationDraft(
+                                            targetDocumentId, targetSegmentId);
+                                        root.refreshComparison();
+                                    }
+                                }
                             }
                         }
                     }
@@ -375,7 +445,7 @@ ColumnLayout {
                 EmptyState {
                     anchors.fill: parent
                     visible: comparisonList.count === 0
-                    iconText: "译"
+                    iconName: "translate"
                     title: subtitleController.selectedDocumentId.length > 0
                         ? qsTr("没有可对照的字幕段") : qsTr("还没有字幕文档")
                     description: qsTr("先转录媒体或导入 SRT，再从这里生成译文。")
@@ -453,7 +523,7 @@ ColumnLayout {
                 EmptyState {
                     anchors.fill: parent
                     visible: glossaryList.count === 0
-                    iconText: "术"
+                    iconName: "transcript"
                     title: qsTr("术语库为空")
                     description: qsTr("添加人名、产品名、缩写和固定译法。")
                 }

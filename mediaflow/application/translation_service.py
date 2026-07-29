@@ -10,6 +10,8 @@ from mediaflow.application.ports import (
     TranslationCachePort,
     TranslationDocuments,
 )
+from mediaflow.application.subtitle_publication import SubtitlePublicationService
+from mediaflow.domain.model_base import new_id
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import GlossaryTermSettings, LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
@@ -35,12 +37,12 @@ class TranslationService:
         repository: TranslationDocuments,
         client_factory: JsonClientFactory,
         cache: TranslationCachePort,
-        write_document_srt: Callable[[str], object],
+        publication: SubtitlePublicationService,
     ):
         self.repository = repository
         self.client_factory = client_factory
         self.cache = cache
-        self.write_document_srt = write_document_srt
+        self.publication = publication
 
     def translate_document(
         self,
@@ -52,25 +54,51 @@ class TranslationService:
         glossary: list[GlossaryTermSettings] | None = None,
         progress: TranslationProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
+        operation_id: str | None = None,
     ) -> SubtitleDocument:
         mode = validate_translation_mode(mode)
-        source_document = self.repository.get_subtitle_document(document_id)
-        source_segments = self.repository.list_subtitle_segments(document_id)
+        source_document = self.repository.subtitles.get_subtitle_document(document_id)
+        source_segments = self.repository.subtitles.list_subtitle_segments(document_id)
         if not source_segments:
             raise ValueError("Source subtitle document is empty")
         output_language = source_document.language if mode == "proofread" else target_language.strip()
         if not output_language:
             raise ValueError("Target language is required")
 
-        project = self.repository.get_project()
-        document = SubtitleDocument(
-            project_id=project.id,
-            asset_id=source_document.asset_id,
-            media_asset_id=source_document.media_asset_id,
-            sequence_id=source_document.sequence_id,
-            language=output_language,
-            source_document_id=source_document.id,
-            is_source=False,
+        project = self.repository.catalog.get_project()
+        try:
+            existing = (
+                self.repository.subtitles.get_subtitle_document(operation_id)
+                if operation_id
+                else None
+            )
+        except KeyError:
+            existing = None
+        if existing is not None and (
+            existing.is_source
+            or existing.source_document_id != source_document.id
+            or existing.language != output_language
+        ):
+            raise RuntimeError("Translation operation id belongs to another result")
+        document = (
+            existing.model_copy(
+                update={
+                    "asset_id": source_document.asset_id,
+                    "media_asset_id": source_document.media_asset_id,
+                    "sequence_id": source_document.sequence_id,
+                }
+            )
+            if existing is not None
+            else SubtitleDocument(
+                id=operation_id or new_id(),
+                project_id=project.id,
+                asset_id=source_document.asset_id,
+                media_asset_id=source_document.media_asset_id,
+                sequence_id=source_document.sequence_id,
+                language=output_language,
+                source_document_id=source_document.id,
+                is_source=False,
+            )
         )
         batches = self._build_batches(source_segments, mode)
 
@@ -114,10 +142,27 @@ class TranslationService:
             check_cancelled=check_cancelled,
         )
 
+        self._checkpoint(check_cancelled)
         if progress:
             progress(OperationProgress.indeterminate("translation_saving"))
-        self.repository.create_subtitle_document(document, output_segments)
-        self.write_document_srt(document.id)
+
+        def save_translation() -> None:
+            if existing is None:
+                self.repository.subtitles.create_subtitle_document(
+                    document,
+                    output_segments,
+                )
+            else:
+                self.repository.subtitles.save_subtitle_document(document)
+                self.repository.subtitles.save_subtitle_segments(
+                    document.id,
+                    output_segments,
+                )
+
+        self.publication.commit_document_change(
+            document.id,
+            save_translation,
+        )
         return document
 
     def translate_segments_preserving_timing(
@@ -177,7 +222,7 @@ class TranslationService:
         wanted = set(segment_ids)
         if not wanted:
             raise ValueError("请先选择要翻译的字幕段")
-        all_segments = self.repository.list_subtitle_segments(document_id)
+        all_segments = self.repository.subtitles.list_subtitle_segments(document_id)
         selected = [segment for segment in all_segments if segment.id in wanted]
         if len(selected) != len(wanted):
             raise KeyError("包含不属于当前字幕文档的字幕段")
@@ -191,11 +236,17 @@ class TranslationService:
             check_cancelled=check_cancelled,
         )
         replacements = {segment.id: segment for segment in translated}
-        self.repository.save_subtitle_segments(
+        self._checkpoint(check_cancelled)
+        self.publication.commit_document_change(
             document_id,
-            [replacements.get(segment.id, segment) for segment in all_segments],
+            lambda: self.repository.subtitles.save_subtitle_segments(
+                document_id,
+                [
+                    replacements.get(segment.id, segment)
+                    for segment in all_segments
+                ],
+            ),
         )
-        self.write_document_srt(document_id)
         return translated
 
     def translate_selected_to_document(
@@ -211,12 +262,12 @@ class TranslationService:
         progress: TranslationProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> list[SubtitleSegment]:
-        source_document = self.repository.get_subtitle_document(source_document_id)
-        target_document = self.repository.get_subtitle_document(target_document_id)
+        source_document = self.repository.subtitles.get_subtitle_document(source_document_id)
+        target_document = self.repository.subtitles.get_subtitle_document(target_document_id)
         if target_document.source_document_id != source_document.id:
             raise ValueError("目标字幕文档不属于当前源文档")
         wanted = set(segment_ids)
-        source_segments = self.repository.list_subtitle_segments(source_document_id)
+        source_segments = self.repository.subtitles.list_subtitle_segments(source_document_id)
         selected = [segment for segment in source_segments if segment.id in wanted]
         if not selected or len(selected) != len(wanted):
             raise KeyError("包含不属于当前源字幕文档的字幕段")
@@ -229,7 +280,7 @@ class TranslationService:
             progress=progress,
             check_cancelled=check_cancelled,
         )
-        existing = self.repository.list_subtitle_segments(target_document_id)
+        existing = self.repository.subtitles.list_subtitle_segments(target_document_id)
         selected_ranges = [
             (segment.start_frame, segment.end_frame) for segment in selected
         ]
@@ -280,8 +331,14 @@ class TranslationService:
             if keep_existing(segment)
         ] + additions
         updated.sort(key=lambda segment: (segment.start_frame, segment.end_frame, segment.id))
-        self.repository.save_subtitle_segments(target_document_id, updated)
-        self.write_document_srt(target_document_id)
+        self._checkpoint(check_cancelled)
+        self.publication.commit_document_change(
+            target_document_id,
+            lambda: self.repository.subtitles.save_subtitle_segments(
+                target_document_id,
+                updated,
+            ),
+        )
         return [*replacements.values(), *additions]
 
     def _translate_strict_batch(
@@ -332,7 +389,7 @@ class TranslationService:
                 context_before=context_before,
             )
         except Exception:
-            result, complete = self._translate_single_fallback(
+            result = self._translate_single_fallback(
                 client,
                 segments,
                 target_language=target_language,
@@ -340,7 +397,7 @@ class TranslationService:
                 glossary=glossary,
                 check_cancelled=check_cancelled,
             )
-            if cacheable_mode and complete:
+            if cacheable_mode:
                 self.cache.put(request_key, [result[item.id] for item in segments])
             return result
         if cacheable_mode:
@@ -418,9 +475,9 @@ class TranslationService:
         mode: TranslationMode,
         glossary: list[GlossaryTermSettings],
         check_cancelled: Callable[[], None] | None,
-    ) -> tuple[dict[str, str], bool]:
+    ) -> dict[str, str]:
         result: dict[str, str] = {}
-        complete = True
+        failures: list[tuple[str, Exception]] = []
         for segment in segments:
             self._checkpoint(check_cancelled)
             try:
@@ -433,10 +490,14 @@ class TranslationService:
                     context_before=[],
                 )
                 result[segment.id] = translated[segment.id]
-            except Exception:
-                result[segment.id] = segment.text
-                complete = False
-        return result, complete
+            except Exception as error:
+                failures.append((segment.id, error))
+        if failures:
+            failed_ids = ", ".join(segment_id for segment_id, _ in failures)
+            raise RuntimeError(
+                f"Translation failed for subtitle segments: {failed_ids}"
+            ) from failures[0][1]
+        return result
 
     def _build_batches(
         self,
@@ -503,7 +564,6 @@ class TranslationService:
             pending: dict[Future[list[SubtitleSegment]], _TranslationBatch] = {
                 executor.submit(worker, batch): batch for batch in batches
             }
-            failed = False
             try:
                 while pending:
                     self._checkpoint(check_cancelled)
@@ -516,12 +576,14 @@ class TranslationService:
                         batch = pending.pop(future)
                         store(batch, future.result())
             except Exception:
-                failed = True
                 for future in pending:
                     future.cancel()
                 raise
             finally:
-                executor.shutdown(wait=not failed, cancel_futures=failed)
+                # A task is not paused, cancelled, or failed until every provider
+                # call has actually stopped. Returning while worker threads are
+                # still spending quota makes the persisted task state untruthful.
+                executor.shutdown(wait=True, cancel_futures=True)
         return [segment for index in range(len(batches)) for segment in results[index]]
 
     @staticmethod

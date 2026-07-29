@@ -12,10 +12,11 @@ from mediaflow.domain.enums import (
     TrackKind,
     TransitionKind,
 )
+from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.project import MediaMetadata, ProjectProfile
 from mediaflow.domain.sequence_audio import audio_clips_for_track
-from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.timeline import ClipAudio
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
+from mediaflow.domain.timeline import ClipAudio, ClipTransformKeyframe, TimelineMarker
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
 
@@ -24,8 +25,8 @@ def editor_fixture(tmp_path: Path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"real-producer-output")
     repository = ProjectRepository.create(tmp_path / "Project", "Project")
-    asset = repository.import_external_asset(source, AssetKind.VIDEO)
-    project = repository.get_project()
+    asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+    project = repository.catalog.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
     video_track = editor.add_track(TrackKind.VIDEO)
     editor.add_track(TrackKind.AUDIO)
@@ -47,15 +48,143 @@ def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
     )
     left, right = editor.split_clip(clip.id, 40)
     assert (left.duration, right.timeline_start, right.source_in) == (40, 40, 50)
-    assert len(repository.load_timeline(editor.sequence_id).clips) == 2
+    assert len(repository.timeline.load_timeline(editor.sequence_id).clips) == 2
 
     editor.undo()
-    persisted = repository.load_timeline(editor.sequence_id)
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
     assert [(item.timeline_start, item.duration) for item in persisted.clips] == [(0, 100)]
 
     editor.redo()
-    persisted = repository.load_timeline(editor.sequence_id)
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
     assert [(item.timeline_start, item.duration) for item in persisted.clips] == [(0, 40), (40, 60)]
+
+
+def test_known_media_source_bounds_are_enforced_at_edit_and_storage_boundaries(
+    editor_fixture,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    asset = repository.catalog.update_asset(
+        asset.model_copy(
+            update={
+                "metadata": asset.metadata.model_copy(
+                    update={"duration_frames": 10},
+                )
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="source range"):
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=10,
+            duration=1,
+        )
+    with pytest.raises(ValueError, match="source range"):
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=1,
+            duration=3,
+            speed_numerator=-1,
+        )
+
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=10,
+    )
+    with pytest.raises(ValueError, match="source range"):
+        editor.trim_clip(
+            clip.id,
+            timeline_start=0,
+            source_in=2,
+            duration=10,
+        )
+    invalid = editor.state
+    invalid.clips[0] = invalid.clips[0].model_copy(
+        update={"source_in": 100, "duration": 2}
+    )
+    with pytest.raises(ValueError, match="source range"):
+        repository.timeline.save_timeline(invalid)
+
+
+def test_split_preserves_valid_incoming_and_outgoing_transitions(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    incoming = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=20,
+    )
+    source = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=20,
+        source_in=20,
+        duration=40,
+    )
+    outgoing = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=60,
+        source_in=60,
+        duration=20,
+    )
+    incoming_transition = editor.create_transition(
+        incoming.id,
+        source.id,
+        TransitionKind.DISSOLVE,
+        duration=6,
+    )
+    outgoing_transition = editor.create_transition(
+        source.id,
+        outgoing.id,
+        TransitionKind.DISSOLVE,
+        duration=6,
+    )
+
+    left, right = editor.split_clip(source.id, 40)
+    transitions = {
+        item.id: item
+        for item in repository.timeline.load_timeline(editor.sequence_id).transitions
+    }
+
+    assert transitions[incoming_transition.id].right_clip_id == left.id
+    assert transitions[outgoing_transition.id].left_clip_id == right.id
+
+
+def test_undo_and_redo_preserve_unrelated_background_timeline_changes(
+    editor_fixture,
+) -> None:
+    repository, editor, _asset, _video_track = editor_fixture
+    editor.history.clear()
+    added = editor.add_track(TrackKind.VIDEO, "用户轨道")
+
+    background = repository.timeline.load_timeline(editor.sequence_id)
+    marker = TimelineMarker(
+        sequence_id=editor.sequence_id,
+        frame=12,
+        name="后台分析结果",
+    )
+    background.markers.append(marker)
+    repository.timeline.save_timeline(background)
+    editor.reload()
+
+    editor.undo()
+    after_undo = repository.timeline.load_timeline(editor.sequence_id)
+    assert marker in after_undo.markers
+    assert added.id not in {track.id for track in after_undo.tracks}
+
+    editor.redo()
+    after_redo = repository.timeline.load_timeline(editor.sequence_id)
+    assert marker in after_redo.markers
+    assert added.id in {track.id for track in after_redo.tracks}
 
 
 def test_sequence_in_out_is_persisted_undoable_and_does_not_trim_clip(editor_fixture) -> None:
@@ -68,33 +197,31 @@ def test_sequence_in_out_is_persisted_undoable_and_does_not_trim_clip(editor_fix
         duration=100,
     )
     editor.set_sequence_in_out(12, 88)
-    state = repository.load_timeline(editor.sequence_id)
+    state = repository.timeline.load_timeline(editor.sequence_id)
     assert (state.sequence.in_out.in_frame, state.sequence.in_out.out_frame) == (12, 88)
     assert state.clips[0] == clip
 
     editor.undo()
-    assert repository.load_timeline(editor.sequence_id).sequence.in_out is None
-    assert repository.load_timeline(editor.sequence_id).clips[0] == clip
+    assert repository.timeline.load_timeline(editor.sequence_id).sequence.in_out is None
+    assert repository.timeline.load_timeline(editor.sequence_id).clips[0] == clip
     editor.redo()
-    assert repository.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 88
+    assert repository.timeline.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 88
 
     editor.trim_clip(clip.id, timeline_start=0, source_in=10, duration=60)
-    assert repository.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 60
+    assert repository.timeline.load_timeline(editor.sequence_id).sequence.in_out.out_frame == 60
     editor.clear_sequence_in_out()
-    assert repository.load_timeline(editor.sequence_id).sequence.in_out is None
+    assert repository.timeline.load_timeline(editor.sequence_id).sequence.in_out is None
 
 
 def test_primary_dialogue_track_is_unique_persisted_and_undoable(editor_fixture) -> None:
     repository, editor, _asset, _video_track = editor_fixture
-    first_audio = next(
-        track for track in editor.state.tracks if track.kind == TrackKind.AUDIO
-    )
+    first_audio = next(track for track in editor.state.tracks if track.kind == TrackKind.AUDIO)
     second_audio = editor.add_track(TrackKind.AUDIO)
 
     assert not any(track.primary_dialogue for track in editor.state.tracks)
     voice_source = repository.project_dir.parent / "voice.wav"
     voice_source.write_bytes(b"real-audio-producer-output")
-    voice_asset = repository.import_external_asset(voice_source, AssetKind.AUDIO)
+    voice_asset = repository.catalog.import_external_asset(voice_source, AssetKind.AUDIO)
     editor.add_clip(
         track_id=second_audio.id,
         asset_id=voice_asset.id,
@@ -102,26 +229,21 @@ def test_primary_dialogue_track_is_unique_persisted_and_undoable(editor_fixture)
         source_in=0,
         duration=100,
     )
-    persisted = repository.load_timeline(editor.sequence_id)
-    assert [
-        track.id for track in persisted.tracks if track.primary_dialogue
-    ] == [second_audio.id]
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
+    assert [track.id for track in persisted.tracks if track.primary_dialogue] == [second_audio.id]
 
     editor.set_primary_dialogue_track(first_audio.id)
-    persisted = repository.load_timeline(editor.sequence_id)
-    assert [
-        track.id for track in persisted.tracks if track.primary_dialogue
-    ] == [first_audio.id]
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
+    assert [track.id for track in persisted.tracks if track.primary_dialogue] == [first_audio.id]
 
     editor.set_primary_dialogue_track(second_audio.id)
-    persisted = repository.load_timeline(editor.sequence_id)
-    assert [
-        track.id for track in persisted.tracks if track.primary_dialogue
-    ] == [second_audio.id]
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
+    assert [track.id for track in persisted.tracks if track.primary_dialogue] == [second_audio.id]
 
     editor.undo()
     assert [
-        track.id for track in repository.load_timeline(editor.sequence_id).tracks
+        track.id
+        for track in repository.timeline.load_timeline(editor.sequence_id).tracks
         if track.primary_dialogue
     ] == [first_audio.id]
 
@@ -130,13 +252,9 @@ def test_empty_audio_track_does_not_claim_dialogue_before_linked_audio_appears(
     editor_fixture,
 ) -> None:
     repository, editor, asset, video_track = editor_fixture
-    asset = repository.update_asset(
+    asset = repository.catalog.update_asset(
         asset.model_copy(
-            update={
-                "metadata": asset.metadata.model_copy(
-                    update={"has_video": True, "has_audio": True}
-                )
-            }
+            update={"metadata": asset.metadata.model_copy(update={"has_video": True, "has_audio": True})}
         )
     )
 
@@ -148,12 +266,12 @@ def test_empty_audio_track_does_not_claim_dialogue_before_linked_audio_appears(
         source_in=0,
         duration=100,
     )
-    persisted = repository.load_timeline(editor.sequence_id)
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
     persisted_video = next(track for track in persisted.tracks if track.id == video_track.id)
     assert persisted_video.linked_audio_track_id is not None
-    assert [
-        track.id for track in persisted.tracks if track.primary_dialogue
-    ] == [persisted_video.linked_audio_track_id]
+    assert [track.id for track in persisted.tracks if track.primary_dialogue] == [
+        persisted_video.linked_audio_track_id
+    ]
 
 
 def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) -> None:
@@ -167,7 +285,7 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
     )
     subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
     document = SubtitleDocument(
-        project_id=repository.get_project().id,
+        project_id=repository.catalog.get_project().id,
         asset_id=asset.id,
         language="zh-CN",
     )
@@ -177,9 +295,9 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
         end_frame=50,
         text="跟随片段",
     )
-    repository.create_subtitle_document(document, [segment])
-    repository.place_subtitle_document(document.id, subtitle_track.id, follow_clips=True)
-    placements = repository.list_subtitle_placements(subtitle_track.id)
+    repository.subtitles.create_subtitle_document(document, [segment])
+    repository.subtitles.place_subtitle_document(document.id, subtitle_track.id, follow_clips=True)
+    placements = repository.subtitles.list_subtitle_placements(subtitle_track.id)
     assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [(20, 40, clip.id)]
 
     editor.trim_clip(clip.id, timeline_start=20, source_in=30, duration=80)
@@ -190,21 +308,21 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
         speed_denominator=1,
         pitch_compensation=True,
     )
-    placements = repository.list_subtitle_placements(subtitle_track.id)
+    placements = repository.subtitles.list_subtitle_placements(subtitle_track.id)
     assert [(item.start_frame, item.end_frame) for item in placements] == [(40, 50)]
 
     left, right = editor.split_clip(clip.id, 45)
-    placements = repository.list_subtitle_placements(subtitle_track.id)
+    placements = repository.subtitles.list_subtitle_placements(subtitle_track.id)
     assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [
         (40, 45, left.id),
         (45, 50, right.id),
     ]
 
     editor.undo()
-    placements = repository.list_subtitle_placements(subtitle_track.id)
+    placements = repository.subtitles.list_subtitle_placements(subtitle_track.id)
     assert [(item.start_frame, item.end_frame, item.clip_id) for item in placements] == [(40, 50, clip.id)]
     editor.redo()
-    assert len(repository.list_subtitle_placements(subtitle_track.id)) == 2
+    assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 2
 
 
 def test_move_rejects_same_track_overlap(editor_fixture) -> None:
@@ -246,12 +364,12 @@ def test_dragging_clips_together_does_not_create_a_transition(editor_fixture) ->
     )
 
     moved = editor.move_clip(second.id, timeline_start=40)
-    state = repository.load_timeline(editor.sequence_id)
+    state = repository.timeline.load_timeline(editor.sequence_id)
     assert moved.timeline_start == first.timeline_end
     assert state.transitions == []
 
     editor.undo()
-    restored = repository.load_timeline(editor.sequence_id)
+    restored = repository.timeline.load_timeline(editor.sequence_id)
     assert next(item for item in restored.clips if item.id == second.id).timeline_start == 60
     assert restored.transitions == []
 
@@ -274,7 +392,7 @@ def test_compound_clip_is_persisted_moved_as_one_unit_and_undoable(editor_fixtur
     )
 
     compound = editor.create_compound_clip([second.id, first.id])
-    persisted = repository.load_timeline(editor.sequence_id)
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
     assert persisted.compounds == [compound]
     assert compound.clip_ids == [first.id, second.id]
 
@@ -284,7 +402,7 @@ def test_compound_clip_is_persisted_moved_as_one_unit_and_undoable(editor_fixtur
         timeline_start=40,
         track_id=video_track.id,
     )
-    moved = repository.load_timeline(editor.sequence_id)
+    moved = repository.timeline.load_timeline(editor.sequence_id)
     assert [(clip.id, clip.timeline_start) for clip in moved.clips] == [
         (first.id, 40),
         (second.id, 70),
@@ -292,13 +410,13 @@ def test_compound_clip_is_persisted_moved_as_one_unit_and_undoable(editor_fixtur
     assert moved.compounds == [compound]
 
     editor.undo()
-    restored = repository.load_timeline(editor.sequence_id)
+    restored = repository.timeline.load_timeline(editor.sequence_id)
     assert [(clip.id, clip.timeline_start) for clip in restored.clips] == [
         (first.id, 20),
         (second.id, 50),
     ]
     editor.dissolve_compound_clip(compound.id)
-    assert repository.load_timeline(editor.sequence_id).compounds == []
+    assert repository.timeline.load_timeline(editor.sequence_id).compounds == []
 
 
 def test_compound_clip_requires_adjacent_clips_on_one_track(editor_fixture) -> None:
@@ -421,8 +539,8 @@ def test_copy_transition_annotations_and_undo_are_persisted(editor_fixture) -> N
     selection = editor.add_range(20, 60, "选区")
 
     assert copied.id != first.id
-    assert repository.load_timeline(editor.sequence_id).markers[0] == marker
-    assert repository.load_timeline(editor.sequence_id).ranges[0] == selection
+    assert repository.timeline.load_timeline(editor.sequence_id).markers[0] == marker
+    assert repository.timeline.load_timeline(editor.sequence_id).ranges[0] == selection
 
     updated = editor.update_transition(
         transition.id,
@@ -431,9 +549,9 @@ def test_copy_transition_annotations_and_undo_are_persisted(editor_fixture) -> N
     )
     assert (updated.kind, updated.duration) == (TransitionKind.FADE, 6)
     editor.remove_transition(updated.id)
-    assert repository.load_timeline(editor.sequence_id).transitions == []
+    assert repository.timeline.load_timeline(editor.sequence_id).transitions == []
     editor.undo()
-    assert repository.load_timeline(editor.sequence_id).transitions[0].id == transition.id
+    assert repository.timeline.load_timeline(editor.sequence_id).transitions[0].id == transition.id
 
 
 def test_timeline_range_creates_complete_editable_short_sequence(editor_fixture) -> None:
@@ -457,7 +575,7 @@ def test_timeline_range_creates_complete_editable_short_sequence(editor_fixture)
     selected = editor.add_range(10, 70, "短视频选区")
     subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
     document = SubtitleDocument(
-        project_id=repository.get_project().id,
+        project_id=repository.catalog.get_project().id,
         asset_id=asset.id,
         language="zh-CN",
     )
@@ -467,14 +585,14 @@ def test_timeline_range_creates_complete_editable_short_sequence(editor_fixture)
         end_frame=25,
         text="区间字幕",
     )
-    repository.create_subtitle_document(document, [segment])
-    repository.place_subtitle_document(document.id, subtitle_track.id)
+    repository.subtitles.create_subtitle_document(document, [segment])
+    repository.subtitles.place_subtitle_document(document.id, subtitle_track.id)
 
     short = SequenceService(repository).create_short_from_range(
         editor.sequence_id,
         selected.id,
     )
-    short_state = repository.load_timeline(short.id)
+    short_state = repository.timeline.load_timeline(short.id)
     assert (short.profile.width, short.profile.height) == (1080, 1920)
     assert [(clip.timeline_start, clip.source_in, clip.duration) for clip in short_state.clips] == [
         (0, 10, 30),
@@ -485,7 +603,7 @@ def test_timeline_range_creates_complete_editable_short_sequence(editor_fixture)
     destination_subtitle_track = next(
         track for track in short_state.tracks if track.kind == TrackKind.SUBTITLE
     )
-    placements = repository.list_subtitle_placements(destination_subtitle_track.id)
+    placements = repository.subtitles.list_subtitle_placements(destination_subtitle_track.id)
     assert [(item.start_frame, item.end_frame) for item in placements] == [(5, 15)]
 
 
@@ -502,19 +620,23 @@ def test_short_creation_rolls_back_the_whole_use_case_on_late_failure(
         duration=40,
     )
     selection = editor.add_range(5, 30, "Atomic short")
-    before_ids = [item.id for item in repository.list_sequences()]
+    before_ids = [item.id for item in repository.catalog.list_sequences()]
 
     def fail_after_sequence_was_staged(_state) -> None:
         raise RuntimeError("late timeline failure")
 
-    monkeypatch.setattr(repository, "save_timeline", fail_after_sequence_was_staged)
+    monkeypatch.setattr(
+        repository.timeline,
+        "save_timeline",
+        fail_after_sequence_was_staged,
+    )
     with pytest.raises(RuntimeError, match="late timeline failure"):
         SequenceService(repository).create_short_from_range(
             editor.sequence_id,
             selection.id,
         )
 
-    assert [item.id for item in repository.list_sequences()] == before_ids
+    assert [item.id for item in repository.catalog.list_sequences()] == before_ids
 
 
 def test_ripple_delete_moves_all_unlocked_tracks(editor_fixture) -> None:
@@ -601,7 +723,7 @@ def test_multi_clip_move_and_delete_are_each_one_persisted_command(editor_fixtur
         timeline_start=10,
         track_id=video_track.id,
     )
-    moved = repository.load_timeline(editor.sequence_id)
+    moved = repository.timeline.load_timeline(editor.sequence_id)
     assert [(clip.id, clip.timeline_start) for clip in moved.clips] == [
         (first.id, 10),
         (second.id, 30),
@@ -611,9 +733,9 @@ def test_multi_clip_move_and_delete_are_each_one_persisted_command(editor_fixtur
     assert [clip.timeline_start for clip in editor.state.clips] == [0, 20]
 
     editor.delete_clips([first.id, second.id])
-    assert repository.load_timeline(editor.sequence_id).clips == []
+    assert repository.timeline.load_timeline(editor.sequence_id).clips == []
     editor.undo()
-    restored = repository.load_timeline(editor.sequence_id)
+    restored = repository.timeline.load_timeline(editor.sequence_id)
     assert [clip.id for clip in restored.clips] == [first.id, second.id]
     assert restored.transitions[0].id == transition.id
 
@@ -703,7 +825,12 @@ def test_track_controls_and_reordering_share_the_command_stack(editor_fixture) -
 
     editor.move_track(overlay.id, 0)
     assert [track.id for track in editor.state.tracks][:2] == [overlay.id, video_track.id]
-    assert [track.position for track in repository.load_timeline(editor.sequence_id).tracks] == [0, 1, 2, 3]
+    assert [track.position for track in repository.timeline.load_timeline(editor.sequence_id).tracks] == [
+        0,
+        1,
+        2,
+        3,
+    ]
 
     editor.undo()
     assert editor.state.tracks[-1].id == overlay.id
@@ -732,7 +859,7 @@ def test_profile_frame_clock_change_retimes_timeline_subtitles_and_undo(editor_f
     )
     subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
     document = SubtitleDocument(
-        project_id=repository.get_project().id,
+        project_id=repository.catalog.get_project().id,
         asset_id=asset.id,
         language="zh-CN",
     )
@@ -742,21 +869,256 @@ def test_profile_frame_clock_change_retimes_timeline_subtitles_and_undo(editor_f
         end_frame=60,
         text="字幕",
     )
-    repository.create_subtitle_document(document, [segment])
-    repository.place_subtitle_document(document.id, subtitle_track.id)
+    repository.subtitles.create_subtitle_document(document, [segment])
+    repository.subtitles.place_subtitle_document(document.id, subtitle_track.id)
 
     editor.set_sequence_profile(ProjectProfile(width=1080, height=1920, fps_numerator=60, fps_denominator=1))
     changed = editor.state.clips[0]
     assert (changed.timeline_start, changed.source_in, changed.duration) == (60, 30, 120)
     assert (changed.audio.fade_in_frames, changed.audio.fade_out_frames) == (12, 18)
-    placement = repository.list_subtitle_placements(subtitle_track.id)[0]
+    placement = repository.subtitles.list_subtitle_placements(subtitle_track.id)[0]
     assert (placement.start_frame, placement.end_frame) == (90, 150)
 
     editor.undo()
     restored = editor.state.clips[0]
     assert (restored.timeline_start, restored.source_in, restored.duration) == (30, 15, 60)
-    placement = repository.list_subtitle_placements(subtitle_track.id)[0]
+    placement = repository.subtitles.list_subtitle_placements(subtitle_track.id)[0]
     assert (placement.start_frame, placement.end_frame) == (45, 75)
+
+
+def test_profile_frame_clock_change_reframes_known_asset_bounds_atomically(
+    tmp_path: Path,
+) -> None:
+    profile_25 = ProjectProfile(fps_numerator=25, fps_denominator=1)
+    source = tmp_path / "clock-source.mp4"
+    source.write_bytes(b"clock-source")
+    with ProjectRepository.create(
+        tmp_path / "Clock Project",
+        "Clock Project",
+        profile_25,
+    ) as repository:
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.catalog.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": asset.metadata.model_copy(
+                        update={"duration_frames": 25, "has_video": True}
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(
+            repository,
+            repository.catalog.get_project().main_sequence_id,
+        )
+        video_track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+
+        editor.set_sequence_profile(
+            profile_25.model_copy(update={"fps_numerator": 30})
+        )
+        assert editor.state.clips[0].duration == 30
+        assert repository.catalog.get_asset(asset.id).metadata.duration_frames == 30
+
+        editor.undo()
+        assert editor.state.clips[0].duration == 25
+        assert repository.catalog.get_asset(asset.id).metadata.duration_frames == 25
+
+
+def test_main_profile_cannot_bypass_the_frame_clock_transaction(
+    tmp_path: Path,
+) -> None:
+    with ProjectRepository.create(
+        tmp_path / "Main Clock Boundary",
+        "Main Clock Boundary",
+    ) as repository:
+        sequence_id = repository.catalog.get_project().main_sequence_id
+        before = repository.timeline.load_timeline(sequence_id)
+        invalid = before.model_copy(deep=True)
+        invalid.sequence = invalid.sequence.model_copy(
+            update={
+                "profile": invalid.sequence.profile.model_copy(
+                    update={"fps_numerator": 24}
+                )
+            }
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match="frame-clock transaction",
+        ):
+            repository.timeline.save_timeline(invalid)
+
+        assert repository.timeline.load_timeline(sequence_id) == before
+
+
+def test_main_clock_change_resyncs_short_subtitles_without_moving_overrides(
+    tmp_path: Path,
+) -> None:
+    main_profile = ProjectProfile(fps_numerator=120, fps_denominator=1)
+    short_profile = main_profile.model_copy(
+        update={
+            "width": 1080,
+            "height": 1920,
+            "fps_numerator": 60,
+        }
+    )
+    subtitle_source = tmp_path / "shared-clock.srt"
+    subtitle_source.write_text("", encoding="utf-8")
+    with ProjectRepository.create(
+        tmp_path / "Shared Subtitle Clock",
+        "Shared Subtitle Clock",
+        main_profile,
+    ) as repository:
+        project = repository.catalog.get_project()
+        short = repository.catalog.create_short_sequence(
+            "Short",
+            short_profile,
+        )
+        asset = repository.catalog.import_external_asset(
+            subtitle_source,
+            AssetKind.SUBTITLE,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            language="en",
+        )
+        first = SubtitleSegment(
+            document_id=document.id,
+            start_frame=3,
+            end_frame=7,
+            text="derived",
+        )
+        second = SubtitleSegment(
+            document_id=document.id,
+            start_frame=10,
+            end_frame=14,
+            text="overridden",
+        )
+        repository.subtitles.create_subtitle_document(
+            document,
+            [first, second],
+        )
+        short_editor = TimelineEditor(repository, short.id)
+        subtitle_track = short_editor.add_track(TrackKind.SUBTITLE)
+        placements = repository.subtitles.place_subtitle_document(
+            document.id,
+            subtitle_track.id,
+            follow_clips=False,
+        )
+        by_segment = {item.segment_id: item for item in placements}
+        assert (
+            by_segment[first.id].start_frame,
+            by_segment[first.id].end_frame,
+        ) == (1, 4)
+        repository.subtitles.update_subtitle_placement_range(
+            by_segment[second.id].id,
+            20,
+            30,
+        )
+
+        main_editor = TimelineEditor(
+            repository,
+            project.main_sequence_id,
+        )
+        main_editor.set_sequence_profile(
+            main_profile.model_copy(update={"fps_numerator": 24})
+        )
+        changed = {
+            item.segment_id: item
+            for item in repository.subtitles.list_subtitle_placements(
+                subtitle_track.id
+            )
+        }
+        assert (
+            changed[first.id].start_frame,
+            changed[first.id].end_frame,
+        ) == (0, 5)
+        assert (
+            changed[second.id].start_frame,
+            changed[second.id].end_frame,
+            changed[second.id].timing_overridden,
+        ) == (20, 30, True)
+
+        main_editor.undo()
+        restored = {
+            item.segment_id: item
+            for item in repository.subtitles.list_subtitle_placements(
+                subtitle_track.id
+            )
+        }
+        assert (
+            restored[first.id].start_frame,
+            restored[first.id].end_frame,
+        ) == (1, 4)
+        assert (
+            restored[second.id].start_frame,
+            restored[second.id].end_frame,
+            restored[second.id].timing_overridden,
+        ) == (20, 30, True)
+
+        main_editor.redo()
+        redone = {
+            item.segment_id: item
+            for item in repository.subtitles.list_subtitle_placements(
+                subtitle_track.id
+            )
+        }
+        assert (
+            redone[first.id].start_frame,
+            redone[first.id].end_frame,
+        ) == (0, 5)
+
+
+def test_short_sequence_source_bounds_use_the_short_sequence_frame_clock(
+    tmp_path: Path,
+) -> None:
+    main_profile = ProjectProfile(fps_numerator=25, fps_denominator=1)
+    source = tmp_path / "short-clock-source.mp4"
+    source.write_bytes(b"short-clock-source")
+    with ProjectRepository.create(
+        tmp_path / "Short Clock Project",
+        "Short Clock Project",
+        main_profile,
+    ) as repository:
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.catalog.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": asset.metadata.model_copy(
+                        update={"duration_frames": 25, "has_video": True}
+                    )
+                }
+            )
+        )
+        short = repository.catalog.create_short_sequence(
+            "30 fps short",
+            main_profile.model_copy(update={"fps_numerator": 30}),
+        )
+        editor = TimelineEditor(repository, short.id)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+        assert clip.duration == 30
+        with pytest.raises(ValueError, match="source range"):
+            editor.trim_clip(
+                clip.id,
+                timeline_start=0,
+                source_in=1,
+                duration=30,
+            )
 
 
 def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_audio(
@@ -765,8 +1127,8 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
     source = tmp_path / "linked.mp4"
     source.write_bytes(b"av-source")
     with ProjectRepository.create(tmp_path / "Linked Project", "Linked Project") as repository:
-        asset = repository.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.update_asset(
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.catalog.update_asset(
             asset.model_copy(
                 update={
                     "metadata": MediaMetadata(
@@ -777,7 +1139,7 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
                 }
             )
         )
-        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
         first_video = editor.add_track(TrackKind.VIDEO)
         first = editor.add_clip(
             track_id=first_video.id,
@@ -802,21 +1164,18 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
             duration=60,
         )
         second_audio_id = next(
-            track.linked_audio_track_id
-            for track in editor.state.tracks
-            if track.id == second_video.id
+            track.linked_audio_track_id for track in editor.state.tracks if track.id == second_video.id
         )
         assert second_audio_id is not None and second_audio_id != first_audio_id
 
         moved = editor.move_clip(second.id, timeline_start=60, track_id=first_video.id)
         assert moved.track_id == first_video.id
-        assert [
-            clip.id for clip in audio_clips_for_track(editor.state, first_audio_id)
-        ] == [first.id, second.id]
+        assert [clip.id for clip in audio_clips_for_track(editor.state, first_audio_id)] == [
+            first.id,
+            second.id,
+        ]
 
-        second_audio_track = next(
-            track for track in editor.state.tracks if track.id == second_audio_id
-        )
+        second_audio_track = next(track for track in editor.state.tracks if track.id == second_audio_id)
         editor.set_track_state(
             second_audio_id,
             enabled=second_audio_track.enabled,
@@ -831,9 +1190,7 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
                 timeline_start=60,
                 track_id=second_video.id,
             )
-        assert next(
-            clip for clip in editor.state.clips if clip.id == second.id
-        ).track_id == first_video.id
+        assert next(clip for clip in editor.state.clips if clip.id == second.id).track_id == first_video.id
         editor.set_track_state(
             second_audio_id,
             enabled=second_audio_track.enabled,
@@ -858,6 +1215,205 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
         editor.undo()
         restored = next(clip for clip in editor.state.clips if clip.id == first.id)
         assert restored.media_kind == ClipMediaKind.LINKED_AV
-        assert not any(
-            clip.media_kind == ClipMediaKind.AUDIO_ONLY for clip in editor.state.clips
+        assert not any(clip.media_kind == ClipMediaKind.AUDIO_ONLY for clip in editor.state.clips)
+
+
+def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
+    tmp_path: Path,
+) -> None:
+    profile_120 = ProjectProfile(fps_numerator=120, fps_denominator=1)
+    source = tmp_path / "snapshot-source.mp4"
+    proxy = tmp_path / "snapshot-proxy.mp4"
+    sdr_proxy = tmp_path / "snapshot-sdr.mp4"
+    source.write_bytes(b"source")
+    proxy.write_bytes(b"proxy")
+    sdr_proxy.write_bytes(b"sdr")
+    project_dir = tmp_path / "Exact Frame Clock"
+    with ProjectRepository.create(
+        project_dir,
+        "Exact Frame Clock",
+        profile_120,
+    ) as repository:
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.catalog.update_asset(
+            asset.model_copy(
+                update={
+                    "proxy_path": str(proxy),
+                    "sdr_preview_proxy_path": str(sdr_proxy),
+                    "metadata": MediaMetadata(
+                        duration_frames=120,
+                        width=1920,
+                        height=1080,
+                        fps_numerator=120,
+                        fps_denominator=1,
+                        has_video=True,
+                    ),
+                }
+            )
         )
+        sequence_id = repository.catalog.get_project().main_sequence_id
+        editor = TimelineEditor(repository, sequence_id)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        subtitle_track = editor.add_track(TrackKind.SUBTITLE)
+        first = editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=60,
+        )
+        second = editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=60,
+            source_in=60,
+            duration=60,
+        )
+        editor.set_clip_transform_keyframes(
+            first.id,
+            [
+                ClipTransformKeyframe(
+                    source_frame=3,
+                    transform=first.transform,
+                ),
+                ClipTransformKeyframe(
+                    source_frame=4,
+                    transform=first.transform.model_copy(update={"x": 8.0}),
+                ),
+            ],
+        )
+        editor.set_clip_audio(
+            first.id,
+            ClipAudio(fade_in_frames=3, fade_out_frames=7),
+        )
+        editor.create_transition(
+            first.id,
+            second.id,
+            TransitionKind.DISSOLVE,
+            duration=7,
+        )
+        editor.add_marker(3, "三帧")
+        editor.add_range(3, 7, "窄范围")
+        editor.set_sequence_in_out(3, 119)
+
+        document = SubtitleDocument(
+            project_id=repository.catalog.get_project().id,
+            asset_id=asset.id,
+            language="zh-CN",
+        )
+        segment = SubtitleSegment(
+            document_id=document.id,
+            start_frame=3,
+            end_frame=7,
+            text="精确字幕",
+        )
+        repository.subtitles.create_subtitle_document(document, [segment])
+        repository.subtitles.save_subtitle_words(
+            document.id,
+            [
+                SubtitleWord(
+                    segment_id=segment.id,
+                    position=0,
+                    start_frame=3,
+                    end_frame=4,
+                    text="精",
+                ),
+                SubtitleWord(
+                    segment_id=segment.id,
+                    position=1,
+                    start_frame=4,
+                    end_frame=7,
+                    text="确",
+                ),
+            ],
+        )
+        placement = repository.subtitles.place_subtitle_document(
+            document.id,
+            subtitle_track.id,
+            offset_frames=3,
+            source_start_frame=3,
+            source_end_frame=7,
+            follow_clips=False,
+        )[0]
+        repository.subtitles.update_subtitle_placement_range(
+            placement.id,
+            3,
+            7,
+            timing_overridden=True,
+        )
+        repository.highlights.save_highlights(
+            [
+                HighlightCandidate(
+                    project_id=repository.catalog.get_project().id,
+                    asset_id=asset.id,
+                    document_id=document.id,
+                    sequence_id=sequence_id,
+                    start_frame=3,
+                    end_frame=7,
+                    title="精确高光",
+                )
+            ]
+        )
+        before = repository.timeline.capture_main_frame_clock(sequence_id)
+
+        editor.set_sequence_profile(
+            profile_120.model_copy(update={"fps_numerator": 24})
+        )
+        after = repository.timeline.capture_main_frame_clock(sequence_id)
+        assert after != before
+        assert after.assets[0].proxy_path is None
+        assert after.assets[0].sdr_preview_proxy_path is None
+        assert len(after.timeline.clips[0].transform_keyframes) == 1
+        assert (
+            after.subtitle_links[0].source_start_frame,
+            after.subtitle_links[0].source_end_frame,
+        ) == (0, 2)
+        assert (
+            after.timeline.sequence.in_out.in_frame,
+            after.timeline.sequence.in_out.out_frame,
+        ) == (0, 24)
+        assert (
+            after.timeline.ranges[0].start_frame,
+            after.timeline.ranges[0].end_frame,
+        ) == (0, 2)
+        with ProjectRepository.open(project_dir, writable=False) as observer:
+            assert observer.timeline.capture_main_frame_clock(sequence_id) == after
+
+        editor.undo()
+        assert repository.timeline.capture_main_frame_clock(sequence_id) == before
+        with ProjectRepository.open(project_dir, writable=False) as observer:
+            assert observer.timeline.capture_main_frame_clock(sequence_id) == before
+
+        editor.redo()
+        assert repository.timeline.capture_main_frame_clock(sequence_id) == after
+        with ProjectRepository.open(project_dir, writable=False) as observer:
+            assert observer.timeline.capture_main_frame_clock(sequence_id) == after
+
+        current_asset = repository.catalog.get_asset(asset.id)
+        repository.catalog.update_asset(
+            current_asset.model_copy(
+                update={
+                    "proxy_path": str(proxy),
+                    "sdr_preview_proxy_path": str(sdr_proxy),
+                }
+            )
+        )
+        resolution_before = repository.timeline.capture_main_frame_clock(sequence_id)
+        editor.reload()
+        editor.set_sequence_profile(
+            editor.state.sequence.profile.model_copy(
+                update={
+                    "width": 1080,
+                    "height": 1920,
+                    "color_mode": ColorMode.HDR10_BT2020_PQ,
+                    "bit_depth": 10,
+                }
+            )
+        )
+        resolution_after = repository.timeline.capture_main_frame_clock(sequence_id)
+        assert resolution_after.assets[0].proxy_path is None
+        assert resolution_after.assets[0].sdr_preview_proxy_path is None
+        editor.undo()
+        assert repository.timeline.capture_main_frame_clock(sequence_id) == resolution_before
+        editor.redo()
+        assert repository.timeline.capture_main_frame_clock(sequence_id) == resolution_after

@@ -5,7 +5,7 @@ import QtQuick.Dialogs
 import "."
 import "components"
 
-ScrollView {
+AppScrollView {
     id: root
     objectName: "highlightPanel"
     clip: true
@@ -15,6 +15,21 @@ ScrollView {
     property bool manualCandidateOpen: false
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
+    readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+    readonly property bool canStartTasks: Boolean(workspaceController.actionCapabilities.canStartTasks)
+
+    function syncDocumentSelector() {
+        const documentId = String(subtitleController.selectedDocumentId || "");
+        const row = subtitleController.subtitleDocumentsModel.findRow(
+            "documentId", documentId);
+        if (row >= 0) {
+            sourceDocument.currentIndex = row;
+        } else if (sourceDocument.count > 0 && documentId.length === 0) {
+            sourceDocument.currentIndex = 0;
+            subtitleController.selectSubtitleDocument(
+                String(sourceDocument.currentValue || ""));
+        }
+    }
 
     function refreshTask() {
         const analysis = taskController.latestCommandTask(
@@ -36,9 +51,15 @@ ScrollView {
     }
     Connections {
         target: subtitleController
-        function onSelectionChanged() { root.refreshTask(); }
+        function onSelectionChanged() {
+            root.syncDocumentSelector();
+            root.refreshTask();
+        }
     }
-    Component.onCompleted: refreshTask()
+    Component.onCompleted: Qt.callLater(function () {
+        root.syncDocumentSelector();
+        root.refreshTask();
+    })
 
     ColumnLayout {
         width: root.availableWidth
@@ -47,7 +68,10 @@ ScrollView {
         FolderDialog {
             id: batchExportFolder
             title: qsTr("选择批量导出文件夹")
-            onAccepted: highlightController.exportSelectedHighlights(selectedFolder.toString())
+            onAccepted: {
+                if (root.canStartTasks)
+                    highlightController.exportSelectedHighlights(selectedFolder.toString());
+            }
         }
         RowLayout {
             objectName: "highlightToolbar"
@@ -62,16 +86,17 @@ ScrollView {
                 valueRole: "documentId"
                 displayText: count > 0 ? currentText : qsTr("需要先生成字幕")
                 onActivated: subtitleController.selectSubtitleDocument(currentValue)
-                Component.onCompleted: if (count > 0)
-                    subtitleController.selectSubtitleDocument(currentValue)
+                onCountChanged: Qt.callLater(root.syncDocumentSelector)
             }
             AppButton {
                 objectName: "analyzeHighlightsButton"
                 text: qsTr("分析")
                 primary: true
-                enabled: subtitleController.selectedDocumentId.length > 0 && !root.taskActive
+                enabled: root.canStartTasks
+                    && String(sourceDocument.currentValue || "").length > 0
+                    && !root.taskActive
                 onClicked: highlightController.analyzeHighlights(
-                    subtitleController.selectedDocumentId)
+                    String(sourceDocument.currentValue || ""))
             }
         }
     Text {
@@ -106,6 +131,7 @@ ScrollView {
         Layout.fillWidth: true
         implicitHeight: 154
         visible: root.manualCandidateOpen
+        enabled: root.canEdit
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
@@ -165,7 +191,7 @@ ScrollView {
                 }
                 AppButton {
                     text: qsTr("添加候选")
-                    enabled: mediaController.selectedAssetId.length > 0 && manualEnd.value > manualStart.value
+                    enabled: root.canEdit && mediaController.selectedAssetId.length > 0 && manualEnd.value > manualStart.value
                     onClicked: highlightController.addManualHighlight(manualStart.value, manualEnd.value, manualTitle.text)
                 }
             }
@@ -177,19 +203,19 @@ ScrollView {
         AppButton {
             Layout.fillWidth: true
             text: qsTr("生成短视频")
-            enabled: highlightList.count > 0
+            enabled: root.canEdit && highlightList.count > 0
             onClicked: highlightController.createAllHighlightShorts()
         }
         AppButton {
             Layout.fillWidth: true
             primary: true
             text: qsTr("快速导出")
-            enabled: highlightList.count > 0 && !root.taskActive
+            enabled: root.canStartTasks && highlightList.count > 0 && !root.taskActive
             onClicked: highlightController.exportSelectedHighlightsToDefaultLocation()
         }
         AppButton {
             text: qsTr("另存为…")
-            enabled: highlightList.count > 0 && !root.taskActive
+            enabled: root.canStartTasks && highlightList.count > 0 && !root.taskActive
             onClicked: batchExportFolder.open()
         }
     }
@@ -271,6 +297,7 @@ ScrollView {
                         Layout.fillWidth: true
                         visible: sourceSequenceId.length === 0
                         text: qsTr("添加到主序列")
+                        enabled: root.canEdit
                         onClicked: highlightController.addHighlightToMainSequence(highlightId)
                     }
                 }
@@ -279,10 +306,12 @@ ScrollView {
                     AppButton {
                         Layout.fillWidth: true
                         text: selected ? qsTr("已纳入导出") : qsTr("纳入导出")
+                        enabled: root.canEdit
                         onClicked: highlightController.setHighlightSelected(highlightId, !selected)
                     }
                     AppButton {
                         text: qsTr("删除")
+                        enabled: root.canEdit
                         onClicked: highlightController.deleteHighlight(highlightId)
                     }
                 }
@@ -290,7 +319,13 @@ ScrollView {
                     Layout.fillWidth: true
                     primary: true
                     text: sequenceId.length > 0 ? qsTr("打开短视频序列") : qsTr("创建短视频序列")
-                    onClicked: highlightController.createShortFromHighlight(highlightId)
+                    enabled: sequenceId.length > 0 || root.canEdit
+                    onClicked: {
+                        if (sequenceId.length > 0)
+                            workspaceController.selectSequence(sequenceId);
+                        else
+                            highlightController.createShortFromHighlight(highlightId);
+                    }
                 }
             }
             MouseArea {
@@ -308,7 +343,7 @@ ScrollView {
         EmptyState {
             anchors.fill: parent
             visible: highlightList.count === 0
-            iconText: "AI"
+            iconName: "highlight"
             title: qsTr("还没有高光候选")
             description: qsTr("选择字幕文档并运行分析。候选结果会显示在这里。")
         }
@@ -317,6 +352,7 @@ ScrollView {
         Layout.fillWidth: true
         implicitHeight: 132
         visible: highlightController.selectedHighlightId.length > 0
+        enabled: root.canEdit
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8

@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import "."
@@ -11,8 +10,14 @@ Panel {
     Layout.fillWidth: true
     implicitHeight: content.implicitHeight + 22
     visible: webController.isWebClip
+    enabled: canEdit
+    opacity: canEdit ? 1.0 : 0.72
+    readonly property bool canEdit:
+        Boolean(workspaceController.actionCapabilities.canEdit)
     property int playheadFrame: 0
     property string snapshotFieldId: ""
+    Component.onCompleted: webController.setActiveFrame(playheadFrame)
+    onPlayheadFrameChanged: webController.setActiveFrame(playheadFrame)
 
     function editable(name) {
         const fields = webController.selectedLayerData.editable || [];
@@ -52,6 +57,12 @@ Panel {
         id: webExportDialog
         title: qsTr("导出网页片段")
         fileMode: FileDialog.SaveFile
+        nameFilters: exportFormat.currentIndex >= 0
+            ? [exportFormat.model[exportFormat.currentIndex].filter]
+            : []
+        defaultSuffix: exportFormat.currentIndex >= 0
+            ? exportFormat.model[exportFormat.currentIndex].suffix
+            : ""
         onAccepted: webController.exportSelected(
             selectedFile, String(exportFormat.currentValue),
             webController.timeMsForFrame(root.playheadFrame), exportBackground.text, true)
@@ -74,16 +85,24 @@ Panel {
             font.weight: Font.DemiBold
         }
 
+        Text {
+            Layout.fillWidth: true
+            visible: !root.canEdit
+            text: qsTr("项目以只读方式打开，网页参数仅供查看")
+            color: Theme.warning
+            font.pixelSize: Theme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
+
         AppComboBox {
-            id: layoutSelector
+            id: variantSelector
             Layout.fillWidth: true
             textRole: "name"
             valueRole: "id"
-            model: webController.layoutOptions
+            model: webController.variantOptions
             currentIndex: Math.max(0, indexOfValue(
-                webController.persistentStateJson.length > 0
-                    ? JSON.parse(webController.persistentStateJson).layout_id || "" : ""))
-            onActivated: webController.selectLayout(String(currentValue || ""))
+                webController.activeVariantId))
+            onActivated: webController.selectVariant(String(currentValue || ""))
         }
 
         RowLayout {
@@ -132,19 +151,45 @@ Panel {
                         font.pixelSize: Theme.fontSizeCaption
                         elide: Text.ElideRight
                     }
-                    Text {
-                        text: keyframeCount > 0 ? kind + " · ◆" + keyframeCount : kind
-                        color: Theme.textMuted
-                        font.pixelSize: 10
+                    RowLayout {
+                        spacing: 3
+                        Text {
+                            text: kind
+                            color: Theme.textMuted
+                            font.pixelSize: 10
+                        }
+                        AppIcon {
+                            visible: keyframeCount > 0
+                            Layout.preferredWidth: 9
+                            Layout.preferredHeight: 9
+                            iconName: "keyframe"
+                            iconColor: Theme.cut
+                        }
+                        Text {
+                            visible: keyframeCount > 0
+                            text: keyframeCount
+                            color: Theme.textMuted
+                            font.pixelSize: 10
+                        }
                     }
-                    AppButton {
+                    AppIconButton {
                         implicitWidth: 30
-                        text: layerVisible ? "◉" : "○"
+                        implicitHeight: 28
+                        iconSize: 15
+                        iconName: layerVisible ? "eye" : "eye-off"
+                        flat: false
+                        Accessible.name: layerVisible ? qsTr("隐藏图层") : qsTr("显示图层")
+                        toolTipText: Accessible.name
                         onClicked: webController.updateLayer(layerId, {visible: !layerVisible})
                     }
-                    AppButton {
+                    AppIconButton {
                         implicitWidth: 30
-                        text: allFieldsLocked ? "锁" : "开"
+                        implicitHeight: 28
+                        iconSize: 15
+                        iconName: allFieldsLocked ? "lock" : "unlock"
+                        flat: false
+                        Accessible.name: allFieldsLocked ? qsTr("解锁图层") : qsTr("锁定图层")
+                        toolTipText: Accessible.name
                         onClicked: webController.setLayerLocked(layerId, !allFieldsLocked)
                     }
                 }
@@ -191,7 +236,7 @@ Panel {
             Layout.fillWidth: true
             visible: root.editable("image")
             text: String(webController.selectedLayerData.image ?? "")
-            placeholderText: qsTr("清单中的本地图片路径")
+            placeholderText: qsTr("media-sources.json 中的素材 ID")
         }
 
         GridLayout {
@@ -356,7 +401,7 @@ Panel {
         AppTextField {
             id: batchBindings
             Layout.fillWidth: true
-            placeholderText: qsTr("绑定 JSON，例如 {\"name\":\"layers.title.content\"}")
+            placeholderText: qsTr("绑定 JSON，例如 {\"name\":\"scenes.opening.layers.title.content\"}")
         }
         AppTextField {
             id: batchNameTemplate
@@ -432,7 +477,9 @@ Panel {
             AppComboBox {
                 id: exportFormat
                 Layout.fillWidth: true
-                model: ["png", "gif", "alpha_video", "video", "overlay"]
+                textRole: "label"
+                valueRole: "value"
+                model: webController.exportFormatOptions
             }
             AppTextField {
                 id: exportBackground

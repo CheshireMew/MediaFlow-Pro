@@ -1,55 +1,74 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import ".."
 
 ComboBox {
     id: control
-    implicitHeight: 36
+    implicitHeight: Theme.controlHeight
     leftPadding: 12
     rightPadding: 34
+    hoverEnabled: true
+    focusPolicy: Qt.StrongFocus
     font.pixelSize: Theme.fontSizeBody
-    palette.button: Theme.surfaceRaised
+    palette.button: Theme.control
     palette.buttonText: Theme.text
-    palette.window: Theme.surfaceFloating
+    palette.window: Theme.popup
     palette.text: Theme.text
-    palette.highlight: Theme.accentSoft
+    palette.highlight: Theme.selectionSoft
     palette.highlightedText: Theme.text
     contentItem: Text {
         text: control.displayText
-        color: control.enabled ? Theme.text : Theme.textMuted
+        color: control.enabled ? Theme.text : Theme.textDisabled
         font: control.font
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
-    indicator: Text {
+    indicator: AppIcon {
+        implicitWidth: 14
+        implicitHeight: 14
         x: control.width - width - 12
         y: Math.round((control.height - height) / 2)
-        text: "▾"
-        color: control.enabled ? Theme.textMuted : Theme.borderStrong
-        font.pixelSize: Theme.fontSizeBodySmall
+        iconName: "chevron-down"
+        iconColor: control.enabled ? Theme.textSubtle : Theme.textDisabled
     }
     background: Rectangle {
         radius: Theme.radiusSmall
-        color: control.down ? Theme.surfaceHover : Theme.surfaceRaised
-        border.color: control.activeFocus ? Theme.accent
-            : control.hovered ? Theme.borderStrong : Theme.border
+        color: !control.enabled
+            ? Theme.controlDisabled
+            : control.down
+            ? Theme.controlPressed
+            : control.hovered ? Theme.controlHover : Theme.control
+        border.color: control.activeFocus
+            ? Theme.focusColor
+            : control.hovered ? Theme.borderStrong : Theme.borderSubtle
         border.width: control.activeFocus ? 2 : 1
+
+        Behavior on color {
+            ColorAnimation { duration: Theme.durationFast }
+        }
+        Behavior on border.color {
+            ColorAnimation { duration: Theme.durationFast }
+        }
     }
     delegate: ItemDelegate {
+        id: delegateItem
+        required property int index
         width: control.width
-        implicitHeight: 38
+        implicitHeight: Theme.controlHeight
         highlighted: control.highlightedIndex === index
         hoverEnabled: true
         contentItem: Text {
-            text: control.textAt(index)
-            color: Theme.text
+            text: control.textAt(delegateItem.index)
+            color: parent.enabled ? Theme.text : Theme.textDisabled
             font: control.font
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
         background: Rectangle {
-            color: parent.highlighted || parent.hovered
-                ? Theme.accentSoft : Theme.surfaceFloating
+            color: delegateItem.highlighted || delegateItem.hovered
+                ? Theme.selectionSoft : Theme.popup
+            radius: Theme.radiusSmall
         }
     }
     popup: Popup {
@@ -68,11 +87,11 @@ ComboBox {
             implicitHeight: contentHeight
             model: popup.visible ? control.delegateModel : null
             currentIndex: control.highlightedIndex
-            ScrollIndicator.vertical: ScrollIndicator {}
+            ScrollIndicator.vertical: AppScrollIndicator {}
         }
         background: Rectangle {
             radius: Theme.radiusSmall
-            color: Theme.surfaceFloating
+            color: Theme.popup
             border.color: Theme.borderStrong
             border.width: 1
         }

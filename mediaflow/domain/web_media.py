@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -29,14 +29,85 @@ WebEditableField = Literal[
     "delay_ms",
     "duration_ms",
 ]
-WebLayoutField = Literal["x", "y", "width", "height", "rotation"]
 WebDataKind = Literal["string", "number", "boolean", "date", "image", "table", "json"]
 WebThemeKind = Literal["color", "font", "number", "string"]
 WebInterpolation = Literal["continuous", "discrete"]
 WebEasingKind = Literal["linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic_bezier"]
 WebExportFormat = Literal["png", "gif", "alpha_video", "video", "overlay"]
+WebPlaybackMode = Literal["manual", "autoplay", "hybrid"]
 
-LAYOUT_FIELDS: frozenset[str] = frozenset({"x", "y", "width", "height", "rotation"})
+WEB_EXPORT_FORMATS: tuple[WebExportFormat, ...] = (
+    "png",
+    "gif",
+    "alpha_video",
+    "video",
+    "overlay",
+)
+_WEB_EXPORT_SUFFIXES: dict[WebExportFormat, tuple[str, ...]] = {
+    "png": (".png",),
+    "gif": (".gif",),
+    "alpha_video": (".mkv",),
+    "video": (".mp4", ".mov", ".mkv"),
+    "overlay": (".png", ".mkv"),
+}
+_WEB_EXPORT_DEFAULT_SUFFIXES: dict[WebExportFormat, str] = {
+    "png": ".png",
+    "gif": ".gif",
+    "alpha_video": ".mkv",
+    "video": ".mp4",
+    "overlay": ".png",
+}
+
+
+def web_export_suffixes(
+    format_name: str,
+    *,
+    overlay_suffix: str | None = None,
+) -> tuple[str, ...]:
+    if format_name not in _WEB_EXPORT_SUFFIXES:
+        raise ValueError(f"未知的网页导出格式：{format_name}")
+    export_format = cast(WebExportFormat, format_name)
+    if export_format != "overlay" or overlay_suffix is None:
+        return _WEB_EXPORT_SUFFIXES[export_format]
+    normalized = overlay_suffix.strip().lower()
+    if normalized not in _WEB_EXPORT_SUFFIXES["overlay"]:
+        raise ValueError(f"网页叠加层不支持输出扩展名：{overlay_suffix}")
+    return (normalized,)
+
+
+def default_web_export_suffix(
+    format_name: str,
+    *,
+    overlay_suffix: str | None = None,
+) -> str:
+    suffixes = web_export_suffixes(
+        format_name,
+        overlay_suffix=overlay_suffix,
+    )
+    if format_name == "overlay" and overlay_suffix is not None:
+        return suffixes[0]
+    return _WEB_EXPORT_DEFAULT_SUFFIXES[cast(WebExportFormat, format_name)]
+
+
+def require_web_export_destination(
+    output_path: str | Path,
+    format_name: str,
+    *,
+    overlay_suffix: str | None = None,
+) -> Path:
+    destination = Path(output_path).expanduser().resolve()
+    suffixes = web_export_suffixes(
+        format_name,
+        overlay_suffix=overlay_suffix,
+    )
+    if destination.suffix.lower() not in suffixes:
+        readable = "、".join(suffixes)
+        raise ValueError(
+            f"网页导出格式“{format_name}”需要使用以下扩展名：{readable}"
+        )
+    return destination
+
+
 CONTINUOUS_ANIMATION_FIELDS: frozenset[str] = frozenset(
     {"font_size", "x", "y", "width", "height", "rotation", "opacity", "z_index"}
 )
@@ -52,17 +123,20 @@ def _local_package_path(value: str) -> str:
     return path.as_posix()
 
 
+def _local_media_reference(value: str) -> str:
+    reference = value.strip().replace("\\", "/")
+    file_part, separator, fragment = reference.partition("#")
+    normalized = _local_package_path(file_part)
+    if separator and not fragment:
+        raise ValueError("Editable media references cannot end with an empty fragment")
+    return f"{normalized}#{fragment}" if separator else normalized
+
+
 class WebCanvas(DomainModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     background_mode: Literal["transparent", "opaque"] = "transparent"
     background_color: str = "#000000"
-
-
-class WebTimeline(DomainModel):
-    duration_ms: int = Field(ge=0)
-    fps: float = Field(default=30.0, gt=0, le=240)
-    loop: Literal["none", "repeat"] = "none"
 
 
 class WebLayerBounds(DomainModel):
@@ -137,19 +211,353 @@ class WebThemeVariable(DomainModel):
         return self
 
 
-class WebLayout(DomainModel):
+class WebPlaybackControls(DomainModel):
+    keyboard: bool
+    wheel: bool
+    touch: bool
+    overview: bool
+
+
+class WebPlayback(DomainModel):
+    mode: WebPlaybackMode
+    fps: float = Field(gt=0, le=240)
+    loop: Literal["none", "repeat"]
+    controls: WebPlaybackControls
+
+
+class WebAccessibility(DomainModel):
+    title_data_field: str
+    canvas_selector: str
+
+
+class WebSceneStep(DomainModel):
+    id: str
+    at_ms: int = Field(ge=0)
+    label: str
+
+    @field_validator("id", "label")
+    @classmethod
+    def non_empty_step_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Editable media scene step fields cannot be empty")
+        return value
+
+
+class WebScene(DomainModel):
+    id: str
+    name: str
+    page_role: str
+    content_shape: str
+    layout_id: str
+    duration_ms: int = Field(gt=0)
+    primary_blocks: int = Field(ge=0)
+    steps: list[WebSceneStep]
+    data: dict[str, JsonValue]
+    asset_slots: dict[str, JsonValue]
+
+    @field_validator("id", "name", "page_role", "content_shape", "layout_id")
+    @classmethod
+    def non_empty_scene_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Editable media scene fields cannot be empty")
+        return value
+
+    @model_validator(mode="after")
+    def valid_steps(self) -> WebScene:
+        ids = [item.id for item in self.steps]
+        times = [item.at_ms for item in self.steps]
+        if not ids or len(set(ids)) != len(ids):
+            raise ValueError("Editable media scene step identifiers must be unique")
+        if times != sorted(times) or len(set(times)) != len(times):
+            raise ValueError("Editable media scene steps must have unique ascending times")
+        if times[0] != 0 or times[-1] >= self.duration_ms:
+            raise ValueError("Editable media scene steps must start at zero and stay in the scene")
+        return self
+
+
+class WebLayoutCapacity(DomainModel):
+    maximum_primary_blocks: int = Field(ge=0)
+
+
+class WebLayoutContract(DomainModel):
+    id: str
+    name: str
+    page_roles: list[str]
+    content_shapes: list[str]
+    required_data_fields: list[str]
+    required_layer_ids: list[str]
+    title_layer_ids: list[str]
+    content_layer_ids: list[str]
+    capacity: WebLayoutCapacity
+    asset_slots: list[str]
+
+
+class WebVariant(DomainModel):
     id: str
     name: str
     canvas: WebCanvas
-    layers: dict[str, WebLayerBounds] = Field(default_factory=dict)
+    layers: dict[str, WebLayerBounds]
 
     @field_validator("id", "name")
     @classmethod
-    def non_empty_layout_text(cls, value: str) -> str:
+    def non_empty_variant_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
-            raise ValueError("Editable media layout fields cannot be empty")
+            raise ValueError("Editable media variant fields cannot be empty")
         return value
+
+
+class WebQualityRoundtrip(DomainModel):
+    data_field: str
+    layer_id: str
+
+
+class WebQualityGap(DomainModel):
+    above: str
+    below: str
+    min_px: float = Field(ge=0)
+
+
+class WebQualityNavigationSafeArea(DomainModel):
+    bottom: float = Field(ge=0)
+    layer_ids: list[str]
+
+
+class WebQualityTitleToContent(DomainModel):
+    title_layer_id: str
+    content_layer_ids: list[str]
+    minimum_px: float = Field(ge=0)
+
+
+class WebQualityBottomWhitespace(DomainModel):
+    content_layer_ids: list[str]
+    maximum_ratio: float = Field(ge=0, le=1)
+
+
+class WebQuality(DomainModel):
+    canvas_selector: str
+    roundtrip: WebQualityRoundtrip
+    required_layer_ids: list[str]
+    bounds_tolerance_px: float = Field(ge=0)
+    minimum_font_px: dict[str, float]
+    minimum_gaps: list[WebQualityGap]
+    navigation_safe_area: WebQualityNavigationSafeArea
+    title_to_content: WebQualityTitleToContent
+    bottom_whitespace: WebQualityBottomWhitespace
+
+
+class WebDelivery(DomainModel):
+    preview: Literal["local-server"]
+    remote_dependencies: Literal["forbid"]
+
+
+class WebSourceRepresentation(DomainModel):
+    kind: Literal["source"]
+    source_id: None
+    build: None
+    verification: None
+
+
+class WebProxyBuild(DomainModel):
+    tool: str = Field(min_length=1)
+    command: list[str] = Field(min_length=1)
+    created_at: str = Field(min_length=1)
+
+
+class WebProxyVerification(DomainModel):
+    duration_tolerance_seconds: float = Field(ge=0)
+    frame_rate_tolerance: float = Field(ge=0)
+    aspect_ratio_tolerance: float = Field(ge=0)
+    require_rotation_match: bool
+    require_audio_stream_count_match: bool
+
+
+class WebProxyRepresentation(DomainModel):
+    kind: Literal["proxy"]
+    source_id: str = Field(min_length=1)
+    build: WebProxyBuild
+    verification: WebProxyVerification
+
+
+class WebMediaAcquisition(DomainModel):
+    method: Literal[
+        "user-provided",
+        "project-owned",
+        "external-download",
+        "generated",
+        "generated-in-project",
+    ]
+    source_url: str
+    captured_at: str | None
+
+
+class WebMediaRights(DomainModel):
+    status: Literal["confirmed", "pending", "not-required"]
+    license: str
+    attribution: str
+    terms_url: str
+
+    @model_validator(mode="after")
+    def confirmed_rights_have_a_basis(self) -> WebMediaRights:
+        if self.status == "confirmed" and not self.license:
+            raise ValueError("Confirmed editable media rights need a license basis")
+        return self
+
+
+class WebMediaIntegrity(DomainModel):
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    bytes: int = Field(gt=0)
+    mime_type: str = Field(min_length=1)
+
+
+class WebMediaGeneration(DomainModel):
+    provider: str = Field(min_length=1)
+    model: str
+    prompt: str
+    seed: str | float | int | None
+    created_at: str = Field(min_length=1)
+
+
+class WebMediaSpeech(DomainModel):
+    provider_voice_id: str
+    voice_name: str
+    language: str
+    text_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    exact_identity: bool
+
+    @model_validator(mode="after")
+    def exact_identity_is_named(self) -> WebMediaSpeech:
+        if self.exact_identity and (not self.provider_voice_id or not self.voice_name):
+            raise ValueError("Exact speech identity needs both provider voice id and voice name")
+        return self
+
+
+class WebMediaCapture(DomainModel):
+    file: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("file")
+    @classmethod
+    def local_capture_file(cls, value: str) -> str:
+        return _local_package_path(value)
+
+
+class WebMediaProvenanceRun(DomainModel):
+    recorded_at: str = Field(min_length=1)
+    provider: str
+    job_id: str
+    capture: WebMediaCapture | None
+
+
+class WebMediaSubject(DomainModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
+class WebMediaCropRect(DomainModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+    @model_validator(mode="after")
+    def stays_inside_source(self) -> WebMediaCropRect:
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError("Editable media crop must stay inside its source")
+        return self
+
+
+class WebMediaCrop(DomainModel):
+    object_position: str | None = None
+    rect: WebMediaCropRect | None = None
+
+    @model_validator(mode="after")
+    def has_a_crop_method(self) -> WebMediaCrop:
+        if self.object_position is None and self.rect is None:
+            raise ValueError("Editable media crop needs object_position or rect")
+        return self
+
+
+class WebMediaSource(DomainModel):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    media_type: Literal[
+        "photo",
+        "screenshot",
+        "video",
+        "video-frame",
+        "audio",
+        "subtitle",
+        "icon",
+        "document",
+        "generated",
+    ]
+    file: str
+    representation: WebSourceRepresentation | WebProxyRepresentation = Field(
+        discriminator="kind"
+    )
+    acquisition: WebMediaAcquisition
+    rights: WebMediaRights
+    usage: str = Field(min_length=1)
+    integrity: WebMediaIntegrity | None
+    generation: WebMediaGeneration | None
+    speech: WebMediaSpeech | None
+    provenance_runs: list[WebMediaProvenanceRun] = Field(min_length=1)
+    subject: WebMediaSubject | None
+    crops: dict[str, WebMediaCrop]
+    notes: str
+
+    @field_validator("file")
+    @classmethod
+    def local_file(cls, value: str) -> str:
+        return _local_media_reference(value)
+
+    @model_validator(mode="after")
+    def valid_source_record(self) -> WebMediaSource:
+        generated_in_project = self.acquisition.method == "generated-in-project"
+        if self.integrity is None and not generated_in_project:
+            raise ValueError("Independent editable media files need integrity metadata")
+        if (
+            self.acquisition.method in {"generated", "generated-in-project"}
+            and self.representation.kind != "proxy"
+            and self.generation is None
+        ):
+            raise ValueError("Generated editable media needs generation metadata")
+        return self
+
+
+class WebMediaSourcesManifest(DomainModel):
+    protocol: Literal["visual-multimedia-media-sources"]
+    version: Literal[3]
+    sources: list[WebMediaSource]
+
+    @model_validator(mode="after")
+    def valid_sources(self) -> WebMediaSourcesManifest:
+        ids = [item.id for item in self.sources]
+        files = [item.file for item in self.sources]
+        if len(set(ids)) != len(ids):
+            raise ValueError("Editable media source identifiers must be unique")
+        if len(set(files)) != len(files):
+            raise ValueError("Editable media source files must be unique")
+        sources = {item.id: item for item in self.sources}
+        for item in self.sources:
+            if item.representation.kind != "proxy":
+                continue
+            source = sources.get(item.representation.source_id)
+            if source is None:
+                raise ValueError(
+                    f"Editable media proxy source does not exist: {item.representation.source_id}"
+                )
+            if source.representation.kind != "source":
+                raise ValueError("Editable media proxies must point directly to an original source")
+            if source.media_type != item.media_type or item.media_type not in {"video", "audio"}:
+                raise ValueError("Editable media proxies must preserve a video or audio media type")
+            if item.acquisition.method != "generated-in-project":
+                raise ValueError("Editable media proxies must be generated inside the project")
+            if item.rights != source.rights:
+                raise ValueError("Editable media proxies must inherit original source rights")
+        return self
 
 
 class WebDataColumn(DomainModel):
@@ -252,22 +660,27 @@ class WebLayerManifest(DomainModel):
 
 
 class EditableMediaManifest(DomainModel):
-    protocol: Literal["editable-media"] = "editable-media"
-    version: Literal[1] = 1
+    protocol: Literal["editable-media"]
+    version: Literal[3]
     entry: str
-    canvas: WebCanvas
-    timeline: WebTimeline
+    media_sources: str
+    playback: WebPlayback
+    accessibility: WebAccessibility
     layers: list[WebLayerManifest]
-    resources: list[str] = Field(default_factory=list)
-    component: WebComponentMetadata | None = None
-    theme_variables: list[WebThemeVariable] = Field(default_factory=list)
-    layouts: list[WebLayout] = Field(default_factory=list)
-    default_layout_id: str = "default"
-    data_fields: list[WebDataField] = Field(default_factory=list)
+    component: WebComponentMetadata
+    theme_variables: list[WebThemeVariable]
+    scenes: list[WebScene]
+    layout_contracts: list[WebLayoutContract]
+    variants: list[WebVariant]
+    default_variant_id: str
+    data_fields: list[WebDataField]
+    quality: WebQuality
+    delivery: WebDelivery
+    resources: list[str]
 
-    @field_validator("entry")
+    @field_validator("entry", "media_sources")
     @classmethod
-    def local_entry(cls, value: str) -> str:
+    def local_manifest_path(cls, value: str) -> str:
         return _local_package_path(value)
 
     @field_validator("resources")
@@ -279,7 +692,7 @@ class EditableMediaManifest(DomainModel):
         return normalized
 
     @model_validator(mode="after")
-    def valid_layer_tree(self) -> EditableMediaManifest:
+    def valid_contract(self) -> EditableMediaManifest:
         ids = [layer.id for layer in self.layers]
         if not ids:
             raise ValueError("Editable media must declare at least one editable layer")
@@ -299,42 +712,121 @@ class EditableMediaManifest(DomainModel):
                     raise ValueError("Editable layer groups cannot contain a cycle")
                 visited.add(parent_id)
                 parent_id = next(item.parent_id for item in self.layers if item.id == parent_id)
-        if len({item.id for item in self.layouts}) != len(self.layouts):
-            raise ValueError("Editable media layout identifiers must be unique")
-        if self.layouts and self.default_layout_id not in {item.id for item in self.layouts}:
-            raise ValueError("Editable media default layout does not exist")
-        for layout in self.layouts:
-            unknown_layers = set(layout.layers) - known
+
+        data_ids = {item.id for item in self.data_fields}
+        if len(data_ids) != len(self.data_fields):
+            raise ValueError("Editable media data field identifiers must be unique")
+        if self.accessibility.title_data_field not in data_ids:
+            raise ValueError("Editable media accessibility title data field does not exist")
+
+        contract_ids = [item.id for item in self.layout_contracts]
+        if not contract_ids or len(set(contract_ids)) != len(contract_ids):
+            raise ValueError("Editable media layout contract identifiers must be unique")
+        contracts = {item.id: item for item in self.layout_contracts}
+        for contract in self.layout_contracts:
+            unknown_layers = (
+                set(contract.required_layer_ids)
+                | set(contract.title_layer_ids)
+                | set(contract.content_layer_ids)
+            ) - known
             if unknown_layers:
                 raise ValueError(
-                    f"Layout {layout.id} references unknown layers: {sorted(unknown_layers)}"
+                    f"Layout contract {contract.id} references unknown layers: "
+                    f"{sorted(unknown_layers)}"
                 )
+            unknown_data = set(contract.required_data_fields) - data_ids
+            if unknown_data:
+                raise ValueError(
+                    f"Layout contract {contract.id} references unknown data fields: "
+                    f"{sorted(unknown_data)}"
+                )
+
+        scene_ids = [item.id for item in self.scenes]
+        if not scene_ids or len(set(scene_ids)) != len(scene_ids):
+            raise ValueError("Editable media scene identifiers must be unique")
+        for scene in self.scenes:
+            scene_contract = contracts.get(scene.layout_id)
+            if scene_contract is None:
+                raise ValueError(f"Scene {scene.id} layout contract does not exist")
+            if scene.page_role not in scene_contract.page_roles:
+                raise ValueError(f"Scene {scene.id} page role violates its layout contract")
+            if scene.content_shape not in scene_contract.content_shapes:
+                raise ValueError(f"Scene {scene.id} content shape violates its layout contract")
+            if scene.primary_blocks > scene_contract.capacity.maximum_primary_blocks:
+                raise ValueError(f"Scene {scene.id} exceeds its layout capacity")
+            unknown_data = set(scene.data) - data_ids
+            if unknown_data:
+                raise ValueError(
+                    f"Scene {scene.id} references unknown data fields: {sorted(unknown_data)}"
+                )
+            missing_data = set(scene_contract.required_data_fields) - set(scene.data)
+            if missing_data:
+                raise ValueError(
+                    f"Scene {scene.id} is missing required data fields: {sorted(missing_data)}"
+                )
+
+        variant_ids = [item.id for item in self.variants]
+        if not variant_ids or len(set(variant_ids)) != len(variant_ids):
+            raise ValueError("Editable media variant identifiers must be unique")
+        if self.default_variant_id not in set(variant_ids):
+            raise ValueError("Editable media default variant does not exist")
+        for variant in self.variants:
+            unknown_layers = set(variant.layers) - known
+            if unknown_layers:
+                raise ValueError(
+                    f"Variant {variant.id} references unknown layers: {sorted(unknown_layers)}"
+                )
+            missing_layers = known - set(variant.layers)
+            if missing_layers:
+                raise ValueError(
+                    f"Variant {variant.id} is missing layers: {sorted(missing_layers)}"
+                )
+
         if len({item.id for item in self.theme_variables}) != len(self.theme_variables):
             raise ValueError("Editable media theme variable identifiers must be unique")
         if len({item.css_variable for item in self.theme_variables}) != len(self.theme_variables):
             raise ValueError("Editable media theme CSS variables must be unique")
-        if len({item.id for item in self.data_fields}) != len(self.data_fields):
-            raise ValueError("Editable media data field identifiers must be unique")
+
+        quality_layers = (
+            set(self.quality.required_layer_ids)
+            | set(self.quality.minimum_font_px)
+            | set(self.quality.navigation_safe_area.layer_ids)
+            | {self.quality.roundtrip.layer_id}
+            | {self.quality.title_to_content.title_layer_id}
+            | set(self.quality.title_to_content.content_layer_ids)
+            | set(self.quality.bottom_whitespace.content_layer_ids)
+            | {
+                layer_id
+                for gap in self.quality.minimum_gaps
+                for layer_id in (gap.above, gap.below)
+            }
+        )
+        unknown_quality_layers = quality_layers - known
+        if unknown_quality_layers:
+            raise ValueError(
+                "Editable media quality rules reference unknown layers: "
+                f"{sorted(unknown_quality_layers)}"
+            )
+        if self.quality.roundtrip.data_field not in data_ids:
+            raise ValueError("Editable media roundtrip data field does not exist")
+        if self.accessibility.canvas_selector != self.quality.canvas_selector:
+            raise ValueError("Editable media canvas selectors must use one canonical value")
         return self
 
-    def layout_for(self, layout_id: str | None, width: int, height: int) -> WebLayout:
-        if not self.layouts:
-            return WebLayout(
-                id="default",
-                name="Default",
-                canvas=self.canvas,
-                layers={layer.id: layer.default_bounds for layer in self.layers},
-            )
-        if layout_id:
-            try:
-                return next(item for item in self.layouts if item.id == layout_id)
-            except StopIteration as error:
-                raise ValueError(f"Editable media layout does not exist: {layout_id}") from error
-        target_ratio = width / max(1, height)
-        return min(
-            self.layouts,
-            key=lambda item: abs(item.canvas.width / item.canvas.height - target_ratio),
-        )
+    @property
+    def duration_ms(self) -> int:
+        return sum(item.duration_ms for item in self.scenes)
+
+    @property
+    def default_variant(self) -> WebVariant:
+        return self.variant_for(self.default_variant_id)
+
+    def variant_for(self, variant_id: str | None) -> WebVariant:
+        resolved = variant_id or self.default_variant_id
+        try:
+            return next(item for item in self.variants if item.id == resolved)
+        except StopIteration as error:
+            raise ValueError(f"Editable media variant does not exist: {resolved}") from error
 
 
 class WebAssetSpec(DomainModel):
@@ -436,31 +928,14 @@ class WebDataSnapshot(DomainModel):
         return self
 
 
-class WebClipState(DomainModel):
-    clip_id: str
+class WebSceneState(DomainModel):
     layers: dict[str, WebLayerOverride] = Field(default_factory=dict)
-    layout_id: str | None = None
-    layout_overrides: dict[str, dict[str, WebLayerOverride]] = Field(default_factory=dict)
     animations: dict[str, dict[WebEditableField, WebAnimationTrack]] = Field(default_factory=dict)
-    theme: dict[str, str | float] = Field(default_factory=dict)
     data_snapshot: WebDataSnapshot = Field(default_factory=WebDataSnapshot)
     locks: dict[str, tuple[WebEditableField, ...]] = Field(default_factory=dict)
-    source_hash: str = ""
-    variant_name: str = ""
-    revision: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def coherent_state(self) -> WebClipState:
-        for layout_id, layers in self.layout_overrides.items():
-            if not layout_id.strip():
-                raise ValueError("Editable media layout override IDs cannot be empty")
-            for layer_id, override in layers.items():
-                unsupported = override.changed_fields() - LAYOUT_FIELDS
-                if unsupported:
-                    raise ValueError(
-                        f"Layout override {layout_id}/{layer_id} contains non-layout fields: "
-                        f"{sorted(unsupported)}"
-                    )
+    def coherent_state(self) -> WebSceneState:
         for layer_id, tracks in self.animations.items():
             for field, track in tracks.items():
                 if field != track.field:
@@ -468,6 +943,34 @@ class WebClipState(DomainModel):
         for layer_id, fields in self.locks.items():
             if len(set(fields)) != len(fields):
                 raise ValueError(f"Locked fields must be unique: {layer_id}")
+        return self
+
+
+class WebRuntimeVariant(DomainModel):
+    id: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class WebRuntimePlayback(DomainModel):
+    mode: WebPlaybackMode
+
+
+class WebClipState(DomainModel):
+    clip_id: str
+    scenes: dict[str, WebSceneState] = Field(default_factory=dict)
+    theme: dict[str, str | float] = Field(default_factory=dict)
+    variant: WebRuntimeVariant | None = None
+    scene_id: str | None = None
+    playback: WebRuntimePlayback | None = None
+    source_hash: str = ""
+    batch_name: str = ""
+    revision: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def coherent_state(self) -> WebClipState:
+        if any(not scene_id.strip() for scene_id in self.scenes):
+            raise ValueError("Editable media scene state identifiers cannot be empty")
         return self
 
 
@@ -509,46 +1012,58 @@ class WebClipExportResult(DomainModel):
 def web_runtime_state(
     state: WebClipState,
     manifest: EditableMediaManifest,
-    *,
-    width: int,
-    height: int,
 ) -> dict[str, JsonValue]:
-    layout = manifest.layout_for(state.layout_id, width, height)
-    resolved_layers: dict[str, JsonValue] = {}
-    layout_changes = state.layout_overrides.get(layout.id, {})
-    for layer in manifest.layers:
-        bounds = layout.layers.get(layer.id, layer.default_bounds)
-        values: dict[str, JsonValue] = bounds.model_dump(mode="json")
-        values.update(state.layers.get(layer.id, WebLayerOverride()).model_dump(exclude_none=True))
-        values.update(layout_changes.get(layer.id, WebLayerOverride()).model_dump(exclude_none=True))
-        resolved_layers[layer.id] = values
+    variant = manifest.variant_for(state.variant.id if state.variant is not None else None)
+    known_scene_ids = {item.id for item in manifest.scenes}
+    scene_id = state.scene_id if state.scene_id in known_scene_ids else manifest.scenes[0].id
+    data_defaults = {item.id: item.default for item in manifest.data_fields}
+    resolved_scenes: dict[str, JsonValue] = {}
+    for scene in manifest.scenes:
+        current = state.scenes.get(scene.id, WebSceneState())
+        resolved_layers: dict[str, JsonValue] = {}
+        for layer in manifest.layers:
+            bounds = variant.layers.get(layer.id, layer.default_bounds)
+            values: dict[str, JsonValue] = bounds.model_dump(mode="json")
+            values.update(
+                current.layers.get(layer.id, WebLayerOverride()).model_dump(exclude_none=True)
+            )
+            resolved_layers[layer.id] = values
+        data = dict(data_defaults)
+        data.update(scene.data)
+        data.update(current.data_snapshot.values)
+        resolved_scenes[scene.id] = cast(
+            JsonValue,
+            {
+                "layers": resolved_layers,
+                "animations": {
+                    layer_id: {
+                        field: track.model_dump(mode="json")
+                        for field, track in tracks.items()
+                    }
+                    for layer_id, tracks in current.animations.items()
+                },
+                "data": data,
+                "locks": {
+                    layer_id: list(fields) for layer_id, fields in current.locks.items()
+                },
+            },
+        )
     theme = {item.id: item.default for item in manifest.theme_variables}
     theme.update(state.theme)
-    data = {item.id: item.default for item in manifest.data_fields}
-    data.update(state.data_snapshot.values)
     return {
-        "layers": resolved_layers,
-        "animations": cast(JsonValue, {
-            layer_id: {
-                field: track.model_dump(mode="json") for field, track in tracks.items()
-            }
-            for layer_id, tracks in state.animations.items()
-        }),
+        "scenes": cast(JsonValue, resolved_scenes),
         "theme": cast(JsonValue, theme),
         "theme_bindings": cast(JsonValue, {
             item.id: item.css_variable for item in manifest.theme_variables
         }),
-        "data": cast(JsonValue, data),
-        "layout": cast(JsonValue, {
-            "id": layout.id,
-            "width": layout.canvas.width,
-            "height": layout.canvas.height,
-            "background_mode": layout.canvas.background_mode,
-            "background_color": layout.canvas.background_color,
+        "variant": cast(JsonValue, {
+            "id": variant.id,
+            "width": variant.canvas.width,
+            "height": variant.canvas.height,
         }),
-        "locks": cast(
-            JsonValue,
-            {layer_id: list(fields) for layer_id, fields in state.locks.items()},
-        ),
+        "scene_id": scene_id,
+        "playback": cast(JsonValue, {
+            "mode": state.playback.mode if state.playback is not None else manifest.playback.mode,
+        }),
         "revision": state.revision,
     }

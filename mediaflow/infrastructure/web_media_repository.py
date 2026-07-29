@@ -4,13 +4,14 @@ import json
 
 from mediaflow.domain.web_media import WebAssetSpec, WebClipState
 
+from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
 from .project_serialization import model_json as _model_json
 
 
-class WebMediaRepository:
+class WebMediaRepository(ProjectRepositoryComponent):
     def save_web_asset_spec(self, spec: WebAssetSpec) -> WebAssetSpec:
-        asset = self.get_asset(spec.asset_id)
+        asset = self._owner.catalog.get_asset(spec.asset_id)
         if asset.kind.value != "web":
             raise ValueError("Editable media metadata can only belong to a web asset")
         with self.transaction() as connection:

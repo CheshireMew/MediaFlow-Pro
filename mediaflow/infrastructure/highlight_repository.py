@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from mediaflow.domain.highlights import HighlightCandidate
 
+from .project_repository_component import ProjectRepositoryComponent
 
-class HighlightRepository:
+
+class HighlightRepository(ProjectRepositoryComponent):
     def save_highlights(self, candidates: list[HighlightCandidate]) -> None:
-        project = self.get_project()
+        project = self._owner.catalog.get_project()
         if any(candidate.project_id != project.id for candidate in candidates):
             raise ValueError("Highlight belongs to another project")
         with self.transaction() as connection:

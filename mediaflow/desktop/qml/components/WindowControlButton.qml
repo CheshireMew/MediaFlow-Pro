@@ -1,24 +1,35 @@
 import QtQuick
-import QtQuick.Controls
 import ".."
 
-Button {
+AppIconButton {
     id: control
+
     property bool closeButton: false
+
     implicitWidth: 46
-    implicitHeight: 42
+    implicitHeight: 46
+    iconSize: 16
+    flat: true
+    danger: closeButton
     focusPolicy: Qt.NoFocus
-    font.pixelSize: Theme.fontSizeBodyLarge
-    contentItem: Text {
-        text: control.text
-        color: control.enabled ? Theme.text : Theme.textMuted
-        font: control.font
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-    }
+
     background: Rectangle {
-        color: control.hovered
-            ? (control.closeButton ? "#c42b38" : Theme.surfaceHover)
-            : "transparent"
+        color: {
+            if (!control.hovered && !control.down)
+                return Theme.transparent;
+            if (control.closeButton)
+                return control.down ? Theme.dangerPressed : Theme.danger;
+            return control.down ? Theme.surfacePressed : Theme.surfaceHover;
+        }
+    }
+
+    contentItem: AppIcon {
+        width: control.iconSize
+        height: control.iconSize
+        anchors.centerIn: parent
+        iconName: control.iconName
+        iconColor: control.closeButton && (control.hovered || control.down)
+            ? Theme.textStrong
+            : control.enabled ? Theme.textSubtle : Theme.textDisabled
     }
 }

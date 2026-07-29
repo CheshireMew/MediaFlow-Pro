@@ -6,17 +6,16 @@ import os
 import re
 from pathlib import Path
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import TrackKind
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import SequenceInOut
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
+from mediaflow.domain.storage_names import content_addressed_child_path
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
 from mediaflow.domain.timeline import TimelineState
-from mediaflow.infrastructure.process_observers import (
-    FfmpegProgressObserver,
-    MeltProgressObserver,
-    ffmpeg_progress_command,
-)
+from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
+from mediaflow.infrastructure.process_observers import MeltProgressObserver
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
@@ -35,6 +34,7 @@ class SequenceBoundaryAnalysisService:
     def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths | None = None):
         self.compiler = compiler
         self.paths = paths or RuntimePaths.discover()
+        self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def snapshot_hash(self, state: TimelineState) -> str:
         enabled_subtitle_tracks = {
@@ -43,7 +43,7 @@ class SequenceBoundaryAnalysisService:
         placements = [
             placement.model_dump(mode="json")
             for track_id in sorted(enabled_subtitle_tracks)
-            for placement in self.compiler.repository.list_subtitle_placements(track_id)
+            for placement in self.compiler.repository.subtitles.list_subtitle_placements(track_id)
         ]
         payload = {
             "timeline": state.model_dump(mode="json"),
@@ -70,10 +70,24 @@ class SequenceBoundaryAnalysisService:
             raise RuntimeError("Sequence changed before boundary analysis started")
 
         project_dir = self.compiler.repository.project_dir
-        graph_path = project_dir / "cache" / "mlt" / f"{state.sequence.id}-boundary-analysis.mlt"
-        cache_dir = project_dir / "cache" / "boundary-analysis" / snapshot_hash[:16]
-        result_path = (
-            project_dir / "generated" / "analysis" / f"{state.sequence.id}-boundary-{snapshot_hash[:16]}.json"
+        graph_path = content_addressed_child_path(
+            project_dir / "cache" / "b",
+            f"boundary-graph:{state.sequence.id}:{snapshot_hash}",
+            namespace="bg",
+            suffix=".mlt",
+        )
+        cache_dir = content_addressed_child_path(
+            project_dir / "cache" / "b",
+            f"boundary-windows:{state.sequence.id}:{snapshot_hash}",
+            namespace="bw",
+            suffix="",
+            required_descendant_component_utf16_units=32,
+        )
+        result_path = content_addressed_child_path(
+            project_dir / "generated" / "a",
+            f"boundary-result:{state.sequence.id}:{snapshot_hash}",
+            namespace="ba",
+            suffix=".json",
         )
         cache_dir.mkdir(parents=True, exist_ok=True)
         result_path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,11 +130,11 @@ class SequenceBoundaryAnalysisService:
             black_in_frame=black_in,
             black_out_frame=black_out,
         )
-        temporary = result_path.with_suffix(result_path.suffix + ".tmp")
-        temporary.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
-        temporary.replace(result_path)
         if progress:
             progress(OperationProgress.indeterminate("sequence_boundary_saving"))
+        if check_cancelled:
+            check_cancelled()
+        atomic_write_text(result_path, analysis.model_dump_json(indent=2))
         return analysis, result_path
 
     def _speech_bounds(self, state: TimelineState, duration: int) -> tuple[int, int] | None:
@@ -128,7 +142,7 @@ class SequenceBoundaryAnalysisService:
         for track in state.tracks:
             if track.kind != TrackKind.SUBTITLE or not track.enabled:
                 continue
-            for placement in self.compiler.repository.list_subtitle_placements(track.id):
+            for placement in self.compiler.repository.subtitles.list_subtitle_placements(track.id):
                 start = max(0, min(duration, placement.start_frame))
                 end = max(0, min(duration, placement.end_frame))
                 if end > start:
@@ -171,7 +185,12 @@ class SequenceBoundaryAnalysisService:
                 check_cancelled()
             start_frame = 0 if edge == "leading" else duration - window_frames
             end_frame = window_frames if edge == "leading" else duration
-            rendered = cache_dir / f"{edge}-{start_frame}-{end_frame}.mkv"
+            rendered = content_addressed_child_path(
+                cache_dir,
+                (f"boundary-window:{state.sequence.id}:{edge}:{start_frame}:{end_frame}"),
+                namespace="w",
+                suffix=".mkv",
+            )
             self._render_window(
                 state,
                 graph_path,
@@ -329,37 +348,32 @@ class SequenceBoundaryAnalysisService:
         message_code: str,
     ) -> list[tuple[float, float]]:
         command = [
-                str(self.paths.ffmpeg),
-                "-hide_banner",
-                "-v",
-                "info",
-                "-i",
-                str(source),
-                "-vf",
-                "blackdetect=d=0.04:pix_th=0.10",
-                "-an",
-                "-f",
-                "null",
-                "-",
-            ]
-        observer = FfmpegProgressObserver(
-            duration_seconds,
-            lambda position: progress(
-                OperationProgress.determinate(
-                    message_code,
-                    completed=position,
-                    total=duration_seconds,
-                    unit="media_seconds",
+            "-v",
+            "info",
+            "-i",
+            str(source),
+            "-vf",
+            "blackdetect=d=0.04:pix_th=0.10",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ]
+        result = self.ffmpeg.run_progress(
+            command,
+            total_seconds=duration_seconds,
+            on_position=(
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        message_code,
+                        completed=position,
+                        total=duration_seconds,
+                        unit="media_seconds",
+                    )
                 )
-            )
-            if progress
-            else None,
-        )
-        result = run_cancellable_streaming(
-            ffmpeg_progress_command(command),
-            on_stderr_line=observer,
-            encoding="utf-8",
-            errors="replace",
+                if progress
+                else None
+            ),
             timeout=3600,
             check_cancelled=check_cancelled,
         )

@@ -33,11 +33,11 @@ class HighlightService:
         maximum_candidates: int = 12,
         progress: HighlightProgress | None = None,
     ) -> list[HighlightCandidate]:
-        document = self.repository.get_subtitle_document(document_id)
+        document = self.repository.subtitles.get_subtitle_document(document_id)
         if document.sequence_id:
-            state = self.repository.load_timeline(document.sequence_id)
+            state = self.repository.timeline.load_timeline(document.sequence_id)
             sequence_assets = [
-                self.repository.get_asset(clip.asset_id)
+                self.repository.catalog.get_asset(clip.asset_id)
                 for clip in sorted(
                     state.clips,
                     key=lambda item: (item.timeline_start, item.track_id, item.id),
@@ -55,10 +55,10 @@ class HighlightService:
             media_asset_id = media_asset.id
         else:
             media_asset_id = document.media_asset_id or document.asset_id
-            media_asset = self.repository.get_asset(media_asset_id)
+            media_asset = self.repository.catalog.get_asset(media_asset_id)
             if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 raise ValueError("字幕文档尚未关联视频或音频素材")
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         if not segments:
             raise ValueError("Subtitle document is empty")
         if progress:
@@ -83,7 +83,7 @@ class HighlightService:
             raise RuntimeError("Highlight response is missing candidates")
         by_id = {segment.id: segment for segment in segments}
         index_by_id = {segment.id: index for index, segment in enumerate(segments)}
-        project = self.repository.get_project()
+        project = self.repository.catalog.get_project()
         candidates: list[HighlightCandidate] = []
         for raw in raw_candidates[:maximum_candidates]:
             if not isinstance(raw, dict):
@@ -110,7 +110,7 @@ class HighlightService:
             )
         if not candidates:
             raise RuntimeError("Highlight analysis returned no valid candidates")
-        existing = self.repository.list_highlights(media_asset_id)
+        existing = self.repository.highlights.list_highlights(media_asset_id)
         additions = [
             candidate
             for candidate in candidates
@@ -122,7 +122,7 @@ class HighlightService:
         if additions:
             if progress:
                 progress(OperationProgress.indeterminate("highlight_saving"))
-            self.repository.save_highlights(additions)
+            self.repository.highlights.save_highlights(additions)
         return [*existing, *additions]
 
     def add_manual_candidate(
@@ -134,9 +134,9 @@ class HighlightService:
         title: str | None = None,
         document_id: str | None = None,
     ) -> HighlightCandidate:
-        asset = self.repository.get_asset(asset_id)
-        project = self.repository.get_project()
-        candidates = self.repository.list_highlights(asset_id)
+        asset = self.repository.catalog.get_asset(asset_id)
+        project = self.repository.catalog.get_project()
+        candidates = self.repository.highlights.list_highlights(asset_id)
         candidate = HighlightCandidate(
             project_id=project.id,
             asset_id=asset.id,
@@ -149,7 +149,7 @@ class HighlightService:
             selected=True,
         )
         self._validate_asset_range(candidate)
-        self.repository.save_highlights([candidate])
+        self.repository.highlights.save_highlights([candidate])
         return candidate
 
     def update_candidate(
@@ -172,19 +172,19 @@ class HighlightService:
             .model_dump()
         )
         self._validate_asset_range(candidate)
-        self.repository.save_highlights([candidate])
+        self.repository.highlights.save_highlights([candidate])
         if candidate.sequence_id:
             self._sync_short_sequence(candidate)
         return candidate
 
     def set_selected(self, candidate_id: str, selected: bool) -> HighlightCandidate:
         candidate = self._candidate(candidate_id).model_copy(update={"selected": bool(selected)})
-        self.repository.save_highlights([candidate])
+        self.repository.highlights.save_highlights([candidate])
         return candidate
 
     def delete_candidate(self, candidate_id: str) -> None:
         self._candidate(candidate_id)
-        self.repository.delete_highlight(candidate_id)
+        self.repository.highlights.delete_highlight(candidate_id)
 
     def create_short_sequence(self, candidate_id: str, *, name: str | None = None):
         with self.repository.transaction():
@@ -194,7 +194,7 @@ class HighlightService:
         candidate = self._candidate(candidate_id)
         if candidate.sequence_id:
             try:
-                sequence = self.repository.get_sequence(candidate.sequence_id)
+                sequence = self.repository.catalog.get_sequence(candidate.sequence_id)
             except KeyError:
                 candidate = candidate.model_copy(update={"sequence_id": None})
             else:
@@ -209,15 +209,15 @@ class HighlightService:
                 name=name or candidate.title,
             )
             candidate = candidate.model_copy(update={"sequence_id": sequence.id})
-            self.repository.save_highlights([candidate])
+            self.repository.highlights.save_highlights([candidate])
             return sequence
-        if self.repository.get_asset(candidate.asset_id).kind != AssetKind.VIDEO:
+        if self.repository.catalog.get_asset(candidate.asset_id).kind != AssetKind.VIDEO:
             raise ValueError("只有关联视频的高光候选可以创建短视频")
-        sequence = self.repository.create_short_sequence(name or candidate.title)
+        sequence = self.repository.catalog.create_short_sequence(name or candidate.title)
         editor = TimelineEditor(self.repository, sequence.id)
         video_track = editor.add_track(TrackKind.VIDEO)
-        project = self.repository.get_project()
-        main_profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        main_profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         short_profile = sequence.profile
         source_in = reframe_frames(candidate.start_frame, main_profile, short_profile)
         source_end = reframe_frames(candidate.end_frame, main_profile, short_profile)
@@ -230,13 +230,13 @@ class HighlightService:
         )
         if candidate.document_id:
             subtitle_track = editor.add_track(TrackKind.SUBTITLE)
-            self.repository.place_subtitle_document(
+            self.repository.subtitles.place_subtitle_document(
                 candidate.document_id,
                 subtitle_track.id,
                 follow_clips=True,
             )
         candidate = candidate.model_copy(update={"sequence_id": sequence.id})
-        self.repository.save_highlights([candidate])
+        self.repository.highlights.save_highlights([candidate])
         return sequence
 
     def _sync_short_sequence(self, candidate: HighlightCandidate) -> None:
@@ -257,15 +257,19 @@ class HighlightService:
     def _source_sequence_id(self, candidate: HighlightCandidate) -> str | None:
         if not candidate.document_id:
             return None
-        return self.repository.get_subtitle_document(candidate.document_id).sequence_id
+        return self.repository.subtitles.get_subtitle_document(candidate.document_id).sequence_id
 
     def selected_candidates(self, asset_id: str | None = None) -> list[HighlightCandidate]:
-        return [candidate for candidate in self.repository.list_highlights(asset_id) if candidate.selected]
+        return [
+            candidate
+            for candidate in self.repository.highlights.list_highlights(asset_id)
+            if candidate.selected
+        ]
 
     def _sync_sequence_clip(self, candidate: HighlightCandidate) -> None:
         if not candidate.sequence_id:
             return
-        state = self.repository.load_timeline(candidate.sequence_id)
+        state = self.repository.timeline.load_timeline(candidate.sequence_id)
         clip = next(
             (
                 item
@@ -276,8 +280,8 @@ class HighlightService:
         )
         if clip is None:
             return
-        project = self.repository.get_project()
-        source_profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        source_profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         destination_profile = state.sequence.profile
         source_in = reframe_frames(candidate.start_frame, source_profile, destination_profile)
         source_end = reframe_frames(candidate.end_frame, source_profile, destination_profile)
@@ -289,22 +293,26 @@ class HighlightService:
             }
         )
         state.clips = [updated if item.id == clip.id else item for item in state.clips]
-        self.repository.save_timeline(state)
+        self.repository.timeline.save_timeline(state)
 
     def _validate_asset_range(self, candidate: HighlightCandidate) -> None:
         source_sequence_id = self._source_sequence_id(candidate)
         if source_sequence_id:
-            duration = self.repository.load_timeline(source_sequence_id).duration_frames
+            duration = self.repository.timeline.load_timeline(source_sequence_id).duration_frames
             if candidate.end_frame > duration:
                 raise ValueError("高光候选区间超出了源时间轴时长")
             return
-        asset = self.repository.get_asset(candidate.asset_id)
+        asset = self.repository.catalog.get_asset(candidate.asset_id)
         if asset.metadata.duration_frames > 0 and candidate.end_frame > asset.metadata.duration_frames:
             raise ValueError("高光候选区间超出了素材时长")
 
     def _candidate(self, candidate_id: str) -> HighlightCandidate:
         try:
-            return next(item for item in self.repository.list_highlights() if item.id == candidate_id)
+            return next(
+                item
+                for item in self.repository.highlights.list_highlights()
+                if item.id == candidate_id
+            )
         except StopIteration as error:
             raise KeyError(candidate_id) from error
 

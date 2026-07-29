@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from mediaflow.application.asset_service import AssetService
 from mediaflow.composition import EditorProject
@@ -12,6 +12,8 @@ from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
 def synthesize_real_speech(path: Path) -> None:
@@ -50,7 +52,7 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
     )
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.get_project().main_sequence_id
+        sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -63,24 +65,27 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
         task = project.start_task(
             TranscribeSequenceCommand(
                 plan=build_dialogue_transcription_plan(
-                    repository.load_timeline(sequence_id),
+                    repository.timeline.load_timeline(sequence_id),
                     {
                         item.id: item
-                        for item in repository.list_assets()
+                        for item in repository.catalog.list_assets()
                     },
                     settings.asr,
+                    project_profile=repository.catalog.get_sequence(
+                        repository.catalog.get_project().main_sequence_id
+                    ).profile,
                 )
             ),
             [asset.id],
             sequence_id=sequence_id,
         )
-        completed = project.tasks.wait(task.id, timeout=180)
-        documents = repository.list_subtitle_documents(sequence_id=sequence_id)
+        completed = project.wait_for_task(task.id, timeout=180)
+        documents = repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
 
         assert completed.status == TaskStatus.COMPLETED
         assert len(documents) == 1
         document = documents[0]
-        segments = repository.list_subtitle_segments(document.id)
+        segments = repository.subtitles.list_subtitle_segments(document.id)
         srt_files = list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
 
         assert segments

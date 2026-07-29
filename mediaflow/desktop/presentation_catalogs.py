@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication
+from dataclasses import dataclass
+
+from PySide6.QtCore import QT_TRANSLATE_NOOP, QCoreApplication
 
 from mediaflow.application.export_catalog import available_export_variants
 from mediaflow.domain.audio import audio_effect_parameter_schema
@@ -26,7 +28,7 @@ from mediaflow.domain.task_commands import (
     TranslateDocumentCommand,
     TranslateSegmentsCommand,
 )
-from mediaflow.domain.tasks import Task
+from mediaflow.domain.tasks import ExportTaskOutcome, Task
 from mediaflow.domain.translation import TRANSLATION_LANGUAGES, TRANSLATION_MODES
 
 _EXPORT_LABELS = {
@@ -43,6 +45,73 @@ _EXPORT_LABELS = {
     "audio_pcm": "PCM / WAV",
     "audio_flac": "FLAC",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceModeDefinition:
+    key: str
+    label_source: str
+    panel_object_name: str
+    icon: str
+
+
+WORKSPACE_MODES = (
+    WorkspaceModeDefinition(
+        "media",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "素材"),
+        "mediaPanel",
+        "media",
+    ),
+    WorkspaceModeDefinition(
+        "transcript",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "文本与字幕"),
+        "transcriptWorkspace",
+        "transcript",
+    ),
+    WorkspaceModeDefinition(
+        "highlight",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "AI 高光"),
+        "highlightPanel",
+        "highlight",
+    ),
+    WorkspaceModeDefinition(
+        "edit",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "片段属性"),
+        "editPanel",
+        "edit",
+    ),
+    WorkspaceModeDefinition(
+        "audio",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "音频"),
+        "audioScroll",
+        "audio",
+    ),
+    WorkspaceModeDefinition(
+        "export",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "导出"),
+        "exportPanel",
+        "export",
+    ),
+    WorkspaceModeDefinition(
+        "tasks",
+        QT_TRANSLATE_NOOP("WorkspaceNavigation", "任务"),
+        "taskCenterPanel",
+        "tasks",
+    ),
+)
+WORKSPACE_MODE_KEYS = tuple(mode.key for mode in WORKSPACE_MODES)
+
+
+def workspace_mode_catalog() -> list[dict[str, str]]:
+    return [
+        {
+            "key": mode.key,
+            "label": QCoreApplication.translate("WorkspaceNavigation", mode.label_source),
+            "panelObjectName": mode.panel_object_name,
+            "icon": mode.icon,
+        }
+        for mode in WORKSPACE_MODES
+    ]
 
 
 def asr_model_options(
@@ -321,6 +390,28 @@ def task_status_label(status: str) -> str:
     return labels.get(status, status)
 
 
+def export_recovery_configuration_label(outcome: ExportTaskOutcome | None) -> str:
+    if outcome is None:
+        return ""
+    recovered = [item for item in outcome.files if item.hardware_fallback_used]
+    if not recovered:
+        return ""
+    if len(recovered) == 1:
+        item = recovered[0]
+        template = QCoreApplication.translate(
+            "TaskCatalog",
+            "硬件编码失败，已从 %1 切换为 %2",
+        )
+        return template.replace("%1", item.requested_video_codec or "").replace(
+            "%2", item.actual_video_codec or ""
+        )
+    template = QCoreApplication.translate(
+        "TaskCatalog",
+        "%1 个文件的硬件编码失败，已自动改用软件编码",
+    )
+    return template.replace("%1", str(len(recovered)))
+
+
 def task_message_label(code: str) -> str:
     labels = {
         "queued": QCoreApplication.translate("TaskMessageCatalog", "已排队"),
@@ -380,6 +471,9 @@ def task_message_label(code: str) -> str:
         "import_registering": QCoreApplication.translate("TaskMessageCatalog", "正在登记素材"),
         "export_compiling": QCoreApplication.translate("TaskMessageCatalog", "正在编译时间线"),
         "export_rendering": QCoreApplication.translate("TaskMessageCatalog", "正在导出时间线"),
+        "export_hardware_encoder_fallback": QCoreApplication.translate(
+            "TaskMessageCatalog", "硬件编码失败，正在改用软件编码"
+        ),
         "export_verifying": QCoreApplication.translate("TaskMessageCatalog", "正在验证导出文件"),
         "export_quality_scanning": QCoreApplication.translate("TaskMessageCatalog", "正在扫描成片质量"),
         "export_quality_proof_frames": QCoreApplication.translate(

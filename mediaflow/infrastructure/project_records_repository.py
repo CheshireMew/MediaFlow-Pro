@@ -3,14 +3,26 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
+from mediaflow.atomic_file import unique_temporary_sibling
+from mediaflow.domain.enums import TaskStatus
+from mediaflow.domain.model_base import new_id, now_ms
 from mediaflow.domain.project_records import ExportHistoryRecord, ProjectVersionRecord
 
+from .project_repository_component import ProjectRepositoryComponent
+from .project_schema_definition import PROJECT_SCHEMA_VERSION
+from .sqlite_uri import read_only_database_uri
 
-class ProjectRecordsRepository:
+_TERMINAL_TASK_STATUSES = tuple(
+    status.value for status in TaskStatus if status.is_terminal
+)
+
+
+class ProjectRecordsRepository(ProjectRepositoryComponent):
     def save_export_history(self, record: ExportHistoryRecord) -> ExportHistoryRecord:
-        self.get_sequence(record.sequence_id)
+        self._owner.catalog.get_sequence(record.sequence_id)
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO export_history(
@@ -64,29 +76,66 @@ class ProjectRecordsRepository:
         normalized = " ".join(name.split())
         if not normalized:
             raise ValueError("版本名称不能为空")
-        project = self.get_project()
-        record = ProjectVersionRecord(
-            name=normalized,
-            snapshot_path="generated/versions/pending.mfp",
-            content_revision=self.content_revision(),
-        )
-        relative_path = f"generated/versions/{record.id}.mfp"
-        record = record.model_copy(update={"snapshot_path": relative_path})
+        record_id = new_id()
+        relative_path = f"generated/versions/{record_id}.mfp"
         snapshot_path = self.project_dir / Path(relative_path)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.transaction() as connection:
-            self._insert_project_version(connection, project.id, record)
-        with self._connection_lock:
-            with sqlite3.connect(snapshot_path) as snapshot:
-                self._connection.backup(snapshot)
-        digest = self._file_sha256(snapshot_path)
-        record = record.model_copy(update={"sha256": digest})
-        with self.transaction() as connection:
-            self._insert_project_version(connection, project.id, record)
-        return record
+        temporary = unique_temporary_sibling(snapshot_path, label="version")
+        published = False
+        try:
+            with self.transaction() as connection:
+                self._require_no_active_tasks(connection)
+                project_row = connection.execute(
+                    "SELECT id, content_revision FROM project LIMIT 1"
+                ).fetchone()
+                if project_row is None:
+                    raise RuntimeError("Project record is missing")
+                content_revision = int(project_row["content_revision"])
+
+                # The repository transaction holds BEGIN IMMEDIATE, so task
+                # writers cannot change the database while this separate
+                # read-only connection captures the last committed state.
+                with closing(self._open_database(self._owner.database_path)) as source:
+                    with closing(sqlite3.connect(temporary)) as snapshot, snapshot:
+                        source.backup(snapshot)
+                self._validate_snapshot_database(
+                    temporary,
+                    expected_project_id=str(project_row["id"]),
+                    expected_content_revision=content_revision,
+                )
+                record = ProjectVersionRecord(
+                    id=record_id,
+                    name=normalized,
+                    snapshot_path=relative_path,
+                    sha256=self._file_sha256(temporary),
+                    content_revision=content_revision,
+                )
+                self._insert_project_version(
+                    connection,
+                    str(project_row["id"]),
+                    record,
+                )
+                temporary.replace(snapshot_path)
+                published = True
+
+                def rollback_snapshot(_error: BaseException) -> None:
+                    self._archive_failed_snapshot(
+                        snapshot_path,
+                        record_id,
+                    )
+
+                self._owner.enlist_transaction_publication(
+                    on_commit=lambda: None,
+                    on_rollback=rollback_snapshot,
+                )
+            return record
+        except BaseException:
+            failed = snapshot_path if published else temporary
+            self._archive_failed_snapshot(failed, record_id)
+            raise
 
     def list_project_versions(self) -> list[ProjectVersionRecord]:
-        project = self.get_project()
+        project = self._owner.catalog.get_project()
         rows = self._fetchall(
             """SELECT id, name, snapshot_path, sha256, content_revision, created_at
                FROM project_version WHERE project_id=? ORDER BY created_at DESC, id""",
@@ -95,32 +144,265 @@ class ProjectRecordsRepository:
         return [ProjectVersionRecord(**dict(row)) for row in rows]
 
     def restore_project_version(self, version_id: str) -> ProjectVersionRecord:
-        versions = self.list_project_versions()
-        try:
-            record = next(item for item in versions if item.id == version_id)
-        except StopIteration as error:
-            raise KeyError(version_id) from error
-        snapshot_path = self._version_snapshot_path(record.snapshot_path)
-        if not snapshot_path.is_file():
-            raise FileNotFoundError(snapshot_path)
-        if self._file_sha256(snapshot_path) != record.sha256:
-            raise RuntimeError("命名版本快照校验失败")
-        with sqlite3.connect(snapshot_path) as source:
+        with self._connection_lock:
+            versions = self.list_project_versions()
+            try:
+                record = next(item for item in versions if item.id == version_id)
+            except StopIteration as error:
+                raise KeyError(version_id) from error
+            snapshot_path = self._version_snapshot_path(record.snapshot_path)
+            if not snapshot_path.is_file():
+                raise FileNotFoundError(snapshot_path)
+            if self._file_sha256(snapshot_path) != record.sha256:
+                raise RuntimeError("命名版本快照校验失败")
+
+            project = self._owner.catalog.get_project()
+            self._validate_snapshot_database(
+                snapshot_path,
+                expected_project_id=project.id,
+            )
+            with closing(self._open_database(snapshot_path)) as snapshot:
+                with self.transaction() as connection:
+                    self._require_no_active_tasks(connection)
+                    current_revision = self.content_revision()
+                    self._require_matching_schema(connection, snapshot)
+                    snapshot_revision = self._snapshot_project_revision(snapshot)
+                    self._replace_project_tables(
+                        connection,
+                        snapshot=snapshot,
+                        preserved_versions=versions,
+                        project_id=project.id,
+                    )
+                    restored_revision = max(
+                        current_revision,
+                        snapshot_revision,
+                    ) + 1
+                    cursor = connection.execute(
+                        """UPDATE project
+                           SET content_revision=?, updated_at=?
+                           WHERE id=?""",
+                        (restored_revision, now_ms(), project.id),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("命名版本快照不属于当前项目")
+                    foreign_key_errors = connection.execute(
+                        "PRAGMA main.foreign_key_check"
+                    ).fetchall()
+                    if foreign_key_errors:
+                        raise RuntimeError("命名版本快照包含无效项目关系")
+        return record
+
+    @staticmethod
+    def _open_database(path: Path) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            read_only_database_uri(path),
+            uri=True,
+            timeout=5.0,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA busy_timeout=5000")
+        return connection
+
+    def _validate_snapshot_database(
+        self,
+        path: Path,
+        *,
+        expected_project_id: str,
+        expected_content_revision: int | None = None,
+    ) -> None:
+        with closing(self._open_database(path)) as source:
             version_row = source.execute(
                 "SELECT version FROM schema_info WHERE component='project'"
             ).fetchone()
-            if version_row is None or int(version_row[0]) != self._project_schema_version():
+            if version_row is None or int(version_row[0]) != PROJECT_SCHEMA_VERSION:
                 raise RuntimeError("命名版本快照的项目格式不受支持")
-            with self._connection_lock:
-                source.backup(self._connection)
-                self._connection.commit()
-        self.acknowledge_content_revision()
-        project = self.get_project()
-        with self.transaction() as connection:
-            for preserved in versions:
-                self._insert_project_version(connection, project.id, preserved)
-        self.acknowledge_content_revision()
-        return record
+            integrity = source.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or str(integrity[0]).casefold() != "ok":
+                raise RuntimeError("命名版本快照完整性检查失败")
+            if source.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("命名版本快照包含无效项目关系")
+            project_row = source.execute(
+                "SELECT id, content_revision FROM project LIMIT 1"
+            ).fetchone()
+            if project_row is None or str(project_row["id"]) != expected_project_id:
+                raise RuntimeError("命名版本快照不属于当前项目")
+            if (
+                expected_content_revision is not None
+                and int(project_row["content_revision"]) != expected_content_revision
+            ):
+                raise RuntimeError("命名版本快照未捕获一致的项目状态")
+            self._require_no_active_tasks(source, snapshot=True)
+
+    @staticmethod
+    def _application_tables(
+        connection: sqlite3.Connection,
+        schema: str,
+    ) -> list[str]:
+        rows = connection.execute(
+            f"""SELECT name
+                FROM {schema}.sqlite_master
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name"""
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def _require_matching_schema(
+        self,
+        connection: sqlite3.Connection,
+        snapshot: sqlite3.Connection,
+    ) -> None:
+        main_tables = self._application_tables(connection, "main")
+        snapshot_tables = self._application_tables(snapshot, "main")
+        if snapshot_tables != main_tables:
+            raise RuntimeError("命名版本快照的项目结构不完整")
+        for table in main_tables:
+            identifier = self._quote_identifier(table)
+            main_columns = connection.execute(
+                f"PRAGMA main.table_info({identifier})"
+            ).fetchall()
+            snapshot_columns = snapshot.execute(
+                f"PRAGMA main.table_info({identifier})"
+            ).fetchall()
+            if [tuple(row) for row in snapshot_columns] != [
+                tuple(row) for row in main_columns
+            ]:
+                raise RuntimeError("命名版本快照的项目结构不受支持")
+
+    def _snapshot_project_revision(
+        self,
+        snapshot: sqlite3.Connection,
+    ) -> int:
+        row = snapshot.execute(
+            "SELECT id, content_revision FROM project LIMIT 1"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("命名版本快照缺少项目记录")
+        self._require_no_active_tasks(
+            snapshot,
+            snapshot=True,
+        )
+        return int(row["content_revision"])
+
+    def _replace_project_tables(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        snapshot: sqlite3.Connection,
+        preserved_versions: list[ProjectVersionRecord],
+        project_id: str,
+    ) -> None:
+        tables = [
+            table
+            for table in self._application_tables(connection, "main")
+            if table != "schema_info"
+        ]
+        insertion_order = self._foreign_key_insertion_order(connection, tables)
+        connection.execute("PRAGMA defer_foreign_keys=ON")
+        for table in tables:
+            identifier = self._quote_identifier(table)
+            for foreign_key in connection.execute(
+                f"PRAGMA main.foreign_key_list({identifier})"
+            ).fetchall():
+                if str(foreign_key["table"]) != table:
+                    continue
+                column = self._quote_identifier(str(foreign_key["from"]))
+                connection.execute(
+                    f"UPDATE {identifier} SET {column}=NULL"
+                )
+        for table in reversed(insertion_order):
+            connection.execute(f"DELETE FROM {self._quote_identifier(table)}")
+        for table in insertion_order:
+            if table == "project_version":
+                continue
+            identifier = self._quote_identifier(table)
+            rows = snapshot.execute(
+                f"SELECT * FROM main.{identifier}"
+            ).fetchall()
+            if not rows:
+                continue
+            placeholders = ",".join("?" for _ in range(len(rows[0])))
+            connection.executemany(
+                f"INSERT INTO main.{identifier} VALUES ({placeholders})",
+                (tuple(row) for row in rows),
+            )
+        for preserved in preserved_versions:
+            self._insert_project_version(
+                connection,
+                project_id,
+                preserved,
+            )
+
+    def _foreign_key_insertion_order(
+        self,
+        connection: sqlite3.Connection,
+        tables: list[str],
+    ) -> list[str]:
+        table_set = set(tables)
+        dependencies: dict[str, set[str]] = {}
+        for table in tables:
+            identifier = self._quote_identifier(table)
+            dependencies[table] = {
+                str(row["table"])
+                for row in connection.execute(
+                    f"PRAGMA main.foreign_key_list({identifier})"
+                ).fetchall()
+                if str(row["table"]) in table_set
+                and str(row["table"]) != table
+            }
+        ordered: list[str] = []
+        remaining = set(tables)
+        while remaining:
+            ready = sorted(
+                table
+                for table in remaining
+                if dependencies[table].isdisjoint(remaining)
+            )
+            if not ready:
+                raise RuntimeError("当前项目结构包含无法恢复的循环关系")
+            ordered.extend(ready)
+            remaining.difference_update(ready)
+        return ordered
+
+    @staticmethod
+    def _require_no_active_tasks(
+        connection: sqlite3.Connection,
+        *,
+        schema: str = "main",
+        snapshot: bool = False,
+    ) -> None:
+        placeholders = ",".join("?" for _ in _TERMINAL_TASK_STATUSES)
+        row = connection.execute(
+            f"""SELECT id FROM {schema}.task
+                WHERE status NOT IN ({placeholders})
+                LIMIT 1""",
+            _TERMINAL_TASK_STATUSES,
+        ).fetchone()
+        if row is not None:
+            target = "命名版本快照" if snapshot else "当前项目"
+            raise RuntimeError(f"{target}仍有未完成任务，请等待任务结束后重试")
+
+    @staticmethod
+    def _quote_identifier(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+    def _archive_failed_snapshot(self, path: Path, record_id: str) -> Path | None:
+        if not path.exists():
+            return None
+        archive = self.project_dir / "generated" / "versions" / "archive"
+        archive.mkdir(parents=True, exist_ok=True)
+        failed_at = now_ms()
+        identity = hashlib.sha256(
+            f"{record_id}\0{path.name}\0{failed_at}".encode()
+        ).hexdigest()[:24]
+        destination = archive / (
+            f"failed-{failed_at}-{identity}{path.suffix or '.mfp'}"
+        )
+        try:
+            path.replace(destination)
+        except OSError:
+            return path if path.exists() else None
+        return destination
 
     def _version_snapshot_path(self, relative_path: str) -> Path:
         versions_root = (self.project_dir / "generated" / "versions").resolve()
@@ -181,9 +463,3 @@ class ProjectRecordsRepository:
                 "created_at": row["created_at"],
             }
         )
-
-    @staticmethod
-    def _project_schema_version() -> int:
-        from mediaflow.infrastructure.project_schema import PROJECT_SCHEMA_VERSION
-
-        return PROJECT_SCHEMA_VERSION

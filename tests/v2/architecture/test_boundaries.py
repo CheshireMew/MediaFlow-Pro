@@ -5,8 +5,13 @@ import re
 from pathlib import Path
 
 from mediaflow.application.workflow_stage_handlers import workflow_stage_handlers
+from mediaflow.automation.operation_registry import OPERATIONS, OperationDefinition
+from mediaflow.desktop.presentation_catalogs import WORKSPACE_MODES
 from mediaflow.domain.enums import WorkflowStage
+from mediaflow.infrastructure.project_migrations import PROJECT_MIGRATIONS
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.project_repository_component import ProjectRepositoryComponent
+from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
 
 ROOT = Path(__file__).resolve().parents[3]
 PYTHON_ROOTS = (ROOT / "mediaflow", ROOT / "scripts", ROOT / "tests")
@@ -93,14 +98,75 @@ def test_workflow_service_dispatches_to_complete_stage_registry() -> None:
 
 
 def test_repository_and_subtitle_capabilities_remain_split() -> None:
-    repository_bases = {base.__name__ for base in ProjectRepository.__mro__}
+    assert ProjectRepository.__bases__ == (object,)
+    repository = _class(
+        ROOT / "mediaflow" / "infrastructure" / "project_repository.py",
+        "ProjectRepository",
+    )
     assert {
+        node.name
+        for node in repository.body
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+    } == {
+        "create",
+        "open",
+        "owns_project_lock",
+        "known_content_revision",
+        "content_revision",
+            "acknowledge_content_revision",
+            "automation_result",
+            "begin_automation_request",
+            "save_automation_result",
+            "consume_task_result_once",
+            "enlist_transaction_publication",
+        "transaction",
+        "close",
+    }
+    initializer = next(
+        node
+        for node in repository.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assigned_components = {
+        target.attr
+        for node in ast.walk(initializer)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "self"
+    }
+    assert {
+        "catalog",
+        "timeline",
+        "audio",
+        "subtitles",
+        "highlights",
+        "web",
+        "records",
+    } <= assigned_components
+    for component_name in (
         "ProjectCatalogRepository",
         "TimelineRepository",
         "AudioRepository",
         "SubtitleRepository",
         "HighlightRepository",
-    } <= repository_bases
+        "WebMediaRepository",
+        "ProjectRecordsRepository",
+    ):
+        module = next(
+            path
+            for path in (ROOT / "mediaflow" / "infrastructure").glob("*_repository.py")
+            if any(
+                isinstance(node, ast.ClassDef) and node.name == component_name
+                for node in _tree(path).body
+            )
+        )
+        component = _class(module, component_name)
+        assert any(
+            isinstance(base, ast.Name) and base.id == ProjectRepositoryComponent.__name__
+            for base in component.bases
+        )
 
     acquisition = _class(
         ROOT / "mediaflow" / "application" / "subtitle_acquisition.py",
@@ -121,8 +187,136 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
     assert "save_sequence_transcript" in acquisition_methods
     assert "transcribe_sequence_audio" not in acquisition_methods
     assert "update_segment" in editing_methods
-    assert publication_methods == {"__init__", "write_document_srt"}
+    assert publication_methods == {
+        "__init__",
+        "document_srt_path",
+        "write_document_srt",
+        "reconcile_document_srts",
+        "commit_document_change",
+        "commit_prepared_documents",
+    }
     assert "write_document_srt" not in acquisition_methods | editing_methods
+    assert "commit_document_change" not in acquisition_methods | editing_methods
+
+
+def test_open_project_has_one_public_application_api() -> None:
+    composition = _class(ROOT / "mediaflow" / "composition.py", "EditorProject")
+    initializer = next(
+        node
+        for node in composition.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    public_service_names = {
+        "documents",
+        "assets",
+        "web",
+        "subtitle_publication",
+        "subtitle_acquisition",
+        "subtitle_editing",
+        "transcript_editing",
+        "highlights",
+        "sequences",
+        "tasks",
+        "workflows",
+        "task_handlers",
+        "history",
+    }
+    assignments = {
+        target.attr
+        for node in ast.walk(initializer)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+        )
+        if isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "self"
+    }
+    assert assignments.isdisjoint(public_service_names)
+
+    production_roots = (
+        ROOT / "mediaflow" / "automation",
+        ROOT / "mediaflow" / "desktop",
+    )
+    violations = []
+    for root in production_roots:
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for name in public_service_names:
+                if re.search(rf"\b(?:project|_project)\.{re.escape(name)}\b", source):
+                    violations.append(f"{path.relative_to(ROOT)} accesses {name}")
+    assert violations == []
+
+
+def test_desktop_controllers_use_declared_members_only() -> None:
+    controller_root = ROOT / "mediaflow" / "desktop" / "controllers"
+    violations = []
+    for path in controller_root.glob("*.py"):
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "__getattr__",
+                "__setattr__",
+            }:
+                violations.append(f"{path.name}:{node.name}")
+    assert violations == []
+
+    broad_refresh_callers: set[tuple[str, str]] = set()
+    for path in controller_root.glob("*.py"):
+        for class_node in (
+            node for node in _tree(path).body if isinstance(node, ast.ClassDef)
+        ):
+            for method in (
+                node for node in class_node.body if isinstance(node, ast.FunctionDef)
+            ):
+                if any(
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "refresh_all"
+                    for node in ast.walk(method)
+                ):
+                    broad_refresh_callers.add((path.name, method.name))
+    assert broad_refresh_callers == set()
+
+    timeline_qml = (
+        ROOT / "mediaflow" / "desktop" / "qml" / "TimelineView.qml"
+    ).read_text(encoding="utf-8")
+    assert "allowedTrackKinds" not in timeline_qml
+    assert "previewClipMove" in timeline_qml
+    assert not (
+        ROOT / "mediaflow" / "infrastructure" / "task_handlers.py"
+    ).exists()
+    assert (
+        ROOT / "mediaflow" / "application" / "project_task_handlers.py"
+    ).is_file()
+
+
+def test_desktop_interaction_layers_do_not_reach_into_infrastructure() -> None:
+    violations = []
+    desktop_root = ROOT / "mediaflow" / "desktop"
+    for relative_root in ("controllers", "coordinators", "presenters"):
+        for path in (desktop_root / relative_root).glob("*.py"):
+            for module in _imported_modules(path):
+                if module.startswith("mediaflow.infrastructure"):
+                    violations.append(f"{path.relative_to(ROOT)} -> {module}")
+    assert violations == []
+
+
+def test_removed_desktop_session_aliases_have_no_callers() -> None:
+    banned_aliases = (
+        "session._project",
+        "session._editor",
+        "session._pending_asset_batch_ids",
+        "session._pending_profile_asset_id",
+    )
+    violations = []
+    for path in _python_files():
+        source = path.read_text(encoding="utf-8")
+        for alias in banned_aliases:
+            if alias in source:
+                violations.append(f"{path.relative_to(ROOT)} uses {alias}")
+    assert violations == []
 
 
 def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
@@ -143,9 +337,9 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     for component in ("PreviewViewport", "WorkspaceNavigation"):
         assert component in workspace
         assert (qml_root / "components" / f"{component}.qml").is_file()
-    assert "WorkflowBanner" not in workspace
+    assert "WorkflowBanner" in workspace
     assert "InspectorPanel" not in workspace
-    assert not (qml_root / "components" / "WorkflowBanner.qml").exists()
+    assert (qml_root / "WorkflowBanner.qml").is_file()
     assert not (qml_root / "InspectorPanel.qml").exists()
     assert "TranscriptWorkspace" in workspace
     assert (qml_root / "TranscriptWorkspace.qml").is_file()
@@ -181,15 +375,19 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     ).read_text(encoding="utf-8")
     assert "subtitleWordsModel" not in subtitle_controller
     assert "rippleDeleteSelectedWords" not in subtitle_controller
-    automation_contract = (
-        ROOT / "mediaflow" / "automation" / "contracts.py"
+    automation_contract = (ROOT / "mediaflow" / "automation" / "contracts.py").read_text(
+        encoding="utf-8"
+    )
+    automation_registry = (
+        ROOT / "mediaflow" / "automation" / "operation_registry.py"
     ).read_text(encoding="utf-8")
+    assert "OPERATIONS" in automation_contract
     for operation in (
         "transcript.get",
         "transcript.edit.preview",
         "transcript.edit.apply",
     ):
-        assert operation in automation_contract
+        assert operation in automation_registry
     task_commands = (
         ROOT / "mediaflow" / "domain" / "task_commands.py"
     ).read_text(encoding="utf-8")
@@ -200,13 +398,33 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
         ROOT / "mediaflow" / "infrastructure" / "audio_region_extractor.py"
     ).exists()
     timeline = (qml_root / "TimelineView.qml").read_text(encoding="utf-8")
-    assert "SequenceToolbar" in timeline
-    assert 'objectName: "timelineRuler"' in timeline
+    timeline_toolbar = (qml_root / "TimelineToolbar.qml").read_text(encoding="utf-8")
+    timeline_canvas = (qml_root / "TimelineCanvas.qml").read_text(encoding="utf-8")
+    assert len(timeline.splitlines()) <= 400
+    assert "TimelineToolbar" in timeline
+    assert "TimelineCanvas" in timeline
+    assert "TimelineTrackControls" in timeline
+    assert "SequenceToolbar" in timeline_toolbar
+    assert 'objectName: "timelineRuler"' in timeline_canvas
     assert "rulerMajorStepFrames" in timeline
-    assert "rulerSeconds" not in timeline
-    assert 'index + "s"' not in timeline
+    assert "rulerSeconds" not in timeline_canvas
+    assert 'index + "s"' not in timeline_canvas
     assert 'objectName: "trackControlsButton"' not in timeline
-    assert "visible: tracksRepeater.count > 0" in timeline
+    assert "visible: trackControlsRepeater.count > 0" in (
+        qml_root / "TimelineTrackControls.qml"
+    ).read_text(encoding="utf-8")
+    for component in (
+        "TimelineToolbar",
+        "TimelineCanvas",
+        "TimelineTrackControls",
+        "TimelineClipLayer",
+        "TimelineAudioClipLayer",
+        "TimelineCompoundLayer",
+        "TimelineSubtitleLayer",
+        "TimelineTransitionLayer",
+        "TimelineMarkerLayer",
+    ):
+        assert (qml_root / f"{component}.qml").is_file()
     media_panel = (qml_root / "MediaPanel.qml").read_text(encoding="utf-8")
     assert "FileDialog.OpenFiles" in media_panel
     assert "selectedFiles" in media_panel
@@ -256,6 +474,113 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert '"生成波形"' not in presentation
 
 
+def test_audited_god_files_stay_replaced_by_focused_components() -> None:
+    limits = {
+        ROOT / "mediaflow" / "application" / "project_task_handlers.py": 150,
+        ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py": 260,
+        ROOT / "mediaflow" / "desktop" / "qml" / "TimelineView.qml": 400,
+        ROOT / "mediaflow" / "infrastructure" / "mlt" / "compiler.py": 300,
+        ROOT / "mediaflow" / "infrastructure" / "project_migration_runner.py": 100,
+    }
+    assert {
+        str(path.relative_to(ROOT)): len(path.read_text(encoding="utf-8").splitlines())
+        for path, limit in limits.items()
+        if len(path.read_text(encoding="utf-8").splitlines()) > limit
+    } == {}
+
+    task_handlers = _class(
+        ROOT / "mediaflow" / "application" / "project_task_handlers.py",
+        "ProjectTaskHandlers",
+    )
+    assert {
+        node.name for node in task_handlers.body if isinstance(node, ast.FunctionDef)
+    } == {"__init__", "register_with"}
+
+    session = _class(
+        ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py",
+        "ProjectSession",
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Signal"
+        for node in ast.walk(session)
+    )
+    session_source = (
+        ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py"
+    ).read_text(encoding="utf-8")
+    for boundary in (
+        "SessionEvents",
+        "SessionModels",
+        "PresentationProjectors",
+        "BackgroundRequests",
+        "ProjectLifecycle",
+        "RuntimeToolOperations",
+        "TaskOperations",
+        "TimelineAssetOperations",
+    ):
+        assert boundary in session_source
+
+
+def test_project_migrations_are_one_continuous_registered_chain() -> None:
+    assert [migration.source_version for migration in PROJECT_MIGRATIONS] == list(
+        range(1, PROJECT_SCHEMA_VERSION)
+    )
+    assert [migration.target_version for migration in PROJECT_MIGRATIONS] == list(
+        range(2, PROJECT_SCHEMA_VERSION + 1)
+    )
+    assert len({migration.apply for migration in PROJECT_MIGRATIONS}) == len(PROJECT_MIGRATIONS)
+    assert not (ROOT / "mediaflow" / "infrastructure" / "project_schema.py").exists()
+
+
+def test_automation_contract_open_mode_and_execution_share_one_registry() -> None:
+    assert OPERATIONS
+    assert all(isinstance(definition, OperationDefinition) for definition in OPERATIONS.values())
+    assert all(
+        definition.execution_mode == "atomic" or definition.open_mode == "write"
+        for definition in OPERATIONS.values()
+    )
+    registry_definitions = []
+    for path in (ROOT / "mediaflow" / "automation").glob("*.py"):
+        for node in ast.walk(_tree(path)):
+            if (
+                isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "OPERATIONS"
+                    for target in node.targets
+                )
+            ) or (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "OPERATIONS"
+            ):
+                registry_definitions.append(path.name)
+    assert registry_definitions == ["operation_registry.py"]
+    for consumer in ("contracts.py", "dispatcher.py"):
+        assert "operation_registry import OPERATIONS" in (
+            ROOT / "mediaflow" / "automation" / consumer
+        ).read_text(encoding="utf-8")
+
+
+def test_ffmpeg_processes_have_one_execution_boundary() -> None:
+    infrastructure = ROOT / "mediaflow" / "infrastructure"
+    violations: list[str] = []
+    for path in infrastructure.rglob("*.py"):
+        if path.name in {"ffmpeg_runner.py", "subprocess_runner.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if (
+            re.search(r"\bsubprocess\.(?:run|Popen)\s*\(", source)
+            and re.search(r"\b(?:self\.)?paths\.ffmpeg\b", source)
+        ):
+            violations.append(str(path.relative_to(ROOT)))
+        if "ffmpeg_progress_command" in source or "FfmpegProgressObserver" in source:
+            violations.append(str(path.relative_to(ROOT)))
+    assert violations == []
+    observer_source = (infrastructure / "process_observers.py").read_text(encoding="utf-8")
+    assert "Ffmpeg" not in observer_source
+
+
 def test_qml_floating_controls_use_the_shared_dark_theme_boundary() -> None:
     qml_root = ROOT / "mediaflow" / "desktop" / "qml"
     components_root = qml_root / "components"
@@ -290,3 +615,72 @@ def test_qml_floating_controls_use_the_shared_dark_theme_boundary() -> None:
         "linkVisited",
     ):
         assert f"palette.{palette_role}:" in main
+
+
+def test_workspace_modes_have_one_presentation_catalog() -> None:
+    assert len(WORKSPACE_MODES) == 7
+    assert len({mode.key for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
+    assert len({mode.panel_object_name for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
+
+    qml_root = ROOT / "mediaflow" / "desktop" / "qml"
+    navigation = (qml_root / "components" / "WorkspaceNavigation.qml").read_text(
+        encoding="utf-8"
+    )
+    workspace = (qml_root / "Workspace.qml").read_text(encoding="utf-8")
+    controller = (
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_controller.py"
+    ).read_text(encoding="utf-8")
+    ui_matrix = (ROOT / "scripts" / "verify_ui_matrix.py").read_text(encoding="utf-8")
+    qml_smoke = (
+        ROOT / "tests" / "v2" / "desktop" / "test_qml_smoke.py"
+    ).read_text(encoding="utf-8")
+
+    assert "workspace_mode_catalog" in controller
+    assert "workspaceController.workspaceModes" in navigation
+    assert "panelObjectName" in workspace
+    assert "model: [" not in navigation
+    assert 'activeMode === "media" ? 0' not in workspace
+    assert "presentation_catalogs import WORKSPACE_MODE_KEYS" in ui_matrix
+    assert "presentation_catalogs import WORKSPACE_MODES" in qml_smoke
+    for mode in WORKSPACE_MODES:
+        assert f'key: "{mode.key}"' not in navigation
+
+
+def test_desktop_brand_and_icons_have_one_component_boundary() -> None:
+    qml_root = ROOT / "mediaflow" / "desktop" / "qml"
+    components = qml_root / "components"
+    assert not (components / "NavIcon.qml").exists()
+    for component in ("AppIcon.qml", "AppIconButton.qml", "BrandMark.qml"):
+        assert (components / component).is_file()
+    assert (
+        ROOT / "mediaflow" / "resources" / "branding" / "mediaflow-mark.svg"
+    ).is_file()
+    assert all(
+        "NavIcon" not in path.read_text(encoding="utf-8")
+        for path in qml_root.rglob("*.qml")
+    )
+    app_source = (ROOT / "mediaflow" / "desktop" / "app.py").read_text(encoding="utf-8")
+    assert "configure_application_icon" in app_source
+    assert "mediaflow-mark.svg" in app_source
+
+    icon_source = (components / "AppIcon.qml").read_text(encoding="utf-8")
+    required_icon_names = {
+        *(mode.icon for mode in WORKSPACE_MODES),
+        "large_thumbnails",
+        "minus",
+        "transition",
+        "transition-zoom",
+        "transition-black",
+        "eye",
+        "eye-off",
+        "keyframe",
+        "microphone",
+        "drag",
+    }
+    for icon_name in required_icon_names:
+        assert f'name === "{icon_name}"' in icon_source
+    assert "Unknown AppIcon name:" in icon_source
+
+    home_source = (qml_root / "HomeView.qml").read_text(encoding="utf-8")
+    assert home_source.count("SignalMapArtwork {") == 2
+    assert "Canvas {" not in home_source

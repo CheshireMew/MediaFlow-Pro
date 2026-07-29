@@ -84,22 +84,6 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
             emit droppedFramesChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::clockDriftChanged, this, [this](double value, quint64 requestId) {
-        if (requestId != m_requestId.load(std::memory_order_acquire))
-            return;
-        if (!qFuzzyCompare(m_clockDriftMs, value)) {
-            m_clockDriftMs = value;
-            emit clockDriftChanged();
-        }
-    });
-    connect(m_runtime, &MltRuntime::audioClockActiveChanged, this, [this](bool value, quint64 requestId) {
-        if (requestId != m_requestId.load(std::memory_order_acquire))
-            return;
-        if (m_audioClockActive != value) {
-            m_audioClockActive = value;
-            emit audioClockActiveChanged();
-        }
-    });
     connect(m_runtime, &MltRuntime::errorOccurred, this, &MltPreviewItem::receiveError, Qt::QueuedConnection);
     m_workerThread.setObjectName(QStringLiteral("MediaFlowMltPreview"));
     m_workerThread.start();
@@ -383,14 +367,6 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
     if (m_droppedFrames != 0) {
         m_droppedFrames = 0;
         emit droppedFramesChanged();
-    }
-    if (!qFuzzyIsNull(m_clockDriftMs)) {
-        m_clockDriftMs = 0.0;
-        emit clockDriftChanged();
-    }
-    if (m_audioClockActive) {
-        m_audioClockActive = false;
-        emit audioClockActiveChanged();
     }
     clearError();
     update();

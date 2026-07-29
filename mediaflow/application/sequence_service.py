@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from mediaflow.application.ports import SequenceServiceDocuments
-from mediaflow.domain.enums import TrackKind
+from mediaflow.application.timeline_clock import (
+    project_frame_profile,
+    reframe_timeline_clock,
+)
+from mediaflow.domain.audio import AudioBus, AudioEffect
+from mediaflow.domain.enums import AudioEffectKind, TrackKind
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.subtitles import SubtitlePlacement
 from mediaflow.domain.timebase import (
@@ -70,7 +75,7 @@ class SequenceService:
                 end_frame,
                 name=name,
             )
-            destination_sequence = self.repository.get_sequence(short_sequence_id)
+            destination_sequence = self.repository.catalog.get_sequence(short_sequence_id)
             return self._copy_selection(
                 source,
                 selected,
@@ -85,7 +90,7 @@ class SequenceService:
         *,
         name: str | None = None,
     ):
-        source = self.repository.load_timeline(source_sequence_id)
+        source = self.repository.timeline.load_timeline(source_sequence_id)
         try:
             selected = next(item for item in source.ranges if item.id == range_id)
         except StopIteration as error:
@@ -100,7 +105,7 @@ class SequenceService:
         *,
         name: str | None,
     ) -> tuple[TimelineState, TimelineRange]:
-        source = self.repository.load_timeline(source_sequence_id)
+        source = self.repository.timeline.load_timeline(source_sequence_id)
         start = max(0, int(start_frame))
         end = min(source.duration_frames, int(end_frame))
         if end <= start:
@@ -120,31 +125,72 @@ class SequenceService:
         name: str | None,
         destination_sequence=None,
     ):
-        destination_sequence = destination_sequence or self.repository.create_short_sequence(
+        destination_sequence = destination_sequence or self.repository.catalog.create_short_sequence(
             name or selected.name or "短视频"
         )
-        destination = self.repository.load_timeline(destination_sequence.id)
+        destination = self.repository.timeline.load_timeline(destination_sequence.id)
         source_profile = source.sequence.profile
         destination_profile = destination.sequence.profile
+        destination_name = (name or selected.name or destination.sequence.name).strip()
+        destination.sequence = destination.sequence.model_copy(
+            update={
+                "name": destination_name or destination.sequence.name,
+                "profile": source_profile,
+                "in_out": None,
+            }
+        )
 
-        source_buses = {
-            item.id: item
-            for item in self.repository.list_audio_buses(source.sequence.id)
-        }
-        destination_buses = self.repository.list_audio_buses(destination_sequence.id)
-        destination_bus_by_name = {item.name: item.id for item in destination_buses}
-        master_bus_id = next(item.id for item in destination_buses if item.parent_bus_id is None)
+        source_buses = self.repository.audio.list_audio_buses(source.sequence.id)
+        bus_map = {bus.id: new_id() for bus in source_buses}
+        cloned_buses = [
+            AudioBus(
+                id=bus_map[bus.id],
+                sequence_id=destination_sequence.id,
+                name=bus.name,
+                parent_bus_id=(
+                    bus_map[bus.parent_bus_id]
+                    if bus.parent_bus_id is not None
+                    else None
+                ),
+                position=bus.position,
+                gain_db=bus.gain_db,
+                muted=bus.muted,
+                solo=bus.solo,
+                channel_layout=bus.channel_layout,
+            )
+            for bus in source_buses
+        ]
+        cloned_effects: list[AudioEffect] = []
+        for bus in source_buses:
+            for effect in self.repository.audio.list_audio_effects(bus.id):
+                parameters = dict(effect.parameters)
+                if effect.kind == AudioEffectKind.DUCKING:
+                    driver_bus_id = str(parameters.get("driver_bus_id", ""))
+                    if driver_bus_id:
+                        if driver_bus_id not in bus_map:
+                            raise ValueError(
+                                "源序列的闪避效果引用了不存在的音频总线"
+                            )
+                        parameters["driver_bus_id"] = bus_map[driver_bus_id]
+                cloned_effects.append(
+                    AudioEffect(
+                        id=new_id(),
+                        bus_id=bus_map[bus.id],
+                        kind=effect.kind,
+                        position=effect.position,
+                        enabled=effect.enabled,
+                        parameters=parameters,
+                    )
+                )
 
         track_map: dict[str, str] = {}
         destination.tracks = []
         for position, track in enumerate(sorted(source.tracks, key=lambda item: item.position)):
-            audio_bus_id = None
-            if track.audio_bus_id:
-                source_bus = source_buses.get(track.audio_bus_id)
-                audio_bus_id = destination_bus_by_name.get(
-                    source_bus.name if source_bus else "",
-                    master_bus_id,
-                )
+            audio_bus_id = (
+                bus_map[track.audio_bus_id]
+                if track.audio_bus_id is not None
+                else None
+            )
             copied_track = Track(
                 sequence_id=destination_sequence.id,
                 name=track.name,
@@ -191,40 +237,21 @@ class SequenceService:
             source_in = (
                 clip.source_in + source_delta if clip.speed_numerator > 0 else clip.source_in - source_delta
             )
-            timeline_start = reframe_frames(
-                overlap_start - selected.start_frame,
-                source_profile,
-                destination_profile,
-            )
-            timeline_end = reframe_frames(
-                overlap_end - selected.start_frame,
-                source_profile,
-                destination_profile,
-            )
+            timeline_start = overlap_start - selected.start_frame
+            timeline_end = overlap_end - selected.start_frame
             copied = Clip(
                 id=new_id(),
                 track_id=track_map[clip.track_id],
                 asset_id=clip.asset_id,
                 timeline_start=timeline_start,
-                source_in=reframe_frames(source_in, source_profile, destination_profile),
+                source_in=source_in,
                 duration=max(1, timeline_end - timeline_start),
                 media_kind=clip.media_kind,
                 speed_numerator=clip.speed_numerator,
                 speed_denominator=clip.speed_denominator,
                 pitch_compensation=clip.pitch_compensation,
                 transform=clip.transform,
-                transform_keyframes=[
-                    item.model_copy(
-                        update={
-                            "source_frame": reframe_frames(
-                                item.source_frame,
-                                source_profile,
-                                destination_profile,
-                            )
-                        }
-                    )
-                    for item in clip.transform_keyframes
-                ],
+                transform_keyframes=list(clip.transform_keyframes),
                 audio=clip.audio,
             )
             destination.clips.append(copied)
@@ -265,10 +292,7 @@ class SequenceService:
                     duration=min(
                         left.duration,
                         right.duration,
-                        max(
-                            1,
-                            reframe_frames(item.duration, source_profile, destination_profile),
-                        ),
+                        item.duration,
                     ),
                     parameters=item.parameters,
                 )
@@ -277,11 +301,7 @@ class SequenceService:
         destination.markers = [
             TimelineMarker(
                 sequence_id=destination_sequence.id,
-                frame=reframe_frames(
-                    item.frame - selected.start_frame,
-                    source_profile,
-                    destination_profile,
-                ),
+                frame=item.frame - selected.start_frame,
                 name=item.name,
                 color=item.color,
             )
@@ -294,35 +314,38 @@ class SequenceService:
             end = min(range_item.end_frame, selected.end_frame)
             if end <= start or range_item.id == selected.id:
                 continue
-            converted_start = reframe_frames(
-                start - selected.start_frame,
-                source_profile,
-                destination_profile,
-            )
+            converted_start = start - selected.start_frame
             destination.ranges.append(
                 TimelineRange(
                     sequence_id=destination_sequence.id,
                     start_frame=converted_start,
                     end_frame=max(
                         converted_start + 1,
-                        reframe_frames(
-                            end - selected.start_frame,
-                            source_profile,
-                            destination_profile,
-                        ),
+                        end - selected.start_frame,
                     ),
                     name=range_item.name,
                     color=range_item.color,
                 )
             )
-        self.repository.save_timeline(destination)
+        destination = reframe_timeline_clock(
+            destination,
+            self.repository.catalog.list_assets(),
+            destination_profile,
+            asset_source_profile=project_frame_profile(self.repository.catalog),
+        ).state
+        self.repository.audio.replace_audio_graph(
+            destination_sequence.id,
+            cloned_buses,
+            cloned_effects,
+        )
+        self.repository.timeline.save_timeline(destination)
 
         placements: list[SubtitlePlacement] = []
         for source_track_id, destination_track_id in track_map.items():
             source_track = next(item for item in source.tracks if item.id == source_track_id)
             if source_track.kind != TrackKind.SUBTITLE:
                 continue
-            for placement in self.repository.list_subtitle_placements(source_track_id):
+            for placement in self.repository.subtitles.list_subtitle_placements(source_track_id):
                 start = max(placement.start_frame, selected.start_frame)
                 end = min(placement.end_frame, selected.end_frame)
                 if end <= start:
@@ -347,7 +370,8 @@ class SequenceService:
                             ),
                         ),
                         text_override=placement.text_override,
+                        timing_overridden=placement.timing_overridden,
                     )
                 )
-        self.repository.add_subtitle_placements(placements)
-        return self.repository.get_sequence(destination_sequence.id)
+        self.repository.subtitles.add_subtitle_placements(placements)
+        return self.repository.catalog.get_sequence(destination_sequence.id)

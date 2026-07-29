@@ -7,91 +7,73 @@ Rectangle {
     id: root
     objectName: "workspaceNavigation"
 
-    property string activeMode: "media"
+    readonly property var modes: workspaceController.workspaceModes
+    property string activeMode: modes.length > 0 ? String(modes[0].key) : ""
     signal modeRequested(string mode)
     signal settingsRequested
 
-    implicitHeight: 50
-    color: Theme.surfaceRaised
-    border.color: Theme.border
+    implicitHeight: 54
+    color: Theme.surface
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 12
-        anchors.topMargin: 6
-        anchors.bottomMargin: 6
+        anchors.leftMargin: 16
+        anchors.rightMargin: 16
+        anchors.topMargin: 8
+        anchors.bottomMargin: 8
         spacing: 5
 
         Repeater {
-            model: [
-                {
-                    key: "media",
-                    label: qsTr("素材")
-                },
-                {
-                    key: "transcript",
-                    label: qsTr("文本与字幕")
-                },
-                {
-                    key: "highlight",
-                    label: qsTr("AI 高光")
-                },
-                {
-                    key: "edit",
-                    label: qsTr("片段属性")
-                },
-                {
-                    key: "audio",
-                    label: qsTr("音频")
-                },
-                {
-                    key: "export",
-                    label: qsTr("导出")
-                },
-                {
-                    key: "tasks",
-                    label: qsTr("任务")
-                }
-            ]
+            model: root.modes
+
             Rectangle {
                 id: navigationItem
                 required property var modelData
+                readonly property bool selected: root.activeMode === String(modelData.key)
                 objectName: "navigationItem_" + modelData.key
+
                 function click() {
                     root.modeRequested(modelData.key);
                 }
+
                 Layout.minimumWidth: 84
-                Layout.preferredWidth: Math.max(84, navigationContent.implicitWidth + 24)
+                Layout.preferredWidth: Math.max(84, navigationContent.implicitWidth + 28)
                 Layout.fillHeight: true
                 radius: Theme.radiusSmall
-                color: root.activeMode === modelData.key ? Theme.accentSoft : navMouse.containsMouse ? Theme.surfaceHover : "transparent"
-                border.color: activeFocus ? Theme.accentHover : root.activeMode === modelData.key ? Theme.accent : "transparent"
-                border.width: activeFocus ? 2 : 1
+                color: navigationItem.selected
+                    ? Theme.accentSoft
+                    : navMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
+                border.color: activeFocus
+                    ? Theme.focusColor
+                    : navigationItem.selected ? Theme.borderStrong : Theme.transparent
+                border.width: activeFocus || navigationItem.selected ? 1 : 0
+
                 RowLayout {
                     id: navigationContent
                     anchors.centerIn: parent
                     spacing: 6
-                    NavIcon {
+
+                    AppIcon {
                         Layout.preferredWidth: 17
                         Layout.preferredHeight: 17
-                        iconName: modelData.key
-                        iconColor: root.activeMode === modelData.key ? Theme.accentHover : Theme.textMuted
+                        iconName: String(modelData.icon)
+                        iconColor: navigationItem.selected ? Theme.accentHover : Theme.textMuted
                     }
+
                     Text {
                         text: modelData.label
-                        color: root.activeMode === modelData.key ? Theme.text : Theme.textMuted
+                        color: navigationItem.selected ? Theme.text : Theme.textMuted
                         font.pixelSize: Theme.fontSizeBodySmall
-                        font.weight: root.activeMode === modelData.key ? Font.DemiBold : Font.Medium
+                        font.weight: navigationItem.selected ? Font.DemiBold : Font.Medium
                     }
                 }
+
                 Accessible.name: modelData.label
                 Accessible.role: Accessible.Button
                 activeFocusOnTab: true
                 Keys.onReturnPressed: navigationItem.click()
                 Keys.onSpacePressed: navigationItem.click()
-                ToolTip.visible: navMouse.containsMouse
-                ToolTip.text: modelData.label
+
                 MouseArea {
                     id: navMouse
                     anchors.fill: parent
@@ -108,24 +90,27 @@ Rectangle {
         }
         Rectangle {
             Layout.preferredWidth: 1
-            Layout.preferredHeight: 24
-            color: Theme.borderStrong
+            Layout.preferredHeight: 20
+            color: Theme.divider
         }
+
         Rectangle {
             id: settingsItem
             objectName: "navigationItem_settings"
             Layout.minimumWidth: 84
-            Layout.preferredWidth: Math.max(84, settingsContent.implicitWidth + 24)
+            Layout.preferredWidth: Math.max(84, settingsContent.implicitWidth + 28)
             Layout.fillHeight: true
             radius: Theme.radiusSmall
-            color: settingsMouse.containsMouse ? Theme.surfaceHover : "transparent"
-            border.color: activeFocus ? Theme.accentHover : "transparent"
-            border.width: activeFocus ? 2 : 1
+            color: settingsMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
+            border.color: activeFocus ? Theme.focusColor : Theme.transparent
+            border.width: activeFocus ? 1 : 0
+
             RowLayout {
                 id: settingsContent
                 anchors.centerIn: parent
                 spacing: 6
-                NavIcon {
+
+                AppIcon {
                     Layout.preferredWidth: 17
                     Layout.preferredHeight: 17
                     iconName: "settings"
@@ -143,8 +128,7 @@ Rectangle {
             activeFocusOnTab: true
             Keys.onReturnPressed: root.settingsRequested()
             Keys.onSpacePressed: root.settingsRequested()
-            ToolTip.visible: settingsMouse.containsMouse
-            ToolTip.text: qsTr("设置")
+
             MouseArea {
                 id: settingsMouse
                 anchors.fill: parent
@@ -155,5 +139,13 @@ Rectangle {
                 }
             }
         }
+    }
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 1
+        color: Theme.divider
     }
 }

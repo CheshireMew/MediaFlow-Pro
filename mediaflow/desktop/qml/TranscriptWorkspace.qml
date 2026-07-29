@@ -14,14 +14,14 @@ ColumnLayout {
 
     spacing: 9
 
-    TabBar {
+    AppTabBar {
         id: transcriptTabs
         objectName: "transcriptWorkspaceTabs"
         Layout.fillWidth: true
-        TabButton { objectName: "transcriptSection_transcribe"; text: qsTr("转写") }
-        TabButton { objectName: "transcriptSection_subtitle"; text: qsTr("字幕") }
-        TabButton { objectName: "transcriptSection_translate"; text: qsTr("翻译") }
-        TabButton { objectName: "transcriptSection_glossary"; text: qsTr("术语表") }
+        AppTabButton { objectName: "transcriptSection_transcribe"; text: qsTr("转写") }
+        AppTabButton { objectName: "transcriptSection_subtitle"; text: qsTr("字幕") }
+        AppTabButton { objectName: "transcriptSection_translate"; text: qsTr("翻译") }
+        AppTabButton { objectName: "transcriptSection_glossary"; text: qsTr("术语表") }
     }
 
     StackLayout {

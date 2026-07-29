@@ -9,6 +9,7 @@ from mediaflow.domain.enums import (
     AssetKind,
     AssetOrigin,
     AssetStatus,
+    ColorMode,
     SequenceKind,
     TaskStatus,
     WorkflowStage,
@@ -23,15 +24,18 @@ from mediaflow.domain.project import (
     Project,
     ProjectProfile,
     Sequence,
+    SequenceInOut,
 )
+from mediaflow.domain.timeline import TimelineRevisionConflict
 from mediaflow.domain.workflows import WorkflowRun
 
 from .file_fingerprint import fingerprint_file, fingerprint_matches
+from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
 from .project_serialization import model_json as _model_json
 
 
-class ProjectCatalogRepository:
+class ProjectCatalogRepository(ProjectRepositoryComponent):
     def get_project(self) -> Project:
         row = self._fetchone("SELECT * FROM project LIMIT 1")
         if row is None:
@@ -39,7 +43,6 @@ class ProjectCatalogRepository:
         return Project(
             id=row["id"],
             name=row["name"],
-            root_path=str(self.project_dir),
             main_sequence_id=row["main_sequence_id"],
             workflow_auto_continue=(
                 None if row["workflow_auto_continue"] < 0 else bool(row["workflow_auto_continue"])
@@ -198,9 +201,9 @@ class ProjectCatalogRepository:
             position=3,
         )
         with self.transaction() as connection:
-            self._insert_sequence(connection, sequence)
+            self._insert_sequence_record(connection, sequence)
             for bus in (master, dialogue, music, effects):
-                self._insert_audio_bus(connection, bus)
+                self._owner.audio._insert_bus_record(connection, bus)
             self._touch_project(connection)
         return sequence
 
@@ -253,10 +256,10 @@ class ProjectCatalogRepository:
         project = self.get_project()
         if asset.project_id != project.id:
             raise ValueError("Asset belongs to a different project")
-        stored_path = self._stored_path(asset.path, managed=asset.managed)
-        proxy_path = self._stored_optional_path(asset.proxy_path)
-        sdr_preview_proxy_path = self._stored_optional_path(asset.sdr_preview_proxy_path)
-        waveform_path = self._stored_optional_path(asset.waveform_path)
+        stored_path = self._store_asset_path(asset.path, managed=asset.managed)
+        proxy_path = self._store_optional_path(asset.proxy_path)
+        sdr_preview_proxy_path = self._store_optional_path(asset.sdr_preview_proxy_path)
+        waveform_path = self._store_optional_path(asset.waveform_path)
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO asset(
@@ -284,23 +287,67 @@ class ProjectCatalogRepository:
             self._touch_project(connection)
         return self.get_asset(asset.id)
 
-    def import_external_asset(self, path: str | Path, kind: AssetKind) -> Asset:
+    def prepare_external_asset(
+        self,
+        path: str | Path,
+        kind: AssetKind,
+    ) -> Asset:
         source = Path(path).resolve(strict=True)
+        fingerprint = fingerprint_file(source)
+        for existing in self.list_assets():
+            if (
+                not existing.managed
+                and existing.kind == kind
+                and self.resolve_asset_path(existing).resolve() == source
+                and existing.fingerprint == fingerprint
+            ):
+                return existing
         project = self.get_project()
-        return self.add_asset(
-            Asset(
-                project_id=project.id,
-                name=source.name,
-                kind=kind,
-                origin=AssetOrigin.EXTERNAL,
-                path=str(source),
-                managed=False,
-                fingerprint=fingerprint_file(source),
-                metadata=MediaMetadata(
-                    has_video=kind in {AssetKind.VIDEO, AssetKind.IMAGE},
-                    has_audio=kind == AssetKind.AUDIO,
-                ),
+        return Asset(
+            project_id=project.id,
+            name=source.name,
+            kind=kind,
+            origin=AssetOrigin.EXTERNAL,
+            path=str(source),
+            managed=False,
+            fingerprint=fingerprint,
+            metadata=MediaMetadata(
+                has_video=kind in {AssetKind.VIDEO, AssetKind.IMAGE},
+                has_audio=kind == AssetKind.AUDIO,
+            ),
+        )
+
+    def commit_external_asset(self, asset: Asset) -> Asset:
+        project = self.get_project()
+        if (
+            asset.project_id != project.id
+            or asset.origin != AssetOrigin.EXTERNAL
+            or asset.managed
+            or asset.fingerprint is None
+        ):
+            raise ValueError("Prepared external asset is invalid")
+        source = Path(asset.path).resolve(strict=True)
+        if fingerprint_file(source) != asset.fingerprint:
+            raise RuntimeError(
+                f"素材在检查完成后发生了变化，请重新导入：{source.name}"
             )
+        for existing in self.list_assets():
+            if (
+                not existing.managed
+                and existing.kind == asset.kind
+                and self.resolve_asset_path(existing).resolve() == source
+                and existing.fingerprint == asset.fingerprint
+            ):
+                if existing.id != asset.id:
+                    raise RuntimeError(
+                        f"素材已被另一个操作导入，请重试：{source.name}"
+                    )
+                return existing
+        return self.add_asset(asset)
+
+    def import_external_asset(self, path: str | Path, kind: AssetKind) -> Asset:
+        return self.commit_external_asset(
+            self.prepare_external_asset(path, kind)
         )
 
     def get_asset(self, asset_id: str) -> Asset:
@@ -317,7 +364,7 @@ class ProjectCatalogRepository:
         current = self.get_asset(asset.id)
         if current.project_id != asset.project_id:
             raise ValueError("Asset project cannot change")
-        stored_path = self._stored_path(asset.path, managed=asset.managed)
+        stored_path = self._store_asset_path(asset.path, managed=asset.managed)
         with self.transaction() as connection:
             connection.execute(
                 """UPDATE asset SET
@@ -331,9 +378,9 @@ class ProjectCatalogRepository:
                     asset.origin.value,
                     stored_path,
                     int(asset.managed),
-                    self._stored_optional_path(asset.proxy_path),
-                    self._stored_optional_path(asset.sdr_preview_proxy_path),
-                    self._stored_optional_path(asset.waveform_path),
+                    self._store_optional_path(asset.proxy_path),
+                    self._store_optional_path(asset.sdr_preview_proxy_path),
+                    self._store_optional_path(asset.waveform_path),
                     asset.status.value,
                     _model_json(asset.fingerprint) if asset.fingerprint else None,
                     _model_json(asset.metadata),
@@ -360,8 +407,8 @@ class ProjectCatalogRepository:
                 SET proxy_path=?, sdr_preview_proxy_path=?
                 WHERE id=? AND fingerprint_json IS ?""",
                 (
-                    self._stored_optional_path(proxy_path),
-                    self._stored_optional_path(sdr_preview_proxy_path),
+                    self._store_optional_path(proxy_path),
+                    self._store_optional_path(sdr_preview_proxy_path),
                     asset_id,
                     expected_fingerprint_json,
                 ),
@@ -387,7 +434,7 @@ class ProjectCatalogRepository:
                 SET waveform_path=?
                 WHERE id=? AND fingerprint_json IS ?""",
                 (
-                    self._stored_optional_path(waveform_path),
+                    self._store_optional_path(waveform_path),
                     asset_id,
                     expected_fingerprint_json,
                 ),
@@ -464,3 +511,192 @@ class ProjectCatalogRepository:
     def resolve_asset_path(self, asset: Asset) -> Path:
         path = Path(asset.path)
         return (self.project_dir / path).resolve() if asset.managed else path.resolve()
+
+    def _store_asset_path(self, path: str, *, managed: bool) -> str:
+        candidate = Path(path)
+        resolved = (
+            (self.project_dir / candidate).resolve()
+            if managed and not candidate.is_absolute()
+            else candidate.resolve()
+        )
+        if not managed:
+            return str(resolved)
+        try:
+            relative = resolved.relative_to(self.project_dir)
+        except ValueError as error:
+            raise ValueError("Managed asset must be inside the project directory") from error
+        return relative.as_posix()
+
+    def _store_optional_path(self, path: str | Path | None) -> str | None:
+        if not path:
+            return None
+        candidate = Path(path)
+        resolved = (
+            (self.project_dir / candidate).resolve()
+            if not candidate.is_absolute()
+            else candidate.resolve()
+        )
+        try:
+            return resolved.relative_to(self.project_dir).as_posix()
+        except ValueError:
+            return str(resolved)
+
+    @staticmethod
+    def _asset_from_row(row: sqlite3.Row) -> Asset:
+        fingerprint = (
+            AssetFingerprint.model_validate_json(row["fingerprint_json"])
+            if row["fingerprint_json"]
+            else None
+        )
+        return Asset(
+            id=row["id"],
+            project_id=row["project_id"],
+            name=row["name"],
+            kind=AssetKind(row["kind"]),
+            origin=AssetOrigin(row["origin"]),
+            path=row["path"],
+            managed=bool(row["managed"]),
+            proxy_path=row["proxy_path"],
+            sdr_preview_proxy_path=row["sdr_preview_proxy_path"],
+            waveform_path=row["waveform_path"],
+            status=AssetStatus(row["status"]),
+            fingerprint=fingerprint,
+            metadata=MediaMetadata.model_validate_json(row["metadata_json"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _insert_sequence_record(
+        connection: sqlite3.Connection,
+        sequence: Sequence,
+    ) -> None:
+        profile = sequence.profile
+        connection.execute(
+            """INSERT INTO sequence(
+                id, project_id, name, kind, position, width, height,
+                fps_numerator, fps_denominator, color_mode, bit_depth,
+                audio_sample_rate, audio_channels, profile_confirmed,
+                in_frame, out_frame, archived, timeline_revision, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                sequence.id,
+                sequence.project_id,
+                sequence.name,
+                sequence.kind.value,
+                sequence.position,
+                profile.width,
+                profile.height,
+                profile.fps_numerator,
+                profile.fps_denominator,
+                profile.color_mode.value,
+                profile.bit_depth,
+                profile.audio_sample_rate,
+                profile.audio_channels,
+                int(sequence.profile_confirmed),
+                sequence.in_out.in_frame if sequence.in_out else None,
+                sequence.in_out.out_frame if sequence.in_out else None,
+                int(sequence.archived),
+                sequence.timeline_revision,
+                sequence.created_at,
+            ),
+        )
+
+    @staticmethod
+    def _update_sequence_record(
+        connection: sqlite3.Connection,
+        sequence: Sequence,
+    ) -> int:
+        profile = sequence.profile
+        cursor = connection.execute(
+            """UPDATE sequence SET
+                name=?, kind=?, position=?, width=?, height=?, fps_numerator=?,
+                fps_denominator=?, color_mode=?, bit_depth=?, audio_sample_rate=?,
+                audio_channels=?, profile_confirmed=?, in_frame=?, out_frame=?,
+                archived=?, timeline_revision=timeline_revision+1
+               WHERE id=? AND timeline_revision=?""",
+            (
+                sequence.name,
+                sequence.kind.value,
+                sequence.position,
+                profile.width,
+                profile.height,
+                profile.fps_numerator,
+                profile.fps_denominator,
+                profile.color_mode.value,
+                profile.bit_depth,
+                profile.audio_sample_rate,
+                profile.audio_channels,
+                int(sequence.profile_confirmed),
+                sequence.in_out.in_frame if sequence.in_out else None,
+                sequence.in_out.out_frame if sequence.in_out else None,
+                int(sequence.archived),
+                sequence.id,
+                sequence.timeline_revision,
+            ),
+        )
+        if cursor.rowcount != 1:
+            row = connection.execute(
+                "SELECT timeline_revision FROM sequence WHERE id=?",
+                (sequence.id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(sequence.id)
+            raise TimelineRevisionConflict(
+                sequence.id,
+                expected=sequence.timeline_revision,
+                actual=int(row["timeline_revision"]),
+            )
+        return sequence.timeline_revision + 1
+
+    @staticmethod
+    def _sequence_from_row(
+        row: sqlite3.Row,
+        preset_json: str | None = None,
+    ) -> Sequence:
+        return Sequence(
+            id=row["id"],
+            project_id=row["project_id"],
+            name=row["name"],
+            kind=SequenceKind(row["kind"]),
+            position=row["position"],
+            export_preset=(
+                ExportPreset.model_validate_json(preset_json) if preset_json else None
+            ),
+            in_out=(
+                SequenceInOut(in_frame=row["in_frame"], out_frame=row["out_frame"])
+                if row["in_frame"] is not None and row["out_frame"] is not None
+                else None
+            ),
+            archived=bool(row["archived"]),
+            timeline_revision=int(row["timeline_revision"]),
+            profile_confirmed=bool(row["profile_confirmed"]),
+            profile=ProjectProfile(
+                width=row["width"],
+                height=row["height"],
+                fps_numerator=row["fps_numerator"],
+                fps_denominator=row["fps_denominator"],
+                color_mode=ColorMode(row["color_mode"]),
+                bit_depth=row["bit_depth"],
+                audio_sample_rate=row["audio_sample_rate"],
+                audio_channels=row["audio_channels"],
+            ),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _store_sequence_export_preset(
+        connection: sqlite3.Connection,
+        sequence: Sequence,
+    ) -> None:
+        if sequence.export_preset is None:
+            connection.execute(
+                "DELETE FROM sequence_export_setting WHERE sequence_id=?",
+                (sequence.id,),
+            )
+            return
+        connection.execute(
+            """INSERT INTO sequence_export_setting(sequence_id, preset_json)
+               VALUES (?, ?)
+               ON CONFLICT(sequence_id) DO UPDATE SET preset_json=excluded.preset_json""",
+            (sequence.id, _model_json(sequence.export_preset)),
+        )

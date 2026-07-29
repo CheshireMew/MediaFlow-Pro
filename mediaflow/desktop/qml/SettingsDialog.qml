@@ -5,7 +5,7 @@ import QtQuick.Dialogs
 import "."
 import "components"
 
-Dialog {
+AppDialog {
     id: root
     objectName: "settingsDialog"
     modal: true
@@ -16,6 +16,7 @@ Dialog {
     height: Math.min(820, parent ? parent.height - 48 : 820)
     property var llmProviderPresets: settingsController.llmProviderPresets
     property bool syncingFromController: false
+    property var settingsBaseline: ({})
 
     function indexOfValue(model, value) {
         for (var i = 0; i < model.length; ++i) {
@@ -27,6 +28,12 @@ Dialog {
 
     function syncFromController() {
         var data = settingsController.settingsData
+        syncForm(data)
+        settingsBaseline = settingsPayload()
+        loadLlmProvider()
+    }
+
+    function syncForm(data) {
         language.currentIndex = root.indexOfValue(language.model, data.language)
         theme.currentIndex = root.indexOfValue(theme.model, data.theme)
         autoContinue.checked = data.autoContinue
@@ -59,7 +66,28 @@ Dialog {
         loudnessTarget.value = Math.round(data.loudnessTarget * 10)
         truePeak.value = Math.round(data.truePeak * 10)
         audioLayout.currentIndex = root.indexOfValue(audioLayout.model, data.audioLayout)
-        loadLlmProvider()
+    }
+
+    function sameValue(left, right) {
+        return JSON.stringify(left) === JSON.stringify(right)
+    }
+
+    function mergeControllerSettings() {
+        if (!visible || syncingFromController)
+            return
+        const form = settingsPayload()
+        const incoming = settingsController.settingsData
+        const merged = {}
+        for (const key of Object.keys(form)) {
+            merged[key] = sameValue(form[key], settingsBaseline[key])
+                ? incoming[key] : form[key]
+        }
+        syncingFromController = true
+        syncForm(merged)
+        settingsBaseline = settingsPayload()
+        Qt.callLater(function() {
+            root.syncingFromController = false
+        })
     }
 
     function loadLlmProvider() {
@@ -134,7 +162,9 @@ Dialog {
         if (syncingFromController)
             return
         settingsSaveTimer.stop()
-        settingsController.saveSettings(settingsPayload())
+        settingsController.saveSettings(
+            settingsPayload(),
+            settingsBaseline)
     }
 
     onOpened: {
@@ -171,6 +201,9 @@ Dialog {
     Connections {
         target: settingsController
         function onSelectionChanged() { root.loadLlmProvider() }
+        function onSettingsChanged() {
+            root.mergeControllerSettings()
+        }
     }
 
     contentItem: ColumnLayout {
@@ -179,13 +212,13 @@ Dialog {
         implicitHeight: Math.min(720, root.parent ? root.parent.height - 100 : 720)
         spacing: 10
 
-        TabBar {
+        AppTabBar {
             id: tabs
             objectName: "settingsTabs"
             Layout.fillWidth: true
-            TabButton { text: qsTr("常规") }
-            TabButton { text: qsTr("下载与媒体") }
-            TabButton { text: qsTr("AI") }
+            AppTabButton { text: qsTr("常规") }
+            AppTabButton { text: qsTr("下载与媒体") }
+            AppTabButton { text: qsTr("AI") }
         }
 
         StackLayout {
@@ -193,7 +226,7 @@ Dialog {
             Layout.fillHeight: true
             currentIndex: tabs.currentIndex
 
-            ScrollView {
+            AppScrollView {
                 id: generalSettingsScroll
                 clip: true
                 ColumnLayout {
@@ -342,7 +375,7 @@ Dialog {
                 }
             }
 
-            ScrollView {
+            AppScrollView {
                 id: downloadSettingsScroll
                 clip: true
                 ColumnLayout {
@@ -440,19 +473,16 @@ Dialog {
                                 }
                             }
                             Text {
-                                text: "Cookie JSON"
+                                text: qsTr("Cookie JSON")
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSizeCaption
                             }
-                            TextArea {
+                            AppTextArea {
                                 id: cookieJsonText
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 placeholderText: qsTr("粘贴浏览器导出的 Cookie JSON 数组")
-                                color: Theme.text
                                 wrapMode: TextEdit.WrapAnywhere
-                                selectByMouse: true
-                                background: Rectangle { color: Theme.window; border.color: Theme.border; radius: Theme.radiusSmall }
                             }
                             RowLayout {
                                 Layout.fillWidth: true
@@ -532,7 +562,7 @@ Dialog {
                                 font.pixelSize: Theme.fontSizeCaption
                                 wrapMode: Text.WordWrap
                             }
-                            ProgressBar {
+                            AppProgressBar {
                                 Layout.fillWidth: true
                                 visible: settingsController.runtimeToolStatus.busy
                                 from: 0; to: 100
@@ -653,7 +683,7 @@ Dialog {
                 }
             }
 
-            ScrollView {
+            AppScrollView {
                 id: aiSettingsScroll
                 clip: true
                 ColumnLayout {
@@ -751,7 +781,7 @@ Dialog {
                             }
                             RowLayout {
                                 Layout.fillWidth: true
-                                Text { text: "API Key"; color: Theme.textMuted; Layout.preferredWidth: 130 }
+                                Text { text: qsTr("API 密钥"); color: Theme.textMuted; Layout.preferredWidth: 130 }
                                 AppTextField { id: llmApiKey; Layout.fillWidth: true; placeholderText: "sk-…"; echoMode: TextInput.Password }
                             }
                             RowLayout {

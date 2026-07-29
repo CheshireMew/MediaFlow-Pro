@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -6,21 +8,28 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from mediaflow.atomic_file import atomic_write_text
+from mediaflow.desktop.presentation_catalogs import WORKSPACE_MODE_KEYS
+from scripts.run_artifacts import verification_run
 
 LANGUAGES = ("zh_CN", "en", "ja")
 SCALES = ("1", "1.5", "2")
 HOME_SIZES = ((1280, 720), (1600, 980))
 SIZES = ((1280, 720), (1920, 1080), (3840, 2160))
-WORK_MODES = ("media", "transcript", "highlight", "edit", "audio", "export", "tasks")
 SETTINGS_TABS = ("general", "download", "ai")
 
 
 def probe(root: Path, language: str, scale: str) -> dict:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["QT_SCALE_FACTOR"] = scale
-    os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(root / "runtime")
+    os.environ["MEDIAFLOW_SETTINGS_PATH"] = str(root / "settings" / "settings.json")
+    os.environ["MEDIAFLOW_APP_ROOT"] = str(root / "app")
 
     from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QUrl
     from PySide6.QtGui import QGuiApplication
@@ -33,7 +42,8 @@ def probe(root: Path, language: str, scale: str) -> dict:
 
     settings = GlobalSettings()
     settings.ui.language = language
-    SettingsRepository(root / "runtime" / "settings.json").save(settings)
+    settings_path = root / "settings" / "settings.json"
+    SettingsRepository(settings_path).save(settings)
     app = QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
@@ -160,7 +170,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             navigation_items = {
                 item.objectName(): item for item in visual_items(navigation)
             }
-            for mode in WORK_MODES:
+            for mode in WORKSPACE_MODE_KEYS:
                 navigation_item = navigation_items.get(f"navigationItem_{mode}")
                 if navigation_item is None or not navigation_item.isVisible():
                     raise RuntimeError(f"Persistent navigation label is missing for {mode}")
@@ -180,7 +190,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 }
             )
             base_panel_width = float(tool_panel.property("width"))
-            for mode in WORK_MODES:
+            for mode in WORKSPACE_MODE_KEYS:
                 workspace.setProperty("activeMode", mode)
                 for _ in range(4):
                     QCoreApplication.processEvents()
@@ -197,7 +207,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
         window.setHeight(1080)
         mode_results = []
         normal_tool_panel_width = float(tool_panel.property("width"))
-        for mode in WORK_MODES:
+        for mode in WORKSPACE_MODE_KEYS:
             workspace.setProperty("activeMode", mode)
             for _ in range(6):
                 QCoreApplication.processEvents()
@@ -286,7 +296,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             QCoreApplication.processEvents()
-            persisted = SettingsRepository(root / "runtime" / "settings.json").load()
+            persisted = SettingsRepository(settings_path).load()
             if persisted.workflow.auto_continue is not previous_auto_continue:
                 break
             time.sleep(0.03)
@@ -310,12 +320,11 @@ def probe(root: Path, language: str, scale: str) -> dict:
     finally:
         controllers.shutdown()
         engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         QCoreApplication.processEvents()
 
 
 def orchestrate(root: Path) -> dict:
-    root.mkdir(parents=True, exist_ok=False)
     results = []
     for language in LANGUAGES:
         for scale in SCALES:
@@ -349,11 +358,11 @@ def orchestrate(root: Path) -> dict:
     report = {
         "scenario_count": len(results),
         "render_count": len(results)
-        * (len(HOME_SIZES) + len(SIZES) + len(WORK_MODES) + len(SETTINGS_TABS)),
+        * (len(HOME_SIZES) + len(SIZES) + len(WORKSPACE_MODE_KEYS) + len(SETTINGS_TABS)),
         "results": results,
     }
     report_path = root / "ui-matrix-report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
     return {**report, "report": str(report_path)}
 
 
@@ -369,10 +378,8 @@ def main() -> None:
             parser.error("--probe requires --root, --language, and --scale")
         print(json.dumps(probe(args.root, args.language, args.scale), ensure_ascii=False))
         return
-    root = args.root or Path("D:/Tools/MediaFlow/test-runs") / (
-        "ui-matrix-" + datetime.now().strftime("%Y%m%d-%H%M%S")
-    )
-    print(json.dumps(orchestrate(root), ensure_ascii=False, indent=2))
+    with verification_run("ui-matrix", explicit_root=args.root) as run_dir:
+        print(json.dumps(orchestrate(run_dir), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

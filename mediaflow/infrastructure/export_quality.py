@@ -3,20 +3,18 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
+from typing import Literal
 
+from mediaflow.atomic_file import atomic_write_text, native_temporary_sibling
 from mediaflow.domain.enums import ExportFormat
 from mediaflow.domain.exports import ExportPreset
-from mediaflow.domain.model_base import new_id
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project_records import ExportQualityCheck, ExportQualityReport
+from mediaflow.domain.storage_names import export_quality_directory
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.mlt.export_service import ExportResult
-from mediaflow.infrastructure.process_observers import (
-    FfmpegProgressObserver,
-    ffmpeg_progress_command,
-)
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable, run_cancellable_streaming
 
 
 class ExportQualityService:
@@ -25,6 +23,7 @@ class ExportQualityService:
     def __init__(self, project_dir: Path, paths: RuntimePaths) -> None:
         self.project_dir = project_dir
         self.paths = paths
+        self.ffmpeg = FfmpegRunner(paths.ffmpeg)
 
     def analyze(
         self,
@@ -32,14 +31,37 @@ class ExportQualityService:
         preset: ExportPreset,
         result: ExportResult,
         *,
+        report_id: str,
         progress=None,
         check_cancelled=None,
     ) -> tuple[ExportQualityReport, Path]:
         output = result.output_path
+        report_dir = export_quality_directory(self.project_dir, report_id)
         streams = result.probe.get("streams") or []
         video = next((item for item in streams if item.get("codec_type") == "video"), None)
         audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
         checks = [self._stream_check(preset, video, audio)]
+        if result.hardware_fallback_used:
+            checks.append(
+                ExportQualityCheck(
+                    key="encoder_recovery",
+                    label="编码器恢复",
+                    status="warning",
+                    summary=(
+                        f"{result.requested_video_codec} 失败，已改用 "
+                        f"{result.actual_video_codec} 完成同格式导出"
+                    ),
+                    details={
+                        "reason": result.hardware_fallback_reason,
+                        "requested_video_codec": result.requested_video_codec,
+                        "actual_video_codec": result.actual_video_codec,
+                        "hardware_failure_log_tail": result.hardware_failure_details,
+                        "archived_failed_outputs": [
+                            str(path) for path in result.archived_failed_outputs
+                        ],
+                    },
+                )
+            )
         checks.append(self._duration_check(state, result))
         duration_seconds = max(
             0.001,
@@ -80,10 +102,9 @@ class ExportQualityService:
                 )
             )
         checks.append(self._safe_area_check(preset))
-        report_id = new_id()
         proof_frames, proof_check = self._proof_frames(
             output,
-            report_id,
+            report_dir,
             state,
             result,
             enabled=video is not None and preset.format != ExportFormat.AUDIO,
@@ -103,10 +124,9 @@ class ExportQualityService:
                 check_cancelled=check_cancelled,
             ),
         )
-        report_dir = self.project_dir / "generated" / "export-qa" / report.id
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / "report.json"
-        report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        atomic_write_text(report_path, report.model_dump_json(indent=2))
         return report, report_path
 
     @staticmethod
@@ -156,7 +176,7 @@ class ExportQualityService:
         progress=None,
         check_cancelled=None,
     ) -> tuple[str, bool]:
-        command = [str(self.paths.ffmpeg), "-hide_banner", "-nostats", "-i", str(output)]
+        command = ["-i", str(output)]
         if has_video:
             command.extend(["-vf", "blackdetect=d=0.5:pix_th=0.10,freezedetect=n=-50dB:d=2"])
         if has_audio:
@@ -164,24 +184,21 @@ class ExportQualityService:
                 ["-af", "silencedetect=n=-50dB:d=2,ebur128=peak=true:framelog=verbose"]
             )
         command.extend(["-f", "null", "-"])
-        observer = FfmpegProgressObserver(
-            duration_seconds,
-            lambda position: progress(
-                OperationProgress.determinate(
-                    "export_quality_scanning",
-                    completed=position,
-                    total=duration_seconds,
-                    unit="media_seconds",
+        completed = self.ffmpeg.run_progress(
+            command,
+            total_seconds=duration_seconds,
+            on_position=(
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        "export_quality_scanning",
+                        completed=position,
+                        total=duration_seconds,
+                        unit="media_seconds",
+                    )
                 )
-            )
-            if progress
-            else None,
-        )
-        completed = run_cancellable_streaming(
-            ffmpeg_progress_command(command),
-            on_stderr_line=observer,
-            encoding="utf-8",
-            errors="replace",
+                if progress
+                else None
+            ),
             timeout=1800,
             check_cancelled=check_cancelled,
         )
@@ -216,7 +233,9 @@ class ExportQualityService:
                 summary="没有读取到可用的真峰值",
             )
         peak = max(finite)
-        status = "failed" if peak > 0 else "warning" if peak > -1 else "passed"
+        status: Literal["passed", "warning", "failed"] = (
+            "failed" if peak > 0 else "warning" if peak > -1 else "passed"
+        )
         summary = f"真峰值 {peak:.1f} dBFS"
         return ExportQualityCheck(
             key="true_peak",
@@ -231,9 +250,15 @@ class ExportQualityService:
         warnings: list[str] = []
         if preset.burn_subtitle_track_id:
             style = preset.subtitle_style
+            if style is None:
+                raise ValueError("Burned subtitles require a subtitle style")
             if not 0.05 <= style.position_x <= 0.95 or not 0.05 <= style.position_y <= 0.95:
                 warnings.append("字幕锚点超出 5%–95% 安全区")
-        if preset.watermark.enabled and preset.watermark.position_x is not None:
+        if (
+            preset.watermark.enabled
+            and preset.watermark.position_x is not None
+            and preset.watermark.position_y is not None
+        ):
             if (
                 not 0.02 <= preset.watermark.position_x <= 0.98
                 or not 0.02 <= preset.watermark.position_y <= 0.98
@@ -249,7 +274,7 @@ class ExportQualityService:
     def _proof_frames(
         self,
         output: Path,
-        report_id: str,
+        output_dir: Path,
         state: TimelineState,
         result: ExportResult,
         *,
@@ -264,12 +289,12 @@ class ExportQualityService:
                 status="passed",
                 summary="纯音频导出无需证明帧",
             )
-        output_dir = self.project_dir / "generated" / "export-qa" / report_id
         output_dir.mkdir(parents=True, exist_ok=True)
         duration = max(0.001, (result.end_frame - result.start_frame) / state.sequence.profile.fps)
         frames: list[Path] = []
         for index, ratio in enumerate((0.1, 0.5, 0.9), start=1):
             destination = output_dir / f"proof-{index}.jpg"
+            temporary = native_temporary_sibling(destination, label="proof")
             if progress:
                 progress(
                     OperationProgress.determinate(
@@ -279,33 +304,36 @@ class ExportQualityService:
                         unit="items",
                     )
                 )
-            completed = run_cancellable(
-                [
-                    str(self.paths.ffmpeg),
-                    "-hide_banner",
-                    "-v",
-                    "error",
-                    "-ss",
-                    f"{duration * ratio:.6f}",
-                    "-i",
-                    str(output),
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    "scale=640:-2",
-                    "-q:v",
-                    "3",
-                    "-y",
-                    str(destination),
-                ],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-                check_cancelled=check_cancelled,
-            )
-            if completed.returncode == 0 and destination.is_file() and destination.stat().st_size:
-                frames.append(destination)
+            try:
+                completed = self.ffmpeg.run(
+                    [
+                        "-v",
+                        "error",
+                        "-ss",
+                        f"{duration * ratio:.6f}",
+                        "-i",
+                        str(output),
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale=640:-2",
+                        "-q:v",
+                        "3",
+                        "-y",
+                        str(temporary),
+                    ],
+                    timeout=120,
+                    check_cancelled=check_cancelled,
+                )
+                if (
+                    completed.returncode == 0
+                    and temporary.is_file()
+                    and temporary.stat().st_size
+                ):
+                    temporary.replace(destination)
+                    frames.append(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
             if progress:
                 progress(
                     OperationProgress.determinate(

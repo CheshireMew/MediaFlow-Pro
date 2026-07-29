@@ -23,11 +23,19 @@ ColumnLayout {
 
     function restore(value) {
         const encoderIndex = encoderField.indexOfValue(value.video_codec || "")
-        if (encoderIndex >= 0)
-            encoderField.currentIndex = encoderIndex
+        if (encoderField.count > 0)
+            encoderField.currentIndex = encoderIndex >= 0 ? encoderIndex : 0
         technical.restore(value)
         subtitles.restore(value)
         watermark.restore(value)
+    }
+
+    function selectedEncoderCodec() {
+        if (encoderField.currentIndex < 0
+                || encoderField.currentValue === undefined
+                || encoderField.currentValue === null)
+            return ""
+        return String(encoderField.currentValue)
     }
 
     function exportOptions() {
@@ -35,7 +43,7 @@ ColumnLayout {
         const subtitleOptions = subtitles.exportOptions()
         return {
             container: root.format.container || root.format.suffix,
-            videoCodec: root.format.value === "audio" ? "" : String(encoderField.currentValue),
+            videoCodec: root.format.value === "audio" ? "" : root.selectedEncoderCodec(),
             pixelFormat: technicalOptions.pixelFormat,
             qualityValue: technicalOptions.qualityValue,
             preset: technicalOptions.preset,
@@ -89,11 +97,16 @@ ColumnLayout {
             }
             AppComboBox {
                 id: encoderField
+                objectName: "exportEncoderField"
                 Layout.fillWidth: true
                 visible: root.format && root.format.value !== "audio"
                 model: root.encoderModel()
                 textRole: "label"
                 valueRole: "value"
+                onCountChanged: {
+                    if (count > 0 && currentIndex < 0)
+                        currentIndex = 0
+                }
             }
             Text {
                 Layout.fillWidth: true

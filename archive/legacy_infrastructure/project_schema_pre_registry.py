@@ -9,17 +9,18 @@ from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
 from mediaflow.domain.enums import AssetKind, TrackKind, WorkflowStage
 from mediaflow.domain.media_association import related_media_stem
 from mediaflow.domain.model_base import new_id
-from mediaflow.domain.settings import AsrSettings, default_media_root
-from mediaflow.infrastructure.legacy_task_commands import legacy_task_command
+from mediaflow.domain.settings import AsrSettings
 from mediaflow.infrastructure.project_serialization import (
     json_value as _json,
 )
 from mediaflow.infrastructure.project_serialization import (
     model_json as _model_json,
 )
+from mediaflow.infrastructure.storage_paths import default_media_root
+from mediaflow.infrastructure.task_command_migrations import migrate_stored_task_command
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 26
+PROJECT_SCHEMA_VERSION = 33
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -31,7 +32,6 @@ CREATE TABLE IF NOT EXISTS schema_info (
 CREATE TABLE IF NOT EXISTS project (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    root_path TEXT NOT NULL,
     main_sequence_id TEXT NOT NULL,
     workflow_auto_continue INTEGER NOT NULL DEFAULT -1,
     content_revision INTEGER NOT NULL DEFAULT 0,
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS sequence (
     in_frame INTEGER,
     out_frame INTEGER,
     archived INTEGER NOT NULL DEFAULT 0,
+    timeline_revision INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS asset (
@@ -270,20 +271,38 @@ CREATE TABLE IF NOT EXISTS project_version (
     content_revision INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS automation_request (
+    request_id TEXT PRIMARY KEY,
+    operation TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS task (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     sequence_id TEXT REFERENCES sequence(id) ON DELETE SET NULL,
+    idempotency_key TEXT,
     command_json TEXT NOT NULL,
     status TEXT NOT NULL,
     progress_json TEXT NOT NULL,
     input_asset_ids_json TEXT NOT NULL,
     artifacts_json TEXT NOT NULL,
+    outcome_json TEXT,
     execution_trace_json TEXT NOT NULL DEFAULT '[]',
     error TEXT,
     revision INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_event (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    task_revision INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS workflow_run (
     id TEXT PRIMARY KEY,
@@ -307,6 +326,10 @@ CREATE INDEX IF NOT EXISTS idx_clip_track_time ON clip(track_id, timeline_start)
 CREATE INDEX IF NOT EXISTS idx_marker_sequence_time ON timeline_marker(sequence_id, frame);
 CREATE INDEX IF NOT EXISTS idx_range_sequence_time ON timeline_range(sequence_id, start_frame);
 CREATE INDEX IF NOT EXISTS idx_task_project_time ON task(project_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_project_idempotency
+ON task(project_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_task_event_project_cursor
+ON task_event(project_id, cursor);
 CREATE INDEX IF NOT EXISTS idx_workflow_project_time ON workflow_run(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_export_history_sequence_time
 ON export_history(sequence_id, created_at);
@@ -424,6 +447,7 @@ def _download_requests_from_parameters(
                     str(value) for value in (parameters.get("subtitle_languages") or ["en", "zh"])
                 ],
                 filename_prefix=filename,
+                output_directory=default_media_root(),
             )
         )
     return requests
@@ -434,6 +458,13 @@ class ProjectSchemaMigrator:
         self.workspace = workspace
 
     def validate(self) -> None:
+        if self.workspace.read_only:
+            self._validate()
+            return
+        with self.workspace.transaction():
+            self._validate()
+
+    def _validate(self) -> None:
         try:
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         except sqlite3.Error as error:
@@ -496,7 +527,10 @@ class ProjectSchemaMigrator:
                     item["id"] for item in connection.execute("SELECT id FROM sequence").fetchall()
                 ]
                 for sequence_id in sequence_ids:
-                    self.workspace._sync_subtitle_placements(connection, sequence_id)
+                    self.workspace.subtitles._sync_subtitle_placements(
+                        connection,
+                        sequence_id,
+                    )
                 connection.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_subtitle_placement_source "
                     "ON subtitle_placement(track_id, segment_id, COALESCE(clip_id, ''))"
@@ -508,7 +542,9 @@ class ProjectSchemaMigrator:
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         if row is not None and int(row["version"]) == 3 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
-                connection.executescript(TIMELINE_ANNOTATION_TABLES_SQL)
+                for statement in TIMELINE_ANNOTATION_TABLES_SQL.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
                     (4,),
@@ -619,7 +655,10 @@ class ProjectSchemaMigrator:
                     item["id"] for item in connection.execute("SELECT id FROM sequence").fetchall()
                 ]
                 for sequence_id in sequence_ids:
-                    self.workspace._sync_subtitle_placements(connection, sequence_id)
+                    self.workspace.subtitles._sync_subtitle_placements(
+                        connection,
+                        sequence_id,
+                    )
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
                     (7,),
@@ -896,7 +935,7 @@ class ProjectSchemaMigrator:
                             task_row["project_id"],
                             task_row["sequence_id"],
                             _model_json(
-                                legacy_task_command(
+                                migrate_stored_task_command(
                                     str(task_row["kind"]),
                                     json.loads(task_row["parameters_json"]),
                                     sequence_id=task_row["sequence_id"],
@@ -927,30 +966,25 @@ class ProjectSchemaMigrator:
         if row is not None and int(row["version"]) == 12 and not self.workspace.read_only:
             media_root = default_media_root()
             with self.workspace.transaction() as connection:
-                for task_row in connection.execute(
-                    "SELECT id, command_json FROM task"
-                ).fetchall():
+                for task_row in connection.execute("SELECT id, command_json FROM task").fetchall():
                     command = json.loads(task_row["command_json"])
                     if command.get("command_type") != "download_media":
                         continue
                     request = command.get("request")
-                    if isinstance(request, dict) and not str(
-                        request.get("output_directory") or ""
-                    ).strip():
+                    if isinstance(request, dict) and not str(request.get("output_directory") or "").strip():
                         request["output_directory"] = media_root
                         connection.execute(
                             "UPDATE task SET command_json=? WHERE id=?",
                             (_json(command), task_row["id"]),
                         )
-                for run_row in connection.execute(
-                    "SELECT id, payload_json FROM workflow_run"
-                ).fetchall():
+                for run_row in connection.execute("SELECT id, payload_json FROM workflow_run").fetchall():
                     payload = json.loads(run_row["payload_json"])
                     changed = False
                     for request in payload.get("requests") or []:
-                        if isinstance(request, dict) and not str(
-                            request.get("output_directory") or ""
-                        ).strip():
+                        if (
+                            isinstance(request, dict)
+                            and not str(request.get("output_directory") or "").strip()
+                        ):
                             request["output_directory"] = media_root
                             changed = True
                     if changed:
@@ -970,8 +1004,7 @@ class ProjectSchemaMigrator:
                 }
                 if "profile_confirmed" not in columns:
                     connection.execute(
-                        "ALTER TABLE sequence ADD COLUMN profile_confirmed "
-                        "INTEGER NOT NULL DEFAULT 1"
+                        "ALTER TABLE sequence ADD COLUMN profile_confirmed INTEGER NOT NULL DEFAULT 1"
                     )
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
@@ -982,9 +1015,7 @@ class ProjectSchemaMigrator:
             with self.workspace.transaction() as connection:
                 columns = {
                     item["name"]
-                    for item in connection.execute(
-                        "PRAGMA table_info(subtitle_placement)"
-                    ).fetchall()
+                    for item in connection.execute("PRAGMA table_info(subtitle_placement)").fetchall()
                 }
                 if "timing_overridden" not in columns:
                     connection.execute(
@@ -1000,18 +1031,14 @@ class ProjectSchemaMigrator:
             with self.workspace.transaction() as connection:
                 document_columns = {
                     item["name"]
-                    for item in connection.execute(
-                        "PRAGMA table_info(subtitle_document)"
-                    ).fetchall()
+                    for item in connection.execute("PRAGMA table_info(subtitle_document)").fetchall()
                 }
                 if "sequence_id" not in document_columns:
                     connection.execute(
                         "ALTER TABLE subtitle_document ADD COLUMN sequence_id TEXT "
                         "REFERENCES sequence(id) ON DELETE CASCADE"
                     )
-                project_row = connection.execute(
-                    "SELECT main_sequence_id FROM project LIMIT 1"
-                ).fetchone()
+                project_row = connection.execute("SELECT main_sequence_id FROM project LIMIT 1").fetchone()
                 main_sequence_id = str(project_row["main_sequence_id"]) if project_row else ""
                 for task_row in connection.execute(
                     "SELECT id, sequence_id, command_json FROM task"
@@ -1033,9 +1060,7 @@ class ProjectSchemaMigrator:
                         "UPDATE task SET command_json=? WHERE id=?",
                         (_json(migrated), task_row["id"]),
                     )
-                for run_row in connection.execute(
-                    "SELECT id, payload_json FROM workflow_run"
-                ).fetchall():
+                for run_row in connection.execute("SELECT id, payload_json FROM workflow_run").fetchall():
                     payload = json.loads(run_row["payload_json"])
                     if "document_ids_before_transcribe" not in payload:
                         continue
@@ -1052,13 +1077,11 @@ class ProjectSchemaMigrator:
         if row is not None and int(row["version"]) == 16 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
                 project_columns = {
-                    item["name"]
-                    for item in connection.execute("PRAGMA table_info(project)").fetchall()
+                    item["name"] for item in connection.execute("PRAGMA table_info(project)").fetchall()
                 }
                 if "content_revision" not in project_columns:
                     connection.execute(
-                        "ALTER TABLE project ADD COLUMN content_revision "
-                        "INTEGER NOT NULL DEFAULT 0"
+                        "ALTER TABLE project ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0"
                     )
                 connection.execute(
                     """CREATE TABLE IF NOT EXISTS web_asset (
@@ -1156,17 +1179,13 @@ class ProjectSchemaMigrator:
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         if row is not None and int(row["version"]) == 19 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
-                track_columns = {
-                    item["name"] for item in connection.execute("PRAGMA table_info(track)")
-                }
+                track_columns = {item["name"] for item in connection.execute("PRAGMA table_info(track)")}
                 if "linked_audio_track_id" not in track_columns:
                     connection.execute(
                         "ALTER TABLE track ADD COLUMN linked_audio_track_id TEXT "
                         "REFERENCES track(id) ON DELETE SET NULL"
                     )
-                clip_columns = {
-                    item["name"] for item in connection.execute("PRAGMA table_info(clip)")
-                }
+                clip_columns = {item["name"] for item in connection.execute("PRAGMA table_info(clip)")}
                 if "media_kind" not in clip_columns:
                     connection.execute(
                         "ALTER TABLE clip ADD COLUMN media_kind TEXT NOT NULL "
@@ -1235,11 +1254,7 @@ class ProjectSchemaMigrator:
                         )
                         if audio_track is None:
                             audio_track = next(
-                                (
-                                    item
-                                    for item in audio_tracks
-                                    if str(item["id"]) not in used_audio_ids
-                                ),
+                                (item for item in audio_tracks if str(item["id"]) not in used_audio_ids),
                                 None,
                             )
                         if audio_track is None:
@@ -1296,7 +1311,7 @@ class ProjectSchemaMigrator:
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         if row is not None and int(row["version"]) == 21 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
-                connection.executescript(
+                connection.execute(
                     """CREATE TABLE IF NOT EXISTS export_history (
                            id TEXT PRIMARY KEY,
                            task_id TEXT NOT NULL,
@@ -1307,8 +1322,10 @@ class ProjectSchemaMigrator:
                            quality_json TEXT NOT NULL,
                            content_revision INTEGER NOT NULL,
                            created_at INTEGER NOT NULL
-                       );
-                       CREATE TABLE IF NOT EXISTS project_version (
+                       )"""
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS project_version (
                            id TEXT PRIMARY KEY,
                            project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
                            name TEXT NOT NULL,
@@ -1316,11 +1333,15 @@ class ProjectSchemaMigrator:
                            sha256 TEXT NOT NULL,
                            content_revision INTEGER NOT NULL,
                            created_at INTEGER NOT NULL
-                       );
-                       CREATE INDEX IF NOT EXISTS idx_export_history_sequence_time
-                       ON export_history(sequence_id, created_at);
-                       CREATE INDEX IF NOT EXISTS idx_project_version_project_time
-                       ON project_version(project_id, created_at);"""
+                       )"""
+                )
+                connection.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_export_history_sequence_time
+                       ON export_history(sequence_id, created_at)"""
+                )
+                connection.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_project_version_project_time
+                       ON project_version(project_id, created_at)"""
                 )
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
@@ -1330,13 +1351,11 @@ class ProjectSchemaMigrator:
         if row is not None and int(row["version"]) == 22 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
                 clip_columns = {
-                    str(item["name"])
-                    for item in connection.execute("PRAGMA table_info(clip)").fetchall()
+                    str(item["name"]) for item in connection.execute("PRAGMA table_info(clip)").fetchall()
                 }
                 if "transform_keyframes_json" not in clip_columns:
                     connection.execute(
-                        "ALTER TABLE clip ADD COLUMN transform_keyframes_json "
-                        "TEXT NOT NULL DEFAULT '[]'"
+                        "ALTER TABLE clip ADD COLUMN transform_keyframes_json TEXT NOT NULL DEFAULT '[]'"
                     )
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
@@ -1346,19 +1365,15 @@ class ProjectSchemaMigrator:
         if row is not None and int(row["version"]) == 23 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
                 track_columns = {
-                    str(item["name"])
-                    for item in connection.execute("PRAGMA table_info(track)").fetchall()
+                    str(item["name"]) for item in connection.execute("PRAGMA table_info(track)").fetchall()
                 }
                 if "primary_dialogue" not in track_columns:
                     connection.execute(
-                        "ALTER TABLE track ADD COLUMN primary_dialogue "
-                        "INTEGER NOT NULL DEFAULT 0"
+                        "ALTER TABLE track ADD COLUMN primary_dialogue INTEGER NOT NULL DEFAULT 0"
                     )
                 sequence_ids = [
                     str(item["id"])
-                    for item in connection.execute(
-                        "SELECT id FROM sequence ORDER BY position, id"
-                    ).fetchall()
+                    for item in connection.execute("SELECT id FROM sequence ORDER BY position, id").fetchall()
                 ]
                 for sequence_id in sequence_ids:
                     candidate = connection.execute(
@@ -1389,9 +1404,7 @@ class ProjectSchemaMigrator:
                 )
                 document_columns = {
                     str(item["name"])
-                    for item in connection.execute(
-                        "PRAGMA table_info(subtitle_document)"
-                    ).fetchall()
+                    for item in connection.execute("PRAGMA table_info(subtitle_document)").fetchall()
                 }
                 if "purpose" not in document_columns:
                     connection.execute(
@@ -1426,8 +1439,7 @@ class ProjectSchemaMigrator:
         if row is not None and int(row["version"]) == 24 and not self.workspace.read_only:
             with self.workspace.transaction() as connection:
                 task_columns = {
-                    str(item["name"])
-                    for item in connection.execute("PRAGMA table_info(task)").fetchall()
+                    str(item["name"]) for item in connection.execute("PRAGMA table_info(task)").fetchall()
                 }
                 if "progress_json" not in task_columns:
                     task_rows = connection.execute(
@@ -1498,9 +1510,7 @@ class ProjectSchemaMigrator:
                             ),
                         )
                     connection.execute("DROP TABLE task_progress_v24")
-                    connection.execute(
-                        "CREATE INDEX idx_task_project_time ON task(project_id, created_at)"
-                    )
+                    connection.execute("CREATE INDEX idx_task_project_time ON task(project_id, created_at)")
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
                     (25,),
@@ -1517,11 +1527,7 @@ class ProjectSchemaMigrator:
                     if command.get("command_type") != "transcribe_sequence":
                         continue
                     if "plan" not in command:
-                        sequence_id = str(
-                            command.pop("sequence_id", None)
-                            or task_row["sequence_id"]
-                            or ""
-                        )
+                        sequence_id = str(command.pop("sequence_id", None) or task_row["sequence_id"] or "")
                         sequence_row = connection.execute(
                             """SELECT fps_numerator, fps_denominator
                                FROM sequence WHERE id=?""",
@@ -1534,14 +1540,10 @@ class ProjectSchemaMigrator:
                             "timeline_start_frame": 0,
                             "timeline_end_frame": 0,
                             "fps_numerator": (
-                                int(sequence_row["fps_numerator"])
-                                if sequence_row is not None
-                                else 30
+                                int(sequence_row["fps_numerator"]) if sequence_row is not None else 30
                             ),
                             "fps_denominator": (
-                                int(sequence_row["fps_denominator"])
-                                if sequence_row is not None
-                                else 1
+                                int(sequence_row["fps_denominator"]) if sequence_row is not None else 1
                             ),
                             "sources": [],
                             "asr": AsrSettings().model_dump(mode="json"),
@@ -1549,10 +1551,7 @@ class ProjectSchemaMigrator:
                     status = str(task_row["status"])
                     update_values: list[object] = [_json(command)]
                     update_clause = "command_json=?"
-                    if (
-                        status in {"pending", "running", "paused"}
-                        and not command["plan"].get("sources")
-                    ):
+                    if status in {"pending", "running", "paused"} and not command["plan"].get("sources"):
                         update_clause += ", status='cancelled', progress_json=?, error=?"
                         update_values.extend(
                             [
@@ -1576,6 +1575,125 @@ class ProjectSchemaMigrator:
                 connection.execute(
                     "UPDATE schema_info SET version=? WHERE component='project'",
                     (26,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 26 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                sequence_columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(sequence)").fetchall()
+                }
+                if "timeline_revision" not in sequence_columns:
+                    connection.execute(
+                        "ALTER TABLE sequence ADD COLUMN timeline_revision INTEGER NOT NULL DEFAULT 0"
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (27,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 27 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS task_event (
+                        cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                        project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+                        task_id TEXT NOT NULL,
+                        task_revision INTEGER NOT NULL,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at INTEGER NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_task_event_project_cursor "
+                    "ON task_event(project_id, cursor)"
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (28,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 28 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                project_dir = Path(self.workspace.project_dir).resolve()
+                for task_row in connection.execute("SELECT id, artifacts_json FROM task").fetchall():
+                    values = json.loads(str(task_row["artifacts_json"]))
+                    references: list[dict[str, str]] = []
+                    for value in values:
+                        path = Path(str(value))
+                        if path.is_absolute():
+                            try:
+                                relative = path.resolve().relative_to(project_dir)
+                            except ValueError:
+                                references.append({"scope": "external", "path": str(path.resolve())})
+                            else:
+                                references.append({"scope": "project", "path": relative.as_posix()})
+                        else:
+                            references.append({"scope": "project", "path": path.as_posix()})
+                    connection.execute(
+                        "UPDATE task SET artifacts_json=? WHERE id=?",
+                        (_json(references), task_row["id"]),
+                    )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (29,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 29 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                project_columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(project)").fetchall()
+                }
+                if "root_path" in project_columns:
+                    connection.execute("ALTER TABLE project DROP COLUMN root_path")
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (30,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 30 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                task_columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(task)").fetchall()
+                }
+                if "idempotency_key" not in task_columns:
+                    connection.execute("ALTER TABLE task ADD COLUMN idempotency_key TEXT")
+                connection.execute(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS idx_task_project_idempotency
+                       ON task(project_id, idempotency_key)
+                       WHERE idempotency_key IS NOT NULL"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (31,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 31 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS automation_request (
+                           request_id TEXT PRIMARY KEY,
+                           operation TEXT NOT NULL,
+                           input_hash TEXT NOT NULL,
+                           result_json TEXT NOT NULL,
+                           created_at INTEGER NOT NULL
+                       )"""
+                )
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (32,),
+                )
+            row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
+        if row is not None and int(row["version"]) == 32 and not self.workspace.read_only:
+            with self.workspace.transaction() as connection:
+                task_columns = {
+                    item["name"] for item in connection.execute("PRAGMA table_info(task)").fetchall()
+                }
+                if "outcome_json" not in task_columns:
+                    connection.execute("ALTER TABLE task ADD COLUMN outcome_json TEXT")
+                connection.execute(
+                    "UPDATE schema_info SET version=? WHERE component='project'",
+                    (33,),
                 )
             row = self.workspace._fetchone("SELECT version FROM schema_info WHERE component='project'")
         if row is None or int(row["version"]) != PROJECT_SCHEMA_VERSION:

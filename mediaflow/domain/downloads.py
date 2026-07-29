@@ -6,7 +6,6 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from mediaflow.domain.model_base import DomainModel
-from mediaflow.domain.settings import default_media_root
 
 
 class DownloadEntry(DomainModel):
@@ -86,7 +85,7 @@ class DownloadRequest(DomainModel):
     download_subtitles: bool = False
     subtitle_languages: list[str] = Field(default_factory=lambda: ["en", "zh"])
     filename_prefix: str = ""
-    output_directory: str = Field(default_factory=default_media_root)
+    output_directory: str
 
     @field_validator("output_directory")
     @classmethod

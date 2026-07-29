@@ -1,48 +1,10 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 
 _MELT_FRAME = re.compile(r"Current Frame:\s*(\d+)", re.IGNORECASE)
 _MELT_PERCENT = re.compile(r"percentage:\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
-
-
-def ffmpeg_progress_command(command: Sequence[str]) -> list[str]:
-    if not command:
-        raise ValueError("FFmpeg command cannot be empty")
-    return [str(command[0]), "-nostats", "-progress", "pipe:2", *map(str, command[1:])]
-
-
-class FfmpegProgressObserver:
-    def __init__(self, total_seconds: float, on_position: Callable[[float], None]):
-        if total_seconds <= 0:
-            raise ValueError("FFmpeg progress requires a positive media duration")
-        self.total_seconds = float(total_seconds)
-        self.on_position = on_position
-
-    def __call__(self, line: str) -> None:
-        key, separator, value = line.partition("=")
-        if not separator:
-            return
-        seconds: float | None = None
-        if key in {"out_time_us", "out_time_ms"}:
-            try:
-                seconds = int(value) / 1_000_000.0
-            except ValueError:
-                return
-        elif key == "out_time":
-            parts = value.split(":")
-            if len(parts) != 3:
-                return
-            try:
-                hours, minutes, raw_seconds = parts
-                seconds = int(hours) * 3600 + int(minutes) * 60 + float(raw_seconds)
-            except ValueError:
-                return
-        elif key == "progress" and value == "end":
-            seconds = self.total_seconds
-        if seconds is not None:
-            self.on_position(max(0.0, min(self.total_seconds, seconds)))
 
 
 class MeltProgressObserver:

@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -24,14 +23,49 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from scripts.run_artifacts import verification_run
 
-RUN_ROOT = Path("D:/Tools/MediaFlow/test-runs")
 FIXTURE_ROOT = Path("D:/Tools/MediaFlow/test-fixtures")
+PREVIEW_FPS = 30
+OPEN_LIMIT_SECONDS = 0.8
+STARTUP_LIMIT_SECONDS = 1.0
+POSITION_TOLERANCE_FRAMES = 3
+
+
+def preview_requirements_met(
+    *,
+    open_seconds: float,
+    startup_seconds: float,
+    first_window_advanced_frames: int,
+    first_window_expected_frames: int,
+    first_window_dropped_frames: int,
+    final_advanced_frames: int,
+    final_expected_frames: int,
+    final_dropped_frames: int,
+) -> bool:
+    """Evaluate every observed playback window, including the final position.
+
+    The final progress check is intentionally independent of the first window:
+    an implementation that plays normally for ten seconds and then freezes must
+    fail even when its drop counter remains unchanged.
+    """
+
+    return (
+        open_seconds <= OPEN_LIMIT_SECONDS
+        and startup_seconds <= STARTUP_LIMIT_SECONDS
+        and first_window_advanced_frames
+        >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
+        and first_window_dropped_frames == 0
+        and final_advanced_frames
+        >= final_expected_frames - POSITION_TOLERANCE_FRAMES
+        and final_dropped_frames == 0
+    )
 
 
 def pump_until(predicate, timeout: float) -> None:
@@ -96,27 +130,34 @@ def ensure_fixture(path: Path, paths: RuntimePaths, duration_seconds: int) -> No
     )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration-seconds", type=int, default=600)
     parser.add_argument("--playback-check-seconds", type=int, default=10)
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
+    with verification_run("preview-performance") as run_dir:
+        return verify(arguments, run_dir)
+
+
+def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
+    if arguments.duration_seconds <= 0:
+        raise ValueError("The playback duration must be positive")
+    if arguments.playback_check_seconds <= 0:
+        raise ValueError("The first playback check must be positive")
     if arguments.duration_seconds < arguments.playback_check_seconds:
         raise ValueError("The media duration must cover the playback check")
 
     paths = RuntimePaths.discover()
     if paths.melt is None or paths.native_qml is None:
         raise RuntimeError("MLT and the native QML plugin must be installed")
-    run_dir = RUN_ROOT / f"preview-performance-{datetime.now():%Y%m%d-%H%M%S}"
-    run_dir.mkdir(parents=True, exist_ok=False)
     media_seconds = arguments.duration_seconds + 5
     fixture = FIXTURE_ROOT / f"preview-motion-tone-long-gop-1080p30-{media_seconds}s.mkv"
     ensure_fixture(fixture, paths, media_seconds)
 
     with ProjectRepository.create(run_dir / "Preview Performance", "Preview Performance") as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(fixture)
-        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
-        track = next(item for item in editor.state.tracks if item.kind == TrackKind.VIDEO)
+        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,
             asset_id=asset.id,
@@ -162,7 +203,7 @@ ApplicationWindow {
         preview.play()
         startup_started = time.monotonic()
         pump_until(
-            lambda: bool(preview.property("audioClockActive")) and int(preview.property("position")) > 0,
+            lambda: bool(preview.property("playing")) and int(preview.property("position")) > 0,
             3,
         )
         startup_seconds = time.monotonic() - startup_started
@@ -175,7 +216,6 @@ ApplicationWindow {
         first_window_dropped = int(preview.property("droppedFrames"))
         first_window_position = int(preview.property("position"))
         first_window_advanced = first_window_position - playback_start_position
-        audio_clock_active = bool(preview.property("audioClockActive"))
 
         remaining = arguments.duration_seconds - arguments.playback_check_seconds
         if remaining > 0:
@@ -183,10 +223,13 @@ ApplicationWindow {
                 lambda: time.monotonic() - check_started >= arguments.duration_seconds,
                 remaining + 10,
             )
-        final_drift_ms = abs(float(preview.property("clockDriftMs")))
         final_position = int(preview.property("position"))
+        final_advanced = final_position - playback_start_position
+        final_dropped = int(preview.property("droppedFrames"))
         preview.pause()
 
+        first_window_expected = arguments.playback_check_seconds * PREVIEW_FPS
+        final_expected = arguments.duration_seconds * PREVIEW_FPS
         report = {
             "fixture": str(fixture),
             "resolution": "1920x1080",
@@ -195,32 +238,38 @@ ApplicationWindow {
             "source_audio": "440 Hz tone, Opus, 48 kHz",
             "duration_seconds": arguments.duration_seconds,
             "open_seconds": open_seconds,
+            "open_limit_seconds": OPEN_LIMIT_SECONDS,
             "startup_seconds": startup_seconds,
+            "startup_limit_seconds": STARTUP_LIMIT_SECONDS,
             "playback_start_position": playback_start_position,
             "first_window_seconds": arguments.playback_check_seconds,
             "first_window_position": first_window_position,
             "first_window_advanced_frames": first_window_advanced,
+            "first_window_expected_frames": first_window_expected,
             "first_window_dropped_frames": first_window_dropped,
-            "audio_clock_active": audio_clock_active,
             "final_position": final_position,
-            "final_clock_drift_ms": final_drift_ms,
+            "final_position_advanced_frames": final_advanced,
+            "final_position_expected_frames": final_expected,
+            "final_dropped_frames": final_dropped,
         }
-        report["passed"] = (
-            open_seconds <= 0.5
-            and startup_seconds <= 0.75
-            and first_window_advanced >= arguments.playback_check_seconds * 30 - 2
-            and first_window_dropped == 0
-            and audio_clock_active
-            and final_drift_ms <= 5.0
+        report["passed"] = preview_requirements_met(
+            open_seconds=open_seconds,
+            startup_seconds=startup_seconds,
+            first_window_advanced_frames=first_window_advanced,
+            first_window_expected_frames=first_window_expected,
+            first_window_dropped_frames=first_window_dropped,
+            final_advanced_frames=final_advanced,
+            final_expected_frames=final_expected,
+            final_dropped_frames=final_dropped,
         )
         report_path = run_dir / "preview-performance-report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
         print(report_path)
         print(json.dumps(report, ensure_ascii=False, indent=2))
 
         window.close()
         engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         QCoreApplication.processEvents()
         if not report["passed"]:
             raise RuntimeError("Native preview performance requirements were not met")

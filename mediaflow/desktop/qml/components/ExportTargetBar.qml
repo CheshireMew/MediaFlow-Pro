@@ -7,6 +7,7 @@ ColumnLayout {
     property var formats: []
     property alias currentIndex: format.currentIndex
     property bool taskActive: false
+    property bool actionsEnabled: true
     property string defaultDirectory: ""
     readonly property var selectedFormat: formats[Math.max(0, currentIndex)]
     signal exportRequested
@@ -53,13 +54,13 @@ ColumnLayout {
             primary: true
             text: root.selectedFormat && root.selectedFormat.value === "audio"
                 ? qsTr("开始导出音频") : qsTr("开始导出视频")
-            enabled: !root.taskActive
+            enabled: root.actionsEnabled && !root.taskActive
             onClicked: root.exportRequested()
         }
         AppButton {
             objectName: "exportAsButton"
             text: qsTr("另存为…")
-            enabled: !root.taskActive
+            enabled: root.actionsEnabled && !root.taskActive
             onClicked: root.saveAsRequested()
         }
     }

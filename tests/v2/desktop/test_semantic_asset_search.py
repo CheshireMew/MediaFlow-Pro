@@ -53,8 +53,7 @@ def test_asset_search_uses_real_linked_transcript_and_multilingual_concepts(
             role for role, name in filtered.roleNames().items() if bytes(name).decode() == "assetId"
         )
         matched_ids = {
-            filtered.data(filtered.index(row, 0), asset_id_role)
-            for row in range(filtered.rowCount())
+            filtered.data(filtered.index(row, 0), asset_id_role) for row in range(filtered.rowCount())
         }
         assert media.id in matched_ids
 

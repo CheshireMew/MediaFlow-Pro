@@ -12,12 +12,18 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtTest import QTest
 
+from mediaflow.composition import EditorApplication
 from mediaflow.desktop.app import configure_application_font, create_engine
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.domain.enums import AssetKind, TaskStatus
+from mediaflow.infrastructure import ytdlp_service
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.settings_repository import SettingsRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+from scripts.verify_real_user_chain import (
+    wait_downloaded_video_selection,
+    wait_for_downloaded_video_placement,
+)
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 
@@ -42,6 +48,49 @@ def _process_until(predicate, *, timeout: float = 20.0) -> bool:
     return bool(predicate())
 
 
+def test_shutdown_cancels_inflight_download_analysis_within_socket_bound(
+    monkeypatch,
+) -> None:
+    _application = QGuiApplication.instance() or QGuiApplication([])
+    request_seen = threading.Event()
+    release_response = threading.Event()
+
+    class Handler(SimpleHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            request_seen.set()
+            release_response.wait(timeout=5)
+
+        def log_message(self, _format: str, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    monkeypatch.setattr(ytdlp_service, "YTDLP_SOCKET_TIMEOUT_SECONDS", 0.25)
+    monkeypatch.setattr(
+        EditorApplication,
+        "discover_video_encoder_options",
+        lambda _application: [],
+    )
+    controllers = EditorControllers()
+    try:
+        controllers.tasks.analyzeDownloadUrl(
+            f"http://127.0.0.1:{server.server_address[1]}/watch"
+        )
+        assert request_seen.wait(timeout=3)
+        started = time.monotonic()
+        controllers.shutdown()
+        assert time.monotonic() - started < 3.0
+    finally:
+        if not controllers.session.requests.shutting_down:
+            controllers.shutdown()
+        release_response.set()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+
+
 def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
     tmp_path: Path,
 ) -> None:
@@ -59,6 +108,8 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
     server_thread.start()
     controllers = EditorControllers()
     session = controllers.session
+    ui_errors: list[str] = []
+    session.events.errorOccurred.connect(ui_errors.append)
     try:
         controllers.workspace.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
@@ -92,18 +143,21 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
 
         controllers.tasks.submitDownloadPlan("best", "1-2", False, "best", "")
 
-        run = session._documents.list_workflow_runs(active_only=True)[0]
+        run = session.binding.current.list_workflow_runs(active_only=True)[0]
         task_ids = run.payload.task_ids
         assert len(task_ids) == 2
-        completed = [session._tasks.wait(task_id, timeout=30) for task_id in task_ids]
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and controllers.workspace.workflowStage == "download":
-            QCoreApplication.processEvents()
-            time.sleep(0.01)
+        completed = [session.binding.current.wait_for_task(task_id, timeout=30) for task_id in task_ids]
+        assert _process_until(
+            lambda: controllers.workspace.workflowStage == "prepare_media"
+            and controllers.workspace.workflowStatus == "awaiting_confirmation"
+            and controllers.media.assetsModel.rowCount() == 2,
+            timeout=5,
+        )
 
-        task_commands = [session._tasks.get(task_id).command for task_id in task_ids]
+        task_commands = [session.binding.current.get_task(task_id).command for task_id in task_ids]
         asset_paths = [
-            session._documents.resolve_asset_path(asset) for asset in session._documents.list_assets()
+            session.binding.current.resolve_asset_path(asset)
+            for asset in session.binding.current.list_assets()
         ]
 
         assert all(task.status == TaskStatus.COMPLETED for task in completed)
@@ -114,6 +168,73 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
         assert {path.parent.name for path in asset_paths} == {"Local Course"}
         assert all(path.is_file() for path in asset_paths)
         assert controllers.media.assetsModel.rowCount() == 2
+
+        downloaded_asset_id = wait_downloaded_video_selection(
+            controllers,
+            run.id,
+            ui_errors,
+            timeout=5,
+        )
+        controllers.workspace.updateSequenceProfile(
+            1920,
+            1080,
+            30,
+            1,
+            "sdr_bt709",
+            2,
+        )
+        web_manifest = (
+            Path(__file__).resolve().parents[3]
+            / "tests"
+            / "fixtures"
+            / "editable-media-v3"
+            / "editable-media.json"
+        )
+        controllers.media.importFiles(
+            [QUrl.fromLocalFile(str(web_manifest))]
+        )
+        web_asset_id = next(
+            asset.id
+            for asset in session.binding.current.list_assets()
+            if asset.kind == AssetKind.WEB
+        )
+        controllers.timeline.dropAssets(
+            [web_asset_id],
+            "",
+            -1,
+            0,
+            3.0,
+            0,
+            True,
+            False,
+        )
+        assert controllers.timeline.clipsModel.rowCount() == 1
+
+        controllers.timeline.dropAssets(
+            [downloaded_asset_id],
+            "",
+            -1,
+            0,
+            3.0,
+            0,
+            True,
+            False,
+        )
+        assert controllers.workspace.profileConfirmationPending is True
+        video_clip_id = wait_for_downloaded_video_placement(
+            controllers,
+            run.id,
+            downloaded_asset_id,
+            ui_errors,
+            timeout=5,
+        )
+        assert controllers.timeline.clipsModel.findRow("clipId", video_clip_id) >= 0
+        assert controllers.workspace.workflowStage == "prepare_media"
+        assert controllers.workspace.workflowStatus == "awaiting_confirmation"
+        assert controllers.workspace.workflowMessageCode != (
+            "workflow_no_transcribable_assets"
+        )
+
         persisted_settings = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load()
         assert persisted_settings.ui.recent_project_paths == [str(tmp_path / "Download UI")]
     finally:
@@ -163,18 +284,16 @@ def test_default_workspace_contains_real_downloaded_video_and_subtitles(
         session._set_download_plan(YtDlpDownloadService().analyze(page_url))
         controllers.tasks.submitDownloadPlan("best", "", True, "best", "")
 
-        run = session._documents.list_workflow_runs(active_only=True)[0]
-        completed = session._tasks.wait(run.payload.task_ids[0], timeout=30)
+        run = session.binding.current.list_workflow_runs(active_only=True)[0]
+        completed = session.binding.current.wait_for_task(run.payload.task_ids[0], timeout=30)
         assert completed.status == TaskStatus.COMPLETED
 
-        assets = session._documents.list_assets()
-        paths = [session._documents.resolve_asset_path(asset) for asset in assets]
+        assets = session.binding.current.list_assets()
+        paths = [session.binding.current.resolve_asset_path(asset) for asset in assets]
         workspace = Path(session.settings.download.output_directory)
         assert {asset.kind for asset in assets} == {AssetKind.VIDEO, AssetKind.SUBTITLE}
         assert all(path.is_relative_to(workspace) and path.is_file() for path in paths)
-        project_subtitles = list(
-            (tmp_path / "Captioned Download" / "generated" / "subtitles").rglob("*.srt")
-        )
+        project_subtitles = list((tmp_path / "Captioned Download" / "generated" / "subtitles").rglob("*.srt"))
         assert project_subtitles
         assert "Hello WorkSpace" in project_subtitles[0].read_text(encoding="utf-8-sig")
     finally:
@@ -225,12 +344,20 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
             source_url,
         )
         controllers.session._set_download_plan(plan)
-        controllers.tasks.downloadPlanChanged.emit()
 
         window = engine.rootObjects()[0]
         window.setWidth(1600)
         window.setHeight(980)
         assert _process_until(lambda: window.property("downloadPlanVisible") is True)
+        download_dialog = window.findChild(QObject, "downloadPlanDialog")
+        download_scroll = window.findChild(QQuickItem, "downloadPlanScroll")
+        window.setHeight(720)
+        assert _process_until(
+            lambda: download_dialog is not None
+            and float(download_dialog.property("height")) <= window.height() - 48
+        )
+        assert download_scroll is not None and download_scroll.isVisible()
+        window.setHeight(980)
         summary = window.findChild(QQuickItem, "downloadMediaSummary")
         confirm = window.findChild(QQuickItem, "confirmDownloadButton")
         resolution = window.findChild(QQuickItem, "downloadResolution")
@@ -259,8 +386,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         custom_media = tmp_path / "Custom Media"
         controllers.settings.setDefaultDownloadDirectory(str(custom_media))
         assert _process_until(
-            lambda: reset_media.isVisible()
-            and Path(destination.property("text")) == custom_media
+            lambda: reset_media.isVisible() and Path(destination.property("text")) == custom_media
         )
         assert QMetaObject.invokeMethod(reset_media, "click")
         assert _process_until(
@@ -320,12 +446,8 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         workspace = page_loader.property("item")
         settings_dialog = workspace.findChild(QObject, "settingsDialog")
         settings_tabs = workspace.findChild(QQuickItem, "settingsTabs")
-        project_directory_setting = workspace.findChild(
-            QQuickItem, "defaultProjectDirectorySetting"
-        )
-        media_directory_setting = workspace.findChild(
-            QQuickItem, "defaultMediaDirectorySetting"
-        )
+        project_directory_setting = workspace.findChild(QQuickItem, "defaultProjectDirectorySetting")
+        media_directory_setting = workspace.findChild(QQuickItem, "defaultMediaDirectorySetting")
         assert settings_dialog is not None and settings_tabs is not None
         assert project_directory_setting is not None
         assert media_directory_setting is not None
@@ -345,10 +467,9 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         banner = workspace.findChild(QQuickItem, "downloadProgressBanner")
         progress_bar = workspace.findChild(QQuickItem, "downloadProgressBar")
         assert banner is not None and progress_bar is not None
-        assert _process_until(
-            lambda: banner.isVisible() and 0 < float(progress_bar.property("value")) < 100
-        )
-        assert workspace.findChild(QQuickItem, "workflowBanner") is None
+        assert _process_until(lambda: banner.isVisible() and 0 < float(progress_bar.property("value")) < 100)
+        workflow_banner = workspace.findChild(QQuickItem, "workflowBanner")
+        assert workflow_banner is not None and not workflow_banner.isVisible()
         rendered = window.grabWindow()
         screenshot = tmp_path / "quick-start-download-progress.png"
         assert not rendered.isNull() and rendered.save(str(screenshot))
@@ -360,12 +481,8 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert downloaded_path.parent.name == "WorkSpace"
         assert (expected_project_path / "project.mfp").is_file()
         persisted_settings = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load()
-        assert persisted_settings.ui.default_project_directory == str(
-            (tmp_path / "Project").resolve()
-        )
-        assert persisted_settings.download.output_directory == str(
-            (tmp_path / "WorkSpace").resolve()
-        )
+        assert persisted_settings.ui.default_project_directory == str((tmp_path / "Project").resolve())
+        assert persisted_settings.download.output_directory == str((tmp_path / "WorkSpace").resolve())
         assert persisted_settings.download.resolution == "best"
         assert persisted_settings.download.download_subtitles is False
         assert persisted_settings.download.codec == "best"

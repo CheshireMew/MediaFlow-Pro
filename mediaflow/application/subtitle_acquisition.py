@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mediaflow.application.ports import SubtitleAcquisitionDocuments
-from mediaflow.application.subtitle_publication import SubtitlePublicationService
+from mediaflow.application.subtitle_publication import (
+    SubtitleDocumentPublication,
+    SubtitlePublicationService,
+)
 from mediaflow.domain.asr import AsrResult, RegionAsrPipeline
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.media_association import related_media_paths
+from mediaflow.domain.model_base import new_id
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.project import Asset
-from mediaflow.domain.sequence_audio import ProjectedDialogueSegment
+from mediaflow.domain.project import Asset, ProjectProfile
+from mediaflow.domain.sequence_audio import (
+    ProjectedDialogueSegment,
+    ProjectedDialogueWord,
+)
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
+from mediaflow.domain.timebase import reframe_interval
 
 if TYPE_CHECKING:
-    from mediaflow.application.asset_service import AssetService
+    from mediaflow.application.asset_service import (
+        AssetService,
+        PreparedAssetRegistration,
+    )
 
 
 class SubtitleAcquisitionService:
@@ -45,13 +56,13 @@ class SubtitleAcquisitionService:
         progress: Callable[[OperationProgress], None] | None = None,
     ) -> tuple[AsrResult, bool]:
         media_source = Path(source).resolve(strict=True)
-        asset = self.repository.get_asset(asset_id)
+        asset = self.repository.catalog.get_asset(asset_id)
         if (
             asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}
             or not asset.metadata.has_audio
         ):
             raise ValueError("主要对白轨上的素材必须包含音频")
-        cached = self.repository.get_asset_transcript(asset_id, signature)
+        cached = self.repository.subtitles.get_asset_transcript(asset_id, signature)
         if cached is not None:
             if progress:
                 progress(
@@ -74,7 +85,7 @@ class SubtitleAcquisitionService:
         )
         if check_cancelled:
             check_cancelled()
-        self.repository.save_asset_transcript(asset_id, signature, result)
+        self.repository.subtitles.save_asset_transcript(asset_id, signature, result)
         return result, False
 
     def save_sequence_transcript(
@@ -83,24 +94,32 @@ class SubtitleAcquisitionService:
         subtitle_asset_id: str,
         projected: tuple[ProjectedDialogueSegment, ...],
         *,
+        document_id: str,
         language: str,
     ) -> SubtitleDocument:
         if not projected:
             raise RuntimeError("主要对白轨范围内没有识别出可用语音")
-        project = self.repository.get_project()
-        self.repository.get_sequence(sequence_id)
-        subtitle_asset = self.repository.get_asset(subtitle_asset_id)
+        project = self.repository.catalog.get_project()
+        sequence_profile = self.repository.catalog.get_sequence(sequence_id).profile
+        main_profile = self.repository.catalog.get_sequence(
+            project.main_sequence_id
+        ).profile
+        subtitle_asset = self.repository.catalog.get_asset(subtitle_asset_id)
         if subtitle_asset.kind != AssetKind.SUBTITLE:
             raise ValueError("时间线转录文档必须关联生成的字幕素材")
         existing = [
             document
-            for document in self.repository.list_subtitle_documents(
+            for document in self.repository.subtitles.list_subtitle_documents(
                 sequence_id=sequence_id
             )
             if document.is_source
             and document.source_document_id is None
             and document.purpose == "sequence_transcript"
         ]
+        if existing and existing[-1].id != document_id:
+            raise RuntimeError(
+                "时间轴转录文档在任务执行期间发生变化，请重新发起转录"
+            )
         document = (
             existing[-1].model_copy(
                 update={
@@ -112,6 +131,7 @@ class SubtitleAcquisitionService:
             )
             if existing
             else SubtitleDocument(
+                id=document_id,
                 project_id=project.id,
                 asset_id=subtitle_asset_id,
                 sequence_id=sequence_id,
@@ -124,36 +144,77 @@ class SubtitleAcquisitionService:
         words: list[SubtitleWord] = []
         for item in projected:
             if item.text.strip():
+                segment_start, segment_end = reframe_interval(
+                    item.start_frame,
+                    item.end_frame,
+                    sequence_profile,
+                    main_profile,
+                )
                 segment = SubtitleSegment(
                     document_id=document.id,
-                    start_frame=item.start_frame,
-                    end_frame=item.end_frame,
+                    start_frame=segment_start,
+                    end_frame=segment_end,
                     text=item.text.strip(),
                     confidence=item.confidence,
                 )
                 segments.append(segment)
                 if item.words:
                     words.extend(
-                        SubtitleWord(
-                            segment_id=segment.id,
+                        self._recognized_word(
+                            segment,
+                            word,
                             position=position,
-                            start_frame=word.start_frame,
-                            end_frame=word.end_frame,
-                            text=word.text,
-                            confidence=word.confidence,
-                            timing_source="recognized",
+                            source_profile=sequence_profile,
+                            destination_profile=main_profile,
                         )
                         for position, word in enumerate(item.words)
                     )
                 else:
                     words.extend(self._estimated_words(segment))
         if existing:
-            self.repository.save_subtitle_document(document)
-            self.repository.save_subtitle_segments(document.id, segments)
-            self.repository.save_subtitle_words(document.id, words)
+            self.repository.subtitles.save_subtitle_document(document)
+            self.repository.subtitles.save_subtitle_segments(document.id, segments)
+            self.repository.subtitles.save_subtitle_words(document.id, words)
         else:
-            self.repository.create_subtitle_document(document, segments, words)
+            self.repository.subtitles.create_subtitle_document(document, segments, words)
         return document
+
+    def sequence_transcript_document_id(self, sequence_id: str) -> str:
+        existing = [
+            document
+            for document in self.repository.subtitles.list_subtitle_documents(
+                sequence_id=sequence_id
+            )
+            if document.is_source
+            and document.source_document_id is None
+            and document.purpose == "sequence_transcript"
+        ]
+        return existing[-1].id if existing else new_id()
+
+    @staticmethod
+    def _recognized_word(
+        segment: SubtitleSegment,
+        word: ProjectedDialogueWord,
+        *,
+        position: int,
+        source_profile: ProjectProfile,
+        destination_profile: ProjectProfile,
+    ) -> SubtitleWord:
+        start_frame, end_frame = reframe_interval(
+            word.start_frame,
+            word.end_frame,
+            source_profile,
+            destination_profile,
+        )
+        return SubtitleWord(
+            segment_id=segment.id,
+            position=position,
+            start_frame=max(segment.start_frame, start_frame),
+            end_frame=min(segment.end_frame, end_frame),
+            text=word.text,
+            confidence=word.confidence,
+            timing_source="recognized",
+        )
 
     @staticmethod
     def _estimated_words(segment: SubtitleSegment) -> list[SubtitleWord]:
@@ -186,32 +247,87 @@ class SubtitleAcquisitionService:
         *,
         language: str | None = None,
         media_asset_id: str | None = None,
+        check_cancelled: Callable[[], None] | None = None,
     ) -> SubtitleDocument:
         source = Path(path).resolve(strict=True)
         if source.suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}:
             raise ValueError("支持导入 SRT、WebVTT、ASS 和 SSA 字幕")
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         cues = SubtitleFile.read(
             source,
             fps_numerator=profile.fps_numerator,
             fps_denominator=profile.fps_denominator,
         )
-        media_asset = self._resolve_media_asset(
+        media_asset, prepared_media = self._prepare_related_media(
             source,
             media_asset_id=media_asset_id,
             asset_service=asset_service,
+            check_cancelled=check_cancelled,
         )
-        asset = asset_service.import_external(source)
-        if asset.kind != AssetKind.SUBTITLE:
-            raise ValueError("SRT 文件没有被识别为字幕素材")
-        return self._create_document_from_cues(
+        prepared_subtitle = asset_service.prepare_external(
+            source,
+            expected_kind=AssetKind.SUBTITLE,
+        )
+        if check_cancelled is not None:
+            check_cancelled()
+        asset = prepared_subtitle.asset
+        associated_media = (
+            media_asset
+            if media_asset is not None
+            else prepared_media.asset
+            if prepared_media is not None
+            else None
+        )
+        existing = [
+            document
+            for document in self.repository.subtitles.list_subtitle_documents(asset.id)
+            if document.is_source
+            and document.media_asset_id
+            == (associated_media.id if associated_media else None)
+        ]
+        if existing:
+            return existing[0]
+        document, segments = self._build_document_from_cues(
             asset.id,
             source,
             cues,
             language=language,
-            media_asset_id=media_asset.id if media_asset else None,
+            media_asset_id=(
+                associated_media.id if associated_media is not None else None
+            ),
         )
+        if check_cancelled is not None:
+            check_cancelled()
+
+        def commit_import() -> SubtitleDocument:
+            if prepared_media is not None:
+                committed_media = asset_service.commit_prepared(
+                    prepared_media
+                )
+                if committed_media.id != prepared_media.asset.id:
+                    raise RuntimeError(
+                        "关联媒体在导入准备后发生冲突，请重试"
+                    )
+            committed_subtitle = asset_service.commit_prepared(
+                prepared_subtitle
+            )
+            if committed_subtitle.id != document.asset_id:
+                raise RuntimeError(
+                    "字幕素材在导入准备后发生冲突，请重试"
+                )
+            return document
+
+        _result, _outputs = self.publication.commit_prepared_documents(
+            commit_import,
+            (
+                SubtitleDocumentPublication(
+                    document=document,
+                    segments=tuple(segments),
+                ),
+            ),
+        )
+        return document
 
     def create_document_from_subtitle_asset(
         self,
@@ -219,34 +335,61 @@ class SubtitleAcquisitionService:
         *,
         language: str | None = None,
     ) -> SubtitleDocument:
-        asset = self.repository.get_asset(asset_id)
+        asset = self.repository.catalog.get_asset(asset_id)
+        document, publication = self.prepare_document_publication(
+            asset,
+            language=language,
+        )
+        if publication is not None:
+            self.publication.commit_prepared_documents(
+                lambda: None,
+                (publication,),
+            )
+        return document
+
+    def prepare_document_publication(
+        self,
+        asset: Asset,
+        *,
+        available_assets: Iterable[Asset] = (),
+        language: str | None = None,
+    ) -> tuple[SubtitleDocument, SubtitleDocumentPublication | None]:
         if asset.kind != AssetKind.SUBTITLE:
             raise ValueError("只有字幕素材可以创建字幕文档")
         existing = [
-            document for document in self.repository.list_subtitle_documents(asset.id) if document.is_source
+            document
+            for document in self.repository.subtitles.list_subtitle_documents(asset.id)
+            if document.is_source
         ]
         if existing:
-            return existing[0]
-        source = self.repository.resolve_asset_path(asset)
+            return existing[0], None
+        source = self.repository.catalog.resolve_asset_path(asset)
         if source.suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}:
             raise ValueError("该素材不是受支持的字幕文件")
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         cues = SubtitleFile.read(
             source,
             fps_numerator=profile.fps_numerator,
             fps_denominator=profile.fps_denominator,
         )
-        media_asset = self._resolve_media_asset(source)
-        return self._create_document_from_cues(
+        media_asset = self._find_related_media(
+            source,
+            available_assets=available_assets,
+        )
+        document, segments = self._build_document_from_cues(
             asset.id,
             source,
             cues,
             language=language,
             media_asset_id=media_asset.id if media_asset else None,
         )
+        return document, SubtitleDocumentPublication(
+            document=document,
+            segments=tuple(segments),
+        )
 
-    def _create_document_from_cues(
+    def _build_document_from_cues(
         self,
         asset_id: str,
         source: Path,
@@ -254,8 +397,8 @@ class SubtitleAcquisitionService:
         *,
         language: str | None,
         media_asset_id: str | None,
-    ) -> SubtitleDocument:
-        project = self.repository.get_project()
+    ) -> tuple[SubtitleDocument, list[SubtitleSegment]]:
+        project = self.repository.catalog.get_project()
         document = SubtitleDocument(
             project_id=project.id,
             asset_id=asset_id,
@@ -272,47 +415,88 @@ class SubtitleAcquisitionService:
             )
             for cue in cues
         ]
-        self.repository.create_subtitle_document(document, segments)
-        self.publication.write_document_srt(document.id)
-        return document
+        return document, segments
 
-    def _resolve_media_asset(
+    def _prepare_related_media(
         self,
         subtitle_path: Path,
         *,
         media_asset_id: str | None = None,
         asset_service: AssetService | None = None,
-    ) -> Asset | None:
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> tuple[Asset | None, PreparedAssetRegistration | None]:
         if media_asset_id:
-            media_asset = self.repository.get_asset(media_asset_id)
+            media_asset = self.repository.catalog.get_asset(media_asset_id)
             if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 raise ValueError("关联字幕的素材必须是视频或音频")
-            return media_asset
+            return media_asset, None
 
-        candidates = [path.resolve() for path in related_media_paths(subtitle_path)]
-        candidate_positions = {str(path).casefold(): position for position, path in enumerate(candidates)}
-        existing = []
-        for asset in self.repository.list_assets():
-            if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
-                continue
-            path = self.repository.resolve_asset_path(asset).resolve()
-            position = candidate_positions.get(str(path).casefold())
-            if position is not None:
-                existing.append((position, asset.kind != AssetKind.VIDEO, asset))
-        if existing:
-            existing.sort(key=lambda item: (item[0], item[1], item[2].id))
-            return existing[0][2]
+        existing = self._find_related_media(subtitle_path)
+        if existing is not None:
+            return existing, None
 
         if asset_service:
-            for candidate in candidates:
+            for candidate in related_media_paths(subtitle_path):
+                candidate = candidate.resolve()
                 if not candidate.is_file() or candidate.stat().st_size <= 0:
                     continue
-                asset = asset_service.import_external(candidate)
-                if asset.kind in {AssetKind.VIDEO, AssetKind.AUDIO}:
-                    return asset
+                prepared = asset_service.prepare_external(
+                    candidate,
+                )
+                if check_cancelled is not None:
+                    check_cancelled()
+                if prepared.asset.kind in {
+                    AssetKind.VIDEO,
+                    AssetKind.AUDIO,
+                }:
+                    return None, prepared
                 raise ValueError("同名文件不是可用的视频或音频")
-        return None
+        return None, None
+
+    def _find_related_media(
+        self,
+        subtitle_path: Path,
+        *,
+        available_assets: Iterable[Asset] = (),
+    ) -> Asset | None:
+        candidates = [
+            path.resolve() for path in related_media_paths(subtitle_path)
+        ]
+        candidate_positions = {
+            str(path).casefold(): position
+            for position, path in enumerate(candidates)
+        }
+        assets_by_id = {
+            asset.id: asset
+            for asset in self.repository.catalog.list_assets()
+        }
+        assets_by_id.update(
+            {asset.id: asset for asset in available_assets}
+        )
+        matches = []
+        for asset in assets_by_id.values():
+            if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
+                continue
+            path = self.repository.catalog.resolve_asset_path(asset).resolve()
+            position = candidate_positions.get(str(path).casefold())
+            if position is not None:
+                matches.append(
+                    (
+                        position,
+                        asset.kind != AssetKind.VIDEO,
+                        asset,
+                    )
+                )
+        if not matches:
+            return None
+        matches.sort(key=lambda item: (item[0], item[1], item[2].id))
+        return matches[0][2]
 
     def _save_segments(self, document_id: str, segments: list[SubtitleSegment]) -> None:
-        self.repository.save_subtitle_segments(document_id, segments)
-        self.publication.write_document_srt(document_id)
+        self.publication.commit_document_change(
+            document_id,
+            lambda: self.repository.subtitles.save_subtitle_segments(
+                document_id,
+                segments,
+            ),
+        )

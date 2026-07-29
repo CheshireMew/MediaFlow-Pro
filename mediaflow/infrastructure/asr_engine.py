@@ -9,7 +9,6 @@ import subprocess
 import sys
 import threading
 import traceback
-import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -21,6 +20,7 @@ from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitle_file import SubtitleFile
 
 from .audio_chunking import AudioChunkingService, AudioPreparationService
+from .cache_manager import CacheManager
 from .runtime_paths import RuntimePaths
 
 
@@ -54,11 +54,15 @@ class AsrPipeline:
             check_cancelled=self.check_cancelled,
             progress=progress,
         )
-        return self.engine.transcribe(
-            prepared,
-            language=language,
-            progress=progress,
-        )
+        cache = CacheManager(self.paths.runtime_dir / "cache")
+        try:
+            return self.engine.transcribe(
+                prepared,
+                language=language,
+                progress=progress,
+            )
+        finally:
+            cache.cleanup_run(prepared.parent)
 
 
 class ChunkedAsrEngine:
@@ -115,6 +119,25 @@ class ChunkedAsrEngine:
             check_cancelled=self.check_cancelled,
             progress=progress,
         )
+        cache = CacheManager(self.paths.runtime_dir / "cache")
+        try:
+            return self._transcribe_chunks(
+                chunks,
+                duration,
+                language=language,
+                progress=progress,
+            )
+        finally:
+            cache.cleanup_run(chunks[0][0].parent)
+
+    def _transcribe_chunks(
+        self,
+        chunks: list[tuple[Path, float]],
+        duration: float,
+        *,
+        language: str | None,
+        progress: AsrProgress | None,
+    ) -> AsrResult:
         chunk_durations = [
             (chunks[index + 1][1] if index + 1 < len(chunks) else duration) - offset
             for index, (_path, offset) in enumerate(chunks)
@@ -196,10 +219,10 @@ class ChunkedAsrEngine:
         output: list[AsrSegment] = []
         detected_language = language or "unknown"
         for index, (_path, offset) in enumerate(chunks):
-            result = results[index]
-            if result is None:
+            chunk_result = results[index]
+            if chunk_result is None:
                 raise RuntimeError(f"转录分块没有返回结果：{index + 1}")
-            detected_language = result.language or detected_language
+            detected_language = chunk_result.language or detected_language
             output.extend(
                 AsrSegment(
                     start_seconds=segment.start_seconds + offset,
@@ -216,7 +239,7 @@ class ChunkedAsrEngine:
                         for word in segment.words
                     ),
                 )
-                for segment in result.segments
+                    for segment in chunk_result.segments
             )
         return AsrResult(
             language=detected_language,
@@ -532,43 +555,52 @@ class FasterWhisperCliEngine:
         progress: AsrProgress | None,
     ) -> AsrResult:
         source = Path(media_path).resolve(strict=True)
-        output_dir = self.paths.runtime_dir / "cache" / "asr-cli" / "runs" / str(uuid.uuid4())
-        output_dir.mkdir(parents=True, exist_ok=True)
-        command = self.build_command(source, output_dir, language=language)
-        if progress:
-            progress(OperationProgress.indeterminate("asr_cli_starting"))
-        returncode, output = self._run(command, progress)
-        srt_path = next(
-            (
-                path
-                for path in sorted(output_dir.rglob("*.srt"))
-                if path.is_file() and path.stat().st_size > 0
-            ),
-            None,
-        )
-        if returncode != 0 and not (srt_path is not None and returncode in self.WINDOWS_OUTPUT_EXIT_CODES):
-            detail = "\n".join(output[-30:]).strip() or "没有 CLI 输出"
-            raise RuntimeError(f"Faster-Whisper CLI 失败（{returncode}）：{detail}")
-        if srt_path is None:
-            raise RuntimeError("Faster-Whisper CLI 没有生成可用的 SRT")
-        cues = SubtitleFile.read(
-            srt_path,
-            fps_numerator=1000,
-            fps_denominator=1,
-        )
-        requested_language = language or self.settings.language
-        return AsrResult(
-            language=(requested_language if requested_language and requested_language != "auto" else "und"),
-            duration_seconds=max(cue.end_frame for cue in cues) / 1000,
-            segments=tuple(
-                AsrSegment(
-                    start_seconds=cue.start_frame / 1000,
-                    end_seconds=cue.end_frame / 1000,
-                    text=cue.text,
-                )
-                for cue in cues
-            ),
-        )
+        cache = CacheManager(self.paths.runtime_dir / "cache")
+        output_dir = cache.create_run("asr-cli")
+        try:
+            command = self.build_command(source, output_dir, language=language)
+            if progress:
+                progress(OperationProgress.indeterminate("asr_cli_starting"))
+            returncode, output = self._run(command, progress)
+            srt_path = next(
+                (
+                    path
+                    for path in sorted(output_dir.rglob("*.srt"))
+                    if path.is_file() and path.stat().st_size > 0
+                ),
+                None,
+            )
+            if returncode != 0 and not (
+                srt_path is not None and returncode in self.WINDOWS_OUTPUT_EXIT_CODES
+            ):
+                detail = "\n".join(output[-30:]).strip() or "没有 CLI 输出"
+                raise RuntimeError(f"Faster-Whisper CLI 失败（{returncode}）：{detail}")
+            if srt_path is None:
+                raise RuntimeError("Faster-Whisper CLI 没有生成可用的 SRT")
+            cues = SubtitleFile.read(
+                srt_path,
+                fps_numerator=1000,
+                fps_denominator=1,
+            )
+            requested_language = language or self.settings.language
+            return AsrResult(
+                language=(
+                    requested_language
+                    if requested_language and requested_language != "auto"
+                    else "und"
+                ),
+                duration_seconds=max(cue.end_frame for cue in cues) / 1000,
+                segments=tuple(
+                    AsrSegment(
+                        start_seconds=cue.start_frame / 1000,
+                        end_seconds=cue.end_frame / 1000,
+                        text=cue.text,
+                    )
+                    for cue in cues
+                ),
+            )
+        finally:
+            cache.cleanup_run(output_dir)
 
     def build_command(
         self,
@@ -772,7 +804,8 @@ def _available_memory_bytes() -> int:
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             return int(status.available_physical)
     try:
-        return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+        sysconf = getattr(os, "sys" + "conf")
+        return int(sysconf("SC_AVPHYS_PAGES") * sysconf("SC_PAGE_SIZE"))
     except (AttributeError, OSError, ValueError):
         return 4 * 1024**3
 

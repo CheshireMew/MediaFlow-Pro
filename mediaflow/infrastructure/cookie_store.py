@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+import stat
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from mediaflow.atomic_file import atomic_write_text
 
 
 class CookieStore:
@@ -31,9 +34,13 @@ class CookieStore:
             secure = "TRUE" if bool(cookie.get("secure")) else "FALSE"
             expires = cookie.get("expirationDate", cookie.get("expires"))
             try:
-                expiration = int(float(expires)) if expires else int(time.time()) + 31_536_000
+                expiration = int(float(expires)) if expires is not None else 0
             except (TypeError, ValueError):
-                expiration = int(time.time()) + 31_536_000
+                expiration = 0
+            if expiration <= 0:
+                expiration = 0
+            elif expiration <= int(time.time()):
+                continue
             lines.append(
                 "\t".join(
                     (
@@ -48,24 +55,35 @@ class CookieStore:
                 )
             )
         if len(lines) == 2:
-            raise ValueError("Cookie 数据中没有有效的名称和值")
+            raise ValueError("Cookie 数据中没有可用条目，可能已过期或缺少名称和值")
         self.directory.mkdir(parents=True, exist_ok=True)
         destination = self.path_for_domain(normalized)
-        temporary = destination.with_suffix(destination.suffix + ".tmp")
-        temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        temporary.replace(destination)
+        atomic_write_text(destination, "\n".join(lines) + "\n")
         return destination
 
     def status(self, domain: str) -> dict[str, Any]:
         normalized = self.normalize_domain(domain)
         path = self.path_for_domain(normalized)
-        exists = path.is_file() and path.stat().st_size > 0
-        age_seconds = max(0.0, time.time() - path.stat().st_mtime) if exists else 0.0
+        try:
+            source_stat = path.stat()
+            exists = stat.S_ISREG(source_stat.st_mode) and source_stat.st_size > 0
+        except OSError:
+            source_stat = None
+            exists = False
+        age_seconds = (
+            max(0.0, time.time() - source_stat.st_mtime)
+            if exists and source_stat is not None
+            else 0.0
+        )
         return {
             "domain": normalized,
             "path": str(path) if exists else "",
             "exists": exists,
-            "valid": exists and age_seconds <= self.MAX_AGE_SECONDS,
+            "valid": (
+                exists
+                and age_seconds <= self.MAX_AGE_SECONDS
+                and self._has_current_cookie(path)
+            ),
             "ageHours": round(age_seconds / 3_600, 1) if exists else 0.0,
         }
 
@@ -81,11 +99,11 @@ class CookieStore:
         if not host:
             return None
         labels = host.split(".")
-        candidates = [host]
-        if len(labels) >= 2:
-            candidates.append(".".join(labels[-2:]))
-        registrable_domain = candidates[-1]
-        if registrable_domain in {"x.com", "twitter.com"}:
+        candidates = [
+            ".".join(labels[index:])
+            for index in range(max(1, len(labels) - 1))
+        ]
+        if any(domain in {"x.com", "twitter.com"} for domain in candidates):
             candidates.extend(("x.com", "twitter.com"))
         for domain in dict.fromkeys(candidates):
             status = self.status(domain)
@@ -95,6 +113,27 @@ class CookieStore:
 
     def path_for_domain(self, domain: str) -> Path:
         return self.directory / f"{self.normalize_domain(domain)}.txt"
+
+    @staticmethod
+    def _has_current_cookie(path: Path) -> bool:
+        now = int(time.time())
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return False
+        for line in lines:
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) != 7:
+                continue
+            try:
+                expiration = int(fields[4])
+            except ValueError:
+                continue
+            if fields[5] and fields[6] and (expiration == 0 or expiration > now):
+                return True
+        return False
 
     @staticmethod
     def normalize_domain(domain: str) -> str:

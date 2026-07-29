@@ -1,12 +1,35 @@
 from fractions import Fraction
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
-from mediaflow.domain.enums import ClipMediaKind, ColorMode, SequenceKind
+from mediaflow.domain.enums import (
+    ClipMediaKind,
+    ColorMode,
+    ExportFormat,
+    SequenceKind,
+    WorkflowStage,
+)
+from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile, Sequence
+from mediaflow.domain.storage_names import (
+    OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
+    content_addressed_child_path,
+    safe_child_path,
+    safe_path_component,
+    utf16_units,
+)
+from mediaflow.domain.task_commands import (
+    AnalyzeDownloadCommand,
+    AnalyzeScenesCommand,
+    ExportHighlightsCommand,
+    ExportSequenceCommand,
+    TranslateSegmentsCommand,
+    WorkflowTaskLink,
+)
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
 from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
 
@@ -15,6 +38,84 @@ def test_frame_timebase_preserves_ntsc_rate() -> None:
     frames = seconds_to_frames(Fraction(1001, 1000), 30_000, 1001)
     assert frames == 30
     assert frames_to_seconds(frames, 30_000, 1001) == Fraction(1001, 1000)
+
+
+def test_storage_names_are_windows_safe_normalized_and_length_bounded() -> None:
+    assert safe_path_component("  CON.txt  ") == "_CON.txt"
+    assert safe_path_component("报告：第一期?.mp4") == "报告：第一期_.mp4"
+    assert safe_path_component(" ... ", fallback="Untitled") == "Untitled"
+    assert safe_path_component("e\u0301") == "é"
+    assert safe_path_component("left\ud800right") == "left_right"
+
+    emoji_name = safe_path_component("😀" * 20, max_utf16_units=9)
+    assert emoji_name == "😀" * 4
+    assert utf16_units(emoji_name) <= 9
+
+    with pytest.raises(ValueError, match="no usable characters"):
+        safe_path_component(" ... ")
+
+
+def test_safe_child_path_budgets_the_complete_native_tool_path(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / ("deep-" * 8)
+    child = safe_child_path(
+        parent,
+        "😀" * 200,
+        prefix="02-",
+        suffix="-12345678.mp4",
+        required_sibling_component_utf16_units=(
+            OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
+        ),
+    )
+
+    assert child.parent == parent.resolve()
+    assert child.name.startswith("02-")
+    assert child.name.endswith("-12345678.mp4")
+    assert utf16_units(str(child)) <= 240
+    assert utf16_units(child.name) <= 240
+    assert (
+        utf16_units(str(child.parent))
+        + 1
+        + OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
+        <= 240
+    )
+
+
+def test_content_addressed_children_preserve_full_identity_with_real_path_budget(
+    max_project_path: Path,
+) -> None:
+    parent = max_project_path / "cache" / "b"
+    first = content_addressed_child_path(
+        parent,
+        "完整内容身份：片段一",
+        namespace="artifact",
+        suffix=".json",
+    )
+    repeated = content_addressed_child_path(
+        parent,
+        "完整内容身份：片段一",
+        namespace="artifact",
+        suffix=".json",
+    )
+    distinct = content_addressed_child_path(
+        parent,
+        "完整内容身份：片段二",
+        namespace="artifact",
+        suffix=".json",
+    )
+    directory = content_addressed_child_path(
+        parent,
+        "窗口缓存目录",
+        namespace="window",
+        suffix="",
+        required_descendant_component_utf16_units=32,
+    )
+
+    assert first == repeated
+    assert first != distinct
+    assert utf16_units(str(first)) <= 240
+    assert utf16_units(str(directory)) + 1 + 32 <= 240
 
 
 def test_hdr10_requires_ten_bit_profile() -> None:
@@ -128,3 +229,162 @@ def test_download_request_persists_one_absolute_output_directory(tmp_path) -> No
         DownloadRequest(entry=entry, output_directory="")
     with pytest.raises(ValidationError, match="must be absolute"):
         DownloadRequest(entry=entry, output_directory="relative/folder")
+
+
+def test_export_commands_reject_conflicting_or_audio_highlight_presets() -> None:
+    audio_preset = ExportPreset(
+        name="FLAC",
+        format=ExportFormat.AUDIO,
+        container="flac",
+        video_codec=None,
+        audio_codec="flac",
+        pixel_format=None,
+    )
+
+    conflicting = ExportSequenceCommand(
+        sequence_id="sequence",
+        output_path="output.mp4",
+        format=ExportFormat.H264,
+        preset=audio_preset,
+    )
+    with pytest.raises(
+        ValueError,
+        match="导出预设格式必须与请求的导出格式一致",
+    ):
+        conflicting.validate_for_execution()
+    highlights = ExportHighlightsCommand(
+        sequence_id="sequence",
+        candidate_ids=["candidate"],
+        output_dir="exports",
+        preset=audio_preset,
+    )
+    with pytest.raises(
+        ValueError,
+        match="高光批量导出必须使用视频预设",
+    ):
+        highlights.validate_for_execution()
+
+    h264_preset = ExportPreset(
+        name="H.264",
+        format=ExportFormat.H264,
+        container="MP4",
+        video_codec="libx264",
+        audio_codec="aac",
+        pixel_format="yuv420p",
+    )
+    assert h264_preset.container == "mp4"
+    assert h264_preset.preferred_extension == "mp4"
+    mismatched_destination = ExportSequenceCommand(
+        sequence_id="sequence",
+        output_path="mislabelled.mkv",
+        format=ExportFormat.H264,
+        preset=h264_preset,
+    )
+    with pytest.raises(ValueError, match="扩展名与封装格式不一致"):
+        mismatched_destination.validate_for_execution()
+
+    m4a_preset = audio_preset.model_copy(
+        update={"container": "ipod", "audio_codec": "aac"}
+    )
+    assert m4a_preset.preferred_extension == "m4a"
+    assert m4a_preset.validate_destination("audio.m4a").suffix == ".m4a"
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ExportSequenceCommand(
+            sequence_id=" ",
+            output_path="",
+        ),
+        lambda: TranslateSegmentsCommand(
+            document_id="",
+            segment_ids=[],
+            target_language=" ",
+        ),
+        lambda: AnalyzeDownloadCommand(url=" "),
+        lambda: AnalyzeScenesCommand(
+            sequence_id="",
+            clip_id=" ",
+        ),
+        lambda: WorkflowTaskLink(
+            run_id=" ",
+            stage=WorkflowStage.DOWNLOAD,
+        ),
+    ],
+)
+def test_task_commands_reject_blank_required_inputs(factory) -> None:
+    with pytest.raises(ValidationError):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"name": " "},
+        {"container": ""},
+        {"preset": ""},
+        {"quality_mode": "nonsense"},
+        {"quality_value": float("nan")},
+        {"gop_frames": -10},
+        {"audio_bitrate": -1},
+    ],
+)
+def test_export_preset_rejects_unusable_values(
+    updates: dict[str, object],
+) -> None:
+    values: dict[str, object] = {
+        "name": "H.264",
+        "format": ExportFormat.H264,
+        "container": "mp4",
+        "video_codec": "libx264",
+        "audio_codec": "aac",
+        "pixel_format": "yuv420p",
+    }
+    values.update(updates)
+
+    with pytest.raises(ValidationError):
+        ExportPreset.model_validate(values)
+
+
+def test_audio_export_preset_rejects_video_configuration() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="Audio-only export cannot use a video codec",
+    ):
+        ExportPreset(
+            name="Invalid audio",
+            format=ExportFormat.AUDIO,
+            container="flac",
+            video_codec="libx265",
+            audio_codec="flac",
+            pixel_format="yuv420p",
+        )
+
+
+def test_export_preset_normalizes_integral_qvariant_numbers() -> None:
+    preset = ExportPreset(
+        name="QVariant H.264",
+        format=ExportFormat.H264,
+        container="mp4",
+        video_codec="libx264",
+        audio_codec="aac",
+        pixel_format="yuv420p",
+        advanced={
+            "width": 1920.0,
+            "height": 1080.0,
+            "fps_numerator": 25.0,
+            "fps_denominator": 1.0,
+            "audio_sample_rate": 48_000.0,
+            "audio_channels": 2.0,
+        },
+    )
+
+    assert preset.advanced == {
+        "width": 1920,
+        "height": 1080,
+        "fps_numerator": 25,
+        "fps_denominator": 1,
+        "audio_sample_rate": 48_000,
+        "audio_channels": 2,
+    }

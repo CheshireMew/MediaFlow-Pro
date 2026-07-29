@@ -293,9 +293,7 @@ void MltRuntime::openGraph(
     m_playbackEnd = m_duration;
     m_droppedFrames = 0;
     m_consumerDropOffset = 0;
-    m_clockDriftMs = 0.0;
     emit droppedFramesChanged(0, requestId);
-    emit clockDriftChanged(0.0, requestId);
     if (!decodeStillFrame(qBound(0, initialFrame, m_duration - 1)))
         return;
     emit durationChanged(m_duration, requestId);
@@ -529,7 +527,11 @@ bool MltRuntime::startPlaybackConsumer()
 
     MltProperties properties = m_api.consumerProperties(m_consumer);
     m_api.propertiesSetInt(properties, "real_time", 1);
-    m_api.propertiesSetInt(properties, "buffer", qMax(25, qRound(m_fps)));
+    const int playbackBufferFrames = qBound(
+        24,
+        qRound(m_fps),
+        60);
+    m_api.propertiesSetInt(properties, "buffer", playbackBufferFrames);
     m_api.propertiesSetInt(properties, "prefill", 4);
     m_api.propertiesSetInt(properties, "drop_max", qMax(1, qRound(m_fps / 4.0)));
     m_api.propertiesSetInt(properties, "width", m_previewWidth);
@@ -587,10 +589,6 @@ void MltRuntime::closePlaybackConsumer()
         m_api.consumerClose(m_consumer);
     m_consumer = nullptr;
     m_frameEvent = nullptr;
-    if (m_audioClockActive) {
-        m_audioClockActive = false;
-        emit audioClockActiveChanged(false, m_requestId.load(std::memory_order_acquire));
-    }
 }
 
 bool MltRuntime::decodeStillFrame(int frameNumber)
@@ -703,15 +701,6 @@ void MltRuntime::deliverConsumerFrame(const QImage &image, int frame, int genera
             m_droppedFrames,
             m_requestId.load(std::memory_order_acquire));
     }
-    if (!m_audioClockActive && qFuzzyCompare(m_rate, 1.0)) {
-        m_audioClockActive = true;
-        emit audioClockActiveChanged(true, m_requestId.load(std::memory_order_acquire));
-    }
-    if (!qFuzzyIsNull(m_clockDriftMs)) {
-        m_clockDriftMs = 0.0;
-        emit clockDriftChanged(0.0, m_requestId.load(std::memory_order_acquire));
-    }
-
     m_position = frame;
     const quint64 requestId = m_requestId.load(std::memory_order_acquire);
     emit frameReady(image, frame, m_duration, requestId);

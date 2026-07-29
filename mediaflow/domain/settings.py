@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -13,25 +11,6 @@ from .translation import (
     validate_translation_language,
     validate_translation_mode,
 )
-
-APPLICATION_ROOT_ENVIRONMENT_VARIABLE = "MEDIAFLOW_APP_ROOT"
-PROJECT_DIRECTORY_NAME = "Project"
-MEDIA_DIRECTORY_NAME = "WorkSpace"
-
-
-def application_root() -> Path:
-    configured = os.environ.get(APPLICATION_ROOT_ENVIRONMENT_VARIABLE)
-    if configured:
-        return Path(configured).expanduser().resolve()
-    return Path(__file__).resolve().parents[2]
-
-
-def default_project_root() -> str:
-    return str((application_root() / PROJECT_DIRECTORY_NAME).resolve())
-
-
-def default_media_root() -> str:
-    return str((application_root() / MEDIA_DIRECTORY_NAME).resolve())
 
 
 class WorkflowSettings(DomainModel):
@@ -46,7 +25,7 @@ class WorkflowSettings(DomainModel):
 
 class DownloadSettings(DomainModel):
     last_url: str = ""
-    output_directory: str = Field(default_factory=default_media_root)
+    output_directory: str = ""
     proxy: str | None = None
     cookie_file: str | None = None
     browser_cookies: Literal["chrome", "edge"] | None = None
@@ -142,9 +121,10 @@ class UiSettings(DomainModel):
     asset_view_mode: Literal["list", "thumbnails", "large_thumbnails"] = "list"
     window_width: int = 1600
     window_height: int = 980
+    window_maximized: bool = False
     left_panel_width: int = 360
     timeline_height: int = 330
-    default_project_directory: str = Field(default_factory=default_project_root)
+    default_project_directory: str = ""
     default_import_directory: str | None = None
     recent_project_paths: list[str] = Field(default_factory=list)
 

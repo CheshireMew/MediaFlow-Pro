@@ -1,12 +1,36 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from .enums import ExportFormat
 from .model_base import DomainModel, new_id
+
+_CONTAINER_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "flac": ("flac",),
+    "ipod": ("m4a",),
+    "matroska": ("mkv",),
+    "mkv": ("mkv",),
+    "mov": ("mov",),
+    "mp4": ("mp4", "m4v"),
+    "mpegts": ("ts", "m2ts"),
+    "ogg": ("ogg", "oga", "opus"),
+    "wav": ("wav",),
+    "webm": ("webm",),
+}
+_INTEGER_ADVANCED_FIELDS = frozenset(
+    {
+        "width",
+        "height",
+        "fps_numerator",
+        "fps_denominator",
+        "audio_sample_rate",
+        "audio_channels",
+    }
+)
 
 
 class SubtitleStyle(DomainModel):
@@ -70,12 +94,123 @@ class ExportPreset(DomainModel):
     video_codec: str | None
     audio_codec: str | None
     pixel_format: str | None
-    quality_mode: str = "crf"
-    quality_value: float = 18.0
+    quality_mode: Literal["crf"] = "crf"
+    quality_value: float = Field(
+        default=18.0,
+        ge=0.0,
+        le=63.0,
+        allow_inf_nan=False,
+    )
     preset: str = "medium"
-    gop_frames: int = 60
-    audio_bitrate: int = 192_000
+    gop_frames: int = Field(default=60, ge=1)
+    audio_bitrate: int = Field(default=192_000, gt=0)
     burn_subtitle_track_id: str | None = None
     subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
     watermark: WatermarkOverlay = Field(default_factory=WatermarkOverlay)
     advanced: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("advanced", mode="before")
+    @classmethod
+    def normalize_integral_advanced_values(
+        cls,
+        value: object,
+    ) -> object:
+        """Normalize lossless numbers crossing JSON/QVariant boundaries."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        for key in _INTEGER_ADVANCED_FIELDS:
+            item = normalized.get(key)
+            if (
+                isinstance(item, float)
+                and item.is_integer()
+            ):
+                normalized[key] = int(item)
+        return normalized
+
+    @field_validator("name", "container", "preset")
+    @classmethod
+    def required_export_text(
+        cls,
+        value: str,
+    ) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Export preset text fields cannot be empty")
+        return normalized
+
+    @field_validator(
+        "video_codec",
+        "audio_codec",
+        "pixel_format",
+        "burn_subtitle_track_id",
+    )
+    @classmethod
+    def optional_export_text(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "Optional export preset text cannot be blank"
+            )
+        return normalized
+
+    @field_validator("container")
+    @classmethod
+    def valid_container(cls, value: str) -> str:
+        if re.fullmatch(r"[A-Za-z0-9_]+", value) is None:
+            raise ValueError(
+                "Export container must be an FFmpeg muxer name"
+            )
+        return value.casefold()
+
+    @model_validator(mode="after")
+    def coherent_media_format(self) -> ExportPreset:
+        if self.format == ExportFormat.AUDIO:
+            if self.video_codec is not None:
+                raise ValueError(
+                    "Audio-only export cannot use a video codec"
+                )
+            if self.pixel_format is not None:
+                raise ValueError(
+                    "Audio-only export cannot use a pixel format"
+                )
+            if self.audio_codec is None:
+                raise ValueError(
+                    "Audio-only export requires an audio codec"
+                )
+        for key in _INTEGER_ADVANCED_FIELDS:
+            value = self.advanced.get(key)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value <= 0
+            ):
+                raise ValueError(
+                    f"Advanced export field {key} must be a positive integer"
+                )
+        return self
+
+    @property
+    def preferred_extension(self) -> str:
+        extensions = _CONTAINER_EXTENSIONS.get(self.container)
+        return extensions[0] if extensions else self.container
+
+    def validate_destination(self, destination: str | Path) -> Path:
+        output = Path(destination)
+        extension = output.suffix.removeprefix(".").casefold()
+        if not extension:
+            raise ValueError("导出目标必须包含文件扩展名")
+        expected = _CONTAINER_EXTENSIONS.get(self.container)
+        if expected is not None and extension not in expected:
+            allowed = "、".join(f".{item}" for item in expected)
+            raise ValueError(
+                "导出文件扩展名与封装格式不一致："
+                f"{self.container} 应使用 {allowed}"
+            )
+        return output

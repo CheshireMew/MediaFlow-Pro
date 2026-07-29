@@ -20,7 +20,7 @@ Item {
         && previewPosition < Number(clipData.endFrame ?? 0)
 
     visible: interactionVisible && clipIsVisible
-    enabled: visible && !workspaceController.readOnly
+    enabled: visible && Boolean(workspaceController.actionCapabilities.canEdit)
 
     function reload() {
         draftX = Number(clipData.x ?? 0)
@@ -77,7 +77,7 @@ Item {
         y: root.draftY * root.height / 100
         width: Math.max(8, root.draftScaleX * root.width)
         height: Math.max(8, root.draftScaleY * root.height)
-        color: "transparent"
+        color: Theme.transparent
         border.width: 2
         border.color: Theme.accent
         transform: Rotation {
@@ -132,7 +132,7 @@ Item {
             anchors.rightMargin: -8
             anchors.bottomMargin: -8
             color: Theme.accent
-            border.color: "white"
+            border.color: Theme.textStrong
             border.width: 1
             z: 3
             DragHandler {

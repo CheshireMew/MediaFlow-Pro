@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from array import array
 from collections.abc import Callable
+from pathlib import Path
 
 from mediaflow.application.ports import AssetProcessingDocuments
+from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset
+from mediaflow.domain.storage_names import require_windows_interop_path
 
-from .process_observers import FfmpegProgressObserver, ffmpeg_progress_command
+from .ffmpeg_runner import FfmpegRunner
 from .runtime_paths import RuntimePaths
-from .subprocess_runner import run_cancellable_streaming
 
 
 class WaveformService:
+    CACHE_VERSION = 2
     SAMPLE_RATE = 8_000
     BLOCK_SIZES = (128, 512, 2048, 8192)
 
@@ -24,6 +28,7 @@ class WaveformService:
     ):
         self.repository = repository
         self.paths = paths or RuntimePaths.discover()
+        self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def generate(
         self,
@@ -33,19 +38,25 @@ class WaveformService:
         progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> Asset:
-        source = self.repository.resolve_asset_path(asset)
+        source = self.repository.catalog.resolve_asset_path(asset)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        source = require_windows_interop_path(source)
         output_dir = self.repository.project_dir / "cache" / "waveforms"
         output_dir.mkdir(parents=True, exist_ok=True)
-        output = output_dir / f"{asset.id}.json"
-        decoded = output_dir / f"{asset.id}.pcm.tmp"
+        output = output_dir / f"{asset.id}-{self._cache_key(asset, source)}.json"
+        decoded = unique_temporary_sibling(
+            output_dir / f"{asset.id}.pcm",
+            label="decoding",
+        )
+        on_position: Callable[[float], None] | None = None
         if duration_seconds <= 0:
             if progress:
                 progress(OperationProgress.indeterminate("waveform_decoding"))
-            observer = None
-        else:
-            observer = FfmpegProgressObserver(
-                duration_seconds,
-                lambda position: progress(
+        elif progress is not None:
+
+            def report_position(position: float) -> None:
+                progress(
                     OperationProgress.determinate(
                         "waveform_decoding",
                         completed=position,
@@ -53,31 +64,27 @@ class WaveformService:
                         unit="media_seconds",
                     )
                 )
-                if progress
-                else None,
-            )
+
+            on_position = report_position
         try:
-            result = run_cancellable_streaming(
-                ffmpeg_progress_command(
-                    [
-                        str(self.paths.ffmpeg),
-                        "-y",
-                        "-hide_banner",
-                        "-v",
-                        "error",
-                        "-i",
-                        str(source),
-                        "-vn",
-                        "-ac",
-                        "1",
-                        "-ar",
-                        str(self.SAMPLE_RATE),
-                        "-f",
-                        "s16le",
-                        str(decoded),
-                    ]
-                ),
-                on_stderr_line=observer,
+            result = self.ffmpeg.run_progress(
+                [
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(source),
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    str(self.SAMPLE_RATE),
+                    "-f",
+                    "s16le",
+                    str(decoded),
+                ],
+                total_seconds=duration_seconds,
+                on_position=on_position,
                 timeout=300,
                 check_cancelled=check_cancelled,
             )
@@ -105,21 +112,37 @@ class WaveformService:
             processed_samples += consumed
         if progress:
             progress(OperationProgress.indeterminate("waveform_saving"))
-        temporary = output.with_suffix(".json.tmp")
-        temporary.write_text(
+        atomic_write_text(
+            output,
             json.dumps(
                 {"sample_rate": self.SAMPLE_RATE, "sample_count": len(samples), "levels": levels},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            encoding="utf-8",
         )
-        temporary.replace(output)
-        return self.repository.set_asset_waveform_path(
+        return self.repository.catalog.set_asset_waveform_path(
             asset.id,
             expected_fingerprint=asset.fingerprint,
             waveform_path=output,
         )
+
+    @classmethod
+    def _cache_key(cls, asset: Asset, source: Path) -> str:
+        source_stat = source.stat()
+        payload = {
+            "version": cls.CACHE_VERSION,
+            "fingerprint": (
+                asset.fingerprint.model_dump(mode="json")
+                if asset.fingerprint is not None
+                else None
+            ),
+            "source_size": source_stat.st_size,
+            "source_modified_ns": source_stat.st_mtime_ns,
+            "sample_rate": cls.SAMPLE_RATE,
+            "block_sizes": cls.BLOCK_SIZES,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
     @staticmethod
     def _peaks(

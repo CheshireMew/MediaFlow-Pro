@@ -18,6 +18,7 @@ def run_cancellable(
     encoding: str | None = None,
     errors: str | None = None,
     timeout: float | None = None,
+    creationflags: int = 0,
 ) -> subprocess.CompletedProcess:
     """Run a child process while keeping task cancellation observable."""
     process = subprocess.Popen(
@@ -29,6 +30,7 @@ def run_cancellable(
         text=text,
         encoding=encoding,
         errors=errors,
+        creationflags=creationflags,
     )
     started = time.monotonic()
     try:
@@ -69,6 +71,7 @@ def run_cancellable_streaming(
     errors: str = "replace",
     timeout: float | None = None,
     split_carriage_returns: bool = False,
+    creationflags: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a text process while consuming both output pipes continuously."""
 
@@ -82,6 +85,7 @@ def run_cancellable_streaming(
         encoding=encoding,
         errors=errors,
         bufsize=1,
+        creationflags=creationflags,
     )
     if process.stdout is None or process.stderr is None:
         raise RuntimeError("Streaming process pipes were not created")

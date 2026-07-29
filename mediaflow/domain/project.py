@@ -7,6 +7,7 @@ from pydantic import Field, computed_field, field_validator, model_validator
 from .enums import AssetKind, AssetOrigin, AssetStatus, ColorMode, SequenceKind
 from .exports import ExportPreset
 from .model_base import DomainModel, new_id, now_ms
+from .timebase import reframe_frames
 
 
 class ProjectProfile(DomainModel):
@@ -44,7 +45,6 @@ class ProjectProfile(DomainModel):
 class Project(DomainModel):
     id: str = Field(default_factory=new_id)
     name: str
-    root_path: str
     main_sequence_id: str
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)
@@ -82,6 +82,21 @@ class MediaMetadata(DomainModel):
     has_video: bool = False
     has_audio: bool = False
 
+    def in_frame_clock(
+        self,
+        source_profile: ProjectProfile,
+        destination_profile: ProjectProfile,
+    ) -> MediaMetadata:
+        return self.model_copy(
+            update={
+                "duration_frames": reframe_frames(
+                    self.duration_frames,
+                    source_profile,
+                    destination_profile,
+                )
+            }
+        )
+
 
 class Asset(DomainModel):
     id: str = Field(default_factory=new_id)
@@ -98,6 +113,25 @@ class Asset(DomainModel):
     fingerprint: AssetFingerprint | None = None
     metadata: MediaMetadata = Field(default_factory=MediaMetadata)
     created_at: int = Field(default_factory=now_ms)
+
+    def in_frame_clock(
+        self,
+        source_profile: ProjectProfile,
+        destination_profile: ProjectProfile,
+    ) -> Asset:
+        if (
+            source_profile.fps_numerator == destination_profile.fps_numerator
+            and source_profile.fps_denominator == destination_profile.fps_denominator
+        ):
+            return self
+        return self.model_copy(
+            update={
+                "metadata": self.metadata.in_frame_clock(
+                    source_profile,
+                    destination_profile,
+                )
+            }
+        )
 
 
 class SequenceInOut(DomainModel):
@@ -122,4 +156,5 @@ class Sequence(DomainModel):
     in_out: SequenceInOut | None = None
     archived: bool = False
     position: int = 0
+    timeline_revision: int = Field(default=0, ge=0)
     created_at: int = Field(default_factory=now_ms)

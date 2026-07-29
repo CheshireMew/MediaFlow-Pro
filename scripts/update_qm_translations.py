@@ -9,6 +9,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "从素材到成片，流程清楚，结果可控。": (
+        "From source to final cut, every step clear and every result controlled.",
+        "素材から完成映像まで、工程は明確に、結果は確実に。",
+    ),
+    "隐藏图层": ("Hide Layer", "レイヤーを非表示"),
+    "显示图层": ("Show Layer", "レイヤーを表示"),
+    "解锁图层": ("Unlock Layer", "レイヤーのロックを解除"),
+    "锁定图层": ("Lock Layer", "レイヤーをロック"),
+    "打开": ("Open", "開く"),
     "多选": ("Multi-select", "複数選択"),
     "开启后直接点击多个片段即可选择；不需要按快捷键": (
         "When enabled, click clips directly to select several; no keyboard shortcut is required.",
@@ -208,6 +217,18 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "既存の Web フレームを再利用中",
     ),
     "正在导出时间线": ("Exporting timeline", "タイムラインを書き出し中"),
+    "硬件编码失败，正在改用软件编码": (
+        "Hardware encoding failed; switching to software encoding",
+        "ハードウェアエンコードに失敗したため、ソフトウェアエンコードに切り替えています",
+    ),
+    "硬件编码失败，已从 %1 切换为 %2": (
+        "Hardware encoding failed; switched from %1 to %2",
+        "ハードウェアエンコードに失敗したため、%1 から %2 に切り替えました",
+    ),
+    "%1 个文件的硬件编码失败，已自动改用软件编码": (
+        "Hardware encoding failed for %1 files; software encoding was used automatically",
+        "%1 個のファイルでハードウェアエンコードに失敗したため、ソフトウェアエンコードを自動的に使用しました",
+    ),
     "正在扫描成片质量": (
         "Scanning final media quality",
         "完成映像の品質を検査中",
@@ -732,7 +753,6 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "プロジェクトフォルダーは直接コピーまたは移動できます",
     ),
     "项目已移动或不可用": ("Project moved or unavailable", "プロジェクトが移動されたか利用できません"),
-    "打开 ›": ("Open ›", "開く ›"),
     "离线": ("Offline", "オフライン"),
     "还没有最近项目": ("No recent projects yet", "最近のプロジェクトはありません"),
     "创建第一个项目后，下载、字幕、短视频和导出结果都会集中保存在项目目录中。": (
@@ -958,6 +978,8 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "高度": ("Height", "高さ"),
     "帧率": ("Frame Rate", "フレームレート"),
     "色彩与输出声道": ("Color and Output Channels", "カラーと出力チャンネル"),
+    "FPS 分子": ("FPS numerator", "FPS 分子"),
+    "FPS 分母": ("FPS denominator", "FPS 分母"),
     "单声道": ("Mono", "モノラル"),
     "立体声": ("Stereo", "ステレオ"),
     "修改帧率会按实际时长重新换算片段、转场和字幕；预览缓存会按需重建。": (
@@ -1215,6 +1237,8 @@ TRANSLATIONS.update(
         "移除记录": ("Remove Record", "記録を削除"),
         "等待执行 · 队列第 %1 位": ("Waiting · Queue position %1", "待機中 · キュー%1番目"),
         "粗体": ("Bold", "太字"),
+        "Cookie JSON": ("Cookie JSON", "Cookie JSON"),
+        "API 密钥": ("API Key", "API キー"),
         "粘贴浏览器导出的 Cookie JSON 数组": (
             "Paste a Cookie JSON array exported from the browser",
             "ブラウザーから書き出したCookie JSON配列を貼り付け",
@@ -1702,6 +1726,57 @@ TRANSLATIONS.update(
         "长音频分块：同时转录 4 块": (
             "Long-audio chunks: 4 at once",
             "長時間音声チャンク：4 個を同時処理",
+        ),
+        "media-sources.json 中的素材 ID": (
+            "Media ID in media-sources.json",
+            "media-sources.json 内の素材 ID",
+        ),
+        "上一个项目的资源未完全释放，文件仍保持占用。请等待任务停稳后重试关闭。": (
+            "The previous project's resources were not fully released, so its files remain in use. Wait for its tasks to stop, then retry closing.",
+            "前のプロジェクトのリソースを完全に解放できず、ファイルは使用中のままです。タスクが停止してから、もう一度閉じてください。",
+        ),
+        "上一阶段已完成，请确认是否继续。": (
+            "The previous stage is complete. Confirm whether to continue.",
+            "前のステージは完了しました。続行するか確認してください。",
+        ),
+        "上次运行被中断，可以从当前阶段恢复。": (
+            "The previous run was interrupted. You can resume from the current stage.",
+            "前回の実行は中断されました。現在のステージから再開できます。",
+        ),
+        "只读项目中可查看素材，但不能加入时间线": (
+            "You can view media in a read-only project, but cannot add it to the timeline",
+            "読み取り専用プロジェクトでは素材を確認できますが、タイムラインには追加できません",
+        ),
+        "复制详情": ("Copy Details", "詳細をコピー"),
+        "复制错误": ("Copy Error", "エラーをコピー"),
+        "收起错误": ("Collapse Error", "エラーを折りたたむ"),
+        "正在关闭上一个项目并释放文件，完成后即可重新打开项目。": (
+            "Closing the previous project and releasing its files. You can open another project when this finishes.",
+            "前のプロジェクトを閉じてファイルを解放しています。完了すると別のプロジェクトを開けます。",
+        ),
+        "确认继续": ("Confirm and Continue", "確認して続行"),
+        '绑定 JSON，例如 {"name":"scenes.opening.layers.title.content"}': (
+            'Binding JSON, for example {"name":"scenes.opening.layers.title.content"}',
+            'バインド JSON（例：{"name":"scenes.opening.layers.title.content"}）',
+        ),
+        "请前往导出页确认设置并开始导出。": (
+            "Go to the Export page to confirm settings and start exporting.",
+            "書き出しページで設定を確認し、書き出しを開始してください。",
+        ),
+        "跳过": ("Skip", "スキップ"),
+        "重试关闭": ("Retry Close", "閉じる操作を再試行"),
+        "错误详情": ("Error Details", "エラー詳細"),
+        "阶段任务失败。查看任务详情后可以恢复或跳过。": (
+            "The stage task failed. Review the task details, then resume or skip it.",
+            "ステージのタスクに失敗しました。タスクの詳細を確認してから、再開またはスキップできます。",
+        ),
+        "阶段任务已取消，可以恢复或跳过。": (
+            "The stage task was cancelled. You can resume or skip it.",
+            "ステージのタスクはキャンセルされました。再開またはスキップできます。",
+        ),
+        "需要先配置并启用 LLM 提供商，也可以跳过当前阶段。": (
+            "Configure and enable an LLM provider first, or skip the current stage.",
+            "先に LLM プロバイダーを設定して有効にしてください。現在のステージをスキップすることもできます。",
         ),
     }
 )

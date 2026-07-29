@@ -17,11 +17,11 @@ def recorded_subtitle_edit(label: str):
         def wrapped(self, document_id: str, *args, **kwargs):
             if self.history is None:
                 return method(self, document_id, *args, **kwargs)
-            before = self.repository.list_subtitle_segments(document_id)
-            before_words = self.repository.list_subtitle_words(document_id)
+            before = self.repository.subtitles.list_subtitle_segments(document_id)
+            before_words = self.repository.subtitles.list_subtitle_words(document_id)
             result = method(self, document_id, *args, **kwargs)
-            after = self.repository.list_subtitle_segments(document_id)
-            after_words = self.repository.list_subtitle_words(document_id)
+            after = self.repository.subtitles.list_subtitle_segments(document_id)
+            after_words = self.repository.subtitles.list_subtitle_words(document_id)
             if before != after or before_words != after_words:
                 self.history.push(
                     ProjectEditCommand(
@@ -61,8 +61,8 @@ class SubtitleEditingService:
         start_frame: int,
         end_frame: int,
     ) -> SubtitlePlacement:
-        before = self.repository.get_subtitle_placement(placement_id)
-        after = self.repository.update_subtitle_placement_range(
+        before = self.repository.subtitles.get_subtitle_placement(placement_id)
+        after = self.repository.subtitles.update_subtitle_placement_range(
             placement_id,
             start_frame,
             end_frame,
@@ -89,8 +89,8 @@ class SubtitleEditingService:
         return after
 
     def reset_placement_range(self, placement_id: str) -> SubtitlePlacement:
-        before = self.repository.get_subtitle_placement(placement_id)
-        after = self.repository.reset_subtitle_placement_range(placement_id)
+        before = self.repository.subtitles.get_subtitle_placement(placement_id)
+        after = self.repository.subtitles.reset_subtitle_placement_range(placement_id)
         if self.history is not None and before != after:
             self.history.push(
                 ProjectEditCommand(
@@ -119,7 +119,7 @@ class SubtitleEditingService:
         *,
         timing_overridden: bool,
     ) -> None:
-        self.repository.update_subtitle_placement_range(
+        self.repository.subtitles.update_subtitle_placement_range(
             placement_id,
             start_frame,
             end_frame,
@@ -139,7 +139,7 @@ class SubtitleEditingService:
         value = text.strip()
         if not value:
             raise ValueError("字幕文本不能为空")
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         try:
             index = next(index for index, item in enumerate(segments) if item.id == segment_id)
         except StopIteration as error:
@@ -173,7 +173,7 @@ class SubtitleEditingService:
             end_frame=int(end_frame),
             text=value,
         )
-        segments = [*self.repository.list_subtitle_segments(document_id), segment]
+        segments = [*self.repository.subtitles.list_subtitle_segments(document_id), segment]
         self._save_segments(document_id, segments)
         return segment
 
@@ -182,7 +182,7 @@ class SubtitleEditingService:
         wanted = set(segment_ids)
         if not wanted:
             return 0
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         remaining = [item for item in segments if item.id not in wanted]
         removed = len(segments) - len(remaining)
         if removed != len(wanted):
@@ -195,7 +195,7 @@ class SubtitleEditingService:
         wanted = set(segment_ids)
         if len(wanted) < 2:
             raise ValueError("至少选择两条连续字幕才能合并")
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         indexes = [index for index, item in enumerate(segments) if item.id in wanted]
         if len(indexes) != len(wanted):
             raise KeyError("包含不属于当前字幕文档的字幕段")
@@ -215,12 +215,12 @@ class SubtitleEditingService:
         updated = [*segments[: indexes[0]], merged, *segments[indexes[-1] + 1 :]]
         selected_words = [
             word
-            for word in self.repository.list_subtitle_words(document_id)
+            for word in self.repository.subtitles.list_subtitle_words(document_id)
             if word.segment_id in wanted
         ]
         retained_words = [
             word
-            for word in self.repository.list_subtitle_words(document_id)
+            for word in self.repository.subtitles.list_subtitle_words(document_id)
             if word.segment_id not in wanted
         ]
         merged_words = [
@@ -241,7 +241,7 @@ class SubtitleEditingService:
         split_frame: int | None = None,
         split_index: int | None = None,
     ) -> tuple[SubtitleSegment, SubtitleSegment]:
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         try:
             index = next(index for index, item in enumerate(segments) if item.id == segment_id)
         except StopIteration as error:
@@ -255,14 +255,14 @@ class SubtitleEditingService:
     @recorded_subtitle_edit("智能拆分字幕")
     def smart_split_document(self, document_id: str, *, text_limit: int = 24) -> int:
         limit = max(1, int(text_limit))
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         minimum_duration = max(
             2,
             seconds_to_frames(1.6, profile.fps_numerator, profile.fps_denominator),
         )
-        segments = self.repository.list_subtitle_segments(document_id)
-        document_words = self.repository.list_subtitle_words(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
+        document_words = self.repository.subtitles.list_subtitle_words(document_id)
         words_by_segment: dict[str, list[SubtitleWord]] = {}
         for word in document_words:
             words_by_segment.setdefault(word.segment_id, []).append(word)
@@ -318,14 +318,14 @@ class SubtitleEditingService:
 
     @recorded_subtitle_edit("修复字幕重叠")
     def fix_overlaps(self, document_id: str) -> int:
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         tolerance = max(
             1,
             seconds_to_frames(0.05, profile.fps_numerator, profile.fps_denominator),
         )
         segments = sorted(
-            self.repository.list_subtitle_segments(document_id),
+            self.repository.subtitles.list_subtitle_segments(document_id),
             key=lambda item: (item.start_frame, item.id),
         )
         fixed: list[SubtitleSegment] = []
@@ -345,8 +345,8 @@ class SubtitleEditingService:
 
     def selected_segments_srt(self, document_id: str, segment_ids: list[str]) -> str:
         selected = self._selected_segments(document_id, segment_ids)
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         return SubtitleFile.dumps_srt(
             [
                 SubtitleCue(
@@ -371,8 +371,8 @@ class SubtitleEditingService:
         if not value:
             raise ValueError("剪贴板中没有可用文本")
         selected = self._selected_segments(document_id, segment_ids)
-        project = self.repository.get_project()
-        profile = self.repository.get_sequence(project.main_sequence_id).profile
+        project = self.repository.catalog.get_project()
+        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
         replacements: list[str] = []
         if "-->" in value:
             try:
@@ -392,7 +392,7 @@ class SubtitleEditingService:
         if count == 0:
             raise ValueError("剪贴板中没有可替换的字幕文本")
         replacement_by_id = {selected[index].id: replacements[index] for index in range(count)}
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         self._save_segments(
             document_id,
             [
@@ -418,7 +418,7 @@ class SubtitleEditingService:
         pattern = re.compile(re.escape(search), 0 if match_case else re.IGNORECASE)
         count = 0
         updated: list[SubtitleSegment] = []
-        for segment in self.repository.list_subtitle_segments(document_id):
+        for segment in self.repository.subtitles.list_subtitle_segments(document_id):
             value, replacements = pattern.subn(replacement, segment.text)
             if replacements and not value.strip():
                 raise ValueError("替换后字幕文本不能为空")
@@ -442,7 +442,7 @@ class SubtitleEditingService:
     ) -> SubtitleSegment:
         if not search:
             raise ValueError("查找内容不能为空")
-        segments = self.repository.list_subtitle_segments(document_id)
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
         try:
             segment = next(item for item in segments if item.id == segment_id)
         except StopIteration as error:
@@ -475,7 +475,7 @@ class SubtitleEditingService:
         pattern = re.compile(re.escape(search), 0 if match_case else re.IGNORECASE)
         return [
             {"segmentId": segment.id, "start": match.start(), "end": match.end()}
-            for segment in self.repository.list_subtitle_segments(document_id)
+            for segment in self.repository.subtitles.list_subtitle_segments(document_id)
             for match in pattern.finditer(segment.text)
         ]
 
@@ -486,21 +486,34 @@ class SubtitleEditingService:
         *,
         words: list[SubtitleWord] | None = None,
     ) -> None:
-        if words is None:
-            previous = {
-                segment.id: segment
-                for segment in self.repository.list_subtitle_segments(document_id)
-            }
-            current = {segment.id: segment for segment in segments}
-            words = [
-                word
-                for word in self.repository.list_subtitle_words(document_id)
-                if word.segment_id in current
-                and previous.get(word.segment_id) == current[word.segment_id]
-            ]
-        self.repository.save_subtitle_segments(document_id, segments)
-        self.repository.save_subtitle_words(document_id, words)
-        self.publication.write_document_srt(document_id)
+        def save() -> None:
+            resolved_words = words
+            if resolved_words is None:
+                previous = {
+                    segment.id: segment
+                    for segment in self.repository.subtitles.list_subtitle_segments(
+                        document_id
+                    )
+                }
+                current = {segment.id: segment for segment in segments}
+                resolved_words = [
+                    word
+                    for word in self.repository.subtitles.list_subtitle_words(
+                        document_id
+                    )
+                    if word.segment_id in current
+                    and previous.get(word.segment_id) == current[word.segment_id]
+                ]
+            self.repository.subtitles.save_subtitle_segments(
+                document_id,
+                segments,
+            )
+            self.repository.subtitles.save_subtitle_words(
+                document_id,
+                resolved_words,
+            )
+
+        self.publication.commit_document_change(document_id, save)
 
     def _restore_document_state(
         self,
@@ -508,9 +521,17 @@ class SubtitleEditingService:
         segments: list[SubtitleSegment],
         words: list[SubtitleWord],
     ) -> None:
-        self.repository.save_subtitle_segments(document_id, segments)
-        self.repository.save_subtitle_words(document_id, words)
-        self.publication.write_document_srt(document_id)
+        def restore() -> None:
+            self.repository.subtitles.save_subtitle_segments(
+                document_id,
+                segments,
+            )
+            self.repository.subtitles.save_subtitle_words(
+                document_id,
+                words,
+            )
+
+        self.publication.commit_document_change(document_id, restore)
 
     def _words_after_split(
         self,
@@ -521,12 +542,12 @@ class SubtitleEditingService:
     ) -> list[SubtitleWord]:
         output = [
             word
-            for word in self.repository.list_subtitle_words(document_id)
+            for word in self.repository.subtitles.list_subtitle_words(document_id)
             if word.segment_id != source.id
         ]
         source_words = [
             word
-            for word in self.repository.list_subtitle_words(document_id)
+            for word in self.repository.subtitles.list_subtitle_words(document_id)
             if word.segment_id == source.id
         ]
         first_words = [
@@ -558,7 +579,9 @@ class SubtitleEditingService:
         if not wanted:
             raise ValueError("请先选择字幕段")
         selected = [
-            segment for segment in self.repository.list_subtitle_segments(document_id) if segment.id in wanted
+            segment
+            for segment in self.repository.subtitles.list_subtitle_segments(document_id)
+            if segment.id in wanted
         ]
         if len(selected) != len(wanted):
             raise KeyError("包含不属于当前字幕文档的字幕段")

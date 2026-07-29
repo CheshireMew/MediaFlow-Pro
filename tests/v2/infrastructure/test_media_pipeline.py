@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
 from PySide6.QtGui import QImage
 
 from mediaflow.application.asset_service import AssetService
@@ -17,8 +20,13 @@ from mediaflow.domain.enums import AssetKind, AssetOrigin, ColorMode, TaskStatus
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.storage_names import (
+    WINDOWS_INTEROP_PATH_UTF16_LIMIT,
+    utf16_units,
+)
 from mediaflow.domain.task_commands import DownloadMediaCommand, GenerateWaveformCommand
 from mediaflow.domain.tasks import Task
+from mediaflow.infrastructure import media_probe
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
 from mediaflow.infrastructure.mlt import TimelineCompiler
@@ -26,6 +34,10 @@ from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.visual_analysis import (
+    SceneDetectionService,
+    SubjectMotionService,
+)
 from mediaflow.infrastructure.waveform_service import WaveformService
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 
@@ -64,6 +76,80 @@ def generate_real_media(path: Path, paths: RuntimePaths, *, width: int = 640, he
     assert path.is_file() and path.stat().st_size > 0
 
 
+def test_native_media_services_reject_an_overlong_external_source_before_launch(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    short_source = tmp_path / "source.mp4"
+    short_source.write_bytes(b"not launched by this boundary test")
+    deep_parent = tmp_path
+    while (
+        utf16_units(str(deep_parent / "source.mp4"))
+        <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
+    ):
+        deep_parent /= "deep-native-source"
+    deep_parent.mkdir(parents=True)
+    deep_source = deep_parent / "source.mp4"
+    shutil.copy2(short_source, deep_source)
+
+    with ProjectRepository.create(
+        tmp_path / "Native Boundaries",
+        "Native Boundaries",
+    ) as repository:
+        asset = repository.catalog.import_external_asset(
+            short_source,
+            AssetKind.VIDEO,
+        )
+        asset = repository.catalog.update_asset(
+            asset.model_copy(update={"path": str(deep_source)})
+        )
+        profile = repository.catalog.get_sequence(
+            repository.catalog.get_project().main_sequence_id
+        ).profile
+        editor = TimelineEditor(
+            repository,
+            repository.catalog.get_project().main_sequence_id,
+        )
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=1,
+        )
+
+        with pytest.raises(ValueError, match="路径过深"):
+            MediaProbe(paths).probe(deep_source)
+        with pytest.raises(ValueError, match="路径过深"):
+            ProxyService(repository, paths).generate(asset, profile)
+        with pytest.raises(ValueError, match="路径过深"):
+            WaveformService(repository, paths).generate(
+                asset,
+                duration_seconds=1,
+            )
+        with pytest.raises(ValueError, match="路径过深"):
+            MediaThumbnailService(paths).thumbnail_for(
+                repository,
+                asset,
+                width=160,
+                height=90,
+            )
+        with pytest.raises(ValueError, match="路径过深"):
+            SceneDetectionService(paths).detect(
+                deep_source,
+                clip,
+                profile,
+            )
+        with pytest.raises(ValueError, match="路径过深"):
+            SubjectMotionService().analyze(
+                deep_source,
+                clip,
+                profile,
+                mode="subject_tracking",
+            )
+
+
 def generate_black_intro_video(path: Path, paths: RuntimePaths) -> None:
     result = subprocess.run(
         [
@@ -97,12 +183,40 @@ def generate_black_intro_video(path: Path, paths: RuntimePaths) -> None:
     assert path.is_file() and path.stat().st_size > 0
 
 
-def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Path) -> None:
+def test_media_probe_rejects_deep_source_before_starting_ffprobe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_parent = tmp_path / "native-source"
+    while utf16_units(str(source_parent / "source.mp4")) <= 240:
+        source_parent /= "deep-native-source"
+    source_parent.mkdir(parents=True)
+    source = source_parent / "source.mp4"
+    source.write_bytes(b"not-probed")
+    subprocess_started = False
+
+    def fail_if_started(*_args, **_kwargs):
+        nonlocal subprocess_started
+        subprocess_started = True
+        raise AssertionError("ffprobe must not start for an over-budget path")
+
+    monkeypatch.setattr(media_probe.subprocess, "run", fail_if_started)
+
+    with pytest.raises(ValueError, match="路径过深"):
+        MediaProbe(RuntimePaths.discover()).probe(source)
+
+    assert subprocess_started is False
+
+
+def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
+    tmp_path: Path,
+    max_project_path: Path,
+) -> None:
     paths = RuntimePaths.discover()
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths)
 
-    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+    with ProjectRepository.create(max_project_path, "Project") as repository:
         assets = AssetService(repository, MediaProbe(paths))
         asset = assets.import_external(source)
 
@@ -116,7 +230,9 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         assert cover_probe.kind == AssetKind.IMAGE
         assert (cover_probe.metadata.width, cover_probe.metadata.height) == (640, 360)
         assert ProjectCoverService(paths).cover_for(repository) == cover
-        default_profile = repository.get_sequence(repository.get_project().main_sequence_id).profile
+        default_profile = repository.catalog.get_sequence(
+            repository.catalog.get_project().main_sequence_id
+        ).profile
         assert (default_profile.width, default_profile.height, default_profile.fps_numerator) == (
             1920,
             1080,
@@ -125,7 +241,7 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
 
         asset = assets.adopt_main_profile_from_video(asset.id)
         assert asset.metadata.duration_frames == 25
-        profile = repository.get_sequence(repository.get_project().main_sequence_id).profile
+        profile = repository.catalog.get_sequence(repository.catalog.get_project().main_sequence_id).profile
         assert (profile.width, profile.height, profile.fps_numerator) == (640, 360, 25)
 
         proxy_progress = []
@@ -136,6 +252,7 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         )
         proxy_path = repository.project_dir / proxied.proxy_path
         assert proxy_path.is_file()
+        assert utf16_units(str(proxy_path)) <= 240
         proxy_probe = MediaProbe(paths).probe(proxy_path, timeline_profile=profile)
         assert proxy_probe.metadata.has_video is True
         proxy_encoding = [
@@ -162,6 +279,8 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(tmp_path: Pa
         assert all(item.mode == "determinate" and item.unit == "samples" for item in calculating)
         assert calculating[-1].completed == calculating[-1].total
         assert waveform_progress[-1].message_code == "waveform_saving"
+        assert utf16_units(str(waveform_path)) <= 240
+        assert not list(repository.project_dir.rglob(".mf-*"))
 
 
 def test_waveform_task_progress_survives_events_storage_and_artifact_consumption(
@@ -181,16 +300,16 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
         if event.event_type == "progress":
             progress_events.append(transported.progress)
 
-    project.tasks.events.subscribe(capture, include_snapshot=False)
+    project.subscribe_task_events(capture, include_snapshot=False)
     try:
-        asset = project.assets.import_external(source)
+        asset = project.import_external_asset(source)
         task = project.start_task(
             GenerateWaveformCommand(asset_id=asset.id),
             [asset.id],
         )
-        completed = project.tasks.wait(task.id, timeout=30)
-        persisted = project.tasks.get(task.id)
-        updated_asset = repository.get_asset(asset.id)
+        completed = project.wait_for_task(task.id, timeout=30)
+        persisted = project.get_task(task.id)
+        updated_asset = repository.catalog.get_asset(asset.id)
         assert updated_asset.waveform_path
         waveform_path = repository.project_dir / updated_asset.waveform_path
         waveform_payload = json.loads(waveform_path.read_text(encoding="utf-8"))
@@ -215,14 +334,66 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
         assert persisted.progress.completed == persisted.progress.total == 1
         assert persisted.progress.unit == "task"
         assert transported_tasks[-1] == persisted
-        assert completed.artifacts == [updated_asset.waveform_path]
+        waveform_path = Path(updated_asset.waveform_path)
+        expected_waveform = (
+            waveform_path
+            if waveform_path.is_absolute()
+            else repository.project_dir / waveform_path
+        )
+        assert [
+            artifact.resolve(repository.project_dir)
+            for artifact in completed.artifacts
+        ] == [expected_waveform]
         assert waveform_payload["sample_count"] > 0
         assert waveform_payload["levels"]["128"]
     finally:
         project.close()
 
 
-def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(tmp_path: Path) -> None:
+def test_stale_waveform_producer_cannot_overwrite_current_asset_waveform(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "changing-source.mp4"
+    generate_real_media(source, paths, width=320, height=180)
+
+    with ProjectRepository.create(tmp_path / "Waveform Versions", "Waveform Versions") as repository:
+        assets = AssetService(repository, MediaProbe(paths))
+        stale_asset = assets.import_external(source)
+        initial = WaveformService(repository, paths).generate(
+            stale_asset,
+            duration_seconds=1,
+        )
+        initial_path = repository.project_dir / initial.waveform_path
+        initial_payload = initial_path.read_bytes()
+
+        generate_real_media(source, paths, width=640, height=360)
+        current_asset = repository.catalog.refresh_asset_status(stale_asset.id)
+        current = WaveformService(repository, paths).generate(
+            current_asset,
+            duration_seconds=1,
+        )
+        current_path = repository.project_dir / current.waveform_path
+        current_payload = current_path.read_bytes()
+
+        assert current_path != initial_path
+        assert current_payload
+        with pytest.raises(RuntimeError, match="素材在波形生成期间发生了变化"):
+            WaveformService(repository, paths).generate(
+                stale_asset,
+                duration_seconds=1,
+            )
+
+        reloaded = repository.catalog.get_asset(stale_asset.id)
+        assert repository.project_dir / reloaded.waveform_path == current_path
+        assert current_path.read_bytes() == current_payload
+        assert initial_path.read_bytes() == initial_payload
+
+
+def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(
+    tmp_path: Path,
+    max_project_path: Path,
+) -> None:
     paths = RuntimePaths.discover()
     video_source = tmp_path / "black-intro.mp4"
     generate_black_intro_video(video_source, paths)
@@ -231,7 +402,10 @@ def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(tmp_pa
     portrait.fill(0xFF3A7DC4)
     assert portrait.save(str(image_source))
 
-    with ProjectRepository.create(tmp_path / "Thumbnail Project", "Thumbnail Project") as repository:
+    with ProjectRepository.create(
+        max_project_path,
+        "Thumbnail Project",
+    ) as repository:
         assets = AssetService(repository, MediaProbe(paths))
         video = assets.import_external(video_source)
         image = assets.import_external(image_source)
@@ -242,6 +416,8 @@ def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(tmp_pa
 
         assert video_thumbnail is not None and video_thumbnail.is_file()
         assert image_thumbnail is not None and image_thumbnail.is_file()
+        assert utf16_units(str(video_thumbnail)) <= 240
+        assert utf16_units(str(image_thumbnail)) <= 240
         rendered_video = QImage(str(video_thumbnail))
         rendered_image = QImage(str(image_thumbnail))
         assert (rendered_video.width(), rendered_video.height()) == (160, 90)
@@ -251,6 +427,55 @@ def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(tmp_pa
         assert rendered_image.pixelColor(80, 45).blue() > 120
         assert rendered_image.pixelColor(10, 45).lightness() < 60
         assert thumbnails.thumbnail_for(repository, video, width=160, height=90) == video_thumbnail
+        assert not list(repository.project_dir.rglob(".mf-*"))
+
+
+def test_thumbnail_cache_tracks_content_when_size_and_timestamp_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    image_source = tmp_path / "changing.bmp"
+    blue = QImage(64, 64, QImage.Format.Format_RGB32)
+    blue.fill(0xFF145AC4)
+    assert blue.save(str(image_source))
+    source_stat = image_source.stat()
+
+    with ProjectRepository.create(tmp_path / "Thumbnail Identity", "Thumbnail Identity") as repository:
+        assets = AssetService(repository, MediaProbe(paths))
+        initial_asset = assets.import_external(image_source)
+        thumbnails = MediaThumbnailService(paths)
+        initial_thumbnail = thumbnails.thumbnail_for(
+            repository,
+            initial_asset,
+            width=64,
+            height=64,
+        )
+        assert initial_thumbnail is not None
+        assert QImage(str(initial_thumbnail)).pixelColor(32, 32).blue() > 150
+
+        red = QImage(64, 64, QImage.Format.Format_RGB32)
+        red.fill(0xFFD32626)
+        assert red.save(str(image_source))
+        assert image_source.stat().st_size == source_stat.st_size
+        os.utime(
+            image_source,
+            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+        )
+        current_asset = repository.catalog.refresh_asset_status(initial_asset.id)
+        assert current_asset.fingerprint != initial_asset.fingerprint
+
+        current_thumbnail = thumbnails.thumbnail_for(
+            repository,
+            current_asset,
+            width=64,
+            height=64,
+        )
+
+        assert current_thumbnail is not None
+        assert current_thumbnail != initial_thumbnail
+        rendered = QImage(str(current_thumbnail))
+        center = rendered.pixelColor(32, 32)
+        assert center.red() > 150 and center.red() > center.blue() * 2
 
 
 def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp_path: Path) -> None:
@@ -284,7 +509,7 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
             assert asset.managed is False
             assert Path(asset.path).parent == media_workspace.resolve()
             assert Path(asset.path).is_file()
-            assert repository.list_assets()[0].id == asset.id
+            assert repository.catalog.list_assets()[0].id == asset.id
             collection_entry = analyzed.entries[0].model_copy(update={"index": 1, "title": "Lesson One"})
             collection_output = downloader.download(
                 DownloadRequest(
@@ -315,7 +540,7 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
             assert asset.managed is False
             assert Path(asset.path).parent == external_directory.resolve()
             assert Path(asset.path).is_file()
-            assert repository.resolve_asset_path(asset) == Path(asset.path)
+            assert repository.catalog.resolve_asset_path(asset) == Path(asset.path)
         task_repository = ProjectRepository.create(tmp_path / "Task Download", "Task Download")
         project = EditorProject(task_repository, settings=GlobalSettings(), paths=paths)
         try:
@@ -331,15 +556,15 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
                 DownloadMediaCommand(request=request),
             )
 
-            completed = project.tasks.wait(task.id, timeout=30)
-            persisted = project.tasks.get(task.id)
-            registered = task_repository.list_assets()
+            completed = project.wait_for_task(task.id, timeout=30)
+            persisted = project.get_task(task.id)
+            registered = task_repository.catalog.list_assets()
 
             assert completed.status == TaskStatus.COMPLETED
             assert isinstance(persisted.command, DownloadMediaCommand)
             assert persisted.command.request == request
             assert len(registered) == 1
-            visible_path = task_repository.resolve_asset_path(registered[0])
+            visible_path = task_repository.catalog.resolve_asset_path(registered[0])
             assert visible_path.is_file()
             assert visible_path.parent.name == "Task Course"
             assert visible_path.name.startswith("007 Task Lesson [")
@@ -348,6 +573,103 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
         finally:
             project.close()
     finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_real_download_registration_failure_withdraws_user_visible_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = RuntimePaths.discover()
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    source = web_root / "sample.mp4"
+    generate_real_media(
+        source,
+        paths,
+        width=320,
+        height=180,
+    )
+    handler = partial(
+        SimpleHTTPRequestHandler,
+        directory=str(web_root),
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler,
+    )
+    thread = threading.Thread(
+        target=server.serve_forever,
+        daemon=True,
+    )
+    thread.start()
+    repository = ProjectRepository.create(
+        tmp_path / "Failed Task Download",
+        "Failed Task Download",
+    )
+    project = EditorProject(
+        repository,
+        settings=GlobalSettings(),
+        paths=paths,
+    )
+    selected_output = tmp_path / "Selected Output"
+    try:
+        url = (
+            f"http://127.0.0.1:"
+            f"{server.server_address[1]}/sample.mp4"
+        )
+        plan = YtDlpDownloadService().analyze(url)
+
+        def fail_registration(*_args, **_kwargs):
+            raise RuntimeError(
+                "injected asset registration failure"
+            )
+
+        monkeypatch.setattr(
+            repository.catalog,
+            "commit_external_asset",
+            fail_registration,
+        )
+        started = project.start_task(
+            DownloadMediaCommand(
+                request=DownloadRequest(
+                    entry=plan.entries[0],
+                    output_directory=str(
+                        selected_output.resolve()
+                    ),
+                )
+            )
+        )
+        completed = project.wait_for_task(
+            started.id,
+            timeout=30,
+        )
+
+        assert completed.status == TaskStatus.FAILED
+        assert repository.catalog.list_assets() == []
+        visible_files = [
+            path
+            for path in selected_output.rglob("*")
+            if path.is_file()
+            and "MediaFlow Failed Downloads"
+            not in path.parts
+        ]
+        archived_files = list(
+            (
+                selected_output
+                / "MediaFlow Failed Downloads"
+            ).rglob("*.mp4")
+        )
+        assert visible_files == []
+        assert len(archived_files) == 1
+        assert archived_files[0].stat().st_size == (
+            source.stat().st_size
+        )
+        assert not list(tmp_path.glob(".mf-dl-*"))
+    finally:
+        project.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
@@ -377,7 +699,7 @@ def test_hdr_project_generates_hdr_and_sdr_display_proxies(tmp_path: Path) -> No
         assert hdr.metadata.color_primaries == "bt2020"
         assert sdr.metadata.pixel_format == "yuv420p"
         assert sdr.metadata.color_primaries == "bt709"
-        editor = TimelineEditor(repository, repository.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=video_track.id,

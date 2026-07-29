@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import AsrSettings
 
@@ -301,10 +302,10 @@ class RuntimeToolService:
 
     @staticmethod
     def _write_json(path: Path, payload: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_text(
+            path,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
 
     @staticmethod
     def _download_with_resume(

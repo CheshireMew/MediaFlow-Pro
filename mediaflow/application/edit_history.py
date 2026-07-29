@@ -11,6 +11,12 @@ class ProjectEditCommand:
     redo_action: Callable[[], None]
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectEditHistoryCheckpoint:
+    undo: tuple[ProjectEditCommand, ...]
+    redo: tuple[ProjectEditCommand, ...]
+
+
 class ProjectEditHistory:
     """One chronological session history shared by timeline and subtitle editing."""
 
@@ -29,6 +35,19 @@ class ProjectEditHistory:
     def push(self, command: ProjectEditCommand) -> None:
         self._undo.append(command)
         self._redo.clear()
+
+    def checkpoint(self) -> ProjectEditHistoryCheckpoint:
+        return ProjectEditHistoryCheckpoint(
+            undo=tuple(self._undo),
+            redo=tuple(self._redo),
+        )
+
+    def restore(
+        self,
+        checkpoint: ProjectEditHistoryCheckpoint,
+    ) -> None:
+        self._undo = list(checkpoint.undo)
+        self._redo = list(checkpoint.redo)
 
     def undo(self) -> str:
         if not self._undo:

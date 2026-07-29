@@ -21,12 +21,18 @@ Item {
         ? mediaController.selectedAssetData : ({})
     readonly property int filteredAssetCount: assetViewLoader.item
         ? assetViewLoader.item.count : 0
+    readonly property bool canEdit:
+        workspaceController.actionCapabilities.canEdit
+    readonly property bool modalOpen: replaceDialog.opened
 
     function openImportDialog() {
-        importDialog.open();
+        if (workspaceController.actionCapabilities.canImport)
+            importDialog.open();
     }
 
     function addAssetAtPlayhead(assetId) {
+        if (!root.canEdit)
+            return;
         timelineController.dropAssets(
             [assetId],
             "",
@@ -81,7 +87,8 @@ Item {
         AppMenuItem {
             objectName: "assetAddAtPlayheadMenuItem"
             text: qsTr("添加到播放头")
-            enabled: root.contextAssetData.status === "online"
+            enabled: root.canEdit
+                && root.contextAssetData.status === "online"
             onTriggered: root.addAssetAtPlayhead(root.contextAssetId)
         }
         AppMenuItem {
@@ -92,6 +99,7 @@ Item {
         AppMenuItem {
             text: qsTr("重新定位")
             visible: root.contextAssetData.status === "offline"
+            enabled: root.canEdit
             onTriggered: {
                 root.relinkAssetId = root.contextAssetId;
                 selectedRelinkDialog.open();
@@ -106,7 +114,7 @@ Item {
             clip: true
             spacing: 2
             model: mediaController.filteredAssetsModel
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: AppScrollBar {}
 
             delegate: MediaAssetDelegate {
                 width: ListView.view ? ListView.view.width : 0
@@ -131,7 +139,7 @@ Item {
             model: mediaController.filteredAssetsModel
             cellWidth: root.viewMode === "large_thumbnails" ? 172 : 112
             cellHeight: root.viewMode === "large_thumbnails" ? 140 : 92
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: AppScrollBar {}
 
             delegate: MediaAssetDelegate {
                 width: (GridView.view ? GridView.view.cellWidth : 112) - 8
@@ -153,24 +161,28 @@ Item {
         spacing: 10
         FileDialog {
             id: importDialog
+            objectName: "mediaImportDialog"
             title: qsTr("导入素材")
             fileMode: FileDialog.OpenFiles
             currentFolder: workspaceController.defaultImportDirectoryUrl
             nameFilters: [qsTr("素材文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)"), qsTr("所有文件 (*)")]
-            onAccepted: mediaController.importFiles(selectedFiles)
+            onAccepted: if (workspaceController.actionCapabilities.canImport)
+                mediaController.importFiles(selectedFiles)
         }
         FolderDialog {
             id: batchRelinkDialog
             title: qsTr("选择离线素材所在目录")
-            onAccepted: mediaController.relinkOfflineMedia(selectedFolder.toString())
+            onAccepted: if (root.canEdit)
+                mediaController.relinkOfflineMedia(selectedFolder.toString())
         }
         FileDialog {
             id: selectedRelinkDialog
             title: qsTr("重新定位离线素材")
             fileMode: FileDialog.OpenFile
-            onAccepted: mediaController.relinkMedia(root.relinkAssetId, selectedFile.toString())
+            onAccepted: if (root.canEdit)
+                mediaController.relinkMedia(root.relinkAssetId, selectedFile.toString())
         }
-        Dialog {
+        AppDialog {
             id: replaceDialog
             anchors.centerIn: parent
             implicitWidth: 400
@@ -213,8 +225,11 @@ Item {
                 onTextChanged: mediaController.setAssetSearchText(text)
                 background: Rectangle {
                     radius: Theme.radiusSmall
-                    color: Theme.surfaceRaised
-                    border.color: search.activeFocus ? Theme.accent : Theme.border
+                    color: Theme.field
+                    border.color: search.activeFocus
+                        ? Theme.accent
+                        : search.hovered ? Theme.borderStrong : Theme.borderSubtle
+                    border.width: search.activeFocus ? 2 : 1
                 }
             }
             MediaViewModeButton {
@@ -225,15 +240,50 @@ Item {
                 onClicked: root.cycleViewMode()
             }
             AppButton {
-                objectName: "openMediaImportButton"
-                text: qsTr("导入")
-                primary: true
-                onClicked: importDialog.open()
+            objectName: "openMediaImportButton"
+            text: qsTr("导入")
+            primary: true
+            enabled: workspaceController.actionCapabilities.canImport
+            onClicked: importDialog.open()
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            AppTextField {
+                id: workspaceDownloadUrl
+                objectName: "workspaceDownloadUrlField"
+                Layout.fillWidth: true
+                placeholderText: qsTr("粘贴视频或播放列表链接")
+                text: String(
+                    settingsController.settingsData.lastDownloadUrl
+                    || "")
+                enabled:
+                    workspaceController.actionCapabilities.canStartTasks
+                onAccepted: {
+                    const value = text.trim();
+                    if (value.length > 0
+                            && !taskController.downloadAnalysisBusy)
+                        taskController.analyzeDownloadUrl(value);
+                }
+            }
+            AppButton {
+                objectName: "workspaceAnalyzeDownloadButton"
+                text: taskController.downloadAnalysisBusy
+                    ? qsTr("分析中…") : qsTr("下载")
+                enabled:
+                    workspaceController.actionCapabilities.canStartTasks
+                    && workspaceDownloadUrl.text.trim().length > 0
+                    && !taskController.downloadAnalysisBusy
+                onClicked: taskController.analyzeDownloadUrl(
+                    workspaceDownloadUrl.text.trim())
             }
         }
 
         AppButton {
             visible: workspaceController.offlineAssetCount > 0
+            enabled: root.canEdit
             Layout.fillWidth: true
             text: qsTr("批量重新定位 (%1)").arg(workspaceController.offlineAssetCount)
             onClicked: batchRelinkDialog.open()
@@ -261,7 +311,7 @@ Item {
             EmptyState {
                 anchors.fill: parent
                 visible: root.filteredAssetCount === 0
-                iconText: "＋"
+                iconName: "add"
                 title: search.text.length === 0
                     ? qsTr("导入第一个素材") : qsTr("没有匹配的素材")
                 description: search.text.length === 0
@@ -285,6 +335,7 @@ Item {
         objectName: "mediaFileDropArea"
         anchors.fill: parent
         z: 200
+        enabled: workspaceController.actionCapabilities.canImport
         onDropped: function (drop) {
             if (!drop.hasUrls)
                 return;
@@ -297,7 +348,7 @@ Item {
         anchors.fill: parent
         visible: fileDropArea.containsDrag
         z: 201
-        color: "#5c132a41"
+        color: Theme.dragOverlay
         border.width: 2
         border.color: Theme.accent
         radius: Theme.radiusSmall

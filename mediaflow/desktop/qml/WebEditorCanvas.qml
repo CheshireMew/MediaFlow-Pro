@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtWebEngine
 import QtWebChannel
 import "."
@@ -10,6 +9,9 @@ Rectangle {
     color: Theme.surfaceSunken
     clip: true
     property int playheadFrame: 0
+    property int syncGeneration: 0
+    readonly property bool webInputActive:
+        visible && webView.activeFocus
 
     function installBridge() {
         webView.runJavaScript(`
@@ -19,12 +21,15 @@ Rectangle {
                 window.__mediaFlowBridgeInstalling = true;
                 const bind = () => new QWebChannel(qt.webChannelTransport, channel => {
                     const bridge = channel.objects.webController;
-                    window.addEventListener("editablemediaselection", event =>
-                        bridge.selectBrowserLayer(String(event.detail.layerId || "")));
+                    window.addEventListener("editablemediaselection", event => {
+                        if (!window.__mediaFlowSynchronizing)
+                            bridge.selectBrowserLayer(String(event.detail.layerId || ""));
+                    });
                     window.addEventListener("editablemediachange", event =>
                         bridge.commitBrowserState(JSON.stringify(event.detail.state)));
                     window.__mediaFlowBridgeInstalled = true;
                     window.__mediaFlowBridgeInstalling = false;
+                    bridge.browserBridgeReady();
                 });
                 if (window.QWebChannel) {
                     bind();
@@ -41,33 +46,73 @@ Rectangle {
     function synchronize() {
         if (!visible || webView.loading || !webController.isWebClip)
             return;
+        const generation = ++root.syncGeneration;
+        webController.setActiveFrame(root.playheadFrame);
         const selected = JSON.stringify(webController.selectedLayerId);
         webView.runJavaScript(`
-            Promise.resolve(window.editableMedia.ready).then(() => {
-                window.editableMedia.setState(${webController.stateJson});
-                window.editableMedia.setTime(${webController.timeMsForFrame(root.playheadFrame)});
-                if (typeof window.editableMedia.setEditCapabilities === "function")
-                    window.editableMedia.setEditCapabilities(${webController.capabilitiesJson});
-                window.editableMedia.setEditMode(true);
-                window.editableMedia.selectLayer(${selected});
-                return true;
-            })
-        `, function () {
+            (() => {
+                const generation = ${generation};
+                window.__mediaFlowSyncGeneration = Math.max(
+                    generation, Number(window.__mediaFlowSyncGeneration || 0));
+                return Promise.resolve(window.editableMedia.ready).then(() => {
+                    if (generation !== window.__mediaFlowSyncGeneration)
+                        return false;
+                    window.__mediaFlowSynchronizing = true;
+                    try {
+                        window.editableMedia.setState(${webController.stateJson});
+                        window.editableMedia.setTime(${webController.timeMsForFrame(root.playheadFrame)});
+                        if (typeof window.editableMedia.setEditCapabilities === "function")
+                            window.editableMedia.setEditCapabilities(${webController.capabilitiesJson});
+                        window.editableMedia.setEditMode(${webController.editMode});
+                        window.editableMedia.selectLayer(${selected});
+                    } finally {
+                        window.__mediaFlowSynchronizing = false;
+                    }
+                    return true;
+                });
+            })()
+        `, function (applied) {
+            if (!applied || generation !== root.syncGeneration)
+                return;
             root.installBridge();
             webView.runJavaScript(webController.browserSnapshotScript, function (snapshot) {
-                if (snapshot)
+                if (snapshot && generation === root.syncGeneration)
                     webController.applyBrowserSnapshot(String(snapshot));
             });
         });
     }
 
+    function synchronizeSelection(layerId) {
+        if (!visible || webView.loading || !webController.isWebClip)
+            return;
+        const selected = JSON.stringify(String(layerId || ""));
+        webView.runJavaScript(`
+            Promise.resolve(window.editableMedia.ready).then(() =>
+                window.editableMedia.selectLayer(${selected}))`);
+    }
+
+    QtObject {
+        id: webBridge
+        WebChannel.id: "webController"
+        function selectBrowserLayer(layerId) {
+            webController.selectBrowserLayer(String(layerId || ""));
+        }
+        function commitBrowserState(payload) {
+            webController.commitBrowserState(String(payload || ""));
+        }
+        function browserBridgeReady() {
+            webController.browserBridgeReady();
+        }
+    }
+
     WebChannel {
         id: channel
-        registeredObjects: [webController]
+        registeredObjects: [webBridge]
     }
 
     WebEngineView {
         id: webView
+        objectName: "webEditorWebView"
         anchors.centerIn: parent
         width: Math.min(parent.width, (webController.activeCanvasData.width || 1080) * zoomFactor)
         height: Math.min(parent.height, (webController.activeCanvasData.height || 1080) * zoomFactor)
@@ -90,11 +135,15 @@ Rectangle {
         function onWebStateChanged() {
             Qt.callLater(root.synchronize);
         }
+        function onBrowserSelectionRequested(layerId) {
+            root.synchronizeSelection(layerId);
+        }
     }
 
     onPlayheadFrameChanged: {
         if (!visible || webView.loading || !webController.isWebClip)
             return;
+        webController.setActiveFrame(root.playheadFrame);
         webView.runJavaScript(`Promise.resolve(window.editableMedia.ready).then(() =>
             window.editableMedia.setTime(${webController.timeMsForFrame(root.playheadFrame)}))`);
     }

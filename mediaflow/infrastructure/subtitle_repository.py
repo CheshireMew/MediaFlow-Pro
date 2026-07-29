@@ -15,10 +15,12 @@ from mediaflow.domain.subtitles import (
     SubtitleSegment,
     SubtitleWord,
 )
-from mediaflow.domain.timebase import reframe_rate
+from mediaflow.domain.timebase import reframe_rate_interval
+
+from .project_repository_component import ProjectRepositoryComponent
 
 
-class SubtitleRepository:
+class SubtitleRepository(ProjectRepositoryComponent):
     def create_subtitle_document(
         self,
         document: SubtitleDocument,
@@ -83,14 +85,14 @@ class SubtitleRepository:
         return self.get_subtitle_document(document.id)
 
     def _validate_subtitle_document(self, document: SubtitleDocument) -> None:
-        project = self.get_project()
+        project = self._owner.catalog.get_project()
         if document.project_id != project.id:
             raise ValueError("Subtitle document belongs to another project")
-        self.get_asset(document.asset_id)
+        self._owner.catalog.get_asset(document.asset_id)
         if document.sequence_id:
-            self.get_sequence(document.sequence_id)
+            self._owner.catalog.get_sequence(document.sequence_id)
         if document.media_asset_id:
-            media_asset = self.get_asset(document.media_asset_id)
+            media_asset = self._owner.catalog.get_asset(document.media_asset_id)
             if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 raise ValueError("Subtitle media must be a video or audio asset")
         if document.source_document_id:
@@ -177,7 +179,7 @@ class SubtitleRepository:
         signature: str,
         result: AsrResult,
     ) -> AsrResult:
-        self.get_asset(asset_id)
+        self._owner.catalog.get_asset(asset_id)
         payload = [
             {
                 "start_seconds": segment.start_seconds,
@@ -643,14 +645,8 @@ class SubtitleRepository:
 
             converted_segments: list[tuple[sqlite3.Row, int, int]] = []
             for segment in segments:
-                source_start = reframe_rate(
+                source_start, source_end = reframe_rate_interval(
                     segment["start_frame"],
-                    main_profile["fps_numerator"],
-                    main_profile["fps_denominator"],
-                    target_profile["fps_numerator"],
-                    target_profile["fps_denominator"],
-                )
-                source_end = reframe_rate(
                     segment["end_frame"],
                     main_profile["fps_numerator"],
                     main_profile["fps_denominator"],

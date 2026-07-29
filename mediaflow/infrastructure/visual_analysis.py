@@ -4,24 +4,24 @@ import json
 import math
 import re
 from pathlib import Path
+from typing import Literal, cast
 
 import cv2
 import numpy as np
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.storage_names import require_windows_interop_path
 from mediaflow.domain.timeline import Clip, ClipTransform, ClipTransformKeyframe
-from mediaflow.infrastructure.process_observers import (
-    FfmpegProgressObserver,
-    ffmpeg_progress_command,
-)
+from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
 
 class SceneDetectionService:
     def __init__(self, paths: RuntimePaths) -> None:
         self.paths = paths
+        self.ffmpeg = FfmpegRunner(paths.ffmpeg)
 
     def detect(
         self,
@@ -35,6 +35,9 @@ class SceneDetectionService:
     ) -> list[int]:
         if not 0.05 <= threshold <= 0.95:
             raise ValueError("场景检测阈值必须在 0.05 到 0.95 之间")
+        source = require_windows_interop_path(
+            Path(source).resolve(strict=True)
+        )
         source_fps = profile.fps
         speed = abs(clip.speed_numerator) / clip.speed_denominator
         consumed = max(1, math.ceil(clip.duration * speed))
@@ -43,45 +46,42 @@ class SceneDetectionService:
         if check_cancelled:
             check_cancelled()
         command = [
-                str(self.paths.ffmpeg),
-                "-hide_banner",
-                "-ss",
-                f"{source_start / source_fps:.9f}",
-                "-t",
-                f"{duration_seconds:.9f}",
-                "-i",
-                str(source),
-                "-filter_complex",
-                (
-                    "[0:v]split=2[scene_input][clock_input];"
-                    f"[scene_input]select='gt(scene,{threshold:g})',showinfo[scenes];"
-                    "[clock_input]null[clock]"
-                ),
-                "-map",
-                "[scenes]",
-                "-map",
-                "[clock]",
-                "-an",
-                "-f",
-                "null",
-                "-",
-            ]
-        observer = FfmpegProgressObserver(
-            duration_seconds,
-            lambda position: progress(
-                OperationProgress.determinate(
-                    "scene_detection_analyzing",
-                    completed=position,
-                    total=duration_seconds,
-                    unit="media_seconds",
+            "-ss",
+            f"{source_start / source_fps:.9f}",
+            "-t",
+            f"{duration_seconds:.9f}",
+            "-i",
+            str(source),
+            "-filter_complex",
+            (
+                "[0:v]split=2[scene_input][clock_input];"
+                f"[scene_input]select='gt(scene,{threshold:g})',showinfo[scenes];"
+                "[clock_input]null[clock]"
+            ),
+            "-map",
+            "[scenes]",
+            "-map",
+            "[clock]",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ]
+        completed = self.ffmpeg.run_progress(
+            command,
+            total_seconds=duration_seconds,
+            on_position=(
+                lambda position: progress(
+                    OperationProgress.determinate(
+                        "scene_detection_analyzing",
+                        completed=position,
+                        total=duration_seconds,
+                        unit="media_seconds",
+                    )
                 )
-            )
-            if progress
-            else None,
-        )
-        completed = run_cancellable_streaming(
-            ffmpeg_progress_command(command),
-            on_stderr_line=observer,
+                if progress
+                else None
+            ),
             timeout=1800,
             check_cancelled=check_cancelled,
         )
@@ -120,6 +120,9 @@ class SubjectMotionService:
     ) -> list[ClipTransformKeyframe]:
         if mode not in {"auto_reframe", "subject_tracking"}:
             raise ValueError("未知的画面跟踪模式")
+        source = require_windows_interop_path(
+            Path(source).resolve(strict=True)
+        )
         capture = cv2.VideoCapture(str(source))
         if not capture.isOpened():
             raise RuntimeError(f"无法读取视频素材：{source}")
@@ -192,7 +195,10 @@ class SubjectMotionService:
                     ClipTransformKeyframe(
                         source_frame=source_frame,
                         transform=transform,
-                        source=mode,
+                        source=cast(
+                            Literal["auto_reframe", "subject_tracking"],
+                            mode,
+                        ),
                         confidence=confidence,
                     )
                 )
@@ -236,6 +242,8 @@ class SubjectMotionService:
 
 
 def write_visual_analysis(path: Path, payload: dict) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2),
+    )
     return path
