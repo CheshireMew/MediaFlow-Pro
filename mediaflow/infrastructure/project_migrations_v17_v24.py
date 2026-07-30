@@ -21,8 +21,8 @@ def migrate_v17_to_v18(workspace) -> None:
                 )
             except (TypeError, ValueError, ValidationError) as error:
                 raise RuntimeError(
-                    "项目包含旧版 editable-media 网页素材，无法无损迁移到 v3。"
-                    "请用 v3 网页包重新导入后再打开项目。"
+                    "项目包含旧版 editable-media 网页素材，无法无损迁移到 v4。"
+                    "请用 v4 网页包重新导入后再打开项目。"
                 ) from error
         state_rows = connection.execute(
             """SELECT state.clip_id, state.state_json, state.revision
@@ -40,8 +40,8 @@ def migrate_v17_to_v18(workspace) -> None:
                 )
             except (TypeError, ValueError, ValidationError) as error:
                 raise RuntimeError(
-                    "项目包含旧版 editable-media 网页片段状态，无法无损迁移到 v3。"
-                    "请在旧版本中移除该网页片段，或重新导入 v3 网页包。"
+                    "项目包含旧版 editable-media 网页片段状态，无法无损迁移到 v4。"
+                    "请在旧版本中移除该网页片段，或重新导入 v4 网页包。"
                 ) from error
         connection.execute(
             "UPDATE schema_info SET version=? WHERE component='project'",

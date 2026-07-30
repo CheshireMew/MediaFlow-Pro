@@ -10,11 +10,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from mediaflow.application.ports import TimelineCompilationDocuments
 from mediaflow.application.web_media_service import (
-    editable_media_source_hash,
     web_package_root,
 )
 from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
@@ -23,11 +23,19 @@ from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset, AssetFingerprint
 from mediaflow.domain.timeline import Clip, TimelineState
 from mediaflow.domain.web_media import (
+    EditableMediaManifest,
     WebAssetSpec,
+    WebBrowserMediaBinding,
     WebClipExportResult,
     WebClipState,
     WebExportFormat,
+    WebMediaSourcesManifest,
+    WebNativeAudioBinding,
+    WebNativeUnderlayBinding,
+    media_source_ids_in_web_data,
     require_web_export_destination,
+    resolved_web_scene_data,
+    web_media_sources_have_audio,
     web_runtime_state,
 )
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
@@ -52,8 +60,71 @@ from mediaflow.infrastructure.web_capture_engine import (
     get_web_capture_engine,
 )
 
-WEB_RENDERER_VERSION = "4"
-WEB_CACHE_MANIFEST_SCHEMA = "mediaflow-web-render-cache/v1"
+WEB_RENDERER_VERSION = "5"
+WEB_CACHE_MANIFEST_SCHEMA = "mediaflow-web-render-cache/v2"
+
+
+@dataclass(frozen=True, slots=True)
+class WebNativeVideoSegment:
+    source_id: str
+    path: Path
+    start_ms: Fraction
+    duration_ms: Fraction
+    active_duration_ms: Fraction
+    source_in_ms: int
+    fit: Literal["cover", "contain"]
+    playback: Literal["hold", "repeat"]
+
+
+@dataclass(frozen=True, slots=True)
+class WebNativeAudioSegment:
+    source_id: str
+    path: Path
+    start_ms: Fraction
+    duration_ms: Fraction
+    source_in_ms: int
+    loop: Literal["none", "repeat"]
+    gain_db: float
+
+
+@dataclass(frozen=True, slots=True)
+class WebNativeMediaPlan:
+    video_segments: tuple[WebNativeVideoSegment, ...]
+    audio_segments: tuple[WebNativeAudioSegment, ...]
+
+    def cache_payload(self) -> dict[str, object]:
+        def fraction_payload(value: Fraction) -> tuple[int, int]:
+            return value.numerator, value.denominator
+
+        return {
+            "video_segments": [
+                {
+                    "source_id": segment.source_id,
+                    "path": segment.path.as_posix(),
+                    "start_ms": fraction_payload(segment.start_ms),
+                    "duration_ms": fraction_payload(segment.duration_ms),
+                    "active_duration_ms": fraction_payload(
+                        segment.active_duration_ms
+                    ),
+                    "source_in_ms": segment.source_in_ms,
+                    "fit": segment.fit,
+                    "playback": segment.playback,
+                }
+                for segment in self.video_segments
+            ],
+            "audio_segments": [
+                {
+                    "source_id": segment.source_id,
+                    "path": segment.path.as_posix(),
+                    "start_ms": fraction_payload(segment.start_ms),
+                    "duration_ms": fraction_payload(segment.duration_ms),
+                    "source_in_ms": segment.source_in_ms,
+                    "loop": segment.loop,
+                    "gain_db": segment.gain_db,
+                }
+                for segment in self.audio_segments
+            ],
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,10 +137,444 @@ class WebRenderTarget:
     height: int
     fps_numerator: int
     fps_denominator: int
+    has_audio: bool
+    audio_sample_rate: int
+    audio_channels: int
+    native_media_plan: WebNativeMediaPlan
 
     @property
     def manifest_path(self) -> Path:
         return self.path.with_name(f"{self.path.name}.manifest.json")
+
+
+def _fraction_decimal(value: Fraction, digits: int = 9) -> str:
+    rendered = f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _milliseconds_as_seconds(value: Fraction) -> str:
+    return _fraction_decimal(value / 1000)
+
+
+def _audio_channel_layout(channels: int) -> str:
+    try:
+        return {1: "mono", 2: "stereo", 6: "5.1"}[channels]
+    except KeyError as error:
+        raise ValueError(f"Unsupported editable media audio channels: {channels}") from error
+
+
+def require_committed_web_publication(
+    *,
+    project_dir: Path,
+    package_root: Path,
+    asset_id: str,
+    source_hash: str,
+) -> None:
+    publication_root = (
+        project_dir.resolve()
+        / "sources"
+        / "web"
+    )
+    package_root = package_root.resolve()
+    match = re.fullmatch(r"p-([0-9a-f]{24})", package_root.name)
+    if (
+        package_root.parent != publication_root
+        or match is None
+    ):
+        raise RuntimeError(
+            "Editable media rendering requires an immutable managed publication"
+        )
+    token = match.group(1)
+    receipt_path = publication_root / "receipts" / f"r-{token}.json"
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            "Editable media publication receipt is unreadable"
+        ) from error
+    expected = {
+        "schema_version": 1,
+        "asset_id": asset_id,
+        "source_hash": source_hash,
+        "token": token,
+        "directory": package_root.name,
+        "status": "committed",
+    }
+    if receipt != expected:
+        raise RuntimeError(
+            "Editable media publication receipt does not match its "
+            "immutable package"
+        )
+
+
+def build_web_render_ffmpeg_command(
+    target: WebRenderTarget,
+    output_path: Path,
+) -> list[str]:
+    if not target.animated:
+        raise ValueError("FFmpeg frame-pipe rendering requires an animated target")
+    fps = Fraction(target.fps_numerator, target.fps_denominator)
+    duration_ms = Fraction(
+        target.frame_count * target.fps_denominator * 1000,
+        target.fps_numerator,
+    )
+    arguments = [
+        "-loglevel",
+        "error",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "-framerate",
+        f"{fps.numerator}/{fps.denominator}",
+        "-i",
+        "-",
+    ]
+    if (
+        not target.native_media_plan.video_segments
+        and not target.native_media_plan.audio_segments
+        and not target.has_audio
+    ):
+        return [
+            *arguments,
+            "-an",
+            "-c:v",
+            "ffv1",
+            "-level",
+            "3",
+            "-pix_fmt",
+            "bgra",
+            "-y",
+            str(output_path),
+        ]
+    next_input = 1
+    video_inputs: list[tuple[WebNativeVideoSegment, int]] = []
+    for video_segment in target.native_media_plan.video_segments:
+        if video_segment.playback == "repeat":
+            arguments.extend(["-stream_loop", "-1"])
+        if video_segment.source_in_ms:
+            arguments.extend(
+                [
+                    "-ss",
+                    _milliseconds_as_seconds(
+                        Fraction(video_segment.source_in_ms)
+                    ),
+                ]
+            )
+        arguments.extend(["-i", str(video_segment.path)])
+        video_inputs.append((video_segment, next_input))
+        next_input += 1
+    audio_inputs: list[tuple[WebNativeAudioSegment, int]] = []
+    for audio_segment in target.native_media_plan.audio_segments:
+        if audio_segment.loop == "repeat":
+            arguments.extend(["-stream_loop", "-1"])
+        if audio_segment.source_in_ms:
+            arguments.extend(
+                [
+                    "-ss",
+                    _milliseconds_as_seconds(
+                        Fraction(audio_segment.source_in_ms)
+                    ),
+                ]
+            )
+        arguments.extend(["-i", str(audio_segment.path)])
+        audio_inputs.append((audio_segment, next_input))
+        next_input += 1
+
+    filters: list[str] = []
+    video_map = "0:v:0"
+    if video_inputs:
+        timeline_labels: list[str] = []
+        cursor_ms = Fraction(0)
+        for segment_index, (video_segment, input_index) in enumerate(video_inputs):
+            if video_segment.start_ms < cursor_ms:
+                raise ValueError("Editable media native video segments overlap")
+            if video_segment.start_ms > cursor_ms:
+                gap_label = f"native_gap_{segment_index}"
+                filters.append(
+                    "color="
+                    f"c=black@0.0:s={target.width}x{target.height}:"
+                    f"r={fps.numerator}/{fps.denominator}:"
+                    f"d={_milliseconds_as_seconds(video_segment.start_ms - cursor_ms)},"
+                    f"format=bgra,setpts=PTS-STARTPTS[{gap_label}]"
+                )
+                timeline_labels.append(gap_label)
+            segment_label = f"native_video_{segment_index}"
+            scale = (
+                f"scale={target.width}:{target.height}:"
+                "force_original_aspect_ratio=increase,"
+                f"crop={target.width}:{target.height}"
+                if video_segment.fit == "cover"
+                else (
+                    f"scale={target.width}:{target.height}:"
+                    "force_original_aspect_ratio=decrease,"
+                    f"pad={target.width}:{target.height}:"
+                    "(ow-iw)/2:(oh-ih)/2:color=black@0.0"
+                )
+            )
+            hold = (
+                f",tpad=stop_mode=clone:"
+                "stop_duration="
+                f"{_milliseconds_as_seconds(video_segment.active_duration_ms)}"
+                if video_segment.playback == "hold"
+                else ""
+            )
+            frozen_tail_ms = (
+                video_segment.duration_ms
+                - video_segment.active_duration_ms
+            )
+            frozen_tail = (
+                ",tpad=stop_mode=clone:"
+                f"stop_duration={_milliseconds_as_seconds(frozen_tail_ms)}"
+                if frozen_tail_ms > 0
+                else ""
+            )
+            filters.append(
+                f"[{input_index}:v:0]"
+                f"fps={fps.numerator}/{fps.denominator},{scale},format=bgra"
+                f"{hold},trim=duration="
+                f"{_milliseconds_as_seconds(video_segment.active_duration_ms)}"
+                f"{frozen_tail},trim=duration="
+                f"{_milliseconds_as_seconds(video_segment.duration_ms)},"
+                f"setpts=PTS-STARTPTS[{segment_label}]"
+            )
+            timeline_labels.append(segment_label)
+            cursor_ms = video_segment.start_ms + video_segment.duration_ms
+        if cursor_ms < duration_ms:
+            gap_label = "native_gap_tail"
+            filters.append(
+                "color="
+                f"c=black@0.0:s={target.width}x{target.height}:"
+                f"r={fps.numerator}/{fps.denominator}:"
+                f"d={_milliseconds_as_seconds(duration_ms - cursor_ms)},"
+                f"format=bgra,setpts=PTS-STARTPTS[{gap_label}]"
+            )
+            timeline_labels.append(gap_label)
+        underlay_label = timeline_labels[0]
+        if len(timeline_labels) > 1:
+            underlay_label = "native_underlay"
+            inputs = "".join(f"[{label}]" for label in timeline_labels)
+            filters.append(
+                f"{inputs}concat=n={len(timeline_labels)}:"
+                f"v=1:a=0[{underlay_label}]"
+            )
+        filters.extend(
+            [
+                "[0:v:0]format=rgba[web_overlay]",
+                f"[{underlay_label}][web_overlay]"
+                "overlay=0:0:shortest=1:format=auto,"
+                "format=bgra[web_composite]",
+            ]
+        )
+        video_map = "[web_composite]"
+
+    audio_map: str | None = None
+    if target.has_audio:
+        layout = _audio_channel_layout(target.audio_channels)
+        audio_labels: list[str] = []
+        for segment_index, (audio_segment, input_index) in enumerate(audio_inputs):
+            if audio_segment.start_ms.denominator != 1:
+                raise ValueError(
+                    "Editable media native audio start must use whole milliseconds"
+                )
+            audio_label = f"native_audio_{segment_index}"
+            filters.append(
+                f"[{input_index}:a:0]"
+                f"aresample={target.audio_sample_rate},"
+                f"aformat=sample_fmts=fltp:channel_layouts={layout},"
+                f"volume={audio_segment.gain_db:.6f}dB,apad,"
+                f"atrim=duration={_milliseconds_as_seconds(audio_segment.duration_ms)},"
+                "asetpts=PTS-STARTPTS,"
+                f"adelay={audio_segment.start_ms.numerator}:all=1[{audio_label}]"
+            )
+            audio_labels.append(audio_label)
+        if audio_labels:
+            inputs = "".join(f"[{label}]" for label in audio_labels)
+            filters.append(
+                f"{inputs}amix=inputs={len(audio_labels)}:"
+                "duration=longest:normalize=0,"
+                f"atrim=duration={_milliseconds_as_seconds(duration_ms)},"
+                f"aformat=sample_rates={target.audio_sample_rate}:"
+                f"channel_layouts={layout},asetpts=PTS-STARTPTS[web_audio]"
+            )
+        else:
+            filters.append(
+                f"anullsrc=r={target.audio_sample_rate}:cl={layout},"
+                f"atrim=duration={_milliseconds_as_seconds(duration_ms)},"
+                "asetpts=PTS-STARTPTS[web_audio]"
+            )
+        audio_map = "[web_audio]"
+
+    if filters:
+        arguments.extend(["-filter_complex", ";".join(filters)])
+    arguments.extend(["-map", video_map])
+    if audio_map is None:
+        arguments.append("-an")
+    else:
+        arguments.extend(["-map", audio_map])
+    arguments.extend(
+        [
+            "-frames:v",
+            str(target.frame_count),
+            "-t",
+            _milliseconds_as_seconds(duration_ms),
+            "-c:v",
+            "ffv1",
+            "-level",
+            "3",
+            "-pix_fmt",
+            "bgra",
+        ]
+    )
+    if audio_map is not None:
+        arguments.extend(["-c:a", "flac"])
+    arguments.extend(["-y", str(output_path)])
+    return arguments
+
+
+def build_web_native_media_plan(
+    *,
+    package_root: Path,
+    manifest: EditableMediaManifest,
+    media_sources: WebMediaSourcesManifest,
+    clip_state: WebClipState,
+    target_duration_ms: Fraction,
+) -> WebNativeMediaPlan:
+    if target_duration_ms <= 0:
+        raise ValueError("Editable media native plan needs a positive duration")
+    sources = {source.id: source for source in media_sources.sources}
+    package_root = package_root.resolve(strict=True)
+    scene_bindings = [
+        (
+            scene,
+            media_source_ids_in_web_data(
+                resolved_web_scene_data(
+                    clip_state,
+                    manifest,
+                    scene.id,
+                ),
+                manifest.data_fields,
+            ),
+        )
+        for scene in manifest.scenes
+    ]
+    for scene, source_ids in scene_bindings:
+        unknown = set(source_ids) - set(sources)
+        if unknown:
+            raise ValueError(
+                f"Editable media scene {scene.id} references undeclared "
+                f"media sources: {sorted(unknown)}"
+            )
+        underlays = [
+            source_id
+            for source_id in source_ids
+            if isinstance(
+                sources[source_id].binding,
+                WebNativeUnderlayBinding,
+            )
+        ]
+        if len(underlays) > 1:
+            raise ValueError(
+                f"Editable media scene {scene.id} selects more than one "
+                "native video underlay"
+            )
+
+    def source_path(source_id: str) -> Path:
+        relative = sources[source_id].file.split("#", 1)[0]
+        path = package_root.joinpath(
+            *PurePosixPath(relative).parts
+        ).resolve(strict=True)
+        try:
+            path.relative_to(package_root)
+        except ValueError as error:
+            raise ValueError(
+                f"Editable media source escaped its package: {source_id}"
+            ) from error
+        return path
+
+    video_segments: list[WebNativeVideoSegment] = []
+    audio_segments: list[WebNativeAudioSegment] = []
+    cycle_duration_ms = Fraction(manifest.duration_ms, 1)
+    cycle_start_ms = Fraction(0, 1)
+    while cycle_start_ms < target_duration_ms:
+        scene_start_ms = cycle_start_ms
+        for scene_index, (scene, source_ids) in enumerate(scene_bindings):
+            active_duration_ms = min(
+                Fraction(scene.duration_ms, 1),
+                target_duration_ms - scene_start_ms,
+            )
+            if active_duration_ms <= 0:
+                break
+            frozen_tail_ms = (
+                max(Fraction(0), target_duration_ms - cycle_duration_ms)
+                if (
+                    manifest.playback.loop != "repeat"
+                    and scene_index == len(scene_bindings) - 1
+                )
+                else Fraction(0)
+            )
+            video_duration_ms = active_duration_ms + frozen_tail_ms
+            for source_id in source_ids:
+                source = sources[source_id]
+                binding = source.binding
+                if isinstance(binding, WebBrowserMediaBinding):
+                    continue
+                path = source_path(source_id)
+                if isinstance(binding, WebNativeUnderlayBinding):
+                    video_segments.append(
+                        WebNativeVideoSegment(
+                            source_id=source_id,
+                            path=path,
+                            start_ms=scene_start_ms,
+                            duration_ms=video_duration_ms,
+                            active_duration_ms=active_duration_ms,
+                            source_in_ms=binding.source_in_ms,
+                            fit=binding.fit,
+                            playback=binding.playback,
+                        )
+                    )
+                    if binding.audio == "include":
+                        audio_segments.append(
+                            WebNativeAudioSegment(
+                                source_id=source_id,
+                                path=path,
+                                start_ms=scene_start_ms,
+                                duration_ms=active_duration_ms,
+                                source_in_ms=binding.source_in_ms,
+                                loop=(
+                                    "repeat"
+                                    if binding.playback == "repeat"
+                                    else "none"
+                                ),
+                                gain_db=binding.gain_db,
+                            )
+                        )
+                    continue
+                if not isinstance(binding, WebNativeAudioBinding):
+                    raise TypeError(
+                        f"Unknown editable media pipeline: {source_id}"
+                    )
+                audio_segments.append(
+                    WebNativeAudioSegment(
+                        source_id=source_id,
+                        path=path,
+                        start_ms=scene_start_ms,
+                        duration_ms=active_duration_ms,
+                        source_in_ms=binding.source_in_ms,
+                        loop=binding.loop,
+                        gain_db=binding.gain_db,
+                    )
+                )
+            scene_start_ms += Fraction(scene.duration_ms, 1)
+            if scene_start_ms >= target_duration_ms:
+                break
+        if manifest.playback.loop != "repeat":
+            break
+        cycle_start_ms += cycle_duration_ms
+    return WebNativeMediaPlan(
+        video_segments=tuple(video_segments),
+        audio_segments=tuple(audio_segments),
+    )
 
 
 class WebRenderCache:
@@ -106,20 +611,51 @@ class WebRenderCache:
             1,
             clip.source_in + consumed if clip.speed_numerator > 0 else clip.source_in + 1,
         )
-        source_hash = editable_media_source_hash(
-            web_package_root(
-                self.documents.catalog.resolve_asset_path(asset),
-                spec.manifest,
+        package_root = web_package_root(
+            self.documents.catalog.resolve_asset_path(asset),
+            spec.manifest,
+        )
+        source_hash = spec.source_hash
+        require_committed_web_publication(
+            project_dir=self.documents.project_dir,
+            package_root=package_root,
+            asset_id=asset.id,
+            source_hash=source_hash,
+        )
+        if clip_state.source_hash != source_hash:
+            raise RuntimeError(
+                "Editable media clip state does not match its immutable "
+                "package publication; rebind the package"
+            )
+        media_sources = WebMediaSourcesManifest.model_validate_json(
+            (package_root / spec.manifest.media_sources).read_text(
+                encoding="utf-8"
             )
         )
-        if source_hash != spec.source_hash:
+        declared_has_audio = web_media_sources_have_audio(media_sources)
+        if declared_has_audio != asset.metadata.has_audio:
             raise RuntimeError(
-                "Editable media package changed after import; rebind it as a new package"
+                "Editable media audio metadata no longer matches its v4 "
+                "source bindings; reimport the package"
             )
+        native_media_plan = build_web_native_media_plan(
+            package_root=package_root,
+            manifest=spec.manifest,
+            media_sources=media_sources,
+            clip_state=clip_state,
+            target_duration_ms=Fraction(
+                frame_count
+                * state.sequence.profile.fps_denominator
+                * 1000,
+                state.sequence.profile.fps_numerator,
+            ),
+        )
+        render_state = web_runtime_state(clip_state, spec.manifest)
+        render_state.pop("revision", None)
         payload = {
             "renderer_version": WEB_RENDERER_VERSION,
             "source_hash": source_hash,
-            "state": clip_state.model_dump(mode="json"),
+            "state": render_state,
             "sequence": state.sequence.profile.model_dump(mode="json"),
             "clip_range": {
                 "source_in": clip.source_in,
@@ -128,6 +664,12 @@ class WebRenderCache:
                 "speed_denominator": clip.speed_denominator,
             },
             "frame_count": frame_count,
+            "native_media": native_media_plan.cache_payload(),
+            "audio": {
+                "enabled": asset.metadata.has_audio,
+                "sample_rate": state.sequence.profile.audio_sample_rate,
+                "channels": state.sequence.profile.audio_channels,
+            },
         }
         digest = hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
@@ -153,6 +695,10 @@ class WebRenderCache:
             height=variant.canvas.height,
             fps_numerator=state.sequence.profile.fps_numerator,
             fps_denominator=state.sequence.profile.fps_denominator,
+            has_audio=asset.metadata.has_audio,
+            audio_sample_rate=state.sequence.profile.audio_sample_rate,
+            audio_channels=state.sequence.profile.audio_channels,
+            native_media_plan=native_media_plan,
         )
 
 
@@ -281,6 +827,9 @@ class WebRenderService:
             "height": target.height,
             "fps_numerator": target.fps_numerator,
             "fps_denominator": target.fps_denominator,
+            "has_audio": target.has_audio,
+            "audio_sample_rate": target.audio_sample_rate,
+            "audio_channels": target.audio_channels,
         }
         if any(payload.get(key) != value for key, value in expected.items()):
             return False
@@ -292,6 +841,12 @@ class WebRenderService:
             "width": target.width,
             "height": target.height,
             "frame_count": target.frame_count if target.animated else 1,
+            "has_audio": target.has_audio,
+            "audio_codec_name": "flac" if target.has_audio else None,
+            "audio_sample_rate": (
+                target.audio_sample_rate if target.has_audio else None
+            ),
+            "audio_channels": target.audio_channels if target.has_audio else None,
         }
         if any(probe.get(key) != value for key, value in expected_probe.items()):
             return False
@@ -498,6 +1053,11 @@ class WebRenderService:
             fps = profile.fps
             duration = max(1 / fps, clip.duration / fps)
             source_args = self._looped_input(cache_path, fps, duration)
+            audio_output = (
+                ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
+                if target.has_audio
+                else ["-an"]
+            )
             self._run_ffmpeg(
                 [
                     "-f",
@@ -512,11 +1072,14 @@ class WebRenderService:
                     (
                         f"[1:v]scale={profile.width}:{profile.height}:"
                         "force_original_aspect_ratio=decrease[web];"
-                        "[0:v][web]overlay=(W-w)/2:(H-h)/2:shortest=1,format=yuv420p"
+                        "[0:v][web]overlay=(W-w)/2:(H-h)/2:"
+                        "shortest=1,format=yuv420p[video]"
                     ),
+                    "-map",
+                    "[video]",
+                    *audio_output,
                     "-t",
                     f"{duration:.6f}",
-                    "-an",
                     "-c:v",
                     "libx264",
                     "-movflags",
@@ -659,27 +1222,7 @@ class WebRenderService:
                         state.sequence.profile.fps_numerator,
                         state.sequence.profile.fps_denominator,
                     )
-                    command = [
-                        "-loglevel",
-                        "error",
-                        "-f",
-                        "image2pipe",
-                        "-vcodec",
-                        "png",
-                        "-framerate",
-                        f"{fps.numerator}/{fps.denominator}",
-                        "-i",
-                        "-",
-                        "-an",
-                        "-c:v",
-                        "ffv1",
-                        "-level",
-                        "3",
-                        "-pix_fmt",
-                        "bgra",
-                        "-y",
-                        str(partial),
-                    ]
+                    command = build_web_render_ffmpeg_command(target, partial)
                     if progress:
                         progress(
                             OperationProgress.determinate(
@@ -805,11 +1348,10 @@ class WebRenderService:
                 str(self.paths.ffprobe),
                 "-v",
                 "error",
-                "-select_streams",
-                "v:0",
                 "-show_entries",
                 (
-                    "stream=codec_name,pix_fmt,width,height,avg_frame_rate:"
+                    "stream=codec_type,codec_name,pix_fmt,width,height,"
+                    "avg_frame_rate,sample_rate,channels:"
                     "format=duration"
                 ),
                 "-of",
@@ -832,13 +1374,37 @@ class WebRenderService:
         try:
             probe_payload = json.loads(result.stdout)
             streams = probe_payload.get("streams") or []
-            stream = streams[0]
+            video_streams = [
+                stream
+                for stream in streams
+                if stream.get("codec_type") == "video"
+            ]
+            audio_streams = [
+                stream
+                for stream in streams
+                if stream.get("codec_type") == "audio"
+            ]
+            if len(video_streams) != 1:
+                raise ValueError("expected exactly one video stream")
+            stream = video_streams[0]
             codec_name = str(stream["codec_name"])
             pixel_format = str(stream["pix_fmt"])
             width = int(stream["width"])
             height = int(stream["height"])
             frame_rate = Fraction(str(stream.get("avg_frame_rate") or "0/1"))
             duration = Fraction(str((probe_payload.get("format") or {}).get("duration") or "0"))
+            if len(audio_streams) > 1:
+                raise ValueError("expected at most one audio stream")
+            audio_stream = audio_streams[0] if audio_streams else None
+            audio_codec_name = (
+                str(audio_stream["codec_name"]) if audio_stream is not None else None
+            )
+            audio_sample_rate = (
+                int(audio_stream["sample_rate"]) if audio_stream is not None else None
+            )
+            audio_channels = (
+                int(audio_stream["channels"]) if audio_stream is not None else None
+            )
         except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError) as error:
             raise RuntimeError(
                 "FFprobe returned incomplete editable web media cache metadata"
@@ -863,12 +1429,22 @@ class WebRenderService:
                 and abs(duration - expected_duration)
                 > Fraction(target.fps_denominator, target.fps_numerator)
             )
+            or (audio_stream is not None) != target.has_audio
+            or (
+                target.has_audio
+                and (
+                    audio_codec_name != "flac"
+                    or audio_sample_rate != target.audio_sample_rate
+                    or audio_channels != target.audio_channels
+                )
+            )
         ):
             raise RuntimeError(
                 "Editable web media cache does not match its render target: "
                 f"codec={codec_name}, pixel_format={pixel_format}, "
                 f"size={width}x{height}, frames={expected_frame_count}, "
-                f"rate={frame_rate}, duration={duration}"
+                f"rate={frame_rate}, duration={duration}, "
+                f"audio={audio_codec_name}/{audio_sample_rate}/{audio_channels}"
             )
         return {
             "codec_name": codec_name,
@@ -878,6 +1454,10 @@ class WebRenderService:
             "frame_count": expected_frame_count,
             "fps_numerator": frame_rate.numerator,
             "fps_denominator": frame_rate.denominator,
+            "has_audio": audio_stream is not None,
+            "audio_codec_name": audio_codec_name,
+            "audio_sample_rate": audio_sample_rate,
+            "audio_channels": audio_channels,
         }
 
     @staticmethod
@@ -896,6 +1476,9 @@ class WebRenderService:
             "height": target.height,
             "fps_numerator": target.fps_numerator,
             "fps_denominator": target.fps_denominator,
+            "has_audio": target.has_audio,
+            "audio_sample_rate": target.audio_sample_rate,
+            "audio_channels": target.audio_channels,
             "fingerprint": fingerprint.model_dump(mode="json"),
             "probe": probe,
         }

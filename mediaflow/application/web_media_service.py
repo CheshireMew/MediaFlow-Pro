@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, TypeVar, cast
@@ -43,7 +44,10 @@ from mediaflow.domain.web_media import (
     WebSceneState,
     WebStateDiff,
     WebVariantResult,
+    media_source_ids_in_web_data,
     parse_editable_media_manifest_json,
+    resolved_web_scene_data,
+    web_media_sources_have_audio,
     web_runtime_state,
 )
 
@@ -66,6 +70,7 @@ class _WebPackageTree:
 class _WebPackagePublication:
     asset_id: str
     manifest: EditableMediaManifest
+    media_sources: WebMediaSourcesManifest
     source_hash: str
     token: str
     staging: Path
@@ -240,8 +245,22 @@ def web_package_root(
     return root
 
 
-def _copy_web_package_file(source: str, destination: str) -> str:
-    return shutil.copy2(source, destination)
+def _copy_web_package_file(
+    source: str,
+    destination: str,
+) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    copied = 0
+    with open(source, "rb") as input_stream, open(
+        destination,
+        "xb",
+    ) as output_stream:
+        while chunk := input_stream.read(1024 * 1024):
+            output_stream.write(chunk)
+            digest.update(chunk)
+            copied += len(chunk)
+    shutil.copystat(source, destination)
+    return copied, digest.hexdigest()
 
 
 class WebMediaService:
@@ -260,12 +279,13 @@ class WebMediaService:
             self._reconcile_publications()
 
     def import_package(self, source: str | Path) -> Asset:
-        package_tree, manifest = self._read_package_tree(source)
+        package_tree, manifest, media_sources = self._read_package_tree(source)
         project = self.repository.catalog.get_project()
         asset_id = new_id()
         publication = self._stage_package(
             package_tree,
             manifest,
+            media_sources,
             asset_id=asset_id,
         )
         main_sequence = self.repository.catalog.get_sequence(project.main_sequence_id)
@@ -274,6 +294,7 @@ class WebMediaService:
             round(publication.manifest.duration_ms * main_sequence.profile.fps / 1000),
         )
         default_variant = publication.manifest.default_variant
+        has_audio = web_media_sources_have_audio(publication.media_sources)
         asset = Asset(
             id=asset_id,
             project_id=project.id,
@@ -293,7 +314,7 @@ class WebMediaService:
                 fps_numerator=main_sequence.profile.fps_numerator,
                 fps_denominator=main_sequence.profile.fps_denominator,
                 has_video=True,
-                has_audio=False,
+                has_audio=has_audio,
             ),
         )
         return self._commit_package_publication(
@@ -358,13 +379,12 @@ class WebMediaService:
         current_scene = current.scenes.get(resolved_scene_id, WebSceneState())
         layers = dict(current_scene.layers)
         manifest_layers = {layer.id: layer for layer in spec.manifest.layers}
-        media_source_ids = self._media_source_ids(
-            web_package_root(
-                self.repository.catalog.resolve_asset_path(asset),
-                spec.manifest,
-            ),
+        package_root = web_package_root(
+            self.repository.catalog.resolve_asset_path(asset),
             spec.manifest,
         )
+        media_sources = self.read_media_sources(package_root, spec.manifest)
+        media_source_ids = {item.id for item in media_sources.sources}
         for layer_id, patch in updates.items():
             manifest_layer = manifest_layers.get(layer_id)
             if manifest_layer is None:
@@ -388,7 +408,7 @@ class WebMediaService:
             candidate = WebLayerOverride.model_validate(values)
             if candidate.image is not None and candidate.image not in media_source_ids:
                 raise ValueError(
-                    f"Layer {layer_id} image is not declared in the v3 media-sources manifest"
+                    f"Layer {layer_id} image is not declared in the v4 media-sources manifest"
                 )
             for field in patch:
                 self._validate_constraint(
@@ -410,6 +430,11 @@ class WebMediaService:
                 "scene_id": resolved_scene_id,
                 "revision": current.revision + 1,
             }
+        )
+        self._validate_media_bindings(
+            spec.manifest,
+            media_sources,
+            updated,
         )
         editor.set_web_clip_state(updated, expected_revision=current.revision)
         return editor.state.web_states[clip_id]
@@ -523,7 +548,7 @@ class WebMediaService:
         }
         if set(runtime_state) != expected_keys:
             raise ValueError(
-                "Editable media runtime state must use the complete v3 state contract"
+                "Editable media runtime state must use the complete v4 state contract"
             )
         runtime_revision = runtime_state["revision"]
         if (
@@ -642,7 +667,7 @@ class WebMediaService:
                 candidate = WebLayerOverride.model_validate(overrides)
                 if candidate.image is not None and candidate.image not in media_source_ids:
                     raise ValueError(
-                        f"Layer {layer_id} image is not declared in the v3 media-sources manifest"
+                        f"Layer {layer_id} image is not declared in the v4 media-sources manifest"
                     )
                 for field in overrides:
                     self._validate_constraint(
@@ -701,7 +726,7 @@ class WebMediaService:
                 if field.kind == "media-source" and value not in media_source_ids:
                     raise ValueError(
                         f"Data field {field_id} media source is not declared in "
-                        "the v3 media-sources manifest"
+                        "the v4 media-sources manifest"
                     )
                 if value != scene_defaults[field_id]:
                     data_overrides[str(field_id)] = cast(JsonValue, value)
@@ -936,7 +961,7 @@ class WebMediaService:
                 if value not in media_source_ids:
                     raise ValueError(
                         f"Data field {field_id} media source is not declared in "
-                        "the v3 media-sources manifest"
+                        "the v4 media-sources manifest"
                     )
             merged[field_id] = value
         snapshot = WebDataSnapshot(
@@ -1197,7 +1222,15 @@ class WebMediaService:
         if asset.kind != AssetKind.WEB:
             raise ValueError("Asset is not editable web media")
         old_spec = self.repository.web.get_web_asset_spec(asset_id)
-        package_tree, new_manifest = self._read_package_tree(source)
+        package_tree, new_manifest, new_media_sources = self._read_package_tree(
+            source
+        )
+        new_has_audio = web_media_sources_have_audio(new_media_sources)
+        if new_has_audio != asset.metadata.has_audio:
+            raise ValueError(
+                "Rebinding editable media cannot change whether the asset has "
+                "native audio; import it as a new asset instead"
+            )
         self._preflight_package_tree(package_tree)
         self._runtime_validator.validate(package_tree.root, new_manifest)
         new_hash = package_tree.source_hash
@@ -1371,6 +1404,7 @@ class WebMediaService:
         publication = self._stage_package(
             package_tree,
             new_manifest,
+            new_media_sources,
             asset_id=asset_id,
         )
         def commit_rebind() -> None:
@@ -1384,6 +1418,7 @@ class WebMediaService:
                                 "duration_frames": duration_frames,
                                 "width": default_variant.canvas.width,
                                 "height": default_variant.canvas.height,
+                                "has_audio": new_has_audio,
                             }
                         ),
                     }
@@ -1442,12 +1477,31 @@ class WebMediaService:
             raise ValueError(f"Editable media scene does not exist: {resolved}")
         return resolved
 
-    @staticmethod
     def _save_state(
+        self,
         editor: TimelineEditor,
         current: WebClipState,
         candidate: WebClipState,
     ) -> WebClipState:
+        try:
+            clip = next(
+                item
+                for item in editor.state.clips
+                if item.id == current.clip_id
+            )
+        except StopIteration as error:
+            raise KeyError(current.clip_id) from error
+        asset = self.repository.catalog.get_asset(clip.asset_id)
+        spec = self.repository.web.get_web_asset_spec(asset.id)
+        package_root = web_package_root(
+            self.repository.catalog.resolve_asset_path(asset),
+            spec.manifest,
+        )
+        self._validate_media_bindings(
+            spec.manifest,
+            self.read_media_sources(package_root, spec.manifest),
+            candidate,
+        )
         updated = candidate.model_copy(update={"revision": current.revision + 1})
         editor.set_web_clip_state(updated, expected_revision=current.revision)
         return editor.state.web_states[current.clip_id]
@@ -1512,7 +1566,11 @@ class WebMediaService:
     @staticmethod
     def _read_package_tree(
         source: str | Path,
-    ) -> tuple[_WebPackageTree, EditableMediaManifest]:
+    ) -> tuple[
+        _WebPackageTree,
+        EditableMediaManifest,
+        WebMediaSourcesManifest,
+    ]:
         requested = Path(source).expanduser()
         if requested.is_symlink() or _is_junction(requested):
             raise ValueError("Editable media package source cannot be a link or junction")
@@ -1530,18 +1588,21 @@ class WebMediaService:
         manifest = parse_editable_media_manifest_json(
             manifest_path.read_text(encoding="utf-8")
         )
-        WebMediaService._validate_files(tree, manifest)
-        return tree, manifest
+        media_sources = WebMediaService._validate_files(tree, manifest)
+        return tree, manifest, media_sources
 
     @staticmethod
     def read_package(source: str | Path) -> tuple[Path, EditableMediaManifest]:
-        tree, manifest = WebMediaService._read_package_tree(source)
+        tree, manifest, _media_sources = WebMediaService._read_package_tree(
+            source
+        )
         return tree.root, manifest
 
     def _stage_package(
         self,
         source_tree: _WebPackageTree,
         manifest: EditableMediaManifest,
+        media_sources: WebMediaSourcesManifest,
         *,
         asset_id: str,
     ) -> _WebPackagePublication:
@@ -1557,6 +1618,7 @@ class WebMediaService:
         publication = _WebPackagePublication(
             asset_id=asset_id,
             manifest=manifest,
+            media_sources=media_sources,
             source_hash=source_tree.source_hash,
             token=token,
             staging=staging,
@@ -1577,30 +1639,64 @@ class WebMediaService:
                 raise FileExistsError(path)
         staging.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copytree(
-                source_tree.root,
-                staging,
-                copy_function=_copy_web_package_file,
-            )
-            copied_tree = _scan_web_package(staging)
-            if (
-                copied_tree.directories != source_tree.directories
-                or copied_tree.files != source_tree.files
-                or copied_tree.source_hash != source_tree.source_hash
-            ):
+            staging.mkdir()
+            for relative in source_tree.directories:
+                staging.joinpath(
+                    *PurePosixPath(relative).parts
+                ).mkdir(parents=True)
+
+            def copy_relative(
+                relative: str,
+            ) -> tuple[str, tuple[int, str]]:
+                source = source_tree.root.joinpath(
+                    *PurePosixPath(relative).parts
+                )
+                destination = staging.joinpath(
+                    *PurePosixPath(relative).parts
+                )
+                return relative, _copy_web_package_file(
+                    str(source),
+                    str(destination),
+                )
+
+            copied_integrity: dict[str, tuple[int, str]] = {}
+            with ThreadPoolExecutor(
+                max_workers=max(1, min(4, len(source_tree.files)))
+            ) as pool:
+                for relative, integrity in pool.map(
+                    copy_relative,
+                    source_tree.files,
+                ):
+                    copied_integrity[relative] = integrity
+            if copied_integrity != source_tree.file_integrity:
                 raise RuntimeError(
                     "Editable media package changed while it was being copied"
                 )
+            copied_tree = _WebPackageTree(
+                root=staging,
+                directories=source_tree.directories,
+                files=source_tree.files,
+                file_integrity=copied_integrity,
+                source_hash=source_tree.source_hash,
+            )
             copied_manifest = parse_editable_media_manifest_json(
                 (staging / MANIFEST_FILE_NAME).read_text(encoding="utf-8")
             )
-            self._validate_files(copied_tree, copied_manifest)
+            copied_media_sources = self._validate_files(
+                copied_tree,
+                copied_manifest,
+            )
             if copied_manifest != manifest:
                 raise RuntimeError(
                     "Editable media manifest changed while it was being copied"
                 )
+            if copied_media_sources != media_sources:
+                raise RuntimeError(
+                    "Editable media source bindings changed while they were being copied"
+                )
             self._runtime_validator.validate(staging, copied_manifest)
             publication.manifest = copied_manifest
+            publication.media_sources = copied_media_sources
             return publication
         except BaseException as error:
             try:
@@ -1841,7 +1937,7 @@ class WebMediaService:
     def _validate_files(
         package_tree: _WebPackageTree,
         manifest: EditableMediaManifest,
-    ) -> None:
+    ) -> WebMediaSourcesManifest:
         media_sources = WebMediaService.read_media_sources(
             package_tree.root,
             manifest,
@@ -1885,6 +1981,87 @@ class WebMediaService:
                         "Editable media provenance capture integrity does not match: "
                         f"{source.id}/{capture_file}"
                     )
+        WebMediaService._validate_media_bindings(
+            manifest,
+            media_sources,
+            WebClipState(clip_id="package-validation"),
+        )
+        return media_sources
+
+    @staticmethod
+    def _validate_media_bindings(
+        manifest: EditableMediaManifest,
+        media_sources: WebMediaSourcesManifest,
+        state: WebClipState,
+    ) -> None:
+        sources_by_id = {source.id: source for source in media_sources.sources}
+
+        def require_browser_image(source_id: str, context: str) -> None:
+            source = sources_by_id.get(source_id)
+            if source is None:
+                raise ValueError(
+                    f"{context} references undeclared media source: {source_id}"
+                )
+            if (
+                source.binding.pipeline != "browser"
+                or source.media_type
+                not in {
+                    "photo",
+                    "screenshot",
+                    "video-frame",
+                    "icon",
+                    "generated",
+                }
+                or source.acquisition.method == "generated-in-project"
+            ):
+                raise ValueError(
+                    f"{context} requires a browser-rendered image source: "
+                    f"{source_id}"
+                )
+
+        for scene in manifest.scenes:
+            scene_state = state.scenes.get(scene.id)
+            if scene_state is not None:
+                for layer_id, layer in scene_state.layers.items():
+                    if layer.image is not None:
+                        require_browser_image(
+                            layer.image,
+                            f"Editable media scene {scene.id} layer {layer_id}",
+                        )
+            data = resolved_web_scene_data(
+                state,
+                manifest,
+                scene.id,
+            )
+            selected_ids = media_source_ids_in_web_data(
+                data,
+                manifest.data_fields,
+            )
+            unknown_ids = set(selected_ids) - set(sources_by_id)
+            if unknown_ids:
+                raise ValueError(
+                    f"Editable media scene {scene.id} references undeclared "
+                    f"media sources: {sorted(unknown_ids)}"
+                )
+            native_underlays = [
+                source_id
+                for source_id in selected_ids
+                if sources_by_id[source_id].binding.pipeline
+                == "native-underlay"
+            ]
+            if len(native_underlays) > 1:
+                raise ValueError(
+                    f"Editable media scene {scene.id} selects more than one "
+                    "native video underlay"
+                )
+            for slot_id, slot in scene.asset_slots.items():
+                source_id = data.get(slot.data_field)
+                if not isinstance(source_id, str) or not source_id:
+                    continue
+                require_browser_image(
+                    source_id,
+                    f"Editable media scene {scene.id} asset slot {slot_id}",
+                )
 
     @staticmethod
     def _validate_constraint(

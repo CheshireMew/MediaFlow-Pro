@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_MEDIA_STARTER = Path(
     os.environ.get(
         "MEDIAFLOW_EDITABLE_MEDIA_PACKAGE",
-        ROOT / "tests" / "fixtures" / "editable-media-v3",
+        ROOT / "tests" / "fixtures" / "editable-media-v4",
     )
 ).resolve()
 

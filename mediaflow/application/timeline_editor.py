@@ -728,6 +728,10 @@ class TimelineEditor:
             source_index = self._clip_index(state, source.id)
             state.clips[source_index] = source.model_copy(update={"media_kind": ClipMediaKind.VIDEO_ONLY})
             state.clips.append(detached.model_copy(update={"track_id": audio_track.id}))
+            if source.id in state.web_states:
+                state.web_states[detached.id] = state.web_states[source.id].model_copy(
+                    update={"clip_id": detached.id, "revision": 0}
+                )
 
         self._commit("解除视音频绑定", mutate)
         return self._clip(source.id), self._clip(detached.id)

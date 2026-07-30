@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
-from typing import Literal, cast
+from typing import Annotated, Literal, cast
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
@@ -550,6 +551,34 @@ class WebMediaCrop(DomainModel):
         return self
 
 
+class WebBrowserMediaBinding(DomainModel):
+    pipeline: Literal["browser"]
+
+
+class WebNativeAudioBinding(DomainModel):
+    pipeline: Literal["native-audio"]
+    loop: Literal["none", "repeat"]
+    source_in_ms: int = Field(ge=0)
+    gain_db: float
+
+
+class WebNativeUnderlayBinding(DomainModel):
+    pipeline: Literal["native-underlay"]
+    fit: Literal["cover", "contain"]
+    playback: Literal["hold", "repeat"]
+    source_in_ms: int = Field(ge=0)
+    audio: Literal["include", "exclude"]
+    gain_db: float
+
+
+WebMediaBinding = Annotated[
+    WebBrowserMediaBinding
+    | WebNativeAudioBinding
+    | WebNativeUnderlayBinding,
+    Field(discriminator="pipeline"),
+]
+
+
 class WebMediaSource(DomainModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
     media_type: Literal[
@@ -564,6 +593,7 @@ class WebMediaSource(DomainModel):
         "generated",
     ]
     file: str
+    binding: WebMediaBinding
     representation: WebSourceRepresentation | WebProxyRepresentation = Field(
         discriminator="kind"
     )
@@ -594,12 +624,30 @@ class WebMediaSource(DomainModel):
             and self.generation is None
         ):
             raise ValueError("Generated editable media needs generation metadata")
+        if self.media_type == "audio" and self.binding.pipeline != "native-audio":
+            raise ValueError(
+                "Editable media audio sources must use the native-audio pipeline"
+            )
+        if (
+            self.binding.pipeline == "native-audio"
+            and self.media_type != "audio"
+        ):
+            raise ValueError(
+                "Only editable media audio sources can use native-audio"
+            )
+        if (
+            self.binding.pipeline == "native-underlay"
+            and self.media_type != "video"
+        ):
+            raise ValueError(
+                "Only editable media video sources can use native-underlay"
+            )
         return self
 
 
 class WebMediaSourcesManifest(DomainModel):
     protocol: Literal["visual-multimedia-media-sources"]
-    version: Literal[3]
+    version: Literal[4]
     sources: list[WebMediaSource]
 
     @model_validator(mode="after")
@@ -627,6 +675,10 @@ class WebMediaSourcesManifest(DomainModel):
                 raise ValueError("Editable media proxies must be generated inside the project")
             if item.rights != source.rights:
                 raise ValueError("Editable media proxies must inherit original source rights")
+            if item.binding != source.binding:
+                raise ValueError(
+                    "Editable media proxies must preserve their source pipeline binding"
+                )
         return self
 
 
@@ -741,7 +793,7 @@ class WebProductionMetadata(DomainModel):
 
 class EditableMediaManifest(DomainModel):
     protocol: Literal["editable-media"]
-    version: Literal[3]
+    version: Literal[4]
     entry: str
     media_sources: str
     playback: WebPlayback
@@ -1080,6 +1132,19 @@ class WebAnimationTrack(DomainModel):
         return self
 
 
+def web_media_sources_have_audio(
+    media_sources: WebMediaSourcesManifest,
+) -> bool:
+    return any(
+        isinstance(source.binding, WebNativeAudioBinding)
+        or (
+            isinstance(source.binding, WebNativeUnderlayBinding)
+            and source.binding.audio == "include"
+        )
+        for source in media_sources.sources
+    )
+
+
 class WebLayerOverride(DomainModel):
     content: str | None = None
     color: str | None = None
@@ -1217,6 +1282,52 @@ class WebClipExportResult(DomainModel):
     cache_path: str
 
 
+def resolved_web_scene_data(
+    state: WebClipState,
+    manifest: EditableMediaManifest,
+    scene_id: str,
+) -> dict[str, JsonValue]:
+    try:
+        scene = next(item for item in manifest.scenes if item.id == scene_id)
+    except StopIteration as error:
+        raise ValueError(
+            f"Editable media scene does not exist: {scene_id}"
+        ) from error
+    current = state.scenes.get(scene.id, WebSceneState())
+    data = {item.id: item.default for item in manifest.data_fields}
+    data.update(scene.data)
+    data.update(current.data_snapshot.values)
+    return data
+
+
+def media_source_ids_in_web_data(
+    data: Mapping[str, JsonValue],
+    fields: list[WebDataField],
+) -> tuple[str, ...]:
+    source_ids: list[str] = []
+    for field in fields:
+        value = data.get(field.id)
+        if field.kind == "media-source":
+            if isinstance(value, str) and value:
+                source_ids.append(value)
+            continue
+        if field.kind != "table" or not isinstance(value, list):
+            continue
+        source_columns = {
+            column.id
+            for column in field.columns
+            if column.kind == "media-source"
+        }
+        for row in value:
+            if not isinstance(row, dict):
+                continue
+            for column_id in source_columns:
+                source_id = row.get(column_id)
+                if isinstance(source_id, str) and source_id:
+                    source_ids.append(source_id)
+    return tuple(dict.fromkeys(source_ids))
+
+
 def web_runtime_state(
     state: WebClipState,
     manifest: EditableMediaManifest,
@@ -1224,7 +1335,6 @@ def web_runtime_state(
     variant = manifest.variant_for(state.variant.id if state.variant is not None else None)
     known_scene_ids = {item.id for item in manifest.scenes}
     scene_id = state.scene_id if state.scene_id in known_scene_ids else manifest.scenes[0].id
-    data_defaults = {item.id: item.default for item in manifest.data_fields}
     resolved_scenes: dict[str, JsonValue] = {}
     for scene in manifest.scenes:
         current = state.scenes.get(scene.id, WebSceneState())
@@ -1235,9 +1345,7 @@ def web_runtime_state(
                 current.layers.get(layer.id, WebLayerOverride()).model_dump(exclude_none=True)
             )
             resolved_layers[layer.id] = values
-        data = dict(data_defaults)
-        data.update(scene.data)
-        data.update(current.data_snapshot.values)
+        data = resolved_web_scene_data(state, manifest, scene.id)
         resolved_scenes[scene.id] = cast(
             JsonValue,
             {

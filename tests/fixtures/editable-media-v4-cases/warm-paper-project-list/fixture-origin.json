@@ -1,0 +1,16 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "mediaflow/editable-media-v4-migration",
+  "derived_from": "visual-multimedia/assets/web-card-cases/warm-paper-project-list@v3",
+  "editable_media_version": 4,
+  "files": {
+    "assets/creator-avatar.png": "255e6243648bbd731aa269c4ac5643e89a818c7ca79b334bec582584c73af91b",
+    "editable-media-runtime.js": "d31871c244816a6ee0065d0b57e487d461cdd2074e96c33d8d34482ca2cdb755",
+    "editable-media.json": "723b6172df0c6435a9807590c9c961c0ad31a5394b13f0a16ecf629e72185238",
+    "index.html": "b346740d321626034da9df463bd00fe255c341bb5f0f8188bbf7bde24a174c60",
+    "media-sources.json": "90d7a50881fdd08ed822dfb2fe46c539ead230df99f91d9756994a857471da96",
+    "preview.png": "c1c4a9f5d33470002f8180fd3f8510926d6104ef9248fe2352ec0a452d285d49",
+    "style-profile.json": "195dac76418c3d4fdddc5bca3e5799759580d0b4543e998e7b1134664f0f8607"
+  }
+}

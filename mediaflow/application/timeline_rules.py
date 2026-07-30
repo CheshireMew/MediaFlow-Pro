@@ -97,10 +97,15 @@ class TimelineRules:
     ) -> None:
         if track_kind not in compatible_track_kinds(media_kind):
             raise ValueError(f"Cannot place {media_kind.value} on a {track_kind.value} track")
-        if media_kind == ClipMediaKind.LINKED_AV and (asset_kind != AssetKind.VIDEO or not has_audio):
-            raise ValueError("Only video assets with audio can create linked clips")
+        if media_kind == ClipMediaKind.LINKED_AV and (
+            asset_kind not in {AssetKind.VIDEO, AssetKind.WEB} or not has_audio
+        ):
+            raise ValueError(
+                "Only video or editable media assets with audio can create linked clips"
+            )
         if media_kind == ClipMediaKind.AUDIO_ONLY and (
-            asset_kind not in {AssetKind.VIDEO, AssetKind.AUDIO} or not has_audio
+            asset_kind not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.WEB}
+            or not has_audio
         ):
             raise ValueError("The source asset has no audio component")
         if media_kind == ClipMediaKind.VIDEO_ONLY and asset_kind not in {

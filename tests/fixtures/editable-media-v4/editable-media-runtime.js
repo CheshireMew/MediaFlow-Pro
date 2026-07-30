@@ -674,7 +674,14 @@
       throw new TypeError("Editable media seek time must be a finite number");
     }
     pause();
-    const resolved = setTime(value * 1000) / 1000;
+    const duration = totalDuration();
+    let milliseconds = value * 1000;
+    if (manifest?.playback?.loop === "repeat"
+      && duration > 0
+      && milliseconds >= duration) {
+      milliseconds %= duration;
+    }
+    const resolved = setTime(milliseconds) / 1000;
     await new Promise((resolve) => requestAnimationFrame(() => {
       requestAnimationFrame(resolve);
     }));
@@ -1027,8 +1034,8 @@
       throw new Error(`Unable to load editable-media manifest: ${response.status} ${manifestUrl}`);
     }
     manifest = await response.json();
-    if (manifest.protocol !== "editable-media" || manifest.version !== 3) {
-      throw new Error("editable-media manifest must use protocol v3");
+    if (manifest.protocol !== "editable-media" || manifest.version !== 4) {
+      throw new Error("editable-media manifest must use protocol v4");
     }
     if (typeof manifest.media_sources !== "string" || !manifest.media_sources) {
       throw new Error("editable-media manifest must declare media_sources");
@@ -1043,9 +1050,9 @@
     mediaSourcesManifest = await mediaResponse.json();
     if (
       mediaSourcesManifest.protocol !== "visual-multimedia-media-sources"
-      || mediaSourcesManifest.version !== 3
+      || mediaSourcesManifest.version !== 4
       || !Array.isArray(mediaSourcesManifest.sources)) {
-      throw new Error("media_sources must use visual-multimedia media-sources v3");
+      throw new Error("media_sources must use visual-multimedia media-sources v4");
     }
     mediaSources = new Map(
       mediaSourcesManifest.sources.map((source) => [source.id, source])

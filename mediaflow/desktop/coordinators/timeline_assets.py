@@ -415,7 +415,12 @@ class TimelineAssetOperations(SessionCoordinator):
                 [asset.id],
             )
         waveform_key = (TaskKind.WAVEFORM, (asset.id,))
-        if asset.metadata.has_audio and not asset.waveform_path and waveform_key not in active:
+        if (
+            asset.kind != AssetKind.WEB
+            and asset.metadata.has_audio
+            and not asset.waveform_path
+            and waveform_key not in active
+        ):
             self._session.tasks.start(
                 GenerateWaveformCommand(asset_id=asset.id),
                 [asset.id],

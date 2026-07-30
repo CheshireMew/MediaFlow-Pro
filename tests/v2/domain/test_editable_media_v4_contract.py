@@ -7,18 +7,21 @@ from pathlib import Path
 import pytest
 
 from mediaflow.domain.editable_media_contract import EDITABLE_MEDIA_SCHEMA_PATH
-from mediaflow.domain.web_media import parse_editable_media_manifest
+from mediaflow.domain.web_media import (
+    WebMediaSourcesManifest,
+    parse_editable_media_manifest,
+)
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 PACKAGES = {
-    "starter": FIXTURES / "editable-media-v3",
-    "warm": FIXTURES / "editable-media-v3-cases" / "warm-paper-project-list",
-    "social": FIXTURES / "editable-media-v3-cases" / "social-evidence-variants",
+    "starter": FIXTURES / "editable-media-v4",
+    "warm": FIXTURES / "editable-media-v4-cases" / "warm-paper-project-list",
+    "social": FIXTURES / "editable-media-v4-cases" / "social-evidence-variants",
 }
 CORPUS_SCHEMA = (
     FIXTURES
-    / "editable-media-v3-contract"
-    / "editable-media.v3.schema.json"
+    / "editable-media-v4-contract"
+    / "editable-media.v4.schema.json"
 )
 
 
@@ -33,7 +36,7 @@ def _sha256(path: Path) -> str:
 
 
 @pytest.mark.parametrize("name", tuple(PACKAGES))
-def test_generated_packages_match_origins_and_v3_contract(name: str) -> None:
+def test_generated_packages_match_origins_and_v4_contract(name: str) -> None:
     package = PACKAGES[name]
     origin = json.loads((package / "fixture-origin.json").read_text(encoding="utf-8"))
     for relative, expected_hash in origin["files"].items():
@@ -41,14 +44,14 @@ def test_generated_packages_match_origins_and_v3_contract(name: str) -> None:
         assert path.is_file()
         assert _sha256(path) == expected_hash
     manifest = parse_editable_media_manifest(_read_manifest(name))
-    assert manifest.version == 3
+    assert manifest.version == 4
 
 
-def test_mediaflow_executes_the_synced_visual_multimedia_schema() -> None:
+def test_mediaflow_executes_the_synced_visual_multimedia_v4_schema() -> None:
     assert EDITABLE_MEDIA_SCHEMA_PATH.read_bytes() == CORPUS_SCHEMA.read_bytes()
 
 
-def test_rich_v3_features_are_first_class_contract_fields() -> None:
+def test_rich_v4_features_are_first_class_contract_fields() -> None:
     warm = parse_editable_media_manifest(_read_manifest("warm"))
     warm_fields = {field.id: field for field in warm.data_fields}
     assert warm_fields["creator_avatar"].kind == "media-source"
@@ -69,6 +72,64 @@ def test_rich_v3_features_are_first_class_contract_fields() -> None:
     merged = social.layer_values_for("square-1x1", "short-title")
     assert merged["rotation"] == 0
     assert merged["visible"] is True
+
+
+def test_v4_media_sources_require_an_explicit_pipeline_binding() -> None:
+    source_manifest = json.loads(
+        (
+            PACKAGES["warm"]
+            / "media-sources.json"
+        ).read_text(encoding="utf-8")
+    )
+    source = source_manifest["sources"][0]
+
+    parsed = WebMediaSourcesManifest.model_validate(source_manifest)
+    assert parsed.sources[0].binding.pipeline == "browser"
+
+    source.pop("binding")
+    with pytest.raises(ValueError, match="binding"):
+        WebMediaSourcesManifest.model_validate(source_manifest)
+
+
+@pytest.mark.parametrize(
+    ("media_type", "binding", "message"),
+    (
+        (
+            "audio",
+            {"pipeline": "browser"},
+            "audio sources must use the native-audio pipeline",
+        ),
+        (
+            "photo",
+            {
+                "pipeline": "native-underlay",
+                "fit": "cover",
+                "playback": "hold",
+                "source_in_ms": 0,
+                "audio": "exclude",
+                "gain_db": 0,
+            },
+            "Only editable media video sources can use native-underlay",
+        ),
+    ),
+)
+def test_v4_rejects_media_type_and_pipeline_mismatches(
+    media_type: str,
+    binding: dict[str, object],
+    message: str,
+) -> None:
+    source_manifest = json.loads(
+        (
+            PACKAGES["warm"]
+            / "media-sources.json"
+        ).read_text(encoding="utf-8")
+    )
+    source = source_manifest["sources"][0]
+    source["media_type"] = media_type
+    source["binding"] = binding
+
+    with pytest.raises(ValueError, match=message):
+        WebMediaSourcesManifest.model_validate(source_manifest)
 
 
 @pytest.mark.parametrize(
@@ -92,7 +153,7 @@ def test_rich_v3_features_are_first_class_contract_fields() -> None:
         ),
     ),
 )
-def test_v3_rejects_removed_data_kinds_and_non_package_paths(
+def test_v4_rejects_removed_data_kinds_and_non_package_paths(
     mutate,
     message: str,
 ) -> None:

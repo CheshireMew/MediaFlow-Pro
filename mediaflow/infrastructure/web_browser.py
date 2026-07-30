@@ -109,7 +109,7 @@ def verify_non_monotonic_seek_pixels(
         if capture_at(seconds) != references[seconds]:
             page.evaluate("() => window.__hf.seek(0)")
             raise ValueError(
-                "Editable media v3 must render identical pixels after non-monotonic frame seeks"
+                "Editable media v4 must render identical pixels after non-monotonic frame seeks"
             )
 
 
@@ -143,11 +143,11 @@ def validate_editable_media_page(
     )
     runtime_manifest = page.evaluate("() => window.editableMedia.getManifest()")
     if parse_editable_media_manifest(runtime_manifest) != manifest:
-        raise ValueError("window.editableMedia.getManifest() must expose the imported v3 manifest")
+        raise ValueError("window.editableMedia.getManifest() must expose the imported v4 manifest")
     runtime_media_sources = page.evaluate("() => window.editableMedia.getMediaSources()")
     if WebMediaSourcesManifest.model_validate(runtime_media_sources) != media_sources:
         raise ValueError(
-            "window.editableMedia.getMediaSources() must expose the imported v3 source manifest"
+            "window.editableMedia.getMediaSources() must expose the imported v4 source manifest"
         )
     expected_duration = sum(item.duration_ms for item in manifest.scenes) / 1000
     frame_protocol = page.evaluate(
@@ -199,7 +199,7 @@ def validate_editable_media_page(
         or not isinstance(root_duration, (int, float))
         or abs(root_duration - expected_duration) > 1e-9
     ):
-        raise ValueError("Editable media v3 root metadata is not synchronized")
+        raise ValueError("Editable media v4 root metadata is not synchronized")
     protocol_duration = frame_protocol.get("duration")
     seek_time_ms = frame_protocol.get("seekTimeMs")
     timeline_duration = frame_protocol.get("timelineDuration")
@@ -212,7 +212,7 @@ def validate_editable_media_page(
         or not isinstance(timeline_duration, (int, float))
         or abs(timeline_duration - expected_duration) > 1e-9
     ):
-        raise ValueError("Editable media v3 frame protocol is not deterministic")
+        raise ValueError("Editable media v4 frame protocol is not deterministic")
     selectors = {layer.id: layer.selector for layer in manifest.layers}
     counts = page.evaluate(
         """selectors => Object.fromEntries(Object.entries(selectors).map(
@@ -233,7 +233,7 @@ def validate_editable_media_page(
         "playback",
         "revision",
     }:
-        raise ValueError("window.editableMedia.getState() must return the complete v3 state")
+        raise ValueError("window.editableMedia.getState() must return the complete v4 state")
     scenes = state.get("scenes")
     scene_ids = {item.id for item in manifest.scenes}
     if not isinstance(scenes, dict) or set(scenes) != scene_ids:
@@ -256,7 +256,7 @@ def validate_editable_media_page(
         state,
     )
     if roundtrip != state:
-        raise ValueError("window.editableMedia.setState() must round-trip the complete v3 state")
+        raise ValueError("window.editableMedia.setState() must round-trip the complete v4 state")
     for variant in manifest.variants:
         selected = page.evaluate(
             "variantId => window.editableMedia.setVariant(variantId)",

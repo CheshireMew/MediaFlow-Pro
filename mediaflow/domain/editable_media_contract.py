@@ -10,7 +10,7 @@ EDITABLE_MEDIA_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
     / "resources"
     / "contracts"
-    / "editable-media.v3.schema.json"
+    / "editable-media.v4.schema.json"
 )
 
 
@@ -51,19 +51,19 @@ def _canonical(value: object) -> str:
 def _resolve_reference(schema: dict[str, Any], reference: str) -> dict[str, Any]:
     if not reference.startswith("#/"):
         raise RuntimeError(
-            f"editable-media v3 schema only allows local references: {reference}"
+            f"editable-media v4 schema only allows local references: {reference}"
         )
     current: object = schema
     for encoded in reference[2:].split("/"):
         key = encoded.replace("~1", "/").replace("~0", "~")
         if not isinstance(current, dict) or key not in current:
             raise RuntimeError(
-                f"editable-media v3 schema references a missing location: {reference}"
+                f"editable-media v4 schema references a missing location: {reference}"
             )
         current = current[key]
     if not isinstance(current, dict):
         raise RuntimeError(
-            f"editable-media v3 schema reference is not an object: {reference}"
+            f"editable-media v4 schema reference is not an object: {reference}"
         )
     return current
 
@@ -111,7 +111,7 @@ def _validate_node(
     if "enum" in node and all(
         _canonical(value) != _canonical(candidate) for candidate in node["enum"]
     ):
-        errors.append(f"{location} is not an allowed editable-media v3 value")
+        errors.append(f"{location} is not an allowed editable-media v4 value")
 
     if isinstance(value, str):
         if "minLength" in node and len(value) < int(node["minLength"]):
@@ -164,7 +164,7 @@ def _validate_node(
                 continue
             additional = node.get("additionalProperties", True)
             if additional is False:
-                errors.append(f"{location}.{key} is not an editable-media v3 field")
+                errors.append(f"{location}.{key} is not an editable-media v4 field")
             elif isinstance(additional, dict):
                 _validate_node(
                     item,
@@ -191,6 +191,6 @@ def validate_editable_media_document(document: object) -> None:
     errors = editable_media_schema_errors(document)
     if errors:
         raise ValueError(
-            "editable-media v3 schema validation failed:\n- "
+            "editable-media v4 schema validation failed:\n- "
             + "\n- ".join(errors)
         )

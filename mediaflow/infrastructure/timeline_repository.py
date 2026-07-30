@@ -219,7 +219,8 @@ class TimelineRepository(ProjectRepositoryComponent):
             if clip.media_kind == ClipMediaKind.AUDIO_ONLY:
                 if (
                     track.kind != TrackKind.AUDIO
-                    or timeline_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}
+                    or timeline_asset.kind
+                    not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.WEB}
                     or not timeline_asset.metadata.has_audio
                 ):
                     raise ValueError("Audio-only clips require an audio track and audio source")
@@ -233,7 +234,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             elif (
                 track.kind != TrackKind.VIDEO
                 or (
-                    timeline_asset.kind != AssetKind.VIDEO
+                    timeline_asset.kind not in {AssetKind.VIDEO, AssetKind.WEB}
                     or not timeline_asset.metadata.has_audio
                     or track.linked_audio_track_id is None
                 )

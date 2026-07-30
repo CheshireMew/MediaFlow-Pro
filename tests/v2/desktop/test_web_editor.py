@@ -22,7 +22,7 @@ from mediaflow.desktop.app import configure_application_font, create_engine
 from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
-STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v3"
+STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v4"
 
 
 def _process_until(predicate, timeout: float = 10.0) -> bool:
@@ -43,7 +43,7 @@ def _application() -> QGuiApplication:
     return app
 
 
-def test_unified_import_opens_the_v3_package_through_local_preview_server(
+def test_unified_import_opens_the_v4_package_through_local_preview_server(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -53,7 +53,7 @@ def test_unified_import_opens_the_v3_package_through_local_preview_server(
     try:
         controllers.workspace.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
-            "Unified V3 Web Import",
+            "Unified V4 Web Import",
         )
         window = engine.rootObjects()[0]
         loader = window.findChild(QObject, "pageLoader")
@@ -100,7 +100,7 @@ def test_unified_import_opens_the_v3_package_through_local_preview_server(
             and bool(controllers.web.browserLayerSnapshot),
             15,
         )
-        assert controllers.web.manifestData["version"] == 3
+        assert controllers.web.manifestData["version"] == 4
         assert controllers.web.browserRevision == 0
     finally:
         controllers.shutdown()
@@ -114,9 +114,9 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    project_path = tmp_path / "Desktop V3 Web Project"
+    project_path = tmp_path / "Desktop V4 Web Project"
     api = EditorApplication()
-    with api.create_project(project_path, "Desktop V3 Web Project") as project:
+    with api.create_project(project_path, "Desktop V4 Web Project") as project:
         asset = project.import_web_package(STARTER)
         sequence_id = project.get_project().main_sequence_id
         editor = project.timeline(sequence_id)

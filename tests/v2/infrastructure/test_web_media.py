@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import sqlite3
@@ -26,7 +28,7 @@ from mediaflow.application.web_media_service import (
 )
 from mediaflow.automation.dispatcher import execute_request
 from mediaflow.composition import EditorProject
-from mediaflow.domain.enums import AssetKind, ExportFormat, TrackKind
+from mediaflow.domain.enums import AssetKind, ClipMediaKind, ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.storage_names import (
@@ -37,6 +39,7 @@ from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.domain.tasks import ArtifactReference
 from mediaflow.domain.web_media import parse_editable_media_manifest
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
+from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -52,10 +55,10 @@ from mediaflow.infrastructure.web_render_service import WebRenderService
 STARTER = Path(
     os.environ.get(
         "MEDIAFLOW_EDITABLE_MEDIA_PACKAGE",
-        Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v3",
+        Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v4",
     )
 ).resolve()
-MEDIA_CASES = STARTER.parent / "editable-media-v3-cases"
+MEDIA_CASES = STARTER.parent / "editable-media-v4-cases"
 
 
 def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaService]:
@@ -92,10 +95,206 @@ def _add_web_clip(
     return project, asset, clip
 
 
-def test_editable_media_v3_full_chain(
+def _native_source_record(
+    *,
+    source_id: str,
+    media_type: str,
+    relative_path: str,
+    binding: dict[str, object],
+    package_root: Path,
+) -> dict[str, object]:
+    path = package_root / relative_path
+    mime_type = mimetypes.guess_type(relative_path)[0]
+    assert mime_type is not None
+    return {
+        "id": source_id,
+        "media_type": media_type,
+        "file": relative_path,
+        "binding": binding,
+        "representation": {
+            "kind": "source",
+            "source_id": None,
+            "build": None,
+            "verification": None,
+        },
+        "acquisition": {
+            "method": "project-owned",
+            "source_url": "",
+            "captured_at": "2026-07-30T00:00:00.000Z",
+        },
+        "rights": {
+            "status": "confirmed",
+            "license": "project-owned",
+            "attribution": "MediaFlow test fixture",
+            "terms_url": "",
+        },
+        "usage": "native editable media pipeline verification",
+        "integrity": {
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": path.stat().st_size,
+            "mime_type": mime_type,
+        },
+        "generation": None,
+        "speech": None,
+        "provenance_runs": [
+            {
+                "recorded_at": "2026-07-30T00:00:00.000Z",
+                "provider": "mediaflow-tests",
+                "job_id": source_id,
+                "capture": None,
+            }
+        ],
+        "subject": {"x": 0.5, "y": 0.5},
+        "crops": {},
+        "notes": "Generated deterministically for the real native media chain test.",
+    }
+
+
+def _build_native_media_package(tmp_path: Path) -> Path:
+    package_root = tmp_path / "editable-media-native"
+    shutil.copytree(STARTER, package_root)
+    assets = package_root / "assets"
+    assets.mkdir()
+    paths = RuntimePaths.discover()
+    video = assets / "native-underlay.mkv"
+    audio = assets / "native-audio.wav"
+    subprocess.run(
+        [
+            str(paths.ffmpeg),
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x16a34a:s=320x180:r=30:d=0.3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=0.3",
+            "-shortest",
+            "-c:v",
+            "ffv1",
+            "-level",
+            "3",
+            "-pix_fmt",
+            "bgra",
+            "-c:a",
+            "flac",
+            "-y",
+            str(video),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            str(paths.ffmpeg),
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000:duration=0.1",
+            "-c:a",
+            "pcm_s16le",
+            "-y",
+            str(audio),
+        ],
+        check=True,
+    )
+
+    manifest_path = package_root / "editable-media.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["data_fields"].extend(
+        [
+            {
+                "id": "native_video",
+                "name": "Native video",
+                "kind": "media-source",
+                "default": "native-underlay",
+            },
+            {
+                "id": "native_audio",
+                "name": "Native audio",
+                "kind": "media-source",
+                "default": "native-audio",
+            },
+        ]
+    )
+    for scene in manifest["scenes"]:
+        scene["duration_ms"] = 200
+        for step_index, step in enumerate(scene["steps"]):
+            step["at_ms"] = step_index * 70
+    for variant in manifest["variants"]:
+        variant["canvas"]["background_mode"] = "transparent"
+        variant["canvas"]["background_color"] = "#00000000"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    sources = {
+        "protocol": "visual-multimedia-media-sources",
+        "version": 4,
+        "sources": [
+            _native_source_record(
+                source_id="native-underlay",
+                media_type="video",
+                relative_path="assets/native-underlay.mkv",
+                binding={
+                    "pipeline": "native-underlay",
+                    "fit": "cover",
+                    "playback": "hold",
+                    "source_in_ms": 0,
+                    "audio": "include",
+                    "gain_db": -3,
+                },
+                package_root=package_root,
+            ),
+            _native_source_record(
+                source_id="native-audio",
+                media_type="audio",
+                relative_path="assets/native-audio.wav",
+                binding={
+                    "pipeline": "native-audio",
+                    "loop": "repeat",
+                    "source_in_ms": 0,
+                    "gain_db": -6,
+                },
+                package_root=package_root,
+            ),
+        ],
+    }
+    (package_root / "media-sources.json").write_text(
+        json.dumps(sources, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    index_path = package_root / "index.html"
+    index = index_path.read_text(encoding="utf-8")
+    index = index.replace('data-duration="6"', 'data-duration="0.4"')
+    index = index.replace(
+        "</head>",
+        (
+            "<style>"
+            "body,.media-canvas{background:transparent!important}"
+            ".media-canvas::before{display:none!important}"
+            "#native-test-overlay{position:absolute;left:20px;top:20px;"
+            "width:120px;height:120px;background:#ff00ff;z-index:9999}"
+            "</style></head>"
+        ),
+    )
+    index = index.replace(
+        "</main>",
+        '<div id="native-test-overlay"></div></main>',
+    )
+    index_path.write_text(index, encoding="utf-8")
+    return package_root
+
+
+def test_editable_media_v4_full_chain(
     tmp_path: Path,
 ) -> None:
-    repository = ProjectRepository.create(tmp_path / "V3 Web Project", "V3 Web Project")
+    repository = ProjectRepository.create(tmp_path / "V4 Web Project", "V4 Web Project")
     editor, service = _service(repository)
     application: EditorProject | None = None
     try:
@@ -302,14 +501,14 @@ def test_editable_media_v3_full_chain(
         assert str(cache) in document.xml
         assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
 
-        output = tmp_path / "v3-web-final.mp4"
+        output = tmp_path / "v4-web-final.mp4"
         result = MltExportService(
             TimelineCompiler(repository),
             RuntimePaths.discover(),
         ).export(
             timeline,
             ExportPreset(
-                name="V3 web verification",
+                name="V4 web verification",
                 format=ExportFormat.H264,
                 container="mp4",
                 video_codec="libx264",
@@ -324,7 +523,7 @@ def test_editable_media_v3_full_chain(
             project.main_sequence_id,
             0,
             3,
-            name="V3 Web short",
+            name="V4 Web short",
         )
         short_state = repository.timeline.load_timeline(short.id)
         assert (
@@ -390,7 +589,7 @@ def test_editable_media_v3_full_chain(
 
         handoff = application.export_fcpxml(
             project.main_sequence_id,
-            tmp_path / "v3-web-handoff.fcpxml",
+            tmp_path / "v4-web-handoff.fcpxml",
         )
         assert all(
             path.is_file() and path.stat().st_size > 0
@@ -415,6 +614,268 @@ def test_editable_media_v3_full_chain(
             application.close()
         else:
             repository.close()
+
+
+def test_native_video_and_audio_use_one_web_cache_through_final_export(
+    tmp_path: Path,
+) -> None:
+    package = _build_native_media_package(tmp_path)
+    repository = ProjectRepository.create(
+        tmp_path / "Native editable media",
+        "Native editable media",
+    )
+    editor, service = _service(repository)
+    try:
+        project = repository.catalog.get_project()
+        asset = service.import_package(package)
+        video_track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=video_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+
+        assert asset.metadata.has_audio is True
+        assert clip.media_kind == ClipMediaKind.LINKED_AV
+        linked_track = next(
+            track
+            for track in editor.state.tracks
+            if track.id == editor.state.tracks[0].linked_audio_track_id
+        )
+        assert linked_track.kind == TrackKind.AUDIO
+
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimePaths.discover())
+        target = renderer.cache.target(timeline, clip, asset)
+        assert len(target.native_media_plan.video_segments) == 2
+        assert len(target.native_media_plan.audio_segments) == 4
+        assert target.native_media_plan.video_segments[-1].active_duration_ms == 200
+        assert target.native_media_plan.video_segments[-1].duration_ms == 800
+        assert target.has_audio is True
+
+        cache = renderer.render_clip(timeline, clip.id)
+        probe = subprocess.run(
+            [
+                str(RuntimePaths.discover().ffprobe),
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name,pix_fmt,sample_rate,channels",
+                "-of",
+                "json",
+                str(cache),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        streams = json.loads(probe.stdout)["streams"]
+        video_stream = next(
+            stream for stream in streams if stream["codec_type"] == "video"
+        )
+        audio_stream = next(
+            stream for stream in streams if stream["codec_type"] == "audio"
+        )
+        assert video_stream["codec_name"] == "ffv1"
+        assert video_stream["pix_fmt"] == "bgra"
+        assert audio_stream == {
+            "codec_name": "flac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+        }
+
+        decoded = subprocess.run(
+            [
+                str(RuntimePaths.discover().ffmpeg),
+                "-loglevel",
+                "error",
+                "-ss",
+                "0.9",
+                "-i",
+                str(cache),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout
+        assert len(decoded) == target.width * target.height * 4
+
+        def pixel(x: int, y: int) -> tuple[int, int, int, int]:
+            offset = (y * target.width + x) * 4
+            return tuple(decoded[offset : offset + 4])  # type: ignore[return-value]
+
+        overlay_pixel = pixel(40, 40)
+        underlay_pixel = pixel(target.width // 2, target.height // 2)
+        assert (
+            overlay_pixel[0] > 240
+            and overlay_pixel[1] < 20
+            and overlay_pixel[2] > 240
+            and overlay_pixel[3] == 255
+        )
+        assert (
+            underlay_pixel[0] < 80
+            and underlay_pixel[1] > 120
+            and underlay_pixel[2] < 120
+            and underlay_pixel[3] == 255
+        )
+
+        document = TimelineCompiler(repository).compile(timeline)
+        assert document.xml.count(str(cache)) == 2
+        assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
+        handoff = FcpxmlExportService(repository).export(
+            timeline,
+            tmp_path / "native-web.fcpxml",
+        )
+        handoff_root = ET.parse(handoff).getroot()
+        handoff_asset = handoff_root.find("./resources/asset")
+        assert handoff_asset is not None
+        assert handoff_asset.attrib["hasAudio"] == "1"
+        assert handoff_asset.attrib["audioChannels"] == "2"
+        handoff_media = handoff_asset.find("./media-rep")
+        assert handoff_media is not None
+        assert handoff_media.attrib["src"] == cache.as_uri()
+
+        direct_output = tmp_path / "native-web-direct.mp4"
+        renderer.export_clip(
+            timeline,
+            clip.id,
+            direct_output,
+            "video",
+        )
+        direct_probe = subprocess.run(
+            [
+                str(RuntimePaths.discover().ffprobe),
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name,sample_rate,channels",
+                "-of",
+                "json",
+                str(direct_output),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert json.loads(direct_probe.stdout)["streams"] == [
+            {
+                "codec_name": "aac",
+                "sample_rate": "48000",
+                "channels": 2,
+            }
+        ]
+
+        sequence_output = tmp_path / "native-web-sequence.mp4"
+        MltExportService(
+            TimelineCompiler(repository),
+            RuntimePaths.discover(),
+        ).export(
+            timeline,
+            ExportPreset(
+                name="Native editable media verification",
+                format=ExportFormat.H264,
+                container="mp4",
+                video_codec="libx264",
+                audio_codec="aac",
+                pixel_format="yuv420p",
+            ),
+            sequence_output,
+        )
+        decoded_audio = subprocess.run(
+            [
+                str(RuntimePaths.discover().ffmpeg),
+                "-loglevel",
+                "error",
+                "-i",
+                str(sequence_output),
+                "-map",
+                "0:a:0",
+                "-t",
+                "0.5",
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout
+        assert decoded_audio
+        assert any(decoded_audio)
+        with pytest.raises(ValueError, match="native audio"):
+            service.rebind_asset(asset.id, STARTER, dry_run=True)
+        assert repository.catalog.get_asset(asset.id).metadata.has_audio is True
+
+        detached_video, detached_audio = editor.detach_clip_audio(clip.id)
+        detached_timeline = repository.timeline.load_timeline(
+            project.main_sequence_id
+        )
+        assert detached_timeline.web_states[detached_audio.id].clip_id == detached_audio.id
+        video_target = renderer.cache.target(
+            detached_timeline,
+            detached_video,
+            asset,
+        )
+        audio_target = renderer.cache.target(
+            detached_timeline,
+            detached_audio,
+            asset,
+        )
+        assert video_target.key == audio_target.key
+        assert video_target.path == audio_target.path == cache
+        assert renderer.render_clip(
+            detached_timeline,
+            detached_audio.id,
+        ) == cache
+    finally:
+        repository.close()
+
+
+def test_native_media_cannot_be_misbound_to_a_browser_asset_slot(
+    tmp_path: Path,
+) -> None:
+    package = _build_native_media_package(tmp_path)
+    manifest_path = package / "editable-media.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["scenes"][0]["asset_slots"] = {
+        "invalid-native-slot": {"data_field": "native_video"}
+    }
+    manifest["layout_contracts"][0]["asset_slots"].append(
+        {
+            "id": "invalid-native-slot",
+            "required": False,
+            "ratio": "16:9",
+            "fit": "cover",
+            "preserve_full_frame": False,
+        }
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    repository = ProjectRepository.create(
+        tmp_path / "Invalid native slot",
+        "Invalid native slot",
+    )
+    _editor, service = _service(repository)
+    try:
+        with pytest.raises(ValueError, match="browser-rendered image source"):
+            service.import_package(package)
+        assert repository.catalog.list_assets() == []
+    finally:
+        repository.close()
 
 
 def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
@@ -461,7 +922,7 @@ def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
         assert not list(cache.parent.glob(f"{cache.stem}.*.partial{cache.suffix}"))
         manifest_path = cache.with_name(f"{cache.name}.manifest.json")
         manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert manifest_payload["schema"] == "mediaflow-web-render-cache/v1"
+        assert manifest_payload["schema"] == "mediaflow-web-render-cache/v2"
         assert manifest_payload["probe"]["frame_count"] == 3
         metrics = real_engine.diagnostics().last_metrics
         assert metrics is not None
@@ -669,7 +1130,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
             repository.close()
 
 
-def test_editable_media_v3_contract_rejections(
+def test_editable_media_v4_contract_rejections(
     tmp_path: Path,
 ) -> None:
     manifest = json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8"))
@@ -693,7 +1154,7 @@ def test_editable_media_v3_contract_rejections(
         with pytest.raises(FileNotFoundError, match="media-sources"):
             service.import_package(missing_sources)
 
-        remote = tmp_path / "remote-v3-package"
+        remote = tmp_path / "remote-v4-package"
         shutil.copytree(STARTER, remote)
         entry = remote / "index.html"
         entry.write_text(
@@ -706,7 +1167,7 @@ def test_editable_media_v3_contract_rejections(
         with pytest.raises(ValueError, match="remote resources"):
             service.import_package(remote)
 
-        non_deterministic = tmp_path / "non-deterministic-v3-package"
+        non_deterministic = tmp_path / "non-deterministic-v4-package"
         shutil.copytree(STARTER, non_deterministic)
         entry = non_deterministic / "index.html"
         entry.write_text(
@@ -835,7 +1296,10 @@ def test_web_package_copy_failure_leaves_only_a_failure_archive(
     copied = 0
     original_copy = web_media_module._copy_web_package_file
 
-    def fail_after_one_file(source: str, destination: str) -> str:
+    def fail_after_one_file(
+        source: str,
+        destination: str,
+    ) -> tuple[int, str]:
         nonlocal copied
         if copied:
             raise OSError("injected package copy failure")
@@ -943,10 +1407,10 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
         repository.close()
 
 
-def test_editable_media_v3_scene_features(
+def test_editable_media_v4_scene_features(
     tmp_path: Path,
 ) -> None:
-    repository = ProjectRepository.create(tmp_path / "Extended V3 Web", "Extended V3 Web")
+    repository = ProjectRepository.create(tmp_path / "Extended V4 Web", "Extended V4 Web")
     editor, service = _service(repository)
     try:
         project, asset, clip = _add_web_clip(repository, editor, service, duration=4)
@@ -1064,7 +1528,7 @@ def test_editable_media_v3_scene_features(
                 == expected
             )
 
-        replacement = tmp_path / "replacement-v3-package"
+        replacement = tmp_path / "replacement-v4-package"
         shutil.copytree(STARTER, replacement)
         manifest_path = replacement / "editable-media.json"
         replacement_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1302,12 +1766,12 @@ def test_reopening_rejects_an_empty_directory_added_to_a_published_web_package(
             _service(reopened)
 
 
-def test_v3_cli_chain(
+def test_v4_cli_chain(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    project_path = tmp_path / "CLI V3 Web Project"
+    project_path = tmp_path / "CLI V4 Web Project"
 
     def request(operation: str, arguments: dict | None = None) -> dict:
         return {
@@ -1318,7 +1782,7 @@ def test_v3_cli_chain(
             "arguments": arguments or {},
         }
 
-    created = execute_request(request("project.create", {"name": "CLI V3 Web Project"}))
+    created = execute_request(request("project.create", {"name": "CLI V4 Web Project"}))
     sequence_id = created["project"]["main_sequence_id"]
     imported = execute_request(request("web.import", {"source": str(STARTER)}))
     asset_id = imported["asset"]["id"]

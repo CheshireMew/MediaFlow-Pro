@@ -12,11 +12,11 @@ from .web_media import WebClipState
 
 
 def default_clip_media_kind(asset_kind: AssetKind, *, has_audio: bool) -> ClipMediaKind:
-    if asset_kind == AssetKind.VIDEO:
+    if asset_kind in {AssetKind.VIDEO, AssetKind.WEB}:
         return ClipMediaKind.LINKED_AV if has_audio else ClipMediaKind.VIDEO_ONLY
     if asset_kind == AssetKind.AUDIO:
         return ClipMediaKind.AUDIO_ONLY
-    if asset_kind in {AssetKind.IMAGE, AssetKind.WEB}:
+    if asset_kind == AssetKind.IMAGE:
         return ClipMediaKind.VIDEO_ONLY
     raise ValueError("Subtitle assets are placed as subtitle documents, not clips")
 

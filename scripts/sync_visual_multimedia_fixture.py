@@ -7,17 +7,17 @@ import shutil
 from pathlib import Path
 
 PACKAGE_SOURCES = (
-    ("assets/web-media-starter", "editable-media-v3"),
+    ("assets/web-media-starter", "editable-media-v4"),
     (
         "assets/web-card-cases/warm-paper-project-list",
-        "editable-media-v3-cases/warm-paper-project-list",
+        "editable-media-v4-cases/warm-paper-project-list",
     ),
     (
         "assets/web-card-cases/social-evidence-variants",
-        "editable-media-v3-cases/social-evidence-variants",
+        "editable-media-v4-cases/social-evidence-variants",
     ),
 )
-SCHEMA_SOURCE = "schemas/editable-media.v3.schema.json"
+SCHEMA_SOURCE = "schemas/editable-media.v4.schema.json"
 
 
 def sha256(path: Path) -> str:
@@ -49,8 +49,8 @@ def sync_package(
     source = source.resolve(strict=True)
     destination = destination.expanduser().resolve()
     manifest = json.loads((source / "editable-media.json").read_text(encoding="utf-8"))
-    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 3:
-        raise ValueError("The producer fixture must use editable-media v3")
+    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 4:
+        raise ValueError("The producer fixture must use editable-media v4")
     files = package_files(source)
     destination.mkdir(parents=True, exist_ok=True)
     for source_file in files:
@@ -66,7 +66,7 @@ def sync_package(
         "protocol": "mediaflow-generated-test-fixture",
         "version": 1,
         "producer": producer,
-        "editable_media_version": 3,
+        "editable_media_version": 4,
         "files": hashes,
     }
     (destination / "fixture-origin.json").write_text(
@@ -87,7 +87,7 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
             producer=f"visual-multimedia/{source_relative}",
         )
     schema_source = skill_root / SCHEMA_SOURCE
-    schema_destination = destination / "editable-media-v3-contract" / schema_source.name
+    schema_destination = destination / "editable-media-v4-contract" / schema_source.name
     schema_destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(schema_source, schema_destination)
     return {
@@ -100,7 +100,7 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sync MediaFlow's editable-media v3 corpus from visual-multimedia."
+        description="Sync MediaFlow's editable-media v4 corpus from visual-multimedia."
     )
     parser.add_argument("visual_multimedia_root", type=Path)
     parser.add_argument(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from pathlib import Path
 
 from mediaflow.application.ports import TimelineCompilationDocuments
@@ -34,8 +35,7 @@ class MltAudioGraph:
         duration: int,
         assets: dict[str, Asset],
         *,
-        use_proxies: bool,
-        prefer_sdr_preview_proxy: bool,
+        clip_sources: Mapping[str, Path],
     ) -> str | None:
         buses = self.repository.audio.list_audio_buses(state.sequence.id)
         if not buses:
@@ -73,8 +73,7 @@ class MltAudioGraph:
                             track,
                             state,
                             assets,
-                            use_proxies=use_proxies,
-                            prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+                            clip_sources=clip_sources,
                         )
                         audio_playlists.add(track.id)
                     sources.append(MltGraph.audio_playlist_id(track.id))
@@ -106,8 +105,7 @@ class MltAudioGraph:
         state: TimelineState,
         assets: dict[str, Asset],
         *,
-        use_proxies: bool,
-        prefer_sdr_preview_proxy: bool,
+        clip_sources: Mapping[str, Path],
     ) -> None:
         clips = output_audio_clips_for_track(state, track.id)
         source_track_ids = {track.id} | {
@@ -128,12 +126,7 @@ class MltAudioGraph:
                 root,
                 clip,
                 asset,
-                MltGraph.source_path(
-                    self.repository,
-                    asset,
-                    use_proxies=use_proxies,
-                    prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
-                ),
+                clip_sources[clip.id],
                 transition_tail_frames=(
                     MltGraph.transition_parts(outgoing[clip.id])[1] if clip.id in outgoing else 0
                 ),

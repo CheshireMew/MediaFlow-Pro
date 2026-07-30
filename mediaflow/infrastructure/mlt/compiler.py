@@ -115,6 +115,7 @@ class TimelineCompiler:
         ]
         outgoing_transitions = {item.left_clip_id: item for item in active_transitions}
         source_paths: list[Path] = []
+        clip_sources: dict[str, Path] = {}
         for clip in state.clips:
             if clip.id not in active_clip_ids:
                 continue
@@ -136,6 +137,7 @@ class TimelineCompiler:
             if not source.is_file():
                 raise FileNotFoundError(source)
             source_paths.append(source)
+            clip_sources[clip.id] = source
             self._clip_graph.append_producer(
                 root,
                 clip,
@@ -180,8 +182,7 @@ class TimelineCompiler:
             ordered_tracks,
             duration,
             assets,
-            use_proxies=use_proxies,
-            prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+            clip_sources=clip_sources,
         )
 
         tractor = ET.SubElement(

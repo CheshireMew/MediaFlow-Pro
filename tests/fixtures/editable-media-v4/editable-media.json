@@ -1,6 +1,6 @@
 {
   "protocol": "editable-media",
-  "version": 3,
+  "version": 4,
   "entry": "index.html",
   "media_sources": "media-sources.json",
   "playback": {
