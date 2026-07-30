@@ -14,6 +14,7 @@ from mediaflow.infrastructure.web_browser import (
 from mediaflow.infrastructure.web_capture_engine import (
     FastCaptureFallbackRequired,
     WebCaptureEngine,
+    _compare_fast_capture,
     _fast_capture_sample_indices,
     _resolve_worker_count,
     _validate_png,
@@ -50,7 +51,7 @@ const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 HTMLCanvasElement.prototype.toDataURL = function (...arguments_) {
   if (this.id === "__mediaflow_capture_canvas") {
     window.__fastCaptureCalls = (window.__fastCaptureCalls || 0) + 1;
-    if (window.__fastCaptureCalls === 6) {
+    if (window.__fastCaptureCalls === 8) {
       throw new Error("intentional drawElement production failure");
     }
   }
@@ -179,6 +180,28 @@ def test_png_validation_rejects_wrong_dimensions_and_non_png_payloads() -> None:
         _validate_png(b"not a png", 1920, 1080)
 
 
+def test_fast_capture_comparison_accepts_antialiasing_but_rejects_missing_content() -> None:
+    cv2 = pytest.importorskip("cv2")
+    numpy = pytest.importorskip("numpy")
+    reference = numpy.full((256, 256, 4), 255, dtype=numpy.uint8)
+    candidate = reference.copy()
+    candidate[40:216:4, 32:224:4, :3] = 232
+    missing = reference.copy()
+    missing[64:192, 64:192, :3] = 0
+
+    def png(image) -> bytes:
+        encoded, payload = cv2.imencode(".png", image)
+        assert encoded
+        return payload.tobytes()
+
+    antialiasing = _compare_fast_capture(png(reference), png(candidate))
+    content_loss = _compare_fast_capture(png(missing), png(reference))
+
+    assert antialiasing.accepted
+    assert antialiasing.alpha_equal
+    assert not content_loss.accepted
+
+
 @pytest.mark.integration
 def test_real_draw_element_failure_requires_clean_screenshot_retry(
     tmp_path: Path,
@@ -223,6 +246,7 @@ def test_real_draw_element_failure_requires_clean_screenshot_retry(
 
     assert len(screenshot_frames) == 12
     assert metrics.capture_backend == "screenshot"
+    assert "explicitly requires Chrome screenshots" in metrics.capture_backend_reason
     assert metrics.fast_capture_workers == 0
     assert metrics.fallback_reason is not None
     assert metrics.seek_seconds > 0

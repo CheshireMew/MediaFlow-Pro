@@ -30,6 +30,7 @@ class RenderResult(TypedDict):
     captured_frames: int
     fast_capture_workers: int
     capture_backend: str
+    capture_backend_reason: str
     fallback_reason: str | None
     worker_bound: str
     available_memory_bytes: int
@@ -124,6 +125,7 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
             "captured_frames": metrics.captured_frames,
             "fast_capture_workers": metrics.fast_capture_workers,
             "capture_backend": metrics.capture_backend,
+            "capture_backend_reason": metrics.capture_backend_reason,
             "fallback_reason": metrics.fallback_reason,
             "worker_bound": metrics.sizing.bound_by,
             "available_memory_bytes": metrics.sizing.available_memory_bytes,
@@ -241,6 +243,8 @@ def _child_result(
         or not isinstance(payload.get("captured_frames"), int)
         or not isinstance(payload.get("fast_capture_workers"), int)
         or payload.get("capture_backend") not in {"drawelement", "screenshot"}
+        or not isinstance(payload.get("capture_backend_reason"), str)
+        or not payload["capture_backend_reason"]
         or (
             payload.get("fallback_reason") is not None
             and not isinstance(payload.get("fallback_reason"), str)

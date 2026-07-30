@@ -19,7 +19,10 @@ from mediaflow.infrastructure.web_browser import verify_non_monotonic_seek_pixel
 
 _BROWSER_IDLE_SECONDS = 30.0
 _FRAME_QUEUE_DEPTH = 2
-_FAST_CAPTURE_VERIFY_DB = 48.0
+_FAST_CAPTURE_MIN_PSNR_DB = 36.0
+_FAST_CAPTURE_MIN_BLURRED_PSNR_DB = 43.0
+_FAST_CAPTURE_MAX_MEAN_ABSOLUTE_ERROR = 0.75
+_FAST_CAPTURE_MAX_BLURRED_CHANNEL_ERROR = 48
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 WebCaptureMode = Literal["auto", "screenshot"]
@@ -203,6 +206,7 @@ class WebCaptureMetrics:
     captured_frames: int
     fast_capture_workers: int
     capture_backend: Literal["drawelement", "screenshot"]
+    capture_backend_reason: str
     fallback_reason: str | None
     sizing: WebCaptureWorkerSizing
     seek_seconds: float
@@ -240,6 +244,7 @@ class _CapturedFrame:
 class _WorkerMetrics:
     captured_frames: int
     fast_capture: bool
+    capture_backend_reason: str
     seek_seconds: float
     capture_seconds: float
     queue_wait_seconds: float
@@ -262,6 +267,43 @@ class FastCaptureFallbackRequired(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class _FastCapturePlan:
     references: dict[int, bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class _FastCaptureAttempt:
+    plan: _FastCapturePlan | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FastCaptureComparison:
+    psnr_db: float
+    blurred_psnr_db: float
+    mean_absolute_error: float
+    blurred_channel_error: int
+    alpha_equal: bool
+
+    @property
+    def accepted(self) -> bool:
+        return (
+            self.psnr_db >= _FAST_CAPTURE_MIN_PSNR_DB
+            and self.blurred_psnr_db >= _FAST_CAPTURE_MIN_BLURRED_PSNR_DB
+            and self.mean_absolute_error
+            <= _FAST_CAPTURE_MAX_MEAN_ABSOLUTE_ERROR
+            and self.blurred_channel_error
+            <= _FAST_CAPTURE_MAX_BLURRED_CHANNEL_ERROR
+            and self.alpha_equal
+        )
+
+    def rejection_reason(self) -> str:
+        return (
+            "drawElementImage visual comparison failed: "
+            f"psnr={self.psnr_db:.3f}dB, "
+            f"blurred_psnr={self.blurred_psnr_db:.3f}dB, "
+            f"mean_error={self.mean_absolute_error:.6f}, "
+            f"blurred_channel_error={self.blurred_channel_error}, "
+            f"alpha_equal={self.alpha_equal}"
+        )
 
 
 @dataclass(slots=True)
@@ -442,16 +484,30 @@ class _BrowserWorker:
             )
 
         try:
-            fast_capture_plan = (
+            fast_capture_attempt = (
                 self._enable_fast_capture(page, cdp, job)
                 if job.capture_mode == "auto"
-                else None
+                else _FastCaptureAttempt(
+                    plan=None,
+                    reason="capture mode explicitly requires Chrome screenshots",
+                )
             )
+            if fast_capture_attempt.plan is None:
+                fast_capture_attempt = _FastCaptureAttempt(
+                    plan=None,
+                    reason=f"worker {self.index}: {fast_capture_attempt.reason}",
+                )
+            fast_capture_plan = fast_capture_attempt.plan
             job.capture_mode_consensus.propose(fast_capture_plan is not None)
             fast_capture = job.capture_mode_consensus.wait(job.cancelled)
             if not fast_capture and fast_capture_plan is not None:
                 page.evaluate(_REMOVE_FAST_CAPTURE_CANVAS)
                 fast_capture_plan = None
+                capture_backend_reason = (
+                    "another capture worker rejected drawElementImage"
+                )
+            else:
+                capture_backend_reason = fast_capture_attempt.reason
             captured = 0
             seek_seconds = 0.0
             capture_seconds = 0.0
@@ -478,13 +534,13 @@ class _BrowserWorker:
                             if fast_capture_plan is not None
                             else None
                         )
-                        if (
-                            reference is not None
-                            and _png_psnr(reference, payload) < _FAST_CAPTURE_VERIFY_DB
-                        ):
-                            raise RuntimeError(
-                                "verification frame drifted from the screenshot reference"
-                            )
+                        if reference is not None:
+                            comparison = _compare_fast_capture(reference, payload)
+                            if not comparison.accepted:
+                                raise RuntimeError(
+                                    "verification frame drifted from the screenshot "
+                                    f"reference; {comparison.rejection_reason()}"
+                                )
                     except BaseException as error:
                         raise FastCaptureFallbackRequired(
                             worker_index=self.index,
@@ -503,6 +559,7 @@ class _BrowserWorker:
             return _WorkerMetrics(
                 captured_frames=captured,
                 fast_capture=fast_capture,
+                capture_backend_reason=capture_backend_reason,
                 seek_seconds=seek_seconds,
                 capture_seconds=capture_seconds,
                 queue_wait_seconds=queue_wait_seconds,
@@ -568,17 +625,26 @@ class _BrowserWorker:
         page,
         cdp,
         job: _CaptureJob,
-    ) -> _FastCapturePlan | None:
+    ) -> _FastCaptureAttempt:
         if os.environ.get("MEDIAFLOW_WEB_FAST_CAPTURE", "1").strip().lower() in {
             "0",
             "false",
             "off",
             "no",
         }:
-            return None
+            return _FastCaptureAttempt(
+                plan=None,
+                reason="MEDIAFLOW_WEB_FAST_CAPTURE disabled drawElementImage",
+            )
         compatibility = page.evaluate(_FAST_CAPTURE_COMPATIBILITY)
         if compatibility.get("supported") is not True:
-            return None
+            return _FastCaptureAttempt(
+                plan=None,
+                reason=(
+                    "drawElementImage compatibility rejected the page: "
+                    f"{compatibility.get('reason') or 'unknown'}"
+                ),
+            )
         sample_indices = job.fast_capture_sample_indices
         references: dict[int, bytes] = {}
         screenshot_seconds = 0.0
@@ -597,6 +663,21 @@ class _BrowserWorker:
             {"width": job.width, "height": job.height},
         )
         try:
+            warm_frame_index, warm_reference = next(iter(references.items()))
+            warm_seconds = (
+                warm_frame_index
+                * job.fps_denominator
+                / job.fps_numerator
+            )
+            page.evaluate(_SEEK_FRAME, warm_seconds)
+            warm_candidate = self._capture_fast(page, job.width, job.height)
+            _validate_png(warm_candidate, job.width, job.height)
+            warm_comparison = _compare_fast_capture(
+                warm_reference,
+                warm_candidate,
+            )
+            if not warm_comparison.accepted:
+                raise RuntimeError(warm_comparison.rejection_reason())
             fast_capture_seconds = 0.0
             for frame_index, reference in references.items():
                 seconds = frame_index * job.fps_denominator / job.fps_numerator
@@ -605,14 +686,22 @@ class _BrowserWorker:
                 candidate = self._capture_fast(page, job.width, job.height)
                 fast_capture_seconds += time.perf_counter() - started
                 _validate_png(candidate, job.width, job.height)
-                if _png_psnr(reference, candidate) < _FAST_CAPTURE_VERIFY_DB:
-                    raise RuntimeError("drawElementImage output did not match the screenshot path")
+                comparison = _compare_fast_capture(reference, candidate)
+                if not comparison.accepted:
+                    raise RuntimeError(comparison.rejection_reason())
             if fast_capture_seconds >= screenshot_seconds:
-                raise RuntimeError("drawElementImage was not faster than Chrome screenshot capture")
-        except BaseException:
+                raise RuntimeError(
+                    "drawElementImage was not faster than Chrome screenshot capture"
+                )
+        except BaseException as error:
             page.evaluate(_REMOVE_FAST_CAPTURE_CANVAS)
-            return None
-        return _FastCapturePlan(references=references)
+            return _FastCaptureAttempt(plan=None, reason=str(error))
+        return _FastCaptureAttempt(
+            plan=_FastCapturePlan(references=references),
+            reason=(
+                "every worker verified drawElementImage against Chrome screenshots"
+            ),
+        )
 
     @staticmethod
     def _capture_fast(page, width: int, height: int) -> bytes:
@@ -793,6 +882,11 @@ class WebCaptureEngine:
                 if all(item.fast_capture for item in worker_metrics)
                 else "screenshot"
             ),
+            capture_backend_reason="; ".join(
+                dict.fromkeys(
+                    item.capture_backend_reason for item in worker_metrics
+                )
+            ),
             fallback_reason=fallback_reason,
             sizing=sizing,
             seek_seconds=sum(item.seek_seconds for item in worker_metrics),
@@ -864,27 +958,58 @@ class WebCaptureEngine:
                     raise RuntimeError("Editable media capture was cancelled") from None
 
 
-def _png_psnr(left: bytes, right: bytes) -> float:
+def _decode_png_bgra(payload: bytes):
     import cv2
     import numpy as np
 
-    left_image = cv2.imdecode(np.frombuffer(left, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-    right_image = cv2.imdecode(np.frombuffer(right, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    image = cv2.imdecode(
+        np.frombuffer(payload, dtype=np.uint8),
+        cv2.IMREAD_UNCHANGED,
+    )
+    if image is None:
+        return None
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGRA)
+    if image.shape[2] == 3:
+        return cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
+    return image
+
+
+def _compare_fast_capture(left: bytes, right: bytes) -> _FastCaptureComparison:
+    import cv2
+    import numpy as np
+
+    left_image = _decode_png_bgra(left)
+    right_image = _decode_png_bgra(right)
     if left_image is None or right_image is None:
-        return 0.0
-    if left_image.ndim == 2:
-        left_image = cv2.cvtColor(left_image, cv2.COLOR_GRAY2BGRA)
-    elif left_image.shape[2] == 3:
-        left_image = cv2.cvtColor(left_image, cv2.COLOR_BGR2BGRA)
-    if right_image.ndim == 2:
-        right_image = cv2.cvtColor(right_image, cv2.COLOR_GRAY2BGRA)
-    elif right_image.shape[2] == 3:
-        right_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2BGRA)
+        return _FastCaptureComparison(
+            psnr_db=0.0,
+            blurred_psnr_db=0.0,
+            mean_absolute_error=float("inf"),
+            blurred_channel_error=255,
+            alpha_equal=False,
+        )
     if left_image.shape != right_image.shape:
-        return 0.0
-    return float(cv2.PSNR(left_image, right_image))
-
-
+        return _FastCaptureComparison(
+            psnr_db=0.0,
+            blurred_psnr_db=0.0,
+            mean_absolute_error=float("inf"),
+            blurred_channel_error=255,
+            alpha_equal=False,
+        )
+    difference = cv2.absdiff(left_image, right_image)
+    blurred_left = cv2.GaussianBlur(left_image, (5, 5), 1.2)
+    blurred_right = cv2.GaussianBlur(right_image, (5, 5), 1.2)
+    blurred_difference = cv2.absdiff(blurred_left, blurred_right)
+    return _FastCaptureComparison(
+        psnr_db=float(cv2.PSNR(left_image, right_image)),
+        blurred_psnr_db=float(cv2.PSNR(blurred_left, blurred_right)),
+        mean_absolute_error=float(np.mean(difference[:, :, :3])),
+        blurred_channel_error=int(np.max(blurred_difference[:, :, :3])),
+        alpha_equal=bool(
+            np.array_equal(left_image[:, :, 3], right_image[:, :, 3])
+        ),
+    )
 def _percentile(values: list[float], fraction: float) -> float:
     if not values:
         return 0.0

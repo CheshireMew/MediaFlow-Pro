@@ -224,8 +224,12 @@ def test_editable_media_v3_full_chain(
         assert diagnostics.last_metrics.worker_count == 1
         assert diagnostics.last_metrics.frame_count == 3
         assert diagnostics.last_metrics.captured_frames == 3
-        assert diagnostics.last_metrics.fast_capture_workers == 0
-        assert diagnostics.last_metrics.capture_backend == "screenshot"
+        assert diagnostics.last_metrics.fast_capture_workers == 1
+        assert diagnostics.last_metrics.capture_backend == "drawelement"
+        assert (
+            diagnostics.last_metrics.capture_backend_reason
+            == "every worker verified drawElementImage against Chrome screenshots"
+        )
         assert diagnostics.last_metrics.fallback_reason is None
         browser_launches = diagnostics.browser_launches
         copied_cache = renderer.render_clip(timeline, copied.id)
