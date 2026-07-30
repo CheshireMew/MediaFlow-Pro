@@ -22,6 +22,7 @@ from mediaflow.domain.subtitle_file import SubtitleFile
 from .audio_chunking import AudioChunkingService, AudioPreparationService
 from .cache_manager import CacheManager
 from .runtime_paths import RuntimePaths
+from .system_resources import available_physical_memory_bytes
 
 
 class AsrPipeline:
@@ -751,7 +752,7 @@ def recommended_chunk_workers(settings: AsrSettings) -> int:
     if settings.parallel_chunks > 0:
         return settings.parallel_chunks
     cpu_count = max(1, os.cpu_count() or 1)
-    available_memory = _available_memory_bytes()
+    available_memory = available_physical_memory_bytes()
     model_memory = _estimated_model_memory_bytes(settings.model)
     memory_workers = max(1, int(available_memory * 0.60 // model_memory))
     if _resolved_device(settings) == "cuda":
@@ -780,34 +781,6 @@ def _estimated_model_memory_bytes(model: str) -> int:
     elif "base" in name:
         gib = 1.5
     return int(gib * 1024**3)
-
-
-def _available_memory_bytes() -> int:
-    if os.name == "nt":
-        import ctypes
-
-        class MemoryStatus(ctypes.Structure):
-            _fields_ = [
-                ("length", ctypes.c_ulong),
-                ("memory_load", ctypes.c_ulong),
-                ("total_physical", ctypes.c_ulonglong),
-                ("available_physical", ctypes.c_ulonglong),
-                ("total_page_file", ctypes.c_ulonglong),
-                ("available_page_file", ctypes.c_ulonglong),
-                ("total_virtual", ctypes.c_ulonglong),
-                ("available_virtual", ctypes.c_ulonglong),
-                ("available_extended_virtual", ctypes.c_ulonglong),
-            ]
-
-        status = MemoryStatus()
-        status.length = ctypes.sizeof(MemoryStatus)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            return int(status.available_physical)
-    try:
-        sysconf = getattr(os, "sys" + "conf")
-        return int(sysconf("SC_AVPHYS_PAGES") * sysconf("SC_PAGE_SIZE"))
-    except (AttributeError, OSError, ValueError):
-        return 4 * 1024**3
 
 
 def _cuda_free_memory_bytes() -> int | None:

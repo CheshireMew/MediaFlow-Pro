@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 import mediaflow.application.web_media_service as web_media_module
+import mediaflow.infrastructure.web_render_service as web_render_module
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.web_media_service import (
@@ -37,10 +38,15 @@ from mediaflow.domain.tasks import ArtifactReference
 from mediaflow.domain.web_media import parse_editable_media_manifest
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
+from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
-from mediaflow.infrastructure.web_capture_engine import web_capture_diagnostics
+from mediaflow.infrastructure.web_capture_engine import (
+    FastCaptureFallbackRequired,
+    get_web_capture_engine,
+    web_capture_diagnostics,
+)
 from mediaflow.infrastructure.web_render_service import WebRenderService
 
 STARTER = Path(
@@ -49,6 +55,7 @@ STARTER = Path(
         Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v3",
     )
 ).resolve()
+MEDIA_CASES = STARTER.parent / "editable-media-v3-cases"
 
 
 def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaService]:
@@ -206,7 +213,11 @@ def test_editable_media_v3_full_chain(
         assert paths[0] == paths[1]
         cache = paths[0]
         assert cache.is_file() and cache.suffix == ".mkv" and cache.stat().st_size > 0
-        assert not cache.with_name(f"{cache.name}.lock").exists()
+        lock_path = cache.with_name(f"{cache.name}.lock")
+        assert lock_path.is_file()
+        released_lock = ProcessFileLock(lock_path)
+        assert released_lock.acquire()
+        released_lock.release()
         assert not list(cache.parent.glob(f"{cache.stem}.*.partial{cache.suffix}"))
         diagnostics = web_capture_diagnostics(find_chromium_executable())
         assert diagnostics.last_metrics is not None
@@ -214,6 +225,8 @@ def test_editable_media_v3_full_chain(
         assert diagnostics.last_metrics.frame_count == 3
         assert diagnostics.last_metrics.captured_frames == 3
         assert diagnostics.last_metrics.fast_capture_workers == 0
+        assert diagnostics.last_metrics.capture_backend == "screenshot"
+        assert diagnostics.last_metrics.fallback_reason is None
         browser_launches = diagnostics.browser_launches
         copied_cache = renderer.render_clip(timeline, copied.id)
         assert copied_cache.is_file() and copied_cache != cache
@@ -398,6 +411,91 @@ def test_editable_media_v3_full_chain(
             application.close()
         else:
             repository.close()
+
+
+def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = ProjectRepository.create(
+        tmp_path / "Web Capture Fallback",
+        "Web Capture Fallback",
+    )
+    editor, service = _service(repository)
+    try:
+        project, _asset, clip = _add_web_clip(repository, editor, service)
+        real_engine = get_web_capture_engine(find_chromium_executable())
+
+        class FailsFirstFastAttempt:
+            def __init__(self) -> None:
+                self.capture_modes: list[str] = []
+
+            def render_frames(self, **arguments):
+                capture_mode = str(arguments.get("capture_mode", "auto"))
+                self.capture_modes.append(capture_mode)
+                if len(self.capture_modes) == 1:
+                    raise FastCaptureFallbackRequired(
+                        worker_index=0,
+                        frame_index=1,
+                        reason="injected production capture failure",
+                    )
+                return real_engine.render_frames(**arguments)
+
+        retry_engine = FailsFirstFastAttempt()
+        monkeypatch.setattr(
+            web_render_module,
+            "get_web_capture_engine",
+            lambda _executable: retry_engine,
+        )
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimePaths.discover())
+
+        cache = renderer.render_clip(timeline, clip.id)
+
+        assert retry_engine.capture_modes == ["auto", "screenshot"]
+        assert cache.is_file() and cache.stat().st_size > 0
+        assert not list(cache.parent.glob(f"{cache.stem}.*.partial{cache.suffix}"))
+        manifest_path = cache.with_name(f"{cache.name}.manifest.json")
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest_payload["schema"] == "mediaflow-web-render-cache/v1"
+        assert manifest_payload["probe"]["frame_count"] == 3
+        metrics = real_engine.diagnostics().last_metrics
+        assert metrics is not None
+        assert metrics.capture_backend == "screenshot"
+        assert metrics.fallback_reason is not None
+        assert "injected production capture failure" in metrics.fallback_reason
+        probe = subprocess.run(
+            [
+                str(RuntimePaths.discover().ffprobe),
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "default=noprint_wrappers=1",
+                str(cache),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "nb_read_frames=3" in probe.stdout
+
+        render_count = real_engine.diagnostics().render_count
+        cache.write_bytes(b"corrupted cache contents")
+        recovered_cache = renderer.render_clip(timeline, clip.id)
+
+        assert recovered_cache == cache
+        assert recovered_cache.stat().st_size > len(b"corrupted cache contents")
+        assert real_engine.diagnostics().render_count == render_count + 1
+        recovered_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert recovered_manifest["probe"]["frame_count"] == 3
+        assert retry_engine.capture_modes == ["auto", "screenshot", "auto"]
+    finally:
+        repository.close()
 
 
 def test_invalid_export_suffix_is_rejected_before_render(
@@ -626,6 +724,31 @@ window.addEventListener("editablemediatime", () => {
         )
         with pytest.raises(ValueError, match="non-monotonic frame seeks"):
             service.import_package(non_deterministic)
+
+        corrupted_media = tmp_path / "corrupted-media-integrity"
+        shutil.copytree(
+            MEDIA_CASES / "warm-paper-project-list",
+            corrupted_media,
+        )
+        avatar = corrupted_media / "assets" / "creator-avatar.png"
+        avatar.write_bytes(avatar.read_bytes() + b"corruption")
+        with pytest.raises(ValueError, match="source integrity"):
+            service.import_package(corrupted_media)
+
+        incorrect_mime = tmp_path / "incorrect-media-mime"
+        shutil.copytree(
+            MEDIA_CASES / "warm-paper-project-list",
+            incorrect_mime,
+        )
+        sources_path = incorrect_mime / "media-sources.json"
+        sources = json.loads(sources_path.read_text(encoding="utf-8"))
+        sources["sources"][0]["integrity"]["mime_type"] = "application/octet-stream"
+        sources_path.write_text(
+            json.dumps(sources, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="MIME type"):
+            service.import_package(incorrect_mime)
     finally:
         repository.close()
 

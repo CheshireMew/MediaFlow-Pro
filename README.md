@@ -142,9 +142,9 @@ AI 文字剪辑使用 `transcript.get`、`transcript.edit.preview`、`transcript
 
 ### 可编辑网页素材
 
-MediaFlow Pro 可导入 `editable-media` v3 本地网页包。网页包用 `window.editableMedia` 暴露结构化编辑状态，并用 `window.__hf.duration/seek(seconds)` 暴露唯一的确定性逐帧边界。进程级 `WebCaptureEngine` 复用本机 Chromium，按素材长度和画布大小启用有界并行页面，通过 Chrome 的快速无损截图接口取得透明 PNG，再严格按帧序交给同一个 FFmpeg 输入管道；实验性的 `drawElementImage` 只有在真实抽帧画质和速度自检同时通过时才会接管，否则自动使用逐像素等价的截图路径。MediaFlow 保留自己的项目状态、缓存键、原子输出和 MLT 合成边界，不引入 HyperFrames 依赖或第二套网页动画时钟。
+MediaFlow Pro 可导入 `editable-media` v3 本地网页包。网页包用 `window.editableMedia` 暴露结构化编辑状态，并用 `window.__hf.duration/seek(seconds)` 暴露唯一的确定性逐帧边界。进程级 `WebCaptureEngine` 复用本机 Chromium，按素材长度、画布大小、逻辑处理器和可用内存启用有界并行页面，通过 Chrome 的快速无损截图接口取得透明 PNG，再严格按帧序交给同一个 FFmpeg 输入管道。首次捕获会用帧 0 锚点和前后跳转验证随机访问；实验性的 `drawElementImage` 必须在每个 worker 上分别通过真实截图的像素与耗时对照，所有 worker 一致通过后才会接管。高速后端若在正式捕获中失效，当前 FFmpeg 尝试会被整体废弃并从帧 0 改用截图路径重跑，不会留下混合后端缓存。MediaFlow 保留自己的项目状态、缓存键、原子输出和 MLT 合成边界，不引入 HyperFrames 依赖或第二套网页动画时钟。
 
-网页包保存组件结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁。桌面界面与 CLI 读写同一项目状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。可通过 `MEDIAFLOW_WEB_WORKERS=1..8` 限制捕获进程数；默认最多使用 4 个，并按帧数、分辨率和逻辑处理器数量自动收缩。
+网页包保存组件结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁。桌面界面与 CLI 读写同一项目状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。导入扫描会同时计算全包身份和每个媒体文件的 SHA-256、字节数及服务 MIME 类型；网页渲染缓存只有在 FFprobe 元数据、帧目标、边缘内容指纹和原子 manifest 全部一致时才会命中。可通过 `MEDIAFLOW_WEB_WORKERS=1..8` 限制捕获进程数；默认最多使用 4 个，并按帧数、分辨率、逻辑处理器和实时可用内存自动收缩，诊断会记录实际限制来源及 seek、捕获、队列等待和帧耗时分位数。
 
 相关能力可从 `mediaflow-cli describe` 读取，包括 `web.import`、`web.clip.keyframe.*`、`web.clip.theme.update`、`web.clip.layout.select`、`web.clip.data.*`、`web.clip.diff`、`web.batch.create`、`web.asset.rebind` 和 `web.clip.export`。远程网址、登录态网页和任意 DOM/CSS 可视化开发不属于该边界。
 

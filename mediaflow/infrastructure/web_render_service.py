@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,10 +17,10 @@ from mediaflow.application.web_media_service import (
     editable_media_source_hash,
     web_package_root,
 )
-from mediaflow.atomic_file import unique_temporary_sibling
+from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.project import Asset
+from mediaflow.domain.project import Asset, AssetFingerprint
 from mediaflow.domain.timeline import Clip, TimelineState
 from mediaflow.domain.web_media import (
     WebAssetSpec,
@@ -31,17 +32,28 @@ from mediaflow.domain.web_media import (
 )
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegInputPipe, FfmpegRunner
+from mediaflow.infrastructure.file_fingerprint import (
+    fingerprint_file,
+    fingerprint_matches,
+)
 from mediaflow.infrastructure.output_reservation import (
     archive_failed_output,
     require_output_transaction_path,
     reserve_output,
     temporary_output_path,
 )
+from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.subprocess_runner import run_cancellable
 from mediaflow.infrastructure.web_browser import WebPackagePreviewServer
-from mediaflow.infrastructure.web_capture_engine import get_web_capture_engine
+from mediaflow.infrastructure.web_capture_engine import (
+    FastCaptureFallbackRequired,
+    WebCaptureMode,
+    get_web_capture_engine,
+)
 
 WEB_RENDERER_VERSION = "4"
+WEB_CACHE_MANIFEST_SCHEMA = "mediaflow-web-render-cache/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +62,14 @@ class WebRenderTarget:
     path: Path
     animated: bool
     frame_count: int
+    width: int
+    height: int
+    fps_numerator: int
+    fps_denominator: int
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.manifest.json")
 
 
 class WebRenderCache:
@@ -74,6 +94,9 @@ class WebRenderCache:
         clip_state = state.web_states.get(clip.id)
         if clip_state is None:
             raise ValueError(f"Web clip has no editable state: {clip.id}")
+        variant = spec.manifest.variant_for(
+            clip_state.variant.id if clip_state.variant is not None else None
+        )
         animated = spec.manifest.duration_ms > 0 or any(
             scene.animations for scene in clip_state.scenes.values()
         )
@@ -126,6 +149,10 @@ class WebRenderCache:
             ),
             animated=animated,
             frame_count=frame_count,
+            width=variant.canvas.width,
+            height=variant.canvas.height,
+            fps_numerator=state.sequence.profile.fps_numerator,
+            fps_denominator=state.sequence.profile.fps_denominator,
         )
 
 
@@ -189,7 +216,7 @@ class WebRenderService:
             raise KeyError(clip_id) from error
         asset = self.documents.catalog.get_asset(clip.asset_id)
         target = self.cache.target(state, clip, asset)
-        if self._cache_is_ready(target.path):
+        if self._cache_is_ready(target):
             if progress:
                 progress(
                     OperationProgress.determinate(
@@ -204,15 +231,15 @@ class WebRenderService:
             progress(OperationProgress.indeterminate("web_render_preparing"))
         target.path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = target.path.with_name(f"{target.path.name}.lock")
-        owns_lock = self._acquire_cache_lock(
+        cache_lock = self._acquire_cache_lock(
             lock_path,
-            target.path,
+            target,
             check_cancelled=check_cancelled,
         )
-        if not owns_lock:
+        if cache_lock is None:
             return target.path
         try:
-            if self._cache_is_ready(target.path):
+            if self._cache_is_ready(target):
                 return target.path
             spec = self.documents.web.get_web_asset_spec(asset.id)
             clip_state = state.web_states[clip.id]
@@ -228,50 +255,76 @@ class WebRenderService:
                 progress=progress,
                 check_cancelled=check_cancelled,
             )
-            if not self._cache_is_ready(target.path):
+            if not self._cache_is_ready(target):
                 raise RuntimeError("Editable web media renderer did not produce a cache file")
             return target.path
         finally:
-            lock_path.unlink(missing_ok=True)
+            cache_lock.release()
 
     @staticmethod
-    def _cache_is_ready(path: Path) -> bool:
-        return path.is_file() and path.stat().st_size > 0
+    def _cache_is_ready(target: WebRenderTarget) -> bool:
+        if not target.path.is_file() or not target.manifest_path.is_file():
+            return False
+        try:
+            payload = json.loads(target.manifest_path.read_text(encoding="utf-8"))
+            fingerprint_payload = payload["fingerprint"]
+            fingerprint = AssetFingerprint.model_validate(fingerprint_payload)
+        except (KeyError, OSError, ValueError, TypeError, json.JSONDecodeError):
+            return False
+        expected = {
+            "schema": WEB_CACHE_MANIFEST_SCHEMA,
+            "renderer_version": WEB_RENDERER_VERSION,
+            "key": target.key,
+            "animated": target.animated,
+            "frame_count": target.frame_count,
+            "width": target.width,
+            "height": target.height,
+            "fps_numerator": target.fps_numerator,
+            "fps_denominator": target.fps_denominator,
+        }
+        if any(payload.get(key) != value for key, value in expected.items()):
+            return False
+        probe = payload.get("probe")
+        if not isinstance(probe, dict):
+            return False
+        expected_probe = {
+            "codec_name": "ffv1" if target.animated else "png",
+            "width": target.width,
+            "height": target.height,
+            "frame_count": target.frame_count if target.animated else 1,
+        }
+        if any(probe.get(key) != value for key, value in expected_probe.items()):
+            return False
+        if target.animated and (
+            probe.get("pixel_format") != "bgra"
+            or probe.get("fps_numerator") != target.fps_numerator
+            or probe.get("fps_denominator") != target.fps_denominator
+        ):
+            return False
+        return fingerprint_matches(target.path, fingerprint)
 
     @classmethod
     def _acquire_cache_lock(
         cls,
         lock_path: Path,
-        target_path: Path,
+        target: WebRenderTarget,
         *,
         check_cancelled=None,
-    ) -> bool:
+    ) -> ProcessFileLock | None:
         deadline = time.monotonic() + 900
+        lock = ProcessFileLock(lock_path)
         while True:
-            if cls._cache_is_ready(target_path):
-                return False
-            try:
-                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    stale = time.time() - lock_path.stat().st_mtime > 3600
-                except FileNotFoundError:
-                    continue
-                if stale:
-                    lock_path.unlink(missing_ok=True)
-                    continue
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"Timed out waiting for editable media cache: {target_path}"
-                    ) from None
-                if check_cancelled is not None:
-                    check_cancelled()
-                time.sleep(0.1)
-                continue
-            else:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                    stream.write(f"pid={os.getpid()}\ncreated={time.time()}\n")
-                return True
+            if cls._cache_is_ready(target):
+                return None
+            if lock.acquire():
+                return lock
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for editable media cache: {target.path}"
+                ) from None
+            if check_cancelled is not None:
+                check_cancelled()
+            time.sleep(0.1)
 
     def export_clip(
         self,
@@ -600,6 +653,7 @@ class WebRenderService:
                         f"&scene={runtime_state['scene_id']}"
                     ),
                 )
+                capture_modes: tuple[WebCaptureMode, ...] = ("auto", "screenshot")
                 if target.animated:
                     fps = Fraction(
                         state.sequence.profile.fps_numerator,
@@ -626,7 +680,6 @@ class WebRenderService:
                         "-y",
                         str(partial),
                     ]
-                    ffmpeg_pipe = self.ffmpeg.open_input_pipe(command)
                     if progress:
                         progress(
                             OperationProgress.determinate(
@@ -647,25 +700,42 @@ class WebRenderService:
                                 )
                             )
 
-                    engine.render_frames(
-                        url=capture_url,
-                        allowed_origin=preview.url_for(""),
-                        width=variant.canvas.width,
-                        height=variant.canvas.height,
-                        fps_numerator=fps.numerator,
-                        fps_denominator=fps.denominator,
-                        runtime_state=runtime_state,
-                        determinism_key=target.key,
-                        frame_count=target.frame_count,
-                        on_frame=ffmpeg_pipe.write,
-                        on_progress=report_frame,
-                        check_cancelled=check_cancelled,
-                    )
-                    pipe_result = ffmpeg_pipe.finish(timeout=1800)
-                    ffmpeg_pipe = None
-                    if pipe_result.returncode != 0:
+                    fallback_reason: str | None = None
+                    for capture_mode in capture_modes:
+                        ffmpeg_pipe = self.ffmpeg.open_input_pipe(command)
+                        try:
+                            engine.render_frames(
+                                url=capture_url,
+                                allowed_origin=preview.url_for(""),
+                                width=variant.canvas.width,
+                                height=variant.canvas.height,
+                                fps_numerator=fps.numerator,
+                                fps_denominator=fps.denominator,
+                                runtime_state=runtime_state,
+                                determinism_key=target.key,
+                                frame_count=target.frame_count,
+                                on_frame=ffmpeg_pipe.write,
+                                on_progress=report_frame,
+                                check_cancelled=check_cancelled,
+                                capture_mode=capture_mode,
+                                fallback_reason=fallback_reason,
+                            )
+                        except FastCaptureFallbackRequired as error:
+                            ffmpeg_pipe.abort()
+                            ffmpeg_pipe = None
+                            fallback_reason = str(error)
+                            continue
+                        pipe_result = ffmpeg_pipe.finish(timeout=1800)
+                        ffmpeg_pipe = None
+                        if pipe_result.returncode != 0:
+                            raise RuntimeError(
+                                "FFmpeg editable web media render failed: "
+                                f"{pipe_result.stderr}"
+                            )
+                        break
+                    else:
                         raise RuntimeError(
-                            f"FFmpeg editable web media render failed: {pipe_result.stderr}"
+                            "Editable web media capture exhausted its screenshot fallback"
                         )
                 else:
                     if progress:
@@ -678,19 +748,33 @@ class WebRenderService:
                             )
                         )
                     frames: list[bytes] = []
-                    engine.render_frames(
-                        url=capture_url,
-                        allowed_origin=preview.url_for(""),
-                        width=variant.canvas.width,
-                        height=variant.canvas.height,
-                        fps_numerator=state.sequence.profile.fps_numerator,
-                        fps_denominator=state.sequence.profile.fps_denominator,
-                        runtime_state=runtime_state,
-                        determinism_key=target.key,
-                        frame_count=1,
-                        on_frame=frames.append,
-                        check_cancelled=check_cancelled,
-                    )
+                    fallback_reason = None
+                    for capture_mode in capture_modes:
+                        frames.clear()
+                        try:
+                            engine.render_frames(
+                                url=capture_url,
+                                allowed_origin=preview.url_for(""),
+                                width=variant.canvas.width,
+                                height=variant.canvas.height,
+                                fps_numerator=state.sequence.profile.fps_numerator,
+                                fps_denominator=state.sequence.profile.fps_denominator,
+                                runtime_state=runtime_state,
+                                determinism_key=target.key,
+                                frame_count=1,
+                                on_frame=frames.append,
+                                check_cancelled=check_cancelled,
+                                capture_mode=capture_mode,
+                                fallback_reason=fallback_reason,
+                            )
+                        except FastCaptureFallbackRequired as error:
+                            fallback_reason = str(error)
+                            continue
+                        break
+                    else:
+                        raise RuntimeError(
+                            "Editable web media capture exhausted its screenshot fallback"
+                        )
                     partial.write_bytes(frames[0])
                     if progress:
                         progress(
@@ -701,10 +785,126 @@ class WebRenderService:
                                 unit="frames",
                             )
                         )
+            probe = self._probe_rendered_cache(partial, target)
             partial.replace(target.path)
+            self._publish_cache_manifest(target, probe)
         except BaseException:
             if ffmpeg_pipe is not None:
                 ffmpeg_pipe.abort()
             raise
         finally:
             partial.unlink(missing_ok=True)
+
+    def _probe_rendered_cache(
+        self,
+        path: Path,
+        target: WebRenderTarget,
+    ) -> dict[str, object]:
+        result = run_cancellable(
+            [
+                str(self.paths.ffprobe),
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                (
+                    "stream=codec_name,pix_fmt,width,height,avg_frame_rate:"
+                    "format=duration"
+                ),
+                "-of",
+                "json",
+                str(path),
+            ],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            creationflags=(
+                subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            ),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFprobe rejected editable web media cache: "
+                f"{result.stderr.strip()}"
+            )
+        try:
+            probe_payload = json.loads(result.stdout)
+            streams = probe_payload.get("streams") or []
+            stream = streams[0]
+            codec_name = str(stream["codec_name"])
+            pixel_format = str(stream["pix_fmt"])
+            width = int(stream["width"])
+            height = int(stream["height"])
+            frame_rate = Fraction(str(stream.get("avg_frame_rate") or "0/1"))
+            duration = Fraction(str((probe_payload.get("format") or {}).get("duration") or "0"))
+        except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+            raise RuntimeError(
+                "FFprobe returned incomplete editable web media cache metadata"
+            ) from error
+        expected_codec = "ffv1" if target.animated else "png"
+        expected_frame_count = target.frame_count if target.animated else 1
+        expected_duration = Fraction(
+            expected_frame_count * target.fps_denominator,
+            target.fps_numerator,
+        )
+        if (
+            codec_name != expected_codec
+            or (width, height) != (target.width, target.height)
+            or (target.animated and pixel_format != "bgra")
+            or (
+                target.animated
+                and frame_rate
+                != Fraction(target.fps_numerator, target.fps_denominator)
+            )
+            or (
+                target.animated
+                and abs(duration - expected_duration)
+                > Fraction(target.fps_denominator, target.fps_numerator)
+            )
+        ):
+            raise RuntimeError(
+                "Editable web media cache does not match its render target: "
+                f"codec={codec_name}, pixel_format={pixel_format}, "
+                f"size={width}x{height}, frames={expected_frame_count}, "
+                f"rate={frame_rate}, duration={duration}"
+            )
+        return {
+            "codec_name": codec_name,
+            "pixel_format": pixel_format,
+            "width": width,
+            "height": height,
+            "frame_count": expected_frame_count,
+            "fps_numerator": frame_rate.numerator,
+            "fps_denominator": frame_rate.denominator,
+        }
+
+    @staticmethod
+    def _publish_cache_manifest(
+        target: WebRenderTarget,
+        probe: dict[str, object],
+    ) -> None:
+        fingerprint = fingerprint_file(target.path)
+        payload = {
+            "schema": WEB_CACHE_MANIFEST_SCHEMA,
+            "renderer_version": WEB_RENDERER_VERSION,
+            "key": target.key,
+            "animated": target.animated,
+            "frame_count": target.frame_count,
+            "width": target.width,
+            "height": target.height,
+            "fps_numerator": target.fps_numerator,
+            "fps_denominator": target.fps_denominator,
+            "fingerprint": fingerprint.model_dump(mode="json"),
+            "probe": probe,
+        }
+        atomic_write_text(
+            target.manifest_path,
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )

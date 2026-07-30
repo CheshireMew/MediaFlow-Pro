@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 
-class ProjectWriteLock:
-    """Process-scoped project lock; the OS releases it on abnormal termination."""
+class ProcessFileLock:
+    """Exclusive byte-range lock whose ownership is released by the operating system."""
 
     def __init__(self, lock_path: Path):
         self.lock_path = lock_path
@@ -54,9 +54,9 @@ class ProjectWriteLock:
             stream.close()
             self._stream = None
 
-    def __enter__(self) -> ProjectWriteLock:
+    def __enter__(self) -> ProcessFileLock:
         if not self.acquire():
-            raise RuntimeError(f"Project is already open for writing: {self.lock_path.parent.parent}")
+            raise RuntimeError(f"File lock is already owned: {self.lock_path}")
         return self
 
     def __exit__(self, *_: object) -> None:

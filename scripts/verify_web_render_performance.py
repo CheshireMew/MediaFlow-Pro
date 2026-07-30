@@ -29,7 +29,18 @@ class RenderResult(TypedDict):
     worker_count: int
     captured_frames: int
     fast_capture_workers: int
+    capture_backend: str
+    fallback_reason: str | None
+    worker_bound: str
+    available_memory_bytes: int
+    estimated_worker_bytes: int
+    seek_seconds: float
+    capture_seconds: float
+    queue_wait_seconds: float
+    frame_time_p50_ms: float
+    frame_time_p95_ms: float
     browser_launches: int
+    failed_render_count: int
 
 
 def web_render_requirements_met(
@@ -39,6 +50,7 @@ def web_render_requirements_met(
     parallel_seconds: float,
     serial_frame_count: int,
     parallel_frame_count: int,
+    identical_frames: int,
     minimum_frame_psnr_db: float,
     parallel_workers: int,
 ) -> bool:
@@ -49,6 +61,7 @@ def web_render_requirements_met(
         and serial_seconds / parallel_seconds >= MIN_PARALLEL_SPEEDUP
         and serial_frame_count == frame_count
         and parallel_frame_count == frame_count
+        and identical_frames == frame_count
         and minimum_frame_psnr_db >= MIN_FRAME_PSNR_DB
         and parallel_workers > 1
     )
@@ -110,7 +123,18 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
             "worker_count": metrics.worker_count,
             "captured_frames": metrics.captured_frames,
             "fast_capture_workers": metrics.fast_capture_workers,
+            "capture_backend": metrics.capture_backend,
+            "fallback_reason": metrics.fallback_reason,
+            "worker_bound": metrics.sizing.bound_by,
+            "available_memory_bytes": metrics.sizing.available_memory_bytes,
+            "estimated_worker_bytes": metrics.sizing.estimated_worker_bytes,
+            "seek_seconds": metrics.seek_seconds,
+            "capture_seconds": metrics.capture_seconds,
+            "queue_wait_seconds": metrics.queue_wait_seconds,
+            "frame_time_p50_ms": metrics.frame_time_p50_ms,
+            "frame_time_p95_ms": metrics.frame_time_p95_ms,
             "browser_launches": diagnostics.browser_launches,
+            "failed_render_count": diagnostics.failed_render_count,
         }
 
 
@@ -216,7 +240,22 @@ def _child_result(
         or not isinstance(payload.get("worker_count"), int)
         or not isinstance(payload.get("captured_frames"), int)
         or not isinstance(payload.get("fast_capture_workers"), int)
+        or payload.get("capture_backend") not in {"drawelement", "screenshot"}
+        or (
+            payload.get("fallback_reason") is not None
+            and not isinstance(payload.get("fallback_reason"), str)
+        )
+        or payload.get("worker_bound")
+        not in {"worker_limit", "work", "memory", "pixels"}
+        or not isinstance(payload.get("available_memory_bytes"), int)
+        or not isinstance(payload.get("estimated_worker_bytes"), int)
+        or not isinstance(payload.get("seek_seconds"), (int, float))
+        or not isinstance(payload.get("capture_seconds"), (int, float))
+        or not isinstance(payload.get("queue_wait_seconds"), (int, float))
+        or not isinstance(payload.get("frame_time_p50_ms"), (int, float))
+        or not isinstance(payload.get("frame_time_p95_ms"), (int, float))
         or not isinstance(payload.get("browser_launches"), int)
+        or not isinstance(payload.get("failed_render_count"), int)
     ):
         raise RuntimeError(f"Web render worker {workers} returned incomplete metrics")
     return cast(RenderResult, payload)
@@ -258,6 +297,7 @@ def verify(frame_count: int, run_root: Path) -> int:
         parallel_seconds=float(parallel["seconds"]),
         serial_frame_count=len(serial_hashes),
         parallel_frame_count=len(parallel_hashes),
+        identical_frames=identical_frames,
         minimum_frame_psnr_db=minimum_frame_psnr_db,
         parallel_workers=int(parallel["worker_count"]),
     )

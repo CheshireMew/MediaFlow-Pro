@@ -25,7 +25,7 @@ from mediaflow.domain.storage_names import require_project_root_path
 from .audio_repository import AudioRepository
 from .highlight_repository import HighlightRepository
 from .project_catalog_repository import ProjectCatalogRepository
-from .project_lock import ProjectWriteLock
+from .project_lock import ProcessFileLock
 from .project_migration_runner import ProjectSchemaMigrator
 from .project_records_repository import ProjectRecordsRepository
 from .project_schema_definition import (
@@ -56,7 +56,7 @@ class ProjectRepository:
         connection: sqlite3.Connection,
         *,
         read_only: bool,
-        write_lock: ProjectWriteLock | None,
+        write_lock: ProcessFileLock | None,
     ):
         self.project_dir = project_dir
         self.database_path = project_dir / PROJECT_FILE_NAME
@@ -95,7 +95,7 @@ class ProjectRepository:
         for directory in MANAGED_DIRECTORIES:
             (root / directory).mkdir(exist_ok=True)
 
-        lock = ProjectWriteLock(root / "cache" / "project.lock")
+        lock = ProcessFileLock(root / "cache" / "project.lock")
         if not lock.acquire():
             raise RuntimeError(f"Project directory is already locked: {root}")
         repository: ProjectRepository | None = None
@@ -174,10 +174,10 @@ class ProjectRepository:
         if cooperative and not writable:
             raise ValueError("Cooperative project access is only meaningful for writable opens")
 
-        lock: ProjectWriteLock | None = None
+        lock: ProcessFileLock | None = None
         read_only = not writable
         if writable and not cooperative:
-            candidate = ProjectWriteLock(root / "cache" / "project.lock")
+            candidate = ProcessFileLock(root / "cache" / "project.lock")
             if candidate.acquire():
                 lock = candidate
             else:

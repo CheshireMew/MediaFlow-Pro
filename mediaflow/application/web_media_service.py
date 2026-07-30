@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import stat
@@ -57,6 +58,7 @@ class _WebPackageTree:
     root: Path
     directories: tuple[str, ...]
     files: tuple[str, ...]
+    file_integrity: Mapping[str, tuple[int, str]]
     source_hash: str
 
 
@@ -179,6 +181,7 @@ def _scan_web_package(package_root: Path) -> _WebPackageTree:
     directories.sort()
     files.sort()
     digest = hashlib.sha256()
+    file_integrity: dict[str, tuple[int, str]] = {}
     inventory = sorted(
         (
             *((relative, b"D") for relative in directories),
@@ -196,18 +199,22 @@ def _scan_web_package(package_root: Path) -> _WebPackageTree:
         with root.joinpath(*PurePosixPath(relative).parts).open("rb") as stream:
             content_length = os.fstat(stream.fileno()).st_size
             digest.update(content_length.to_bytes(8, "big"))
+            file_digest = hashlib.sha256()
             bytes_read = 0
             while chunk := stream.read(1024 * 1024):
                 bytes_read += len(chunk)
                 digest.update(chunk)
+                file_digest.update(chunk)
         if bytes_read != content_length:
             raise RuntimeError(
                 f"Editable media package changed while it was scanned: {relative}"
             )
+        file_integrity[relative] = (content_length, file_digest.hexdigest())
     return _WebPackageTree(
         root=root,
         directories=tuple(directories),
         files=tuple(files),
+        file_integrity=file_integrity,
         source_hash=digest.hexdigest(),
     )
 
@@ -1523,7 +1530,7 @@ class WebMediaService:
         manifest = parse_editable_media_manifest_json(
             manifest_path.read_text(encoding="utf-8")
         )
-        WebMediaService._validate_files(package_root, manifest)
+        WebMediaService._validate_files(tree, manifest)
         return tree, manifest
 
     @staticmethod
@@ -1587,7 +1594,7 @@ class WebMediaService:
             copied_manifest = parse_editable_media_manifest_json(
                 (staging / MANIFEST_FILE_NAME).read_text(encoding="utf-8")
             )
-            self._validate_files(staging, copied_manifest)
+            self._validate_files(copied_tree, copied_manifest)
             if copied_manifest != manifest:
                 raise RuntimeError(
                     "Editable media manifest changed while it was being copied"
@@ -1831,15 +1838,53 @@ class WebMediaService:
         }
 
     @staticmethod
-    def _validate_files(package_root: Path, manifest: EditableMediaManifest) -> None:
-        media_sources = WebMediaService.read_media_sources(package_root, manifest)
+    def _validate_files(
+        package_tree: _WebPackageTree,
+        manifest: EditableMediaManifest,
+    ) -> None:
+        media_sources = WebMediaService.read_media_sources(
+            package_tree.root,
+            manifest,
+        )
+        package_files = set(package_tree.files)
         for relative in [manifest.entry, manifest.media_sources, *manifest.resources]:
-            if not (package_root / relative).is_file():
-                raise FileNotFoundError(package_root / relative)
+            if relative not in package_files:
+                raise FileNotFoundError(package_tree.root / relative)
         for source in media_sources.sources:
             source_file = source.file.split("#", 1)[0]
-            if not (package_root / source_file).is_file():
-                raise FileNotFoundError(package_root / source_file)
+            if source_file not in package_files:
+                raise FileNotFoundError(package_tree.root / source_file)
+            if source.integrity is not None:
+                actual_bytes, actual_sha256 = package_tree.file_integrity[source_file]
+                if (
+                    actual_bytes != source.integrity.bytes
+                    or actual_sha256 != source.integrity.sha256
+                ):
+                    raise ValueError(
+                        "Editable media source integrity does not match its file: "
+                        f"{source.id}"
+                    )
+                served_mime_type = mimetypes.guess_type(source_file)[0]
+                if served_mime_type != source.integrity.mime_type:
+                    raise ValueError(
+                        "Editable media source MIME type does not match its file name: "
+                        f"{source.id} declares {source.integrity.mime_type}, "
+                        f"server resolves {served_mime_type or 'unknown'}"
+                    )
+            for run in source.provenance_runs:
+                if run.capture is None:
+                    continue
+                capture_file = run.capture.file
+                if capture_file not in package_files:
+                    raise FileNotFoundError(package_tree.root / capture_file)
+                if (
+                    package_tree.file_integrity[capture_file][1]
+                    != run.capture.sha256
+                ):
+                    raise ValueError(
+                        "Editable media provenance capture integrity does not match: "
+                        f"{source.id}/{capture_file}"
+                    )
 
     @staticmethod
     def _validate_constraint(

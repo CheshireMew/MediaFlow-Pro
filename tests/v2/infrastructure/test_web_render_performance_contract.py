@@ -10,6 +10,7 @@ def _requirements(**overrides: object) -> bool:
         "parallel_seconds": 20.0,
         "serial_frame_count": 180,
         "parallel_frame_count": 180,
+        "identical_frames": 180,
         "minimum_frame_psnr_db": 80.0,
         "parallel_workers": 2,
     }
@@ -27,6 +28,10 @@ def test_web_render_contract_rejects_missing_frames() -> None:
 
 def test_web_render_contract_rejects_visible_pixel_drift() -> None:
     assert not _requirements(minimum_frame_psnr_db=45.0)
+
+
+def test_web_render_contract_rejects_any_lossless_frame_difference() -> None:
+    assert not _requirements(identical_frames=179)
 
 
 def test_web_render_contract_rejects_serial_execution() -> None:

@@ -76,9 +76,6 @@ def verify_non_monotonic_seek_pixels(
     duration_seconds: float,
     capture: Callable[[], bytes],
 ) -> None:
-    first_probe = max(0.0, duration_seconds * 0.25)
-    alternate_probe = max(first_probe, duration_seconds * 0.75)
-
     def capture_at(seconds: float) -> bytes:
         page.evaluate(
             """async seconds => {
@@ -89,19 +86,25 @@ def verify_non_monotonic_seek_pixels(
         )
         return capture()
 
-    # Prime Chromium's raster surface across both comparison states. With a
-    # transparent CDP surface, the first alternate-state capture can switch
-    # glyph antialiasing mode even after layout and fonts are ready.
-    capture_at(first_probe)
-    capture_at(alternate_probe)
-    reference = capture_at(first_probe)
-    capture_at(alternate_probe)
-    repeated = capture_at(first_probe)
-    page.evaluate("() => window.__hf.seek(0)")
-    if reference != repeated:
-        raise ValueError(
-            "Editable media v3 must render identical pixels after non-monotonic frame seeks"
-        )
+    probes = tuple(
+        max(0.0, duration_seconds * fraction)
+        for fraction in (0.0, 0.25, 0.5, 0.75, 0.95)
+    )
+    # Warm every comparison state before recording references. Chromium can
+    # switch glyph antialiasing mode the first time a transparent surface is
+    # painted at a new state even after fonts and layout report ready.
+    for seconds in probes:
+        capture_at(seconds)
+    references = {seconds: capture_at(seconds) for seconds in probes}
+    # A seekable composition must be independent of call order. The second
+    # pass deliberately jumps backward and forward, then returns to frame 0
+    # so lazy timeline initialization and accumulated side effects are visible.
+    for seconds in (probes[2], probes[1], probes[4], probes[3], probes[0]):
+        if capture_at(seconds) != references[seconds]:
+            page.evaluate("() => window.__hf.seek(0)")
+            raise ValueError(
+                "Editable media v3 must render identical pixels after non-monotonic frame seeks"
+            )
 
 
 def validate_editable_media_page(
