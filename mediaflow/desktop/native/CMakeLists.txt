@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick Multimedia)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickPrivate)
 
 qt_add_plugin(mediaflownativeplugin
     CLASS_NAME MediaFlowNativePlugin
@@ -22,7 +22,7 @@ target_link_libraries(mediaflownativeplugin PRIVATE
     Qt6::Gui
     Qt6::Qml
     Qt6::Quick
-    Qt6::Multimedia
+    Qt6::QuickPrivate
 )
 
 if(WIN32)

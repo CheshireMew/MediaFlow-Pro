@@ -6,7 +6,7 @@ AbstractButton {
     id: control
 
     property string iconName: ""
-    property int iconSize: 18
+    property int iconSize: Theme.iconSizeToolbar
     property bool primary: false
     property bool danger: false
     property bool flat: true
@@ -16,10 +16,8 @@ AbstractButton {
             return Theme.textDisabled;
         if (control.primary)
             return Theme.onAccent;
-        if (control.danger && (control.hovered || control.down))
-            return Theme.textStrong;
         if (control.danger)
-            return Theme.danger;
+            return control.hovered || control.down ? Theme.dangerHover : Theme.text;
         if (control.checked)
             return Theme.accentHover;
         return Theme.text;
@@ -34,7 +32,7 @@ AbstractButton {
         if (control.danger)
             return control.down
                 ? Theme.dangerPressed
-                : control.hovered ? Theme.danger : Theme.dangerSoft;
+                : control.hovered ? Theme.dangerSoft : Theme.transparent;
         if (control.down)
             return Theme.controlPressed;
         if (control.checked)
@@ -44,8 +42,8 @@ AbstractButton {
         return control.flat ? Theme.transparent : Theme.control;
     }
 
-    implicitWidth: 36
-    implicitHeight: 36
+    implicitWidth: Theme.iconButtonSize
+    implicitHeight: Theme.iconButtonSize
     padding: 0
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus

@@ -8,7 +8,7 @@ AppIconButton {
 
     implicitWidth: 46
     implicitHeight: 46
-    iconSize: 16
+    iconSize: Theme.iconSizeToolbar
     flat: true
     danger: closeButton
     focusPolicy: Qt.NoFocus

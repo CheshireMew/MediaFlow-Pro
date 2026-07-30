@@ -1,12 +1,18 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QLibrary>
+#include <QMap>
+#include <QMutex>
 #include <QObject>
 #include <QString>
+#include <QWaitCondition>
 
 #include <atomic>
 #include <cstdint>
+
+class QTimer;
 
 class MltRuntime final : public QObject
 {
@@ -36,10 +42,9 @@ public slots:
 
 signals:
     void frameReady(const QImage &image, int frame, int duration, quint64 requestId);
-    void positionChanged(int frame, quint64 requestId);
     void durationChanged(int duration, quint64 requestId);
     void playingChanged(bool playing, quint64 requestId);
-    void droppedFramesChanged(int droppedFrames, quint64 requestId);
+    void presentationDeadlineMissed(int count, quint64 requestId);
     void errorOccurred(const QString &message, quint64 requestId);
 
 private:
@@ -58,6 +63,11 @@ private:
             int integer;
             void *pointer;
         } value;
+    };
+
+    struct RenderedFrame {
+        QImage image;
+        int position = 0;
     };
 
     enum MltImageFormat {
@@ -91,7 +101,6 @@ private:
         using ConsumerClose = void (*)(MltConsumer);
         using PropertiesSet = int (*)(MltProperties, const char *, const char *);
         using PropertiesSetInt = int (*)(MltProperties, const char *, int);
-        using PropertiesGetInt = int (*)(MltProperties, const char *);
         using EventListener = void (*)(MltProperties, void *, MltEventData);
         using EventsListen = MltEvent (*)(
             MltProperties,
@@ -123,7 +132,6 @@ private:
         ConsumerClose consumerClose = nullptr;
         PropertiesSet propertiesSet = nullptr;
         PropertiesSetInt propertiesSetInt = nullptr;
-        PropertiesGetInt propertiesGetInt = nullptr;
         EventsListen eventsListen = nullptr;
         EventDataToFrame eventDataToFrame = nullptr;
     };
@@ -150,11 +158,18 @@ private:
     void closePlaybackConsumer();
     bool decodeStillFrame(int frame);
     bool readFrameImage(MltFrame frame, int position, QImage &image);
-    static void onConsumerFrame(
+    static void onConsumerFrameRendered(
         MltProperties owner,
         void *listenerData,
         MltEventData eventData);
-    void deliverConsumerFrame(const QImage &image, int frame, int generation);
+    static void onConsumerPlaybackStarted(
+        MltProperties owner,
+        void *listenerData,
+        MltEventData eventData);
+    void beginPresentation(int generation);
+    void presentNextFrame();
+    void deliverPresentationFrame(const QImage &image, int frame, int generation);
+    void scheduleNextPresentation();
     void setPlaying(bool playing);
 
     QLibrary m_library;
@@ -164,16 +179,14 @@ private:
     MltProfile m_profile = nullptr;
     MltProducer m_producer = nullptr;
     MltConsumer m_consumer = nullptr;
-    MltEvent m_frameEvent = nullptr;
+    MltEvent m_renderEvent = nullptr;
+    MltEvent m_showEvent = nullptr;
     int m_position = 0;
     int m_duration = 0;
     int m_playbackStart = 0;
     int m_playbackEnd = 0;
     int m_pendingSeekFrame = -1;
     bool m_seekScheduled = false;
-    int m_droppedFrames = 0;
-    int m_consumerDropOffset = 0;
-    int m_consumerDropBaseline = -1;
     double m_fps = 30.0;
     double m_rate = 1.0;
     double m_volume = 1.0;
@@ -189,4 +202,17 @@ private:
     std::atomic<bool> m_frameOutputHdr{false};
     std::atomic<quint64> m_requestId{0};
     std::atomic<int> m_consumerGeneration{0};
+    std::atomic<int> m_presentationStartGeneration{-1};
+    std::atomic<quint64> m_renderSequence{0};
+    std::atomic<int> m_renderQueueCapacity{60};
+    QMutex m_renderedFramesMutex;
+    QWaitCondition m_renderQueueNotFull;
+    QMap<quint64, RenderedFrame> m_renderedFrames;
+    QTimer *m_presentationTimer = nullptr;
+    QElapsedTimer m_presentationClock;
+    quint64 m_nextPresentationSequence = 0;
+    qint64 m_nextPresentationDeadlineNs = 0;
+    int m_presentationGeneration = -1;
+    int m_currentDeadlineMisses = 0;
+    bool m_presentationStarted = false;
 };

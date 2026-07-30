@@ -53,6 +53,7 @@ class WorkspaceModeDefinition:
     label_source: str
     panel_object_name: str
     icon: str
+    navigation_visible: bool = True
 
 
 WORKSPACE_MODES = (
@@ -75,12 +76,6 @@ WORKSPACE_MODES = (
         "highlight",
     ),
     WorkspaceModeDefinition(
-        "edit",
-        QT_TRANSLATE_NOOP("WorkspaceNavigation", "片段属性"),
-        "editPanel",
-        "edit",
-    ),
-    WorkspaceModeDefinition(
         "audio",
         QT_TRANSLATE_NOOP("WorkspaceNavigation", "音频"),
         "audioScroll",
@@ -91,6 +86,7 @@ WORKSPACE_MODES = (
         QT_TRANSLATE_NOOP("WorkspaceNavigation", "导出"),
         "exportPanel",
         "export",
+        False,
     ),
     WorkspaceModeDefinition(
         "tasks",
@@ -100,6 +96,9 @@ WORKSPACE_MODES = (
     ),
 )
 WORKSPACE_MODE_KEYS = tuple(mode.key for mode in WORKSPACE_MODES)
+WORKSPACE_NAVIGATION_MODE_KEYS = tuple(
+    mode.key for mode in WORKSPACE_MODES if mode.navigation_visible
+)
 
 
 def workspace_mode_catalog() -> list[dict[str, str]]:
@@ -109,6 +108,7 @@ def workspace_mode_catalog() -> list[dict[str, str]]:
             "label": QCoreApplication.translate("WorkspaceNavigation", mode.label_source),
             "panelObjectName": mode.panel_object_name,
             "icon": mode.icon,
+            "navigationVisible": mode.navigation_visible,
         }
         for mode in WORKSPACE_MODES
     ]

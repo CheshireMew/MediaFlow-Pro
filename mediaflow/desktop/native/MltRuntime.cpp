@@ -8,6 +8,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSize>
+#include <QTimer>
 #include <QtMath>
 
 #include <utility>
@@ -139,7 +140,15 @@ private:
 
 MltRuntime::MltRuntime(QObject *parent)
     : QObject(parent)
+    , m_presentationTimer(new QTimer(this))
 {
+    m_presentationTimer->setSingleShot(true);
+    m_presentationTimer->setTimerType(Qt::PreciseTimer);
+    connect(
+        m_presentationTimer,
+        &QTimer::timeout,
+        this,
+        &MltRuntime::presentNextFrame);
 }
 
 MltRuntime::~MltRuntime()
@@ -195,7 +204,6 @@ bool MltRuntime::loadApi(const QString &runtimeRoot)
         && resolve(m_api.consumerClose, "mlt_consumer_close")
         && resolve(m_api.propertiesSet, "mlt_properties_set")
         && resolve(m_api.propertiesSetInt, "mlt_properties_set_int")
-        && resolve(m_api.propertiesGetInt, "mlt_properties_get_int")
         && resolve(m_api.eventsListen, "mlt_events_listen")
         && resolve(m_api.eventDataToFrame, "mlt_event_data_to_frame");
     if (!resolved) {
@@ -291,9 +299,6 @@ void MltRuntime::openGraph(
     m_position = 0;
     m_playbackStart = 0;
     m_playbackEnd = m_duration;
-    m_droppedFrames = 0;
-    m_consumerDropOffset = 0;
-    emit droppedFramesChanged(0, requestId);
     if (!decodeStillFrame(qBound(0, initialFrame, m_duration - 1)))
         return;
     emit durationChanged(m_duration, requestId);
@@ -526,14 +531,13 @@ bool MltRuntime::startPlaybackConsumer()
     }
 
     MltProperties properties = m_api.consumerProperties(m_consumer);
-    m_api.propertiesSetInt(properties, "real_time", 1);
+    m_api.propertiesSetInt(properties, "real_time", -2);
     const int playbackBufferFrames = qBound(
         24,
         qRound(m_fps),
         60);
     m_api.propertiesSetInt(properties, "buffer", playbackBufferFrames);
-    m_api.propertiesSetInt(properties, "prefill", 4);
-    m_api.propertiesSetInt(properties, "drop_max", qMax(1, qRound(m_fps / 4.0)));
+    m_api.propertiesSetInt(properties, "prefill", qMin(4, playbackBufferFrames));
     m_api.propertiesSetInt(properties, "width", m_previewWidth);
     m_api.propertiesSetInt(properties, "height", m_previewHeight);
     m_api.propertiesSetInt(properties, "progressive", 1);
@@ -548,14 +552,29 @@ bool MltRuntime::startPlaybackConsumer()
     const QByteArray encodedVolume = QByteArray::number(m_volume, 'f', 4);
     m_api.propertiesSet(properties, "volume", encodedVolume.constData());
 
-    m_consumerDropOffset = m_droppedFrames;
-    m_consumerDropBaseline = -1;
-    m_frameEvent = m_api.eventsListen(
+    m_renderSequence.store(0, std::memory_order_release);
+    m_renderQueueCapacity.store(playbackBufferFrames * 2, std::memory_order_release);
+    m_nextPresentationSequence = 0;
+    m_nextPresentationDeadlineNs = 0;
+    m_presentationGeneration = -1;
+    m_currentDeadlineMisses = 0;
+    m_presentationStarted = false;
+    {
+        const QMutexLocker locker(&m_renderedFramesMutex);
+        m_renderedFrames.clear();
+    }
+    m_renderEvent = m_api.eventsListen(
+        properties,
+        this,
+        "consumer-frame-render",
+        &MltRuntime::onConsumerFrameRendered);
+    m_showEvent = m_api.eventsListen(
         properties,
         this,
         "consumer-frame-show",
-        &MltRuntime::onConsumerFrame);
-    if (!m_frameEvent
+        &MltRuntime::onConsumerPlaybackStarted);
+    if (!m_renderEvent
+        || !m_showEvent
         || m_api.consumerConnect(m_consumer, m_api.producerService(m_producer)) != 0
         || m_api.consumerStart(m_consumer) != 0) {
         emit errorOccurred(
@@ -570,16 +589,18 @@ bool MltRuntime::startPlaybackConsumer()
 void MltRuntime::closePlaybackConsumer()
 {
     m_consumerGeneration.fetch_add(1, std::memory_order_acq_rel);
+    {
+        const QMutexLocker locker(&m_renderedFramesMutex);
+        m_renderQueueNotFull.wakeAll();
+    }
+    if (m_presentationTimer)
+        m_presentationTimer->stop();
+    m_presentationGeneration = -1;
+    m_currentDeadlineMisses = 0;
+    m_presentationStarted = false;
     if (m_producer)
         m_api.producerSetSpeed(m_producer, 0.0);
     if (m_consumer) {
-        MltProperties properties = m_api.consumerProperties(m_consumer);
-        const int consumerDrops = m_api.propertiesGetInt(properties, "drop_count");
-        if (m_consumerDropBaseline >= 0) {
-            m_droppedFrames = qMax(
-                m_droppedFrames,
-                m_consumerDropOffset + qMax(0, consumerDrops - m_consumerDropBaseline));
-        }
         if (m_api.consumerPurge)
             m_api.consumerPurge(m_consumer);
         if (m_api.consumerStop)
@@ -588,7 +609,13 @@ void MltRuntime::closePlaybackConsumer()
     if (m_consumer && m_api.consumerClose)
         m_api.consumerClose(m_consumer);
     m_consumer = nullptr;
-    m_frameEvent = nullptr;
+    m_renderEvent = nullptr;
+    m_showEvent = nullptr;
+    {
+        const QMutexLocker locker(&m_renderedFramesMutex);
+        m_renderedFrames.clear();
+        m_renderQueueNotFull.wakeAll();
+    }
 }
 
 bool MltRuntime::decodeStillFrame(int frameNumber)
@@ -617,7 +644,6 @@ bool MltRuntime::decodeStillFrame(int frameNumber)
     m_position = frameNumber;
     const quint64 requestId = m_requestId.load(std::memory_order_acquire);
     emit frameReady(image, frameNumber, m_duration, requestId);
-    emit positionChanged(frameNumber, requestId);
     return true;
 }
 
@@ -642,17 +668,17 @@ bool MltRuntime::readFrameImage(MltFrame frame, int position, QImage &result)
         const QColorSpace outputColor(
             outputHdr ? QColorSpace::SRgbLinear : QColorSpace::SRgb);
         const QImage::Format outputFormat = outputHdr
-            ? QImage::Format_RGBA16FPx4
-            : QImage::Format_RGBA8888;
+            ? QImage::Format_RGBA16FPx4_Premultiplied
+            : QImage::Format_RGBX8888;
         result = image.convertedToColorSpace(outputColor, outputFormat);
     } else {
-        const QImage image(pixels, width, height, width * 4, QImage::Format_RGBA8888);
+        const QImage image(pixels, width, height, width * 4, QImage::Format_RGBX8888);
         result = image.copy();
     }
     return !result.isNull();
 }
 
-void MltRuntime::onConsumerFrame(
+void MltRuntime::onConsumerFrameRendered(
     MltProperties,
     void *listenerData,
     MltEventData eventData)
@@ -665,22 +691,152 @@ void MltRuntime::onConsumerFrame(
         return;
 
     const int generation = runtime->m_consumerGeneration.load(std::memory_order_acquire);
+    const quint64 sequence = runtime->m_renderSequence.fetch_add(
+        1,
+        std::memory_order_acq_rel);
     const int position = qBound(
         0,
         static_cast<int>(runtime->m_api.frameGetPosition(frame)),
         qMax(0, runtime->m_frameDuration.load(std::memory_order_acquire) - 1));
     QImage image;
-    if (!runtime->readFrameImage(frame, position, image))
+    runtime->readFrameImage(frame, position, image);
+    {
+        QMutexLocker locker(&runtime->m_renderedFramesMutex);
+        const int capacity = runtime->m_renderQueueCapacity.load(std::memory_order_acquire);
+        while (runtime->m_renderedFrames.size() >= capacity
+               && generation
+                   == runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+            runtime->m_renderQueueNotFull.wait(&runtime->m_renderedFramesMutex);
+        }
+        if (generation != runtime->m_consumerGeneration.load(std::memory_order_acquire))
+            return;
+        runtime->m_renderedFrames.insert(
+            sequence,
+            RenderedFrame{std::move(image), position});
+    }
+}
+
+void MltRuntime::onConsumerPlaybackStarted(
+    MltProperties,
+    void *listenerData,
+    MltEventData)
+{
+    auto *runtime = static_cast<MltRuntime *>(listenerData);
+    if (!runtime)
+        return;
+    const int generation = runtime->m_consumerGeneration.load(std::memory_order_acquire);
+    const int previousGeneration = runtime->m_presentationStartGeneration.exchange(
+        generation,
+        std::memory_order_acq_rel);
+    if (previousGeneration == generation)
         return;
     QMetaObject::invokeMethod(
         runtime,
-        [runtime, image = std::move(image), position, generation]() {
-            runtime->deliverConsumerFrame(image, position, generation);
+        [runtime, generation]() {
+            runtime->beginPresentation(generation);
         },
         Qt::QueuedConnection);
 }
 
-void MltRuntime::deliverConsumerFrame(const QImage &image, int frame, int generation)
+void MltRuntime::beginPresentation(int generation)
+{
+    if (generation != m_consumerGeneration.load(std::memory_order_acquire)
+        || !m_consumer
+        || !m_playing
+        || m_presentationGeneration == generation) {
+        return;
+    }
+    m_presentationGeneration = generation;
+    m_nextPresentationSequence = 0;
+    m_nextPresentationDeadlineNs = 0;
+    m_currentDeadlineMisses = 0;
+    m_presentationStarted = false;
+    presentNextFrame();
+}
+
+void MltRuntime::presentNextFrame()
+{
+    const int generation = m_presentationGeneration;
+    if (generation != m_consumerGeneration.load(std::memory_order_acquire)
+        || !m_consumer
+        || !m_playing) {
+        return;
+    }
+
+    if (m_presentationStarted) {
+        const qint64 remainingNs = m_nextPresentationDeadlineNs
+            - m_presentationClock.nsecsElapsed();
+        if (remainingNs > 0) {
+            m_presentationTimer->start(
+                qMax(1, static_cast<int>((remainingNs + 999999) / 1000000)));
+            return;
+        }
+    }
+
+    RenderedFrame rendered;
+    {
+        const QMutexLocker locker(&m_renderedFramesMutex);
+        auto frame = m_renderedFrames.find(m_nextPresentationSequence);
+        if (frame == m_renderedFrames.end()) {
+            if (m_presentationStarted) {
+                const qint64 frameIntervalNs = qMax(
+                    1LL,
+                    qRound64(1000000000.0 / m_fps));
+                const qint64 overdueNs = m_presentationClock.nsecsElapsed()
+                    - m_nextPresentationDeadlineNs;
+                const int deadlineMisses = qMax(
+                    0,
+                    static_cast<int>(overdueNs / frameIntervalNs));
+                if (deadlineMisses > m_currentDeadlineMisses) {
+                    emit presentationDeadlineMissed(
+                        deadlineMisses - m_currentDeadlineMisses,
+                        m_requestId.load(std::memory_order_acquire));
+                    m_currentDeadlineMisses = deadlineMisses;
+                }
+            }
+            m_presentationTimer->start(1);
+            return;
+        }
+        rendered = std::move(frame.value());
+        m_renderedFrames.erase(frame);
+        m_renderQueueNotFull.wakeOne();
+    }
+
+    m_currentDeadlineMisses = 0;
+    if (!m_presentationStarted) {
+        m_presentationClock.start();
+        m_presentationStarted = true;
+    }
+    ++m_nextPresentationSequence;
+    deliverPresentationFrame(rendered.image, rendered.position, generation);
+    if (generation != m_consumerGeneration.load(std::memory_order_acquire)
+        || !m_consumer
+        || !m_playing) {
+        return;
+    }
+
+    const qint64 frameIntervalNs = qMax(
+        1LL,
+        qRound64(1000000000.0 / m_fps));
+    const qint64 nowNs = m_presentationClock.nsecsElapsed();
+    m_nextPresentationDeadlineNs += frameIntervalNs;
+    if (nowNs > m_nextPresentationDeadlineNs + frameIntervalNs)
+        m_nextPresentationDeadlineNs = nowNs + frameIntervalNs;
+    scheduleNextPresentation();
+}
+
+void MltRuntime::scheduleNextPresentation()
+{
+    const qint64 remainingNs = m_nextPresentationDeadlineNs
+        - m_presentationClock.nsecsElapsed();
+    m_presentationTimer->start(
+        qMax(1, static_cast<int>((qMax(0LL, remainingNs) + 999999) / 1000000)));
+}
+
+void MltRuntime::deliverPresentationFrame(
+    const QImage &image,
+    int frame,
+    int generation)
 {
     if (generation != m_consumerGeneration.load(std::memory_order_acquire)
         || !m_consumer
@@ -688,23 +844,9 @@ void MltRuntime::deliverConsumerFrame(const QImage &image, int frame, int genera
         return;
     }
 
-    const int consumerDrops = m_api.propertiesGetInt(
-        m_api.consumerProperties(m_consumer),
-        "drop_count");
-    if (m_consumerDropBaseline < 0)
-        m_consumerDropBaseline = consumerDrops;
-    const int droppedFrames = m_consumerDropOffset
-        + qMax(0, consumerDrops - m_consumerDropBaseline);
-    if (droppedFrames != m_droppedFrames) {
-        m_droppedFrames = droppedFrames;
-        emit droppedFramesChanged(
-            m_droppedFrames,
-            m_requestId.load(std::memory_order_acquire));
-    }
     m_position = frame;
     const quint64 requestId = m_requestId.load(std::memory_order_acquire);
     emit frameReady(image, frame, m_duration, requestId);
-    emit positionChanged(frame, requestId);
     if ((m_rate > 0.0 && frame >= m_playbackEnd - 1)
         || (m_rate < 0.0 && frame <= m_playbackStart)) {
         pause(requestId);

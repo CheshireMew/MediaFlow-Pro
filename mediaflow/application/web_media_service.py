@@ -42,6 +42,7 @@ from mediaflow.domain.web_media import (
     WebSceneState,
     WebStateDiff,
     WebVariantResult,
+    parse_editable_media_manifest_json,
     web_runtime_state,
 )
 
@@ -625,7 +626,7 @@ class WebMediaService:
                         f"Editable media runtime layer {current_scene_id}/{layer_id} "
                         f"contains non-editable fields: {sorted(disallowed)}"
                     )
-                base = variant.layers[layer_id].model_dump(mode="json")
+                base = spec.manifest.layer_values_for(variant.id, layer_id)
                 overrides = {
                     str(field): value
                     for field, value in layer_value.items()
@@ -690,9 +691,9 @@ class WebMediaService:
             for field_id, value in data_value.items():
                 field = data_fields[str(field_id)]
                 self._validate_data_value(field, value)
-                if field.kind == "image" and value not in media_source_ids:
+                if field.kind == "media-source" and value not in media_source_ids:
                     raise ValueError(
-                        f"Data field {field_id} image is not declared in "
+                        f"Data field {field_id} media source is not declared in "
                         "the v3 media-sources manifest"
                     )
                 if value != scene_defaults[field_id]:
@@ -924,10 +925,11 @@ class WebMediaService:
             if field is None:
                 raise ValueError(f"Editable media data field is not declared: {field_id}")
             self._validate_data_value(field, value)
-            if field.kind == "image":
+            if field.kind == "media-source":
                 if value not in media_source_ids:
                     raise ValueError(
-                        f"Data field {field_id} image is not declared in the v3 media-sources manifest"
+                        f"Data field {field_id} media source is not declared in "
+                        "the v3 media-sources manifest"
                     )
             merged[field_id] = value
         snapshot = WebDataSnapshot(
@@ -1462,9 +1464,10 @@ class WebMediaService:
         valid = {
             "string": isinstance(value, str),
             "date": isinstance(value, str),
-            "image": isinstance(value, str),
+            "media-source": isinstance(value, str),
             "number": isinstance(value, (int, float)) and not isinstance(value, bool),
             "boolean": isinstance(value, bool),
+            "list": isinstance(value, list),
             "table": isinstance(value, list) and all(isinstance(row, dict) for row in value),
             "json": isinstance(value, (dict, list, str, int, float, bool)) or value is None,
         }.get(kind, False)
@@ -1489,7 +1492,7 @@ class WebMediaService:
                     cell_valid = {
                         "string": isinstance(cell, str),
                         "date": isinstance(cell, str),
-                        "image": isinstance(cell, str),
+                        "media-source": isinstance(cell, str),
                         "number": isinstance(cell, (int, float)) and not isinstance(cell, bool),
                         "boolean": isinstance(cell, bool),
                     }[column_kind]
@@ -1517,7 +1520,7 @@ class WebMediaService:
         tree = _scan_web_package(package_root)
         if not manifest_path.is_file():
             raise FileNotFoundError(manifest_path)
-        manifest = EditableMediaManifest.model_validate_json(
+        manifest = parse_editable_media_manifest_json(
             manifest_path.read_text(encoding="utf-8")
         )
         WebMediaService._validate_files(package_root, manifest)
@@ -1581,7 +1584,7 @@ class WebMediaService:
                 raise RuntimeError(
                     "Editable media package changed while it was being copied"
                 )
-            copied_manifest = EditableMediaManifest.model_validate_json(
+            copied_manifest = parse_editable_media_manifest_json(
                 (staging / MANIFEST_FILE_NAME).read_text(encoding="utf-8")
             )
             self._validate_files(staging, copied_manifest)

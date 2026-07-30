@@ -4,11 +4,11 @@ import ".."
 Canvas {
     id: root
 
-    width: 20
-    height: 20
+    width: Theme.iconSizeToolbar
+    height: Theme.iconSizeToolbar
     property string iconName: "media"
     property color iconColor: Theme.textMuted
-    property real strokeWidth: 1.75
+    property real strokeWidth: Theme.iconStrokeWidth
 
     onIconNameChanged: requestPaint()
     onIconColorChanged: requestPaint()
@@ -213,10 +213,11 @@ Canvas {
                  [10, 14], [2.5, 12], [10, 10]],
                 true);
         } else if (name === "edit" || name === "cut") {
-            circle(6, 6.5, 2.5, false);
-            circle(6, 17.5, 2.5, false);
-            strokeLine([[8.2, 8], [20, 17.5]], false);
-            strokeLine([[8.2, 16], [20, 6.5]], false);
+            circle(6, 7, 2.75, false);
+            circle(6, 17, 2.75, false);
+            strokeLine([[8.4, 8.6], [20, 20]], false);
+            strokeLine([[8.4, 15.4], [14.3, 9.5]], false);
+            strokeLine([[17.2, 6.6], [20, 4]], false);
         } else if (name === "audio") {
             strokeLine([[9, 18], [9, 5], [19, 3], [19, 15]], false);
             circle(6, 18, 3, true);
@@ -252,17 +253,23 @@ Canvas {
             }
         } else if (name === "undo" || name === "redo") {
             const mirrored = name === "redo";
-            const direction = mirrored ? -1 : 1;
-            const origin = mirrored ? 17.5 : 6.5;
-            strokeLine([
-                [origin + direction * 4, 5.5],
-                [origin, 9.5],
-                [origin + direction * 4, 13.5]
-            ], false);
-            begin();
-            context.arc(12, 13, 7, mirrored ? Math.PI * 1.05 : Math.PI * 1.95,
-                        mirrored ? Math.PI * 1.95 : Math.PI * 1.05, mirrored);
-            context.stroke();
+            if (mirrored) {
+                strokeLine([[15, 5], [20, 10], [15, 15]], false);
+                begin();
+                context.moveTo(20, 10);
+                context.lineTo(9.5, 10);
+                context.bezierCurveTo(6.1, 10, 4, 12.2, 4, 15.5);
+                context.bezierCurveTo(4, 18.3, 6.2, 20, 9, 20);
+                context.stroke();
+            } else {
+                strokeLine([[9, 5], [4, 10], [9, 15]], false);
+                begin();
+                context.moveTo(4, 10);
+                context.lineTo(14.5, 10);
+                context.bezierCurveTo(17.9, 10, 20, 12.2, 20, 15.5);
+                context.bezierCurveTo(20, 18.3, 17.8, 20, 15, 20);
+                context.stroke();
+            }
         } else if (name === "minimize") {
             strokeLine([[6, 17], [18, 17]], false);
         } else if (name === "maximize") {
@@ -272,11 +279,18 @@ Canvas {
             strokeLine([[17, 17], [17, 19], [5, 19], [5, 7], [7, 7]], false);
         } else if (name === "close" || name === "delete") {
             if (name === "delete") {
-                roundedRect(7, 8, 10, 12, 1.5);
-                strokeLine([[5, 6], [19, 6]], false);
-                strokeLine([[9, 3.5], [15, 3.5]], false);
-                strokeLine([[10, 11], [10, 17]], false);
-                strokeLine([[14, 11], [14, 17]], false);
+                strokeLine([[4.5, 7], [19.5, 7]], false);
+                strokeLine([[9, 7], [9, 4.5], [15, 4.5], [15, 7]], false);
+                begin();
+                context.moveTo(6.5, 7);
+                context.lineTo(7.25, 19.5);
+                context.quadraticCurveTo(7.35, 21, 9, 21);
+                context.lineTo(15, 21);
+                context.quadraticCurveTo(16.65, 21, 16.75, 19.5);
+                context.lineTo(17.5, 7);
+                context.stroke();
+                strokeLine([[10, 11], [10.3, 17]], false);
+                strokeLine([[14, 11], [13.7, 17]], false);
             } else {
                 strokeLine([[6, 6], [18, 18]], false);
                 strokeLine([[18, 6], [6, 18]], false);
@@ -321,8 +335,17 @@ Canvas {
         } else if (name === "minus") {
             strokeLine([[4, 12], [20, 12]], false);
         } else if (name === "duplicate") {
-            roundedRect(4, 7, 12, 13, 1.8);
-            roundedRect(8, 4, 12, 13, 1.8);
+            roundedRect(8, 8, 12.5, 12.5, 2.2);
+            begin();
+            context.moveTo(16, 8);
+            context.lineTo(16, 6);
+            context.quadraticCurveTo(16, 4, 14, 4);
+            context.lineTo(6, 4);
+            context.quadraticCurveTo(4, 4, 4, 6);
+            context.lineTo(4, 14);
+            context.quadraticCurveTo(4, 16, 6, 16);
+            context.lineTo(8, 16);
+            context.stroke();
         } else if (name === "transition") {
             strokeLine([[4, 6], [20, 18]], false);
             strokeLine([[4, 18], [20, 6]], false);

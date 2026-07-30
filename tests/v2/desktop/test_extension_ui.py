@@ -82,9 +82,8 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkey
         asset_id = controllers.media.assetsModel.get(0)["assetId"]
         controllers.timeline.dropAssets([asset_id], "", -1, 0, 3.0, 0, True, False)
         assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 1)
+        controllers.timeline.selectClip(controllers.timeline.clipsModel.get(0)["clipId"])
 
-        edit_navigation = _visual_item(window.contentItem(), "navigationItem_edit")
-        assert edit_navigation is not None and QMetaObject.invokeMethod(edit_navigation, "click")
         detect_button = window.findChild(QQuickItem, "detectScenesButton")
         reframe_button = window.findChild(QQuickItem, "autoReframeButton")
         tracking_button = window.findChild(QQuickItem, "trackSubjectButton")
@@ -109,8 +108,8 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkey
             timeout=60,
         )
 
-        export_navigation = _visual_item(window.contentItem(), "navigationItem_export")
-        assert export_navigation is not None and QMetaObject.invokeMethod(export_navigation, "click")
+        export_button = _visual_item(window.contentItem(), "titleExportButton")
+        assert export_button is not None and QMetaObject.invokeMethod(export_button, "click")
         fcpxml_button = window.findChild(QQuickItem, "exportFcpxmlButton")
         assert fcpxml_button is not None and fcpxml_button.isVisible()
         fcpxml = tmp_path / "extension-ui.fcpxml"

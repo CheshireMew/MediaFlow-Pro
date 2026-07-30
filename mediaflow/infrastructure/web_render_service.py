@@ -13,7 +13,6 @@ from pathlib import Path
 
 from mediaflow.application.ports import TimelineCompilationDocuments
 from mediaflow.application.web_media_service import (
-    WebMediaService,
     editable_media_source_hash,
     web_package_root,
 )
@@ -39,12 +38,10 @@ from mediaflow.infrastructure.output_reservation import (
     temporary_output_path,
 )
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.web_browser import (
-    WebPackagePreviewServer,
-    validate_editable_media_page,
-)
+from mediaflow.infrastructure.web_browser import WebPackagePreviewServer
+from mediaflow.infrastructure.web_capture_engine import get_web_capture_engine
 
-WEB_RENDERER_VERSION = "3"
+WEB_RENDERER_VERSION = "4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,65 +578,27 @@ class WebRenderService:
         progress=None,
         check_cancelled=None,
     ) -> None:
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError as error:
-            raise RuntimeError("Playwright is required for editable web media rendering") from error
         executable = find_chromium_executable()
+        engine = get_web_capture_engine(executable)
         manifest = spec.manifest
         package_root = web_package_root(entry, manifest)
         variant = manifest.variant_for(
             clip_state.variant.id if clip_state.variant is not None else None
         )
         runtime_state = web_runtime_state(clip_state, manifest)
-        media_sources = WebMediaService.read_media_sources(package_root, manifest)
         partial = unique_temporary_sibling(
             target.path,
             label="web-render",
         )
         ffmpeg_pipe: FfmpegInputPipe | None = None
         try:
-            with WebPackagePreviewServer(package_root) as preview, sync_playwright() as playwright:
-                browser = playwright.chromium.launch(
-                    executable_path=str(executable),
-                    headless=True,
-                    args=["--disable-renderer-backgrounding", "--disable-background-timer-throttling"],
-                )
-                context = browser.new_context(
-                    viewport={
-                        "width": variant.canvas.width,
-                        "height": variant.canvas.height,
-                    },
-                    device_scale_factor=1,
-                )
-                context.route(
-                    "http://**/*",
-                    lambda route: (
-                        route.continue_()
-                        if preview.owns_url(route.request.url)
-                        else route.abort()
+            with WebPackagePreviewServer(package_root) as preview:
+                capture_url = preview.url_for(
+                    manifest.entry,
+                    query=(
+                        f"capture=1&variant={variant.id}"
+                        f"&scene={runtime_state['scene_id']}"
                     ),
-                )
-                context.route(
-                    "https://**/*",
-                    lambda route: route.abort(),
-                )
-                page = context.new_page()
-                page.goto(
-                    preview.url_for(
-                        manifest.entry,
-                        query=(
-                            f"capture=1&variant={variant.id}"
-                            f"&scene={runtime_state['scene_id']}"
-                        ),
-                    ),
-                    wait_until="load",
-                    timeout=15000,
-                )
-                validate_editable_media_page(page, manifest, media_sources)
-                page.evaluate(
-                    "state => window.editableMedia.setState(state)",
-                    runtime_state,
                 )
                 if target.animated:
                     fps = Fraction(
@@ -677,25 +636,31 @@ class WebRenderService:
                                 unit="frames",
                             )
                         )
-                    for frame in range(target.frame_count):
-                        if check_cancelled is not None:
-                            check_cancelled()
-                        milliseconds = frame * 1000 * fps.denominator / fps.numerator
-                        page.evaluate(
-                            "time => window.__hf.seek(time)",
-                            milliseconds / 1000,
-                        )
-                        page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => resolve()))")
-                        ffmpeg_pipe.write(page.screenshot(type="png", omit_background=True))
+                    def report_frame(completed: int) -> None:
                         if progress:
                             progress(
                                 OperationProgress.determinate(
                                     "web_rendering",
-                                    completed=frame + 1,
+                                    completed=completed,
                                     total=target.frame_count,
                                     unit="frames",
                                 )
                             )
+
+                    engine.render_frames(
+                        url=capture_url,
+                        allowed_origin=preview.url_for(""),
+                        width=variant.canvas.width,
+                        height=variant.canvas.height,
+                        fps_numerator=fps.numerator,
+                        fps_denominator=fps.denominator,
+                        runtime_state=runtime_state,
+                        determinism_key=target.key,
+                        frame_count=target.frame_count,
+                        on_frame=ffmpeg_pipe.write,
+                        on_progress=report_frame,
+                        check_cancelled=check_cancelled,
+                    )
                     pipe_result = ffmpeg_pipe.finish(timeout=1800)
                     ffmpeg_pipe = None
                     if pipe_result.returncode != 0:
@@ -712,8 +677,21 @@ class WebRenderService:
                                 unit="frames",
                             )
                         )
-                    page.evaluate("time => window.__hf.seek(time)", 0)
-                    partial.write_bytes(page.screenshot(type="png", omit_background=True))
+                    frames: list[bytes] = []
+                    engine.render_frames(
+                        url=capture_url,
+                        allowed_origin=preview.url_for(""),
+                        width=variant.canvas.width,
+                        height=variant.canvas.height,
+                        fps_numerator=state.sequence.profile.fps_numerator,
+                        fps_denominator=state.sequence.profile.fps_denominator,
+                        runtime_state=runtime_state,
+                        determinism_key=target.key,
+                        frame_count=1,
+                        on_frame=frames.append,
+                        check_cancelled=check_cancelled,
+                    )
+                    partial.write_bytes(frames[0])
                     if progress:
                         progress(
                             OperationProgress.determinate(
@@ -723,7 +701,6 @@ class WebRenderService:
                                 unit="frames",
                             )
                         )
-                browser.close()
             partial.replace(target.path)
         except BaseException:
             if ffmpeg_pipe is not None:

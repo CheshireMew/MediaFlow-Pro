@@ -119,6 +119,7 @@ private:
     int m_pendingPosition = 0;
     int m_pendingDuration = 0;
     int m_requestedPosition = 0;
+    int m_lastPlaybackFrame = -1;
     bool m_seekPending = false;
     int m_seekRetryAttempts = 0;
     QTimer m_seekRetryTimer;

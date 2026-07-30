@@ -133,6 +133,10 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.preferredHeight: 48
             hostWindow: window
+            onExportRequested: {
+                if (pageLoader.item && pageLoader.item.openExportPanel)
+                    pageLoader.item.openExportPanel();
+            }
         }
         Loader {
             id: pageLoader

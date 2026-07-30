@@ -8,8 +8,11 @@ Rectangle {
     id: root
     objectName: "downloadProgressBanner"
     visible: taskController.downloadProgressVisible
-    color: Theme.surfaceRaised
-    border.color: Theme.transparent
+    color: Theme.surfaceFloating
+    radius: Theme.radius
+    border.width: 1
+    border.color: Theme.borderStrong
+    clip: true
 
     Rectangle {
         anchors.left: parent.left
@@ -65,10 +68,12 @@ Rectangle {
         }
         AppButton {
             text: qsTr("任务详情")
+            compact: true
             onClicked: taskController.openTaskCenter()
         }
         AppButton {
             text: qsTr("取消下载")
+            compact: true
             danger: true
             enabled: workspaceController.actionCapabilities.canManageWorkflow
             onClicked: workspaceController.cancelWorkflow(workspaceController.workflowRunId)

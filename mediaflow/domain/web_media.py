@@ -7,6 +7,7 @@ from typing import Literal, cast
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
+from .editable_media_contract import validate_editable_media_document
 from .model_base import DomainModel, now_ms
 
 WebLayerKind = Literal["text", "image", "shape", "group", "component"]
@@ -29,7 +30,16 @@ WebEditableField = Literal[
     "delay_ms",
     "duration_ms",
 ]
-WebDataKind = Literal["string", "number", "boolean", "date", "image", "table", "json"]
+WebDataKind = Literal[
+    "string",
+    "number",
+    "boolean",
+    "date",
+    "media-source",
+    "list",
+    "table",
+    "json",
+]
 WebThemeKind = Literal["color", "font", "number", "string"]
 WebInterpolation = Literal["continuous", "discrete"]
 WebEasingKind = Literal["linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic_bezier"]
@@ -114,11 +124,13 @@ CONTINUOUS_ANIMATION_FIELDS: frozenset[str] = frozenset(
 
 
 def _local_package_path(value: str) -> str:
-    normalized = value.strip().replace("\\", "/")
+    normalized = value.strip()
+    if "\\" in normalized:
+        raise ValueError("Editable media paths must use /")
     path = PurePosixPath(normalized)
     if not normalized or path.is_absolute() or ".." in path.parts:
         raise ValueError("Editable media paths must stay inside the package")
-    if ":" in path.parts[0]:
+    if ":" in path.parts[0] or "://" in normalized:
         raise ValueError("Editable media paths cannot use a URL or drive protocol")
     return path.as_posix()
 
@@ -145,6 +157,18 @@ class WebLayerBounds(DomainModel):
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     rotation: float = 0.0
+
+
+class WebVariantLayer(DomainModel):
+    x: float | None = None
+    y: float | None = None
+    width: float | None = Field(default=None, gt=0)
+    height: float | None = Field(default=None, gt=0)
+    rotation: float | None = None
+    font_size: float | None = Field(default=None, gt=0)
+    opacity: float | None = Field(default=None, ge=0, le=1)
+    z_index: float | None = None
+    visible: bool | None = None
 
 
 class WebFieldConstraint(DomainModel):
@@ -244,6 +268,10 @@ class WebSceneStep(DomainModel):
         return value
 
 
+class WebAssetSlotBinding(DomainModel):
+    data_field: str
+
+
 class WebScene(DomainModel):
     id: str
     name: str
@@ -254,7 +282,7 @@ class WebScene(DomainModel):
     primary_blocks: int = Field(ge=0)
     steps: list[WebSceneStep]
     data: dict[str, JsonValue]
-    asset_slots: dict[str, JsonValue]
+    asset_slots: dict[str, WebAssetSlotBinding]
 
     @field_validator("id", "name", "page_role", "content_shape", "layout_id")
     @classmethod
@@ -281,6 +309,14 @@ class WebLayoutCapacity(DomainModel):
     maximum_primary_blocks: int = Field(ge=0)
 
 
+class WebAssetSlot(DomainModel):
+    id: str
+    required: bool
+    ratio: str = Field(pattern=r"^\d+(?:\.\d+)?:\d+(?:\.\d+)?$")
+    fit: Literal["cover", "contain"]
+    preserve_full_frame: bool
+
+
 class WebLayoutContract(DomainModel):
     id: str
     name: str
@@ -291,14 +327,14 @@ class WebLayoutContract(DomainModel):
     title_layer_ids: list[str]
     content_layer_ids: list[str]
     capacity: WebLayoutCapacity
-    asset_slots: list[str]
+    asset_slots: list[WebAssetSlot]
 
 
 class WebVariant(DomainModel):
     id: str
     name: str
     canvas: WebCanvas
-    layers: dict[str, WebLayerBounds]
+    layers: dict[str, WebVariantLayer]
 
     @field_validator("id", "name")
     @classmethod
@@ -336,16 +372,50 @@ class WebQualityBottomWhitespace(DomainModel):
     maximum_ratio: float = Field(ge=0, le=1)
 
 
-class WebQuality(DomainModel):
+class WebQualitySafeArea(DomainModel):
+    top: float = Field(ge=0)
+    right: float = Field(ge=0)
+    bottom: float = Field(ge=0)
+    left: float = Field(ge=0)
+
+
+class WebQualityThumbnail(DomainModel):
+    width: float = Field(gt=0)
+    minimum_text_px: float = Field(ge=0)
+    text_layer_ids: list[str]
+
+
+class WebQualityBandOccupancy(DomainModel):
+    bands: int = Field(ge=1)
+    minimum_fill: float = Field(ge=0, le=1)
+    maximum_underfilled_bands: int = Field(ge=0)
+
+
+class WebQualityRules(DomainModel):
+    canvas_selector: str | None = None
+    roundtrip: WebQualityRoundtrip | None = None
+    required_layer_ids: list[str] = Field(default_factory=list)
+    required_title_layer_ids: list[str] = Field(default_factory=list)
+    bounds_tolerance_px: float | None = Field(default=None, ge=0)
+    allow_overflow_layer_ids: list[str] = Field(default_factory=list)
+    safe_area: WebQualitySafeArea | None = None
+    safe_area_layer_ids: list[str] = Field(default_factory=list)
+    minimum_font_px: dict[str, float] = Field(default_factory=dict)
+    minimum_gaps: list[WebQualityGap] = Field(default_factory=list)
+    content_bounds_layer_ids: list[str] = Field(default_factory=list)
+    minimum_content_span: float | None = Field(default=None, ge=0, le=1)
+    band_occupancy: WebQualityBandOccupancy | None = None
+    thumbnail: WebQualityThumbnail | None = None
+    navigation_safe_area: WebQualityNavigationSafeArea | None = None
+    title_to_content: WebQualityTitleToContent | None = None
+    bottom_whitespace: WebQualityBottomWhitespace | None = None
+
+
+class WebQuality(WebQualityRules):
     canvas_selector: str
-    roundtrip: WebQualityRoundtrip
-    required_layer_ids: list[str]
     bounds_tolerance_px: float = Field(ge=0)
-    minimum_font_px: dict[str, float]
-    minimum_gaps: list[WebQualityGap]
-    navigation_safe_area: WebQualityNavigationSafeArea
-    title_to_content: WebQualityTitleToContent
-    bottom_whitespace: WebQualityBottomWhitespace
+    variant_overrides: dict[str, WebQualityRules] = Field(default_factory=dict)
+    scene_overrides: dict[str, WebQualityRules] = Field(default_factory=dict)
 
 
 class WebDelivery(DomainModel):
@@ -563,7 +633,7 @@ class WebMediaSourcesManifest(DomainModel):
 class WebDataColumn(DomainModel):
     id: str
     name: str
-    kind: Literal["string", "number", "boolean", "date", "image"] = "string"
+    kind: Literal["string", "number", "boolean", "date", "media-source"] = "string"
 
 
 class WebDataField(DomainModel):
@@ -592,10 +662,11 @@ class WebDataField(DomainModel):
         matches = {
             "string": isinstance(self.default, str),
             "date": isinstance(self.default, str),
-            "image": isinstance(self.default, str),
+            "media-source": isinstance(self.default, str),
             "number": isinstance(self.default, (int, float))
             and not isinstance(self.default, bool),
             "boolean": isinstance(self.default, bool),
+            "list": isinstance(self.default, list),
             "table": isinstance(self.default, list)
             and all(isinstance(row, dict) for row in self.default),
             "json": True,
@@ -618,7 +689,7 @@ class WebDataField(DomainModel):
                     valid = {
                         "string": isinstance(value, str),
                         "date": isinstance(value, str),
-                        "image": isinstance(value, str),
+                        "media-source": isinstance(value, str),
                         "number": isinstance(value, (int, float))
                         and not isinstance(value, bool),
                         "boolean": isinstance(value, bool),
@@ -659,6 +730,15 @@ class WebLayerManifest(DomainModel):
         return self
 
 
+class WebProductionMetadata(DomainModel):
+    source_id: str | None = Field(default=None, min_length=1)
+    source_version: str | None = Field(default=None, min_length=1)
+    content_unit_id: str | None = Field(default=None, min_length=1)
+    media_project_id: str | None = Field(default=None, min_length=1)
+    media_script_version: str | None = Field(default=None, min_length=1)
+    profile_id: str | None = Field(default=None, min_length=1)
+
+
 class EditableMediaManifest(DomainModel):
     protocol: Literal["editable-media"]
     version: Literal[3]
@@ -677,6 +757,7 @@ class EditableMediaManifest(DomainModel):
     quality: WebQuality
     delivery: WebDelivery
     resources: list[str]
+    production: WebProductionMetadata | None = None
 
     @field_validator("entry", "media_sources")
     @classmethod
@@ -713,7 +794,8 @@ class EditableMediaManifest(DomainModel):
                 visited.add(parent_id)
                 parent_id = next(item.parent_id for item in self.layers if item.id == parent_id)
 
-        data_ids = {item.id for item in self.data_fields}
+        data_fields = {item.id: item for item in self.data_fields}
+        data_ids = set(data_fields)
         if len(data_ids) != len(self.data_fields):
             raise ValueError("Editable media data field identifiers must be unique")
         if self.accessibility.title_data_field not in data_ids:
@@ -724,6 +806,9 @@ class EditableMediaManifest(DomainModel):
             raise ValueError("Editable media layout contract identifiers must be unique")
         contracts = {item.id: item for item in self.layout_contracts}
         for contract in self.layout_contracts:
+            asset_slot_ids = [item.id for item in contract.asset_slots]
+            if len(set(asset_slot_ids)) != len(asset_slot_ids):
+                raise ValueError(f"Layout contract {contract.id} asset slots must be unique")
             unknown_layers = (
                 set(contract.required_layer_ids)
                 | set(contract.title_layer_ids)
@@ -759,11 +844,49 @@ class EditableMediaManifest(DomainModel):
                 raise ValueError(
                     f"Scene {scene.id} references unknown data fields: {sorted(unknown_data)}"
                 )
-            missing_data = set(scene_contract.required_data_fields) - set(scene.data)
+            missing_data = {
+                field_id
+                for field_id in scene_contract.required_data_fields
+                if field_id not in scene.data and data_fields[field_id].default is None
+            }
             if missing_data:
                 raise ValueError(
                     f"Scene {scene.id} is missing required data fields: {sorted(missing_data)}"
                 )
+            asset_slots = {item.id: item for item in scene_contract.asset_slots}
+            unknown_asset_slots = set(scene.asset_slots) - set(asset_slots)
+            if unknown_asset_slots:
+                raise ValueError(
+                    f"Scene {scene.id} references unknown asset slots: "
+                    f"{sorted(unknown_asset_slots)}"
+                )
+            missing_asset_slots = {
+                item.id
+                for item in scene_contract.asset_slots
+                if item.required and item.id not in scene.asset_slots
+            }
+            if missing_asset_slots:
+                raise ValueError(
+                    f"Scene {scene.id} is missing required asset slots: "
+                    f"{sorted(missing_asset_slots)}"
+                )
+            for slot_id, binding in scene.asset_slots.items():
+                field = data_fields.get(binding.data_field)
+                if field is None:
+                    raise ValueError(
+                        f"Scene {scene.id} asset slot {slot_id} references an unknown data field"
+                    )
+                if field.kind != "media-source":
+                    raise ValueError(
+                        f"Scene {scene.id} asset slot {slot_id} must bind a media-source field"
+                    )
+                value = scene.data.get(field.id, field.default)
+                if asset_slots[slot_id].required and (
+                    not isinstance(value, str) or not value
+                ):
+                    raise ValueError(
+                        f"Scene {scene.id} asset slot {slot_id} has no media source"
+                    )
 
         variant_ids = [item.id for item in self.variants]
         if not variant_ids or len(set(variant_ids)) != len(variant_ids):
@@ -776,39 +899,92 @@ class EditableMediaManifest(DomainModel):
                 raise ValueError(
                     f"Variant {variant.id} references unknown layers: {sorted(unknown_layers)}"
                 )
-            missing_layers = known - set(variant.layers)
-            if missing_layers:
-                raise ValueError(
-                    f"Variant {variant.id} is missing layers: {sorted(missing_layers)}"
-                )
 
         if len({item.id for item in self.theme_variables}) != len(self.theme_variables):
             raise ValueError("Editable media theme variable identifiers must be unique")
         if len({item.css_variable for item in self.theme_variables}) != len(self.theme_variables):
             raise ValueError("Editable media theme CSS variables must be unique")
 
-        quality_layers = (
-            set(self.quality.required_layer_ids)
-            | set(self.quality.minimum_font_px)
-            | set(self.quality.navigation_safe_area.layer_ids)
-            | {self.quality.roundtrip.layer_id}
-            | {self.quality.title_to_content.title_layer_id}
-            | set(self.quality.title_to_content.content_layer_ids)
-            | set(self.quality.bottom_whitespace.content_layer_ids)
-            | {
-                layer_id
-                for gap in self.quality.minimum_gaps
-                for layer_id in (gap.above, gap.below)
-            }
-        )
-        unknown_quality_layers = quality_layers - known
-        if unknown_quality_layers:
+        unknown_variant_overrides = set(self.quality.variant_overrides) - set(variant_ids)
+        if unknown_variant_overrides:
             raise ValueError(
-                "Editable media quality rules reference unknown layers: "
-                f"{sorted(unknown_quality_layers)}"
+                "Editable media quality variant overrides reference unknown variants: "
+                f"{sorted(unknown_variant_overrides)}"
             )
-        if self.quality.roundtrip.data_field not in data_ids:
-            raise ValueError("Editable media roundtrip data field does not exist")
+        unknown_scene_overrides = set(self.quality.scene_overrides) - set(scene_ids)
+        if unknown_scene_overrides:
+            raise ValueError(
+                "Editable media quality scene overrides reference unknown scenes: "
+                f"{sorted(unknown_scene_overrides)}"
+            )
+        quality_rules: list[tuple[str, WebQualityRules]] = [
+            ("quality", self.quality),
+            *[
+                (f"quality.variant_overrides.{variant_id}", rules)
+                for variant_id, rules in self.quality.variant_overrides.items()
+            ],
+            *[
+                (f"quality.scene_overrides.{scene_id}", rules)
+                for scene_id, rules in self.quality.scene_overrides.items()
+            ],
+        ]
+        for label, rules in quality_rules:
+            quality_layers = (
+                set(rules.required_layer_ids)
+                | set(rules.required_title_layer_ids)
+                | set(rules.allow_overflow_layer_ids)
+                | set(rules.safe_area_layer_ids)
+                | set(rules.minimum_font_px)
+                | set(rules.content_bounds_layer_ids)
+                | (
+                    set(rules.thumbnail.text_layer_ids)
+                    if rules.thumbnail is not None
+                    else set()
+                )
+                | (
+                    set(rules.navigation_safe_area.layer_ids)
+                    if rules.navigation_safe_area is not None
+                    else set()
+                )
+                | (
+                    {rules.title_to_content.title_layer_id}
+                    | set(rules.title_to_content.content_layer_ids)
+                    if rules.title_to_content is not None
+                    else set()
+                )
+                | (
+                    set(rules.bottom_whitespace.content_layer_ids)
+                    if rules.bottom_whitespace is not None
+                    else set()
+                )
+                | (
+                    {rules.roundtrip.layer_id}
+                    if rules.roundtrip is not None
+                    else set()
+                )
+                | {
+                    layer_id
+                    for gap in rules.minimum_gaps
+                    for layer_id in (gap.above, gap.below)
+                }
+            )
+            unknown_quality_layers = quality_layers - known
+            if unknown_quality_layers:
+                raise ValueError(
+                    f"{label} references unknown layers: {sorted(unknown_quality_layers)}"
+                )
+            if (
+                rules.roundtrip is not None
+                and rules.roundtrip.data_field not in data_ids
+            ):
+                raise ValueError(f"{label} roundtrip data field does not exist")
+            if (
+                rules.canvas_selector is not None
+                and rules.canvas_selector != self.accessibility.canvas_selector
+            ):
+                raise ValueError(
+                    "Editable media canvas selectors must use one canonical value"
+                )
         if self.accessibility.canvas_selector != self.quality.canvas_selector:
             raise ValueError("Editable media canvas selectors must use one canonical value")
         return self
@@ -827,6 +1003,38 @@ class EditableMediaManifest(DomainModel):
             return next(item for item in self.variants if item.id == resolved)
         except StopIteration as error:
             raise ValueError(f"Editable media variant does not exist: {resolved}") from error
+
+    def layer_values_for(
+        self,
+        variant_id: str | None,
+        layer_id: str,
+    ) -> dict[str, JsonValue]:
+        try:
+            layer = next(item for item in self.layers if item.id == layer_id)
+        except StopIteration as error:
+            raise ValueError(f"Editable media layer does not exist: {layer_id}") from error
+        values = cast(
+            dict[str, JsonValue],
+            layer.default_bounds.model_dump(mode="json"),
+        )
+        variant_layer = self.variant_for(variant_id).layers.get(layer_id)
+        if variant_layer is not None:
+            values.update(
+                cast(
+                    dict[str, JsonValue],
+                    variant_layer.model_dump(mode="json", exclude_none=True),
+                )
+            )
+        return values
+
+
+def parse_editable_media_manifest(document: object) -> EditableMediaManifest:
+    validate_editable_media_document(document)
+    return EditableMediaManifest.model_validate(document)
+
+
+def parse_editable_media_manifest_json(value: str) -> EditableMediaManifest:
+    return parse_editable_media_manifest(json.loads(value))
 
 
 class WebAssetSpec(DomainModel):
@@ -1022,8 +1230,7 @@ def web_runtime_state(
         current = state.scenes.get(scene.id, WebSceneState())
         resolved_layers: dict[str, JsonValue] = {}
         for layer in manifest.layers:
-            bounds = variant.layers.get(layer.id, layer.default_bounds)
-            values: dict[str, JsonValue] = bounds.model_dump(mode="json")
+            values = manifest.layer_values_for(variant.id, layer.id)
             values.update(
                 current.layers.get(layer.id, WebLayerOverride()).model_dump(exclude_none=True)
             )

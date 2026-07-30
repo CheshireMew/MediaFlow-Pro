@@ -6,7 +6,10 @@ from pathlib import Path
 
 from mediaflow.application.workflow_stage_handlers import workflow_stage_handlers
 from mediaflow.automation.operation_registry import OPERATIONS, OperationDefinition
-from mediaflow.desktop.presentation_catalogs import WORKSPACE_MODES
+from mediaflow.desktop.presentation_catalogs import (
+    WORKSPACE_MODES,
+    WORKSPACE_NAVIGATION_MODE_KEYS,
+)
 from mediaflow.domain.enums import WorkflowStage
 from mediaflow.infrastructure.project_migrations import PROJECT_MIGRATIONS
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -337,10 +340,21 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     for component in ("PreviewViewport", "WorkspaceNavigation"):
         assert component in workspace
         assert (qml_root / "components" / f"{component}.qml").is_file()
-    assert "WorkflowBanner" in workspace
-    assert "InspectorPanel" not in workspace
+    status_overlays = qml_root / "WorkspaceStatusOverlays.qml"
+    assert "WorkspaceStatusOverlays" in workspace
+    assert "WorkflowBanner" not in workspace
+    assert status_overlays.is_file()
+    status_overlay_source = status_overlays.read_text(encoding="utf-8")
+    assert "WorkflowBanner" in status_overlay_source
+    assert "DownloadProgressBanner" in status_overlay_source
+    assert "InspectorPanel" in workspace
     assert (qml_root / "WorkflowBanner.qml").is_file()
-    assert not (qml_root / "InspectorPanel.qml").exists()
+    inspector = qml_root / "InspectorPanel.qml"
+    assert inspector.is_file()
+    inspector_source = inspector.read_text(encoding="utf-8")
+    assert "EditPanel" in inspector_source
+    assert "草稿参数" in inspector_source
+    assert "素材参数" in inspector_source
     assert "TranscriptWorkspace" in workspace
     assert (qml_root / "TranscriptWorkspace.qml").is_file()
     assert "TaskCenterPanel" in workspace
@@ -618,9 +632,11 @@ def test_qml_floating_controls_use_the_shared_dark_theme_boundary() -> None:
 
 
 def test_workspace_modes_have_one_presentation_catalog() -> None:
-    assert len(WORKSPACE_MODES) == 7
+    assert len(WORKSPACE_MODES) == 6
     assert len({mode.key for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
     assert len({mode.panel_object_name for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
+    assert "edit" not in {mode.key for mode in WORKSPACE_MODES}
+    assert "export" not in WORKSPACE_NAVIGATION_MODE_KEYS
 
     qml_root = ROOT / "mediaflow" / "desktop" / "qml"
     navigation = (qml_root / "components" / "WorkspaceNavigation.qml").read_text(
@@ -640,8 +656,10 @@ def test_workspace_modes_have_one_presentation_catalog() -> None:
     assert "panelObjectName" in workspace
     assert "model: [" not in navigation
     assert 'activeMode === "media" ? 0' not in workspace
-    assert "presentation_catalogs import WORKSPACE_MODE_KEYS" in ui_matrix
-    assert "presentation_catalogs import WORKSPACE_MODES" in qml_smoke
+    assert "WORKSPACE_MODE_KEYS" in ui_matrix
+    assert "WORKSPACE_NAVIGATION_MODE_KEYS" in ui_matrix
+    assert "WORKSPACE_MODES" in qml_smoke
+    assert "WORKSPACE_NAVIGATION_MODE_KEYS" in qml_smoke
     for mode in WORKSPACE_MODES:
         assert f'key: "{mode.key}"' not in navigation
 
@@ -664,6 +682,19 @@ def test_desktop_brand_and_icons_have_one_component_boundary() -> None:
     assert "mediaflow-mark.svg" in app_source
 
     icon_source = (components / "AppIcon.qml").read_text(encoding="utf-8")
+    icon_button_source = (components / "AppIconButton.qml").read_text(encoding="utf-8")
+    theme_source = (qml_root / "Theme.qml").read_text(encoding="utf-8")
+    assert "Theme.iconSizeToolbar" in icon_source
+    assert "Theme.iconStrokeWidth" in icon_source
+    assert "Theme.iconSizeToolbar" in icon_button_source
+    assert "Theme.iconButtonSize" in icon_button_source
+    assert "control.hovered ? Theme.dangerSoft : Theme.transparent" in icon_button_source
+    for token in (
+        "iconSizeToolbar: 16",
+        "iconButtonSize: 32",
+        "iconStrokeWidth: 1.45",
+    ):
+        assert token in theme_source
     required_icon_names = {
         *(mode.icon for mode in WORKSPACE_MODES),
         "large_thumbnails",
@@ -682,5 +713,5 @@ def test_desktop_brand_and_icons_have_one_component_boundary() -> None:
     assert "Unknown AppIcon name:" in icon_source
 
     home_source = (qml_root / "HomeView.qml").read_text(encoding="utf-8")
-    assert home_source.count("SignalMapArtwork {") == 2
+    assert home_source.count("SignalMapArtwork {") == 1
     assert "Canvas {" not in home_source

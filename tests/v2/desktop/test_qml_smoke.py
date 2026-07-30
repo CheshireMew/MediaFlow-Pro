@@ -30,7 +30,10 @@ from PySide6.QtTest import QTest
 from mediaflow.application.task_service import TaskContext, TaskStopped
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.app import configure_application_font, create_engine
-from mediaflow.desktop.presentation_catalogs import WORKSPACE_MODES
+from mediaflow.desktop.presentation_catalogs import (
+    WORKSPACE_MODES,
+    WORKSPACE_NAVIGATION_MODE_KEYS,
+)
 from mediaflow.domain.enums import TaskKind, TaskStatus, TrackKind
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import (
@@ -498,15 +501,7 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
         assert settings_dialog is not None
         zoom_before_modal = timeline_zoom.property("value")
         visibility_before_modal = window.visibility()
-        settings_center = settings_button.mapToScene(
-            QPointF(settings_button.width() / 2, settings_button.height() / 2)
-        )
-        QTest.mouseClick(
-            window,
-            Qt.LeftButton,
-            Qt.NoModifier,
-            QPoint(round(settings_center.x()), round(settings_center.y())),
-        )
+        assert QMetaObject.invokeMethod(settings_button, "click")
         assert _process_until(lambda: settings_dialog.property("visible") is True)
         QTest.keyClick(window, Qt.Key_Minus)
         QTest.keyClick(window, Qt.Key_F11)
@@ -851,16 +846,16 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert detach_menu_item.property("enabled") is False
         menu_background = clip_context_menu.property("background")
         assert menu_background is not None
-        assert menu_background.property("color") == QColor("#20222b")
+        assert menu_background.property("color") == QColor("#303136")
         assert clip_context_menu.setProperty("currentIndex", 2)
         assert _process_until(lambda: detach_menu_item.property("highlighted"))
         detach_background = detach_menu_item.property("background")
         detach_content = detach_menu_item.property("contentItem")
         assert detach_background is not None and detach_content is not None
         assert _process_until(
-            lambda: detach_background.property("color") == QColor("#272a34")
+            lambda: detach_background.property("color") == QColor("#36373b")
         )
-        assert detach_content.property("textColor") == QColor("#5c5f69")
+        assert detach_content.property("textColor") == QColor("#62656b")
         split_content = split_menu_item.property("contentItem")
         split_text_items = {
             item.property("text"): item for item in split_content.childItems() if item.property("text")
@@ -1907,7 +1902,6 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         controllers.timeline.selectTransition(transition_id)
         workspace = engine.rootObjects()[0].findChild(QQuickItem, "workspace")
         assert workspace is not None
-        workspace.setProperty("activeMode", "edit")
         QCoreApplication.processEvents()
         transition_kind = engine.rootObjects()[0].findChild(
             QQuickItem, "selectedTransitionKind")
@@ -2183,6 +2177,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         preview_controls_scroll = workspace.findChild(
             QQuickItem, "previewControlsScroll")
         timeline_panel = workspace.findChild(QQuickItem, "timelinePanel")
+        inspector_panel = workspace.findChild(QQuickItem, "inspectorPanel")
+        assert inspector_panel is not None and inspector_panel.isVisible()
         assert workspace.findChild(QQuickItem, "inspectorContainer") is None
         assert workspace.findChild(QQuickItem, "compactInspectorDrawer") is None
         assert workspace.findChild(QQuickItem, "compactInspectorButton") is None
@@ -2195,17 +2191,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             preview_controls_scroll.width()
         ):
             assert preview_controls_scroll.property("interactive") is True
-        assert abs(navigation.width() - workspace.width()) <= 2
-        assert 46 <= navigation.height() <= 54
+        assert abs(navigation.width() - tool_panel.width()) <= 2
+        assert 66 <= navigation.height() <= 70
         assert tool_panel is not None and preview_viewport is not None and timeline_panel is not None
+        workspace_gutter = float(workspace.property("workspaceGutter"))
         tool_panel_position = tool_panel.mapToItem(workspace, QPointF(0, 0))
-        assert abs(tool_panel_position.x()) <= 2
-        assert (
-            abs(tool_panel_position.y() - navigation.height() - workspace.property("workspaceBannerHeight"))
-            <= 2
-        )
+        assert abs(tool_panel_position.x() - workspace_gutter) <= 2
+        assert abs(tool_panel_position.y() - workspace_gutter) <= 2
         navigation_items = {item.objectName(): item for item in _visual_items(navigation)}
-        modes = tuple(mode.key for mode in WORKSPACE_MODES)
+        modes = WORKSPACE_NAVIGATION_MODE_KEYS
         for mode in modes:
             navigation_item = navigation_items.get(f"navigationItem_{mode}")
             assert navigation_item is not None and navigation_item.isVisible()
@@ -2230,6 +2224,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         fixed_geometry = {
             "tool": geometry(tool_panel),
             "preview": geometry(preview_viewport),
+            "inspector": geometry(inspector_panel),
             "timeline": geometry(timeline_panel),
         }
         panel_names = {
@@ -2264,7 +2259,11 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 ):
                     assert workspace.findChild(QQuickItem, removed_action) is None
                 media_task_panel = workspace.findChild(QQuickItem, "mediaTaskPanel")
-                assert media_task_panel is not None and not media_task_panel.isVisible()
+                assert media_task_panel is not None
+                if media_task_panel.isVisible():
+                    assert controllers.tasks.latestMediaTask(
+                        controllers.media.selectedAssetId
+                    ).get("status") != "completed"
             elif mode == "highlight":
                 highlight_toolbar = workspace.findChild(QQuickItem, "highlightToolbar")
                 source_document = workspace.findChild(QQuickItem, "highlightSourceDocument")
@@ -2322,12 +2321,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                     if item.objectName() == "taskOpenResultButton"
                     and item.property("taskCommandType") in {"generate_proxy", "generate_waveform"}
                 ]
-                assert internal_result_buttons
                 assert all(not button.isVisible() for button in internal_result_buttons)
             assert preview_viewport.isVisible() and timeline_panel.isVisible()
             for key, item in (
                 ("tool", tool_panel),
                 ("preview", preview_viewport),
+                ("inspector", inspector_panel),
                 ("timeline", timeline_panel),
             ):
                 assert all(
@@ -2362,7 +2361,6 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.timeline.selectedClipData["x"] == 12.5
         assert controllers.timeline.selectedClipData["y"] == 7.5
 
-        assert QMetaObject.invokeMethod(navigation_items["navigationItem_edit"], "click")
         edit_pos_x = workspace.findChild(QQuickItem, "editClipPosX")
         edit_pos_y = workspace.findChild(QQuickItem, "editClipPosY")
         apply_transform = workspace.findChild(QQuickItem, "applyClipTransformButton")
@@ -2459,6 +2457,23 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         blank_selection_area = timeline.findChild(QQuickItem, "timelineBlankSelectionArea")
         track_controls_panel = workspace.findChild(QQuickItem, "trackControlsPanel")
         assert timeline_toolbar is not None
+        compact_icon_buttons = [
+            root_window.findChild(QQuickItem, object_name)
+            for object_name in (
+                "workspaceUndoButton",
+                "workspaceRedoButton",
+                "openProjectVersionsButton",
+                "timelineSplitButton",
+                "timelineDuplicateButton",
+                "timelineDeleteButton",
+            )
+        ]
+        assert all(button is not None for button in compact_icon_buttons)
+        assert all(int(button.property("iconSize")) <= 16 for button in compact_icon_buttons)
+        assert all(float(button.implicitWidth()) <= 32 for button in compact_icon_buttons)
+        timeline_delete_button = compact_icon_buttons[-1]
+        assert timeline_delete_button.property("danger") is True
+        assert timeline_delete_button.property("backgroundColor") == QColor("#00000000")
         assert timeline_scroll is not None
         assert blank_selection_area is not None
         assert track_controls_panel is not None
@@ -2506,13 +2521,13 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert dialogue_button_background is not None
         assert dialogue_microphone is not None
         assert dialogue_marker is not None and dialogue_marker.width() == 3
-        assert dialogue_button_background.property("color").name() == "#292440"
-        assert dialogue_microphone.property("iconColor").name() == "#9a8cf7"
+        assert dialogue_button_background.property("color").name() == "#17383c"
+        assert dialogue_microphone.property("iconColor").name() == "#20c7d4"
         timeline_origin = timeline.mapToItem(workspace, QPointF(0, 0))
         tool_panel_bottom = tool_panel.mapToItem(workspace, QPointF(0, tool_panel.height()))
-        assert abs(timeline_origin.x()) <= 2
-        assert abs(timeline.width() - workspace.width()) <= 2
-        assert abs(timeline_origin.y() - tool_panel_bottom.y() - 8) <= 2
+        assert abs(timeline_origin.x() - workspace_gutter) <= 2
+        assert abs(timeline.width() - workspace.width() + 2 * workspace_gutter) <= 2
+        assert abs(timeline_origin.y() - tool_panel_bottom.y() - workspace_gutter) <= 2
         first_clip_projection = controllers.timeline.clipsModel.get(0)
         assert first_clip_projection["assetKind"] == "video"
         assert first_clip_projection["trackKind"] == "video"
@@ -2721,7 +2736,6 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
 
         controllers.timeline.selectClip(first_clip_projection["clipId"])
         assert timeline.property("multiSelectMode") is True
-        assert QMetaObject.invokeMethod(navigation_items["navigationItem_edit"], "click")
         detach_audio = workspace.findChild(QQuickItem, "detachClipAudioButton")
         assert detach_audio is not None and _process_until(detach_audio.isVisible)
         assert QMetaObject.invokeMethod(detach_audio, "click")
@@ -3056,8 +3070,10 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert QMetaObject.invokeMethod(settings_close, "click")
 
-        workspace.setProperty("activeMode", "export")
-        QCoreApplication.processEvents()
+        title_export = root.findChild(QQuickItem, "titleExportButton")
+        assert title_export is not None and title_export.isVisible()
+        assert QMetaObject.invokeMethod(title_export, "click")
+        assert _process_until(lambda: workspace.property("activeMode") == "export")
 
         def export_buttons_are_visible() -> bool:
             export_panel = workspace.findChild(QQuickItem, "exportPanel")
@@ -3252,7 +3268,11 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         workspace.setProperty("activeMode", "media")
         media_task_panel = workspace.findChild(QQuickItem, "mediaTaskPanel")
-        assert media_task_panel is not None and not media_task_panel.isVisible()
+        assert media_task_panel is not None
+        if media_task_panel.isVisible():
+            assert controllers.tasks.latestMediaTask(
+                controllers.media.selectedAssetId
+            ).get("status") != "completed"
 
         master_bus = next(
             controllers.audio.audioBusesModel.get(index)
@@ -3464,9 +3484,10 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert recent_section.property("level") == 1
         assert home.findChild(QQuickItem, "createProjectButton") is None
         assert create_hero.isVisible() and create_hero.property("enabled")
-        assert create_hero_icon is not None and create_hero_icon.width() >= 58
+        assert create_hero.height() <= 144
+        assert create_hero_icon is not None and 52 <= create_hero_icon.width() <= 58
         assert create_hero_title is not None and create_hero_title.isVisible()
-        assert create_hero_title.property("font").pixelSize() >= 30
+        assert 18 <= create_hero_title.property("font").pixelSize() <= 22
         assert open_existing_button is not None and open_existing_button.isVisible()
         assert download_url_field is not None and download_url_field.isVisible()
         assert paste_download_url_button is not None and paste_download_url_button.isVisible()

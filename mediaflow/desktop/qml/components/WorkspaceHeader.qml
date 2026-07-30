@@ -5,6 +5,7 @@ import ".."
 
 Item {
     id: root
+    signal exportRequested
 
     ProjectVersionsDialog {
         id: projectVersionsDialog
@@ -24,7 +25,8 @@ Item {
         + redoButton.implicitWidth
         + versionsButton.implicitWidth
         + closeProjectButton.implicitWidth
-        + controls.spacing * 4
+        + exportButton.implicitWidth
+        + controls.spacing * 5
     implicitHeight: 42
 
     RowLayout {
@@ -75,6 +77,7 @@ Item {
 
         AppIconButton {
             id: undoButton
+            objectName: "workspaceUndoButton"
             iconName: "undo"
             Accessible.name: qsTr("撤销")
             toolTipText: Accessible.name + " (Ctrl+Z)"
@@ -85,6 +88,7 @@ Item {
 
         AppIconButton {
             id: redoButton
+            objectName: "workspaceRedoButton"
             iconName: "redo"
             Accessible.name: qsTr("重做")
             toolTipText: Accessible.name + " (Ctrl+Y)"
@@ -109,6 +113,16 @@ Item {
             implicitHeight: Theme.controlHeightCompact
             enabled: workspaceController.actionCapabilities.canCloseProject
             onClicked: workspaceController.closeProject()
+        }
+
+        AppButton {
+            id: exportButton
+            objectName: "titleExportButton"
+            text: qsTr("导出")
+            primary: true
+            implicitHeight: Theme.controlHeightCompact
+            enabled: workspaceController.actionCapabilities.canStartTasks
+            onClicked: root.exportRequested()
         }
     }
 }

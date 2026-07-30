@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "."
 import "components"
-
 Rectangle {
     id: root
     objectName: "workspace"
@@ -11,9 +10,8 @@ Rectangle {
     property string activeMode: workspaceController.workspaceModes.length > 0
         ? String(workspaceController.workspaceModes[0].key) : ""
     property var exportPreviewOptions: ({})
-    readonly property int workspaceNavigationHeight: 54
-    readonly property int workspaceBannerHeight:
-        taskController.downloadProgressVisible || workflowBanner.visible ? 64 : 0
+    readonly property int workspaceNavigationHeight: 68
+    readonly property int workspaceGutter: 10
     readonly property Item focusedItem: root.Window.window
         ? root.Window.window.activeFocusItem : null
     readonly property bool textInputActive: focusedItem instanceof TextInput
@@ -33,9 +31,13 @@ Rectangle {
         && !root.modalOpen
     readonly property bool canEdit:
         workspaceController.actionCapabilities.canEdit
-    property real toolPanelWidth: Math.max(340, settingsController.settingsData.leftPanelWidth || 360)
+    property real toolPanelWidth: Math.max(
+        root.width >= 1600 ? 520 : 420,
+        Math.min(
+            root.width >= 1600 ? 680 : 460,
+            settingsController.settingsData.leftPanelWidth || 520))
+    property real inspectorPanelWidth: root.width >= 1600 ? 400 : 330
     property real timelinePanelHeight: Math.max(210, settingsController.settingsData.timelineHeight || 330)
-
     function panelIndexForMode(modeKey) {
         const modes = workspaceController.workspaceModes;
         let panelObjectName = "";
@@ -54,11 +56,9 @@ Rectangle {
         }
         return 0;
     }
-
     function toggleFullscreen() {
         previewViewport.toggleFullscreen();
     }
-
     function playPreview() {
         previewViewport.playPreviewFrom(timeline.visiblePlayheadFrame);
     }
@@ -95,6 +95,22 @@ Rectangle {
         });
     }
 
+    function openExportPanel() {
+        root.activeMode = "export";
+    }
+
+    function activeSequenceName() {
+        for (let index = 0;
+                index < workspaceController.sequencesModel.rowCount();
+                ++index) {
+            const sequence = workspaceController.sequencesModel.get(index);
+            if (String(sequence.sequenceId)
+                    === String(workspaceController.activeSequenceId))
+                return String(sequence.name);
+        }
+        return qsTr("时间线");
+    }
+
     Connections {
         target: workspaceController
         function onPreviewRangeRequested(startFrame, endFrame) {
@@ -113,32 +129,13 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
 
-        WorkspaceNavigation {
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.workspaceNavigationHeight
-            activeMode: root.activeMode
-            onModeRequested: function (mode) {
-                root.activeMode = mode;
-            }
-            onSettingsRequested: settingsDialog.open()
-        }
-
-        DownloadProgressBanner {
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 64 : 0
-        }
-
-        WorkflowBanner {
-            id: workflowBanner
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 64 : 0
-            onOpenSettingsRequested: settingsDialog.open()
-            onOpenExportRequested: root.activeMode = "export"
-        }
-
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.leftMargin: root.workspaceGutter
+            Layout.rightMargin: root.workspaceGutter
+            Layout.topMargin: root.workspaceGutter
+            Layout.bottomMargin: root.workspaceGutter
             spacing: 0
 
             RowLayout {
@@ -150,89 +147,101 @@ Rectangle {
                     id: toolPanelContainer
                     objectName: "toolPanelContainer"
                     Layout.preferredWidth: root.toolPanelWidth
+                    Layout.minimumWidth: 420
                     Layout.fillHeight: true
                     color: Theme.surface
-                    border.width: 0
+                    radius: Theme.radius
+                    border.width: 1
+                    border.color: Theme.borderSubtle
+                    clip: true
 
-                    StackLayout {
-                        id: toolStack
+                    ColumnLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: 16
-                        anchors.rightMargin: 16
-                        anchors.topMargin: 14
-                        anchors.bottomMargin: 14
-                        currentIndex: root.panelIndexForMode(root.activeMode)
+                        spacing: 0
 
-                        Loader {
-                            id: mediaPanelLoader
-                            property string panelObjectName: "mediaPanel"
-                            active: root.activeMode === "media"
-                                || status === Loader.Ready
-                            sourceComponent: MediaPanel {
-                                dragPreview: mediaDragPreview
-                                playheadFrame: timeline.visiblePlayheadFrame
-                                pixelsPerFrame: timeline.pixelsPerFrame
-                                snapEnabled: timeline.snapEnabled
+                        WorkspaceNavigation {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: root.workspaceNavigationHeight
+                            activeMode: root.activeMode
+                            onModeRequested: function (mode) {
+                                root.activeMode = mode;
                             }
+                            onSettingsRequested: settingsDialog.open()
                         }
-                        Loader {
-                            property string panelObjectName: "transcriptWorkspace"
-                            active: root.activeMode === "transcript"
-                                || status === Loader.Ready
-                            sourceComponent: TranscriptWorkspace {
-                                playheadFrame: previewViewport.position
-                                playbackActive: previewViewport.playing
-                                onImportRequested: root.openMediaImportDialog()
-                                onSeekRequested: function (frame) {
-                                    previewViewport.seek(frame);
+
+                        StackLayout {
+                            id: toolStack
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.leftMargin: 14
+                            Layout.rightMargin: 14
+                            Layout.topMargin: 12
+                            Layout.bottomMargin: 12
+                            currentIndex: root.panelIndexForMode(root.activeMode)
+
+                            Loader {
+                                id: mediaPanelLoader
+                                property string panelObjectName: "mediaPanel"
+                                active: root.activeMode === "media"
+                                    || status === Loader.Ready
+                                sourceComponent: MediaPanel {
+                                    dragPreview: mediaDragPreview
+                                    playheadFrame: timeline.visiblePlayheadFrame
+                                    pixelsPerFrame: timeline.pixelsPerFrame
+                                    snapEnabled: timeline.snapEnabled
                                 }
                             }
-                        }
-                        Loader {
-                            property string panelObjectName: "highlightPanel"
-                            active: root.activeMode === "highlight"
-                                || status === Loader.Ready
-                            sourceComponent: HighlightPanel {
-                                playheadFrame: previewViewport.position
-                            }
-                        }
-                        Loader {
-                            property string panelObjectName: "editPanel"
-                            active: root.activeMode === "edit"
-                                || status === Loader.Ready
-                            sourceComponent: EditPanel {
-                                playheadFrame: previewViewport.position
-                            }
-                        }
-                        Loader {
-                            property string panelObjectName: "audioScroll"
-                            active: root.activeMode === "audio"
-                                || status === Loader.Ready
-                            sourceComponent: AudioPanel {}
-                        }
-                        Loader {
-                            property string panelObjectName: "exportPanel"
-                            active: root.activeMode === "export"
-                                || status === Loader.Ready
-                            sourceComponent: ExportPanel {
-                                onPreviewConfigurationChanged: function (options) {
-                                    root.exportPreviewOptions = options;
+                            Loader {
+                                property string panelObjectName: "transcriptWorkspace"
+                                active: root.activeMode === "transcript"
+                                    || status === Loader.Ready
+                                sourceComponent: TranscriptWorkspace {
+                                    playheadFrame: previewViewport.position
+                                    playbackActive: previewViewport.playing
+                                    onImportRequested: root.openMediaImportDialog()
+                                    onSeekRequested: function (frame) {
+                                        previewViewport.seek(frame);
+                                    }
                                 }
                             }
-                        }
-                        Loader {
-                            id: taskCenterPanelLoader
-                            property string panelObjectName: "taskCenterPanel"
-                            active: root.activeMode === "tasks"
-                                || status === Loader.Ready
-                            sourceComponent: TaskCenterPanel {}
+                            Loader {
+                                property string panelObjectName: "highlightPanel"
+                                active: root.activeMode === "highlight"
+                                    || status === Loader.Ready
+                                sourceComponent: HighlightPanel {
+                                    playheadFrame: previewViewport.position
+                                }
+                            }
+                            Loader {
+                                property string panelObjectName: "audioScroll"
+                                active: root.activeMode === "audio"
+                                    || status === Loader.Ready
+                                sourceComponent: AudioPanel {}
+                            }
+                            Loader {
+                                property string panelObjectName: "exportPanel"
+                                active: root.activeMode === "export"
+                                    || status === Loader.Ready
+                                sourceComponent: ExportPanel {
+                                    onPreviewConfigurationChanged: function (options) {
+                                        root.exportPreviewOptions = options;
+                                    }
+                                }
+                            }
+                            Loader {
+                                id: taskCenterPanelLoader
+                                property string panelObjectName: "taskCenterPanel"
+                                active: root.activeMode === "tasks"
+                                    || status === Loader.Ready
+                                sourceComponent: TaskCenterPanel {}
+                            }
                         }
                     }
                 }
 
                 Rectangle {
                     id: leftResizeHandle
-                    Layout.preferredWidth: 8
+                    Layout.preferredWidth: root.workspaceGutter
                     Layout.fillHeight: true
                     color: Theme.window
                     property real startWidth: 0
@@ -242,8 +251,12 @@ Rectangle {
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         width: leftDrag.active ? 2 : 1
-                        color: leftDrag.active ? Theme.accent : Theme.divider
+                        color: leftDrag.active ? Theme.accent
+                            : leftResizeHover.hovered ? Theme.borderStrong
+                            : Theme.transparent
                     }
+
+                    HoverHandler { id: leftResizeHover }
 
                     DragHandler {
                         id: leftDrag
@@ -256,85 +269,160 @@ Rectangle {
                             else
                                 root.persistPanelLayout();
                         }
-                        onTranslationChanged: root.toolPanelWidth = Math.max(340, Math.min(640, leftResizeHandle.startWidth + translation.x))
+                        onTranslationChanged: root.toolPanelWidth = Math.max(
+                            root.width >= 1600 ? 460 : 420,
+                            Math.min(root.width >= 1600 ? 680 : 460,
+                                leftResizeHandle.startWidth + translation.x))
                     }
                 }
 
-                PreviewViewport {
-                    id: previewViewport
+                Rectangle {
+                    id: previewPanel
+                    objectName: "previewPanel"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 260
-                    visible: !(root.activeMode === "edit" && webController.isWebClip && webController.editMode)
-                    source: workspaceController.previewGraphPath
-                    runtimeRoot: workspaceController.mltRuntimeRoot
-                    hdrEnabled: workspaceController.colorMode === "hdr10_bt2020_pq"
-                    profileWidth: workspaceController.profileWidth
-                    profileHeight: workspaceController.profileHeight
-                    exportPreviewActive: root.activeMode === "export"
-                    exportPreviewOptions: root.exportPreviewOptions
-                    subtitleText: root.activeMode === "export"
-                        ? subtitleController.subtitleTextForTrackAtFrame(
-                            String(root.exportPreviewOptions.burnSubtitleTrackId || ""),
-                            position)
-                        : subtitleController.subtitleTextAtFrame(position)
-                    watermarkSource: root.activeMode === "export"
-                        && root.exportPreviewOptions.watermark
-                        && root.exportPreviewOptions.watermark.enabled
-                        ? mediaController.assetUrl(
-                            String(root.exportPreviewOptions.watermark.asset_id || ""))
-                        : ""
-                    onDroppedFramesReported: function (count) {
-                        workspaceController.reportPreviewDroppedFrames(count);
-                    }
-                    onHdrActiveReported: function (active) {
-                        workspaceController.reportHdrPreviewActive(active);
+                    Layout.minimumWidth: 360
+                    color: Theme.surface
+                    radius: Theme.radius
+                    border.width: 1
+                    border.color: Theme.borderSubtle
+                    clip: true
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 0
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 50
+                            color: Theme.surface
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 18
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: qsTr("播放器") + " · " + root.activeSequenceName()
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSizeTitleSmall
+                                font.weight: Font.Medium
+                            }
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                height: 1
+                                color: Theme.divider
+                            }
+                        }
+
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.minimumHeight: 260
+
+                            PreviewViewport {
+                                id: previewViewport
+                                anchors.fill: parent
+                                visible: !(webController.isWebClip
+                                    && webController.editMode)
+                                source: workspaceController.previewGraphPath
+                                runtimeRoot: workspaceController.mltRuntimeRoot
+                                hdrEnabled: workspaceController.colorMode
+                                    === "hdr10_bt2020_pq"
+                                profileWidth: workspaceController.profileWidth
+                                profileHeight: workspaceController.profileHeight
+                                exportPreviewActive: root.activeMode === "export"
+                                exportPreviewOptions: root.exportPreviewOptions
+                                subtitleText: root.activeMode === "export"
+                                    ? subtitleController.subtitleTextForTrackAtFrame(
+                                        String(root.exportPreviewOptions
+                                            .burnSubtitleTrackId || ""),
+                                        position)
+                                    : subtitleController.subtitleTextAtFrame(position)
+                                watermarkSource: root.activeMode === "export"
+                                    && root.exportPreviewOptions.watermark
+                                    && root.exportPreviewOptions.watermark.enabled
+                                    ? mediaController.assetUrl(String(
+                                        root.exportPreviewOptions.watermark
+                                            .asset_id || ""))
+                                    : ""
+                                onDroppedFramesReported: function (count) {
+                                    workspaceController
+                                        .reportPreviewDroppedFrames(count);
+                                }
+                                onHdrActiveReported: function (active) {
+                                    workspaceController
+                                        .reportHdrPreviewActive(active);
+                                }
+                            }
+
+                            Loader {
+                                id: webEditorLoader
+                                objectName: "webEditorLoader"
+                                anchors.fill: parent
+                                visible: webController.isWebClip
+                                    && webController.editMode
+                                active: visible || status === Loader.Ready
+                                sourceComponent: WebEditorCanvas {
+                                    playheadFrame: previewViewport.position
+                                }
+                            }
+                        }
                     }
                 }
 
-                Loader {
-                    id: webEditorLoader
-                    objectName: "webEditorLoader"
-                    Layout.fillWidth: true
+                Rectangle {
+                    Layout.preferredWidth: root.workspaceGutter
                     Layout.fillHeight: true
-                    Layout.minimumHeight: 260
-                    visible: root.activeMode === "edit" && webController.isWebClip && webController.editMode
-                    active: visible || status === Loader.Ready
-                    sourceComponent: WebEditorCanvas {
-                        playheadFrame: previewViewport.position
-                    }
+                    color: Theme.window
+                }
+
+                InspectorPanel {
+                    objectName: "inspectorPanel"
+                    Layout.preferredWidth: root.inspectorPanelWidth
+                    Layout.minimumWidth: 330
+                    Layout.fillHeight: true
+                    playheadFrame: previewViewport.position
+                    onEditProfileRequested: sequenceProfileDialog.open()
                 }
             }
 
                 Rectangle {
                     id: timelineResizeHandle
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 8
+                    Layout.preferredHeight: root.workspaceGutter
                     color: Theme.window
-                property real startHeight: 0
+                    property real startHeight: 0
 
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    height: timelineDrag.active ? 2 : 1
-                    color: timelineDrag.active ? Theme.accent : Theme.divider
-                }
-
-                DragHandler {
-                    id: timelineDrag
-                    target: null
-                    xAxis.enabled: false
-                    yAxis.enabled: true
-                    onActiveChanged: {
-                        if (active)
-                            timelineResizeHandle.startHeight = root.timelinePanelHeight;
-                        else
-                            root.persistPanelLayout();
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: timelineDrag.active ? 2 : 1
+                        color: timelineDrag.active ? Theme.accent
+                            : timelineResizeHover.hovered ? Theme.borderStrong
+                            : Theme.transparent
                     }
-                    onTranslationChanged: root.timelinePanelHeight = Math.max(210, Math.min(640, timelineResizeHandle.startHeight - translation.y))
+
+                    HoverHandler { id: timelineResizeHover }
+
+                    DragHandler {
+                        id: timelineDrag
+                        target: null
+                        xAxis.enabled: false
+                        yAxis.enabled: true
+                        onActiveChanged: {
+                            if (active)
+                                timelineResizeHandle.startHeight = root.timelinePanelHeight;
+                            else
+                                root.persistPanelLayout();
+                        }
+                        onTranslationChanged: root.timelinePanelHeight = Math.max(
+                            210, Math.min(640,
+                                timelineResizeHandle.startHeight - translation.y))
+                    }
                 }
-            }
 
             TimelineView {
                 id: timeline
@@ -356,6 +444,16 @@ Rectangle {
                 onEditProfileRequested: sequenceProfileDialog.open()
             }
         }
+    }
+
+    WorkspaceStatusOverlays {
+        anchors.fill: parent
+        toolPanelWidth: toolPanelContainer.width
+        previewPanelWidth: previewPanel.width
+        gutter: root.workspaceGutter
+        z: 300
+        onOpenSettingsRequested: settingsDialog.open()
+        onOpenExportRequested: root.activeMode = "export"
     }
 
     Rectangle {

@@ -8,7 +8,7 @@ Rectangle {
     required property var view
     required property var timelineViewport
     Layout.fillWidth: true
-    Layout.preferredHeight: 44
+    Layout.preferredHeight: 48
     color: Theme.surface
     border.color: Theme.transparent
 
@@ -36,9 +36,9 @@ Rectangle {
 
         RowLayout {
             id: toolbarRow
-            x: 10
+            x: 14
             height: toolbarFlick.height - 6
-            spacing: 7
+            spacing: 6
             SequenceToolbar {
                 Layout.preferredWidth: implicitWidth
                 Layout.preferredHeight: implicitHeight
@@ -52,6 +52,7 @@ Rectangle {
             AppButton {
                 objectName: "timelineMultiSelectButton"
                 text: qsTr("多选")
+                compact: true
                 checkable: true
                 checked: view.multiSelectMode
                 quiet: !checked
@@ -69,6 +70,7 @@ Rectangle {
             AppButton {
                 objectName: "clearTimelineSelectionButton"
                 text: qsTr("清除选择")
+                compact: true
                 quiet: true
                 visible: timelineController.selectedClipIds.length > 0
                 onClicked: view.clearTimelineSelection()
@@ -76,6 +78,7 @@ Rectangle {
             AppButton {
                 objectName: "createCompoundClipButton"
                 text: qsTr("创建复合片段")
+                compact: true
                 quiet: true
                 enabled: view.canEdit && timelineController.canCreateCompoundClip
                 visible: timelineController.selectedCompoundId.length === 0
@@ -86,12 +89,14 @@ Rectangle {
             AppButton {
                 objectName: "dissolveCompoundClipButton"
                 text: qsTr("解除复合")
+                compact: true
                 quiet: true
                 visible: timelineController.selectedCompoundId.length > 0
                 enabled: view.canEdit
                 onClicked: timelineController.dissolveSelectedCompoundClip()
             }
             AppIconButton {
+                objectName: "timelineSplitButton"
                 iconName: "cut"
                 flat: true
                 Accessible.name: qsTr("分割片段")
@@ -100,6 +105,7 @@ Rectangle {
                 toolTipText: qsTr("在播放头处分割所选片段（Ctrl+K / Ctrl+B）")
             }
             AppIconButton {
+                objectName: "timelineDuplicateButton"
                 iconName: "duplicate"
                 flat: true
                 Accessible.name: qsTr("创建片段副本")
@@ -108,6 +114,7 @@ Rectangle {
                 toolTipText: qsTr("在片段末尾创建副本（Ctrl+D）")
             }
             AppIconButton {
+                objectName: "timelineDeleteButton"
                 iconName: "delete"
                 flat: true
                 danger: true
@@ -117,49 +124,9 @@ Rectangle {
                 toolTipText: qsTr("删除所选片段并保留空隙（Delete）")
             }
             AppButton {
-                text: qsTr("波纹删")
-                quiet: true
-                enabled: view.canEdit && timelineController.selectedClipIds.length > 0
-                onClicked: timelineController.deleteSelectedClips(true)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("删除所选片段并闭合空隙（Shift+Delete）")
-            }
-            AppButton {
-                text: "M"
-                quiet: true
-                Accessible.name: qsTr("添加标记")
-                leftPadding: 11
-                rightPadding: 11
-                enabled: view.canEdit
-                onClicked: timelineController.addTimelineMarker(view.playheadFrame)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("在播放头处添加标记（M）")
-            }
-            AppButton {
-                text: "I"
-                quiet: true
-                Accessible.name: qsTr("设置入点")
-                leftPadding: 11
-                rightPadding: 11
-                enabled: view.canEdit && workspaceController.timelineDurationFrames > 0
-                onClicked: timelineController.setSequenceInPoint(view.playheadFrame)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("设置入点（I）")
-            }
-            AppButton {
-                text: "O"
-                quiet: true
-                Accessible.name: qsTr("设置出点")
-                leftPadding: 11
-                rightPadding: 11
-                enabled: view.canEdit && workspaceController.timelineDurationFrames > 0
-                onClicked: timelineController.setSequenceOutPoint(view.playheadFrame)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("设置出点（O）")
-            }
-            AppButton {
                 objectName: "timelineSnapButton"
                 text: qsTr("吸附")
+                compact: true
                 checkable: true
                 checked: view.snapEnabled
                 quiet: !checked
@@ -171,11 +138,39 @@ Rectangle {
                 id: timelineMoreButton
                 objectName: "timelineMoreButton"
                 text: qsTr("更多")
+                compact: true
                 quiet: true
                 onClicked: timelineMoreMenu.open()
                 AppMenu {
                     id: timelineMoreMenu
                     y: timelineMoreButton.height + 4
+                    AppMenuItem {
+                        text: qsTr("波纹删除所选片段")
+                        enabled: view.canEdit
+                            && timelineController.selectedClipIds.length > 0
+                        onTriggered: timelineController.deleteSelectedClips(true)
+                    }
+                    AppMenuItem {
+                        text: qsTr("添加标记")
+                        enabled: view.canEdit
+                        onTriggered: timelineController.addTimelineMarker(
+                            view.playheadFrame)
+                    }
+                    AppMenuItem {
+                        text: qsTr("设置入点")
+                        enabled: view.canEdit
+                            && workspaceController.timelineDurationFrames > 0
+                        onTriggered: timelineController.setSequenceInPoint(
+                            view.playheadFrame)
+                    }
+                    AppMenuItem {
+                        text: qsTr("设置出点")
+                        enabled: view.canEdit
+                            && workspaceController.timelineDurationFrames > 0
+                        onTriggered: timelineController.setSequenceOutPoint(
+                            view.playheadFrame)
+                    }
+                    AppMenuSeparator {}
                     AppMenuItem {
                         objectName: "smartSequenceBoundsButton"
                         text: timelineController.sequenceBoundaryAnalysisRunning ? qsTr("正在分析入出点…") : qsTr("智能设置入出点")
@@ -249,6 +244,7 @@ Rectangle {
             AppButton {
                 objectName: "fitTimelineButton"
                 text: qsTr("适配")
+                compact: true
                 quiet: true
                 Accessible.name: qsTr("适配整个时间线")
                 onClicked: view.fitTimeline()

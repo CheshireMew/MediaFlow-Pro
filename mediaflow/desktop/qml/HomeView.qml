@@ -166,20 +166,13 @@ Rectangle {
                     id: createHero
                     objectName: "homeCreateHero"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 228
+                    Layout.preferredHeight: 132
                     padding: 0
                     hoverEnabled: true
                     focusPolicy: Qt.StrongFocus
                     Accessible.name: qsTr("新建项目")
                     Accessible.description: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
-                    scale: down ? 0.998 : 1.0
                     enabled: workspaceController.actionCapabilities.canCreateProject
-                    Behavior on scale {
-                        NumberAnimation {
-                            duration: Theme.durationFast
-                            easing.type: Easing.OutCubic
-                        }
-                    }
                     onClicked: createProjectDialog.open()
 
                     HoverHandler {
@@ -187,28 +180,14 @@ Rectangle {
                     }
 
                     background: Rectangle {
-                        radius: Theme.radiusLarge
-                        clip: true
+                        radius: Theme.radius
                         border.width: createHero.activeFocus ? 2 : 1
-                        color: Theme.surfaceRaised
+                        color: createHero.down ? Theme.surfacePressed
+                            : createHero.hovered ? Theme.surfaceHover : Theme.surface
                         border.color: createHero.activeFocus || createHero.hovered
                             ? Theme.borderStrong : Theme.border
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop {
-                                position: 0.0
-                                color: createHero.hovered
-                                    ? Theme.surfaceFloating : Theme.surfaceRaised
-                            }
-                            GradientStop {
-                                position: 1.0
-                                color: createHero.hovered
-                                    ? Theme.accentSoft : Theme.surfaceRaised
-                            }
-                        }
-
                         Behavior on color {
-                            ColorAnimation { duration: Theme.duration }
+                            ColorAnimation { duration: Theme.durationFast }
                         }
                         Behavior on border.color {
                             ColorAnimation { duration: Theme.durationFast }
@@ -218,126 +197,58 @@ Rectangle {
                     contentItem: Item {
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 42
-                            anchors.rightMargin: 34
-                            anchors.topMargin: 28
-                            anchors.bottomMargin: 28
-                            spacing: 34
+                            anchors.margins: 24
+                            spacing: 18
+
+                            Rectangle {
+                                id: createHeroIcon
+                                objectName: "createProjectHeroIcon"
+                                Layout.preferredWidth: 54
+                                Layout.preferredHeight: 54
+                                radius: Theme.radius
+                                color: Theme.accent
+                                AppIcon {
+                                    anchors.centerIn: parent
+                                    width: 24
+                                    height: 24
+                                    iconName: "add"
+                                    iconColor: Theme.onAccent
+                                    strokeWidth: 2
+                                }
+                            }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.preferredWidth: 760
-                                Layout.fillHeight: true
-                                spacing: 10
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 9
-                                    BrandMark {
-                                        Layout.preferredWidth: 27
-                                        Layout.preferredHeight: 27
-                                    }
-                                    Text {
-                                        text: "MediaFlow"
-                                        color: Theme.text
-                                        font.pixelSize: Theme.fontSizeTitleSmall
-                                        font.weight: Font.DemiBold
-                                        font.letterSpacing: 0.2
-                                    }
-                                    Text {
-                                        text: "PRO"
-                                        color: Theme.accent
-                                        font.family: Theme.monoFontFamily
-                                        font.pixelSize: Theme.fontSizeCaption
-                                        font.weight: Font.DemiBold
-                                        font.letterSpacing: 1.4
-                                    }
-                                    Rectangle {
-                                        Layout.preferredWidth: 34
-                                        Layout.preferredHeight: 1
-                                        color: Theme.borderStrong
-                                    }
-                                    Text {
-                                        text: "LOCAL PROJECT · VERIFIED OUTPUT"
-                                        color: Theme.textMuted
-                                        font.family: Theme.monoFontFamily
-                                        font.pixelSize: Theme.fontSizeCaption
-                                        font.letterSpacing: 0.8
-                                    }
-                                }
-
+                                spacing: 7
                                 Text {
-                                    Layout.fillWidth: true
-                                    text: qsTr("从素材到成片，流程清楚，结果可控。")
+                                    id: createHeroTitle
+                                    objectName: "createProjectHeroTitle"
+                                    text: qsTr("新建项目")
                                     color: Theme.text
-                                    font.pixelSize: Theme.fontSizeDisplay
+                                    font.pixelSize: Theme.fontSizeTitle
                                     font.weight: Font.DemiBold
-                                    wrapMode: Text.WordWrap
                                 }
-
                                 Text {
                                     Layout.fillWidth: true
                                     text: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
                                     color: Theme.textSubtle
-                                    font.pixelSize: Theme.fontSizeBodyLarge
+                                    font.pixelSize: Theme.fontSizeBody
                                     wrapMode: Text.WordWrap
-                                }
-
-                                Item { Layout.fillHeight: true }
-
-                                RowLayout {
-                                    spacing: 14
-                                    Rectangle {
-                                        id: createHeroIcon
-                                        objectName: "createProjectHeroIcon"
-                                        implicitWidth: 58
-                                        implicitHeight: 58
-                                        radius: Theme.radius
-                                        color: Theme.accent
-                                        AppIcon {
-                                            anchors.centerIn: parent
-                                            width: 24
-                                            height: 24
-                                            iconName: "add"
-                                            iconColor: Theme.onAccent
-                                            strokeWidth: 2
-                                        }
-                                    }
-                                    ColumnLayout {
-                                        spacing: 2
-                                        Text {
-                                            id: createHeroTitle
-                                            objectName: "createProjectHeroTitle"
-                                            text: qsTr("新建项目")
-                                            color: Theme.text
-                                            font.pixelSize: Theme.fontSizeDisplay + 6
-                                            font.weight: Font.DemiBold
-                                        }
-                                        Text {
-                                            text: "CTRL + N"
-                                            color: Theme.accent
-                                            font.family: Theme.monoFontFamily
-                                            font.pixelSize: Theme.fontSizeCaption
-                                            font.letterSpacing: 1
-                                        }
-                                    }
                                 }
                             }
 
                             Rectangle {
-                                Layout.preferredWidth: 1
-                                Layout.fillHeight: true
-                                color: Theme.divider
-                            }
-
-                            Item {
-                                id: signalMap
-                                Layout.fillWidth: true
-                                Layout.preferredWidth: 500
-                                Layout.fillHeight: true
-
-                                SignalMapArtwork {
-                                    anchors.fill: parent
+                                Layout.preferredWidth: shortcutText.implicitWidth + 22
+                                Layout.preferredHeight: 30
+                                radius: Theme.radiusSmall
+                                color: Theme.surfaceRaised
+                                Text {
+                                    id: shortcutText
+                                    anchors.centerIn: parent
+                                    text: "Ctrl + N"
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontSizeCaption
+                                    font.weight: Font.Medium
                                 }
                             }
                         }

@@ -36,6 +36,8 @@ PREVIEW_FPS = 30
 OPEN_LIMIT_SECONDS = 0.8
 STARTUP_LIMIT_SECONDS = 1.0
 POSITION_TOLERANCE_FRAMES = 3
+CADENCE_P95_LIMIT_SECONDS = 0.050
+CADENCE_MAX_LIMIT_SECONDS = 0.100
 
 
 def preview_requirements_met(
@@ -44,16 +46,22 @@ def preview_requirements_met(
     startup_seconds: float,
     first_window_advanced_frames: int,
     first_window_expected_frames: int,
+    first_window_presented_frames: int,
+    first_window_visible_frames: int,
     first_window_dropped_frames: int,
     final_advanced_frames: int,
     final_expected_frames: int,
+    final_presented_frames: int,
+    final_visible_frames: int,
     final_dropped_frames: int,
+    presentation_p95_seconds: float,
+    presentation_max_seconds: float,
 ) -> bool:
-    """Evaluate every observed playback window, including the final position.
+    """Evaluate decoded, delivered, and visibly rendered playback.
 
-    The final progress check is intentionally independent of the first window:
-    an implementation that plays normally for ten seconds and then freezes must
-    fail even when its drop counter remains unchanged.
+    Position alone is insufficient: a clock can advance while the displayed
+    image freezes or skips. The event and frame-swap counts prove that decoded
+    frames reached both the Qt item and the scene graph at a stable cadence.
     """
 
     return (
@@ -61,11 +69,42 @@ def preview_requirements_met(
         and startup_seconds <= STARTUP_LIMIT_SECONDS
         and first_window_advanced_frames
         >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
+        and first_window_presented_frames
+        >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
+        and first_window_visible_frames
+        >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
         and first_window_dropped_frames == 0
         and final_advanced_frames
         >= final_expected_frames - POSITION_TOLERANCE_FRAMES
+        and final_presented_frames
+        >= final_expected_frames - POSITION_TOLERANCE_FRAMES
+        and final_visible_frames
+        >= final_expected_frames - POSITION_TOLERANCE_FRAMES
         and final_dropped_frames == 0
+        and presentation_p95_seconds <= CADENCE_P95_LIMIT_SECONDS
+        and presentation_max_seconds <= CADENCE_MAX_LIMIT_SECONDS
     )
+
+
+def samples_in_window(
+    samples: list[tuple[float, int]],
+    started: float,
+    ended: float,
+) -> list[tuple[float, int]]:
+    return [sample for sample in samples if started <= sample[0] <= ended]
+
+
+def cadence_seconds(samples: list[tuple[float, int]]) -> tuple[float, float]:
+    intervals = [
+        current[0] - previous[0]
+        for previous, current in zip(samples, samples[1:], strict=False)
+        if current[1] != previous[1]
+    ]
+    if not intervals:
+        return float("inf"), float("inf")
+    ordered = sorted(intervals)
+    p95_index = min(len(ordered) - 1, int(len(ordered) * 0.95))
+    return ordered[p95_index], max(ordered)
 
 
 def pump_until(predicate, timeout: float) -> None:
@@ -192,6 +231,23 @@ ApplicationWindow {
         preview = window.findChild(QObject, "preview")
         if preview is None:
             raise RuntimeError("The native preview item was not created")
+        presentation_samples: list[tuple[float, int]] = []
+        visible_samples: list[tuple[float, int]] = []
+
+        def record_presentation() -> None:
+            if bool(preview.property("playing")):
+                presentation_samples.append(
+                    (time.monotonic(), int(preview.property("position"))))
+
+        def record_visible_frame() -> None:
+            if not bool(preview.property("playing")):
+                return
+            position = int(preview.property("position"))
+            if not visible_samples or visible_samples[-1][1] != position:
+                visible_samples.append((time.monotonic(), position))
+
+        preview.positionChanged.connect(record_presentation)
+        window.frameSwapped.connect(record_visible_frame)
         preview.setProperty("runtimeRoot", str(paths.melt.parent))
         open_started = time.monotonic()
         preview.setProperty("source", str(graph))
@@ -213,9 +269,14 @@ ApplicationWindow {
             lambda: time.monotonic() - check_started >= arguments.playback_check_seconds,
             arguments.playback_check_seconds + 5,
         )
+        first_window_ended = time.monotonic()
         first_window_dropped = int(preview.property("droppedFrames"))
         first_window_position = int(preview.property("position"))
         first_window_advanced = first_window_position - playback_start_position
+        first_window_presented = len(
+            samples_in_window(presentation_samples, check_started, first_window_ended))
+        first_window_visible = len(
+            samples_in_window(visible_samples, check_started, first_window_ended))
 
         remaining = arguments.duration_seconds - arguments.playback_check_seconds
         if remaining > 0:
@@ -223,6 +284,7 @@ ApplicationWindow {
                 lambda: time.monotonic() - check_started >= arguments.duration_seconds,
                 remaining + 10,
             )
+        playback_ended = time.monotonic()
         final_position = int(preview.property("position"))
         final_advanced = final_position - playback_start_position
         final_dropped = int(preview.property("droppedFrames"))
@@ -230,6 +292,18 @@ ApplicationWindow {
 
         first_window_expected = arguments.playback_check_seconds * PREVIEW_FPS
         final_expected = arguments.duration_seconds * PREVIEW_FPS
+        final_presentation_samples = samples_in_window(
+            presentation_samples,
+            check_started,
+            playback_ended,
+        )
+        final_visible_samples = samples_in_window(
+            visible_samples,
+            check_started,
+            playback_ended,
+        )
+        presentation_p95, presentation_max = cadence_seconds(
+            final_presentation_samples)
         report = {
             "fixture": str(fixture),
             "resolution": "1920x1080",
@@ -246,21 +320,35 @@ ApplicationWindow {
             "first_window_position": first_window_position,
             "first_window_advanced_frames": first_window_advanced,
             "first_window_expected_frames": first_window_expected,
+            "first_window_presented_frames": first_window_presented,
+            "first_window_visible_frames": first_window_visible,
             "first_window_dropped_frames": first_window_dropped,
             "final_position": final_position,
             "final_position_advanced_frames": final_advanced,
             "final_position_expected_frames": final_expected,
+            "final_presented_frames": len(final_presentation_samples),
+            "final_visible_frames": len(final_visible_samples),
             "final_dropped_frames": final_dropped,
+            "presentation_p95_seconds": presentation_p95,
+            "presentation_p95_limit_seconds": CADENCE_P95_LIMIT_SECONDS,
+            "presentation_max_seconds": presentation_max,
+            "presentation_max_limit_seconds": CADENCE_MAX_LIMIT_SECONDS,
         }
         report["passed"] = preview_requirements_met(
             open_seconds=open_seconds,
             startup_seconds=startup_seconds,
             first_window_advanced_frames=first_window_advanced,
             first_window_expected_frames=first_window_expected,
+            first_window_presented_frames=first_window_presented,
+            first_window_visible_frames=first_window_visible,
             first_window_dropped_frames=first_window_dropped,
             final_advanced_frames=final_advanced,
             final_expected_frames=final_expected,
+            final_presented_frames=len(final_presentation_samples),
+            final_visible_frames=len(final_visible_samples),
             final_dropped_frames=final_dropped,
+            presentation_p95_seconds=presentation_p95,
+            presentation_max_seconds=presentation_max,
         )
         report_path = run_dir / "preview-performance-report.json"
         atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))

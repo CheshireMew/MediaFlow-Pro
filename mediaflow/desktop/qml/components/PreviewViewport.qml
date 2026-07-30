@@ -254,13 +254,22 @@ Rectangle {
         }
     }
 
+    Item {
+        id: previewStage
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: previewControlBar.top
+    }
+
     Rectangle {
         id: previewSurface
         objectName: "previewSurface"
-        anchors.centerIn: parent
+        anchors.centerIn: previewStage
         readonly property real targetAspectRatio: Math.max(1, root.profileWidth) / Math.max(1, root.profileHeight)
-        readonly property real maximumWidth: Math.max(1, Math.min(parent.width - 96, 1080))
-        readonly property real maximumHeight: Math.max(1, parent.height - 106)
+        readonly property real maximumWidth: Math.max(
+            1, Math.min(previewStage.width - 72, 1080))
+        readonly property real maximumHeight: Math.max(1, previewStage.height - 44)
         width: Math.min(maximumWidth, maximumHeight * targetAspectRatio)
         height: width / targetAspectRatio
         scale: root.viewportZoom
@@ -428,32 +437,41 @@ Rectangle {
     }
 
     Rectangle {
-        id: previewControlDock
-        anchors.horizontalCenter: parent.horizontalCenter
+        id: previewControlBar
+        objectName: "previewControlBar"
+        anchors.left: parent.left
+        anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 8
-        width: Math.min(parent.width - 24, previewControls.implicitWidth + 28)
-        height: 42
-        radius: 12
-        color: Theme.surfaceFloating
-        border.color: Theme.border
-        opacity: 0.97
+        height: 52
+        color: Theme.surface
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1
+            color: Theme.divider
+        }
     }
 
     Flickable {
         id: previewControlsFlick
         objectName: "previewControlsScroll"
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 8
-        height: 42
+        anchors.fill: previewControlBar
         clip: true
-        contentWidth: Math.max(width, previewControls.implicitWidth + 24)
+        contentWidth: Math.max(width, previewControls.implicitWidth + 32)
         contentHeight: previewControls.implicitHeight
         flickableDirection: Flickable.HorizontalFlick
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentWidth > width
+        onWidthChanged: Qt.callLater(function () {
+            contentX = Math.max(0, Math.min(
+                contentX, Math.max(0, contentWidth - width)));
+        })
+        onContentWidthChanged: Qt.callLater(function () {
+            contentX = Math.max(0, Math.min(
+                contentX, Math.max(0, contentWidth - width)));
+        })
         ScrollBar.horizontal: AppScrollBar {
             policy: previewControlsFlick.contentWidth > previewControlsFlick.width
                 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
@@ -461,12 +479,12 @@ Rectangle {
 
         RowLayout {
             id: previewControls
-            x: Math.max(12, (previewControlsFlick.width - implicitWidth) / 2)
+            x: Math.max(16, (previewControlsFlick.width - implicitWidth) / 2)
             height: previewControlsFlick.height
-            spacing: 10
+            spacing: 8
         AppIconButton {
             iconName: "previous"
-            flat: false
+            flat: true
             Accessible.name: qsTr("上一帧")
             toolTipText: Accessible.name
             enabled: preview.duration > 0
@@ -482,7 +500,7 @@ Rectangle {
         }
         AppIconButton {
             iconName: "stop"
-            flat: false
+            flat: true
             Accessible.name: qsTr("停止并回到开头")
             toolTipText: Accessible.name
             enabled: preview.duration > 0
@@ -523,7 +541,7 @@ Rectangle {
         }
         AppIconButton {
             iconName: root.previewMuted || root.previewVolume <= 0 ? "mute" : "volume"
-            flat: false
+            flat: true
             Accessible.name: root.previewMuted ? qsTr("取消静音") : qsTr("静音")
             toolTipText: Accessible.name
             onClicked: root.toggleMute()
@@ -550,7 +568,7 @@ Rectangle {
         }
         AppIconButton {
             iconName: "zoom-out"
-            flat: false
+            flat: true
             Accessible.name: qsTr("缩小预览")
             toolTipText: Accessible.name
             onClicked: root.viewportZoom = Math.max(0.5, root.viewportZoom / 1.2)
@@ -558,6 +576,8 @@ Rectangle {
         AppButton {
             objectName: "previewZoomReset"
             text: Math.round(root.viewportZoom * 100) + "%"
+            compact: true
+            quiet: true
             Accessible.name: qsTr("重置预览视图")
             ToolTip.visible: hovered
             ToolTip.text: Accessible.name
@@ -565,14 +585,14 @@ Rectangle {
         }
         AppIconButton {
             iconName: "zoom-in"
-            flat: false
+            flat: true
             Accessible.name: qsTr("放大预览")
             toolTipText: Accessible.name
             onClicked: root.viewportZoom = Math.min(4, root.viewportZoom * 1.2)
         }
         AppIconButton {
             iconName: "fullscreen"
-            flat: false
+            flat: true
             Accessible.name: qsTr("切换全屏")
             toolTipText: Accessible.name + " (F11)"
             onClicked: root.toggleFullscreen()

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.model_base import new_id
-from mediaflow.domain.web_media import EditableMediaManifest, WebClipState
+from mediaflow.domain.web_media import WebClipState, parse_editable_media_manifest_json
 from mediaflow.infrastructure.project_serialization import json_value as _json
 
 
@@ -16,10 +16,10 @@ def migrate_v17_to_v18(workspace) -> None:
             "SELECT asset_id, manifest_json FROM web_asset"
         ).fetchall():
             try:
-                EditableMediaManifest.model_validate_json(
+                parse_editable_media_manifest_json(
                     str(asset_row["manifest_json"])
                 )
-            except ValidationError as error:
+            except (TypeError, ValueError, ValidationError) as error:
                 raise RuntimeError(
                     "项目包含旧版 editable-media 网页素材，无法无损迁移到 v3。"
                     "请用 v3 网页包重新导入后再打开项目。"

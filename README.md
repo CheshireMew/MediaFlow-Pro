@@ -142,7 +142,9 @@ AI 文字剪辑使用 `transcript.get`、`transcript.edit.preview`、`transcript
 
 ### 可编辑网页素材
 
-MediaFlow 可导入 `editable-media` v3 本地网页包。网页包用 `window.editableMedia` 暴露结构化编辑状态，并用 `window.__hf.duration/seek(seconds)` 暴露唯一的确定性逐帧边界；MediaFlow 自己启动 Chromium、逐帧读取当前项目状态、生成缓存，再用 FFmpeg/MLT 输出 PNG、GIF、透明视频、普通视频或完整时间线成片，不依赖 HyperFrames。网页包保存组件结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁。桌面界面与 CLI 读写同一项目状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。
+MediaFlow Pro 可导入 `editable-media` v3 本地网页包。网页包用 `window.editableMedia` 暴露结构化编辑状态，并用 `window.__hf.duration/seek(seconds)` 暴露唯一的确定性逐帧边界。进程级 `WebCaptureEngine` 复用本机 Chromium，按素材长度和画布大小启用有界并行页面，通过 Chrome 的快速无损截图接口取得透明 PNG，再严格按帧序交给同一个 FFmpeg 输入管道；实验性的 `drawElementImage` 只有在真实抽帧画质和速度自检同时通过时才会接管，否则自动使用逐像素等价的截图路径。MediaFlow 保留自己的项目状态、缓存键、原子输出和 MLT 合成边界，不引入 HyperFrames 依赖或第二套网页动画时钟。
+
+网页包保存组件结构与复杂动画，`project.mfp` 的 `WebClipState` 保存每个片段的文字、样式、比例布局、关键帧、主题、数据快照和字段锁。桌面界面与 CLI 读写同一项目状态，网页素材换版按稳定图层 ID 迁移，原网页目录会保留而不会被回写。可通过 `MEDIAFLOW_WEB_WORKERS=1..8` 限制捕获进程数；默认最多使用 4 个，并按帧数、分辨率和逻辑处理器数量自动收缩。
 
 相关能力可从 `mediaflow-cli describe` 读取，包括 `web.import`、`web.clip.keyframe.*`、`web.clip.theme.update`、`web.clip.layout.select`、`web.clip.data.*`、`web.clip.diff`、`web.batch.create`、`web.asset.rebind` 和 `web.clip.export`。远程网址、登录态网页和任意 DOM/CSS 可视化开发不属于该边界。
 
@@ -153,6 +155,7 @@ D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pytest tests\v2
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_ui_matrix
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_performance
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_preview_performance
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_web_render_performance
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_display_capabilities
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_real_user_chain
 ```

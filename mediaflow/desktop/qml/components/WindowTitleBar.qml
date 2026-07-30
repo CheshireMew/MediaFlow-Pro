@@ -8,6 +8,7 @@ Rectangle {
     id: root
     objectName: "appTitleBar"
     required property var hostWindow
+    signal exportRequested
     implicitHeight: 48
     color: Theme.surfaceSunken
 
@@ -64,24 +65,6 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            Layout.preferredWidth: 1
-            Layout.preferredHeight: 16
-            color: Theme.divider
-        }
-
-        Text {
-            objectName: "windowProjectName"
-            Layout.minimumWidth: 80
-            Layout.preferredWidth: Math.min(implicitWidth, 320)
-            Layout.maximumWidth: 320
-            text: root.hostWindow.title
-            color: workspaceController.hasProject ? Theme.text : Theme.textMuted
-            font.pixelSize: Theme.fontSizeBody
-            font.weight: workspaceController.hasProject ? Font.Medium : Font.Normal
-            elide: Text.ElideRight
-        }
-
         Item { Layout.fillWidth: true }
 
         WorkspaceHeader {
@@ -90,6 +73,7 @@ Rectangle {
             Layout.minimumWidth: implicitWidth
             Layout.preferredWidth: implicitWidth
             Layout.maximumWidth: implicitWidth
+            onExportRequested: root.exportRequested()
         }
         RowLayout {
             id: windowControls
@@ -119,6 +103,21 @@ Rectangle {
                 onClicked: root.hostWindow.close()
             }
         }
+    }
+
+    Text {
+        objectName: "windowProjectName"
+        visible: workspaceController.hasProject
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.min(320, Math.max(80, implicitWidth))
+        text: root.hostWindow.title
+        color: Theme.text
+        font.pixelSize: Theme.fontSizeBody
+        font.weight: Font.Medium
+        horizontalAlignment: Text.AlignHCenter
+        elide: Text.ElideRight
+        z: 2
     }
 
     Rectangle {

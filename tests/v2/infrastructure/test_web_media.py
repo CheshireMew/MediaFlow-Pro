@@ -34,11 +34,13 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.domain.tasks import ArtifactReference
-from mediaflow.domain.web_media import EditableMediaManifest
+from mediaflow.domain.web_media import parse_editable_media_manifest
+from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
+from mediaflow.infrastructure.web_capture_engine import web_capture_diagnostics
 from mediaflow.infrastructure.web_render_service import WebRenderService
 
 STARTER = Path(
@@ -206,6 +208,17 @@ def test_editable_media_v3_full_chain(
         assert cache.is_file() and cache.suffix == ".mkv" and cache.stat().st_size > 0
         assert not cache.with_name(f"{cache.name}.lock").exists()
         assert not list(cache.parent.glob(f"{cache.stem}.*.partial{cache.suffix}"))
+        diagnostics = web_capture_diagnostics(find_chromium_executable())
+        assert diagnostics.last_metrics is not None
+        assert diagnostics.last_metrics.worker_count == 1
+        assert diagnostics.last_metrics.frame_count == 3
+        assert diagnostics.last_metrics.captured_frames == 3
+        assert diagnostics.last_metrics.fast_capture_workers == 0
+        browser_launches = diagnostics.browser_launches
+        copied_cache = renderer.render_clip(timeline, copied.id)
+        assert copied_cache.is_file() and copied_cache != cache
+        reused_browser = web_capture_diagnostics(find_chromium_executable())
+        assert reused_browser.browser_launches == browser_launches
 
         probe = subprocess.run(
             [
@@ -559,13 +572,13 @@ def test_editable_media_v3_contract_rejections(
 ) -> None:
     manifest = json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8"))
     manifest["version"] = 1
-    with pytest.raises(ValidationError, match="version"):
-        EditableMediaManifest.model_validate(manifest)
+    with pytest.raises((ValueError, ValidationError), match="version"):
+        parse_editable_media_manifest(manifest)
 
     manifest = json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8"))
     manifest["scenes"].append(dict(manifest["scenes"][0]))
-    with pytest.raises(ValidationError, match="scene identifiers"):
-        EditableMediaManifest.model_validate(manifest)
+    with pytest.raises((ValueError, ValidationError), match="scene identifiers"):
+        parse_editable_media_manifest(manifest)
 
     missing_sources = tmp_path / "missing-media-sources"
     shutil.copytree(STARTER, missing_sources)
@@ -590,6 +603,29 @@ def test_editable_media_v3_contract_rejections(
         )
         with pytest.raises(ValueError, match="remote resources"):
             service.import_package(remote)
+
+        non_deterministic = tmp_path / "non-deterministic-v3-package"
+        shutil.copytree(STARTER, non_deterministic)
+        entry = non_deterministic / "index.html"
+        entry.write_text(
+            entry.read_text(encoding="utf-8").replace(
+                "</body>",
+                """
+<script>
+let nonDeterministicSeekCount = 0;
+window.addEventListener("editablemediatime", () => {
+  nonDeterministicSeekCount += 1;
+  const title = document.querySelector("[data-editable-id='title']");
+  title.textContent = `Non-deterministic seek ${nonDeterministicSeekCount}`;
+});
+</script>
+</body>
+""",
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="non-monotonic frame seeks"):
+            service.import_package(non_deterministic)
     finally:
         repository.close()
 

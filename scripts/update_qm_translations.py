@@ -9,6 +9,43 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "主时间线": ("Main Timeline", "メインタイムライン"),
+    "代理": ("Proxy", "プロキシ"),
+    "修改时间线设置": ("Edit Timeline Settings", "タイムライン設定を変更"),
+    "分析中…": ("Analyzing…", "解析中…"),
+    "分辨率": ("Resolution", "解像度"),
+    "可编辑": ("Editable", "編集可能"),
+    "声道": ("Audio Channels", "音声チャンネル"),
+    "已就绪": ("Ready", "準備完了"),
+    "序列字幕，共 %1 条。点击可选择，双击可播放。": (
+        "Sequence subtitles, %1 total. Click to select; double-click to play.",
+        "シーケンス字幕、全%1件。クリックで選択、ダブルクリックで再生。",
+    ),
+    "总帧数": ("Total Frames", "総フレーム数"),
+    "播放器": ("Player", "プレーヤー"),
+    "文件位置": ("File Location", "ファイルの場所"),
+    "时间线": ("Timeline", "タイムライン"),
+    "时间线名称": ("Timeline Name", "タイムライン名"),
+    "未生成": ("Not Generated", "未生成"),
+    "波形": ("Waveform", "波形"),
+    "点击选择；双击播放": (
+        "Click to select; double-click to play",
+        "クリックで選択、ダブルクリックで再生",
+    ),
+    "片段参数": ("Clip Settings", "クリップ設定"),
+    "状态": ("Status", "状態"),
+    "类型": ("Type", "種類"),
+    "素材参数": ("Media Settings", "素材設定"),
+    "色彩空间": ("Color Space", "カラースペース"),
+    "草稿参数": ("Draft Settings", "草稿設定"),
+    "草稿名称": ("Draft Name", "草稿名"),
+    "规格": ("Format", "形式"),
+    "项目": ("Project", "プロジェクト"),
+    "项目以只读方式打开，网页参数仅供查看": (
+        "The project is open read-only. Web parameters are view-only.",
+        "プロジェクトは読み取り専用で開かれています。Web パラメータは表示のみです。",
+    ),
+    "项目状态": ("Project Status", "プロジェクトの状態"),
     "从素材到成片，流程清楚，结果可控。": (
         "From source to final cut, every step clear and every result controlled.",
         "素材から完成映像まで、工程は明確に、結果は確実に。",

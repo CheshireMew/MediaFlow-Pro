@@ -6,7 +6,7 @@
 #include <QMutexLocker>
 #include <QQuickWindow>
 #include <QSGSimpleTextureNode>
-#include <QSGTexture>
+#include <QtQuick/private/qsgplaintexture_p.h>
 
 #ifdef Q_OS_WIN
 #include <dxgi1_6.h>
@@ -50,16 +50,6 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
         m_seekRetryTimer.start();
     });
     connect(m_runtime, &MltRuntime::frameReady, this, &MltPreviewItem::queueFrame, Qt::DirectConnection);
-    connect(m_runtime, &MltRuntime::positionChanged, this, [this](int value, quint64 requestId) {
-        if (requestId != m_requestId.load(std::memory_order_acquire))
-            return;
-        if (m_position != value) {
-            m_position = value;
-            if (!m_seekPending)
-                m_requestedPosition = value;
-            emit positionChanged();
-        }
-    });
     connect(m_runtime, &MltRuntime::durationChanged, this, [this](int value, quint64 requestId) {
         if (requestId != m_requestId.load(std::memory_order_acquire))
             return;
@@ -73,17 +63,20 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
             return;
         if (m_playing != value) {
             m_playing = value;
+            m_lastPlaybackFrame = -1;
             emit playingChanged();
         }
     });
-    connect(m_runtime, &MltRuntime::droppedFramesChanged, this, [this](int value, quint64 requestId) {
-        if (requestId != m_requestId.load(std::memory_order_acquire))
-            return;
-        if (m_droppedFrames != value) {
-            m_droppedFrames = value;
+    connect(
+        m_runtime,
+        &MltRuntime::presentationDeadlineMissed,
+        this,
+        [this](int count, quint64 requestId) {
+            if (requestId != m_requestId.load(std::memory_order_acquire) || count <= 0)
+                return;
+            m_droppedFrames += count;
             emit droppedFramesChanged();
-        }
-    });
+        });
     connect(m_runtime, &MltRuntime::errorOccurred, this, &MltPreviewItem::receiveError, Qt::QueuedConnection);
     m_workerThread.setObjectName(QStringLiteral("MediaFlowMltPreview"));
     m_workerThread.start();
@@ -222,15 +215,18 @@ QSGNode *MltPreviewItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *
     }
 
     auto *node = static_cast<QSGSimpleTextureNode *>(oldNode);
-    if (!node)
+    QSGPlainTexture *texture = nullptr;
+    if (!node) {
         node = new QSGSimpleTextureNode;
-
-    QSGTexture *oldTexture = node->texture();
-    node->setOwnsTexture(false);
-    QSGTexture *texture = window()->createTextureFromImage(image);
-    node->setTexture(texture);
-    node->setOwnsTexture(true);
-    delete oldTexture;
+        texture = new QSGPlainTexture;
+        node->setTexture(texture);
+        node->setOwnsTexture(true);
+    } else {
+        texture = static_cast<QSGPlainTexture *>(node->texture());
+    }
+    texture->setImage(image);
+    texture->setFiltering(QSGTexture::Linear);
+    node->markDirty(QSGNode::DirtyMaterial);
     const QSizeF source = image.size();
     QSizeF fitted = source;
     fitted.scale(boundingRect().size(), Qt::KeepAspectRatio);
@@ -293,13 +289,21 @@ void MltPreviewItem::deliverLatestFrame()
         requestId = m_pendingRequestId;
         m_frameDeliveryScheduled = false;
     }
-    if (requestId != m_requestId.load(std::memory_order_acquire) || image.isNull())
+    if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
-    {
-        const QMutexLocker locker(&m_frameMutex);
-        if (requestId != m_requestId.load(std::memory_order_acquire))
-            return;
-        m_frame = image;
+    if (m_playing && qFuzzyCompare(qAbs(m_playbackRate), 1.0)) {
+        int dropped = image.isNull() ? 1 : 0;
+        if (m_lastPlaybackFrame >= 0) {
+            const int direction = m_playbackRate < 0.0 ? -1 : 1;
+            const int advance = (frame - m_lastPlaybackFrame) * direction;
+            if (advance > 1)
+                dropped += advance - 1;
+        }
+        m_lastPlaybackFrame = frame;
+        if (dropped > 0) {
+            m_droppedFrames += dropped;
+            emit droppedFramesChanged();
+        }
     }
     if (m_position != frame) {
         m_position = frame;
@@ -316,7 +320,15 @@ void MltPreviewItem::deliverLatestFrame()
         m_duration = duration;
         emit durationChanged();
     }
-    update();
+    if (!image.isNull()) {
+        {
+            const QMutexLocker locker(&m_frameMutex);
+            if (requestId != m_requestId.load(std::memory_order_acquire))
+                return;
+            m_frame = image;
+        }
+        update();
+    }
 }
 
 void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
@@ -368,6 +380,7 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
         m_droppedFrames = 0;
         emit droppedFramesChanged();
     }
+    m_lastPlaybackFrame = -1;
     clearError();
     update();
 }

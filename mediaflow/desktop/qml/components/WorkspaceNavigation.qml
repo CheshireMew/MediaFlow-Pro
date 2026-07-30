@@ -7,21 +7,22 @@ Rectangle {
     id: root
     objectName: "workspaceNavigation"
 
-    readonly property var modes: workspaceController.workspaceModes
+    readonly property var modes: workspaceController.workspaceModes.filter(
+        function (mode) { return Boolean(mode.navigationVisible); })
     property string activeMode: modes.length > 0 ? String(modes[0].key) : ""
     signal modeRequested(string mode)
     signal settingsRequested
 
-    implicitHeight: 54
+    implicitHeight: 68
     color: Theme.surface
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 16
-        anchors.rightMargin: 16
-        anchors.topMargin: 8
-        anchors.bottomMargin: 8
-        spacing: 5
+        anchors.leftMargin: 8
+        anchors.rightMargin: 8
+        anchors.topMargin: 5
+        anchors.bottomMargin: 4
+        spacing: 1
 
         Repeater {
             model: root.modes
@@ -36,36 +37,48 @@ Rectangle {
                     root.modeRequested(modelData.key);
                 }
 
-                Layout.minimumWidth: 84
-                Layout.preferredWidth: Math.max(84, navigationContent.implicitWidth + 28)
+                Layout.minimumWidth: 58
+                Layout.preferredWidth: Math.max(58, navigationContent.implicitWidth + 14)
                 Layout.fillHeight: true
                 radius: Theme.radiusSmall
-                color: navigationItem.selected
-                    ? Theme.accentSoft
-                    : navMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
+                color: navMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
                 border.color: activeFocus
                     ? Theme.focusColor
-                    : navigationItem.selected ? Theme.borderStrong : Theme.transparent
-                border.width: activeFocus || navigationItem.selected ? 1 : 0
+                    : Theme.transparent
+                border.width: activeFocus ? 1 : 0
 
-                RowLayout {
+                ColumnLayout {
                     id: navigationContent
                     anchors.centerIn: parent
-                    spacing: 6
+                    spacing: 3
 
                     AppIcon {
-                        Layout.preferredWidth: 17
-                        Layout.preferredHeight: 17
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 22
                         iconName: String(modelData.icon)
-                        iconColor: navigationItem.selected ? Theme.accentHover : Theme.textMuted
+                        iconColor: navigationItem.selected ? Theme.accent : Theme.textSubtle
                     }
 
                     Text {
+                        Layout.alignment: Qt.AlignHCenter
                         text: modelData.label
-                        color: navigationItem.selected ? Theme.text : Theme.textMuted
+                        color: navigationItem.selected ? Theme.accent : Theme.textSubtle
                         font.pixelSize: Theme.fontSizeBodySmall
                         font.weight: navigationItem.selected ? Font.DemiBold : Font.Medium
                     }
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    height: 2
+                    radius: 1
+                    visible: navigationItem.selected
+                    color: Theme.accent
                 }
 
                 Accessible.name: modelData.label
@@ -89,36 +102,37 @@ Rectangle {
             Layout.fillWidth: true
         }
         Rectangle {
-            Layout.preferredWidth: 1
-            Layout.preferredHeight: 20
-            color: Theme.divider
-        }
-
-        Rectangle {
             id: settingsItem
             objectName: "navigationItem_settings"
-            Layout.minimumWidth: 84
-            Layout.preferredWidth: Math.max(84, settingsContent.implicitWidth + 28)
+
+            function click() {
+                root.settingsRequested();
+            }
+
+            Layout.minimumWidth: 58
+            Layout.preferredWidth: Math.max(58, settingsContent.implicitWidth + 14)
             Layout.fillHeight: true
             radius: Theme.radiusSmall
             color: settingsMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
             border.color: activeFocus ? Theme.focusColor : Theme.transparent
             border.width: activeFocus ? 1 : 0
 
-            RowLayout {
+            ColumnLayout {
                 id: settingsContent
                 anchors.centerIn: parent
-                spacing: 6
+                spacing: 3
 
                 AppIcon {
-                    Layout.preferredWidth: 17
-                    Layout.preferredHeight: 17
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: 22
+                    Layout.preferredHeight: 22
                     iconName: "settings"
-                    iconColor: Theme.textMuted
+                    iconColor: Theme.textSubtle
                 }
                 Text {
+                    Layout.alignment: Qt.AlignHCenter
                     text: qsTr("设置")
-                    color: Theme.textMuted
+                    color: Theme.textSubtle
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.Medium
                 }
@@ -126,8 +140,8 @@ Rectangle {
             Accessible.name: qsTr("设置")
             Accessible.role: Accessible.Button
             activeFocusOnTab: true
-            Keys.onReturnPressed: root.settingsRequested()
-            Keys.onSpacePressed: root.settingsRequested()
+            Keys.onReturnPressed: settingsItem.click()
+            Keys.onSpacePressed: settingsItem.click()
 
             MouseArea {
                 id: settingsMouse
@@ -135,7 +149,7 @@ Rectangle {
                 hoverEnabled: true
                 onClicked: {
                     settingsItem.forceActiveFocus();
-                    root.settingsRequested();
+                    settingsItem.click();
                 }
             }
         }

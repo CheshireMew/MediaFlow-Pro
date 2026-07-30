@@ -15,8 +15,12 @@ Rectangle {
         && !(workspaceController.workflowStage === "download"
             && taskController.downloadProgressVisible)
     color: workspaceController.workflowStatus === "blocked"
-        ? Theme.warningSoft : Theme.surfaceRaised
-    border.color: Theme.transparent
+        ? Theme.warningSoft : Theme.surfaceFloating
+    radius: Theme.radius
+    border.width: 1
+    border.color: workspaceController.workflowStatus === "blocked"
+        ? Theme.warning : Theme.borderStrong
+    clip: true
 
     Rectangle {
         anchors.left: parent.left
@@ -80,9 +84,9 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 18
-        anchors.rightMargin: 14
-        spacing: 10
+        anchors.leftMargin: 14
+        anchors.rightMargin: 12
+        spacing: 8
 
         Rectangle {
             Layout.preferredWidth: 3
@@ -150,6 +154,7 @@ Rectangle {
         AppButton {
             objectName: "workflowContinue"
             primary: true
+            compact: true
             visible: workspaceController.workflowStatus !== "running"
             enabled: root.canAct
                 && (workspaceController.workflowStage !== "translate"
@@ -179,6 +184,7 @@ Rectangle {
 
         AppButton {
             objectName: "workflowSkip"
+            compact: true
             visible: root.canSkip
             enabled: root.canAct
             text: qsTr("跳过")
@@ -188,6 +194,7 @@ Rectangle {
 
         AppButton {
             objectName: "workflowCancel"
+            compact: true
             enabled: root.canAct
             danger: true
             text: qsTr("取消")

@@ -306,7 +306,7 @@
     const timeOutput = document.querySelector("#time");
     const query = new URLSearchParams(location.search);
     const captureMode = query.get("capture") === "1"
-      || Boolean(window.__HF_EXPORT_RENDER_SEEK_CONFIG);
+      || document.body.classList.contains("capture");
     let output = { width: 1, height: 1, durationMs: 1 };
 
     if (captureMode) document.body.classList.add("capture");

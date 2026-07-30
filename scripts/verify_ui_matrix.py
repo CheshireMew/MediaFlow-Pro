@@ -15,7 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.desktop.presentation_catalogs import WORKSPACE_MODE_KEYS
+from mediaflow.desktop.presentation_catalogs import (
+    WORKSPACE_MODE_KEYS,
+    WORKSPACE_NAVIGATION_MODE_KEYS,
+)
 from scripts.run_artifacts import verification_run
 
 LANGUAGES = ("zh_CN", "en", "ja")
@@ -31,7 +34,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
     os.environ["MEDIAFLOW_SETTINGS_PATH"] = str(root / "settings" / "settings.json")
     os.environ["MEDIAFLOW_APP_ROOT"] = str(root / "app")
 
-    from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QUrl
+    from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPointF, QUrl
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQuick import QQuickItem, QQuickWindow
     from shiboken6 import getCppPointer, wrapInstance
@@ -127,12 +130,42 @@ def probe(root: Path, language: str, scale: str) -> dict:
             workspace = loader.property("item")
             navigation = workspace.findChild(QObject, "workspaceNavigation")
             tool_panel = workspace.findChild(QObject, "toolPanelContainer")
+            preview_panel = workspace.findChild(QObject, "previewPanel")
+            preview_viewport = workspace.findChild(QObject, "previewViewport")
+            preview_control_bar = workspace.findChild(QObject, "previewControlBar")
+            inspector = workspace.findChild(QObject, "inspectorPanel")
             timeline = workspace.findChild(QObject, "timelinePanel")
             timeline_toolbar = workspace.findChild(QObject, "timelineToolbarScroll")
-            if navigation is None or tool_panel is None or timeline is None:
+            compact_icon_buttons = [
+                window.findChild(QObject, object_name)
+                for object_name in (
+                    "workspaceUndoButton",
+                    "workspaceRedoButton",
+                    "openProjectVersionsButton",
+                    "timelineSplitButton",
+                    "timelineDuplicateButton",
+                    "timelineDeleteButton",
+                )
+            ]
+            if (
+                navigation is None
+                or tool_panel is None
+                or preview_panel is None
+                or preview_viewport is None
+                or preview_control_bar is None
+                or inspector is None
+                or timeline is None
+            ):
                 raise RuntimeError("Primary workspace controls were not created")
+            if any(button is None for button in compact_icon_buttons):
+                raise RuntimeError("Primary compact icon buttons were not created")
+            if any(
+                int(button.property("iconSize")) > 16
+                or float(button.property("implicitWidth")) > 32
+                for button in compact_icon_buttons
+            ):
+                raise RuntimeError("Toolbar icons regressed to oversized controls")
             for retired_name in (
-                "inspectorContainer",
                 "compactInspectorDrawer",
                 "compactInspectorButton",
             ):
@@ -159,8 +192,45 @@ def probe(root: Path, language: str, scale: str) -> dict:
                         f"Timeline overflow controls are unreachable at {width}x{height}"
                     )
                 timeline_toolbar.setProperty("contentX", 0)
-            if abs(float(navigation.property("width")) - float(workspace.property("width"))) > 2:
-                raise RuntimeError(f"Workspace navigation is not full width at {width}x{height}")
+            if abs(float(navigation.property("width")) - float(tool_panel.property("width"))) > 2:
+                raise RuntimeError(
+                    f"Workspace navigation does not match the tool pane at {width}x{height}"
+                )
+            if not bool(inspector.property("visible")):
+                raise RuntimeError(f"Persistent inspector is hidden at {width}x{height}")
+            gutter = float(workspace.property("workspaceGutter"))
+            panel_items = (tool_panel, preview_panel, inspector, timeline)
+            if any(float(panel.property("radius")) < 8 for panel in panel_items):
+                raise RuntimeError(f"Workspace panels lost their rounded boundary at {width}x{height}")
+            tool_origin = tool_panel.mapToItem(workspace, QPointF(0, 0))
+            preview_origin = preview_panel.mapToItem(workspace, QPointF(0, 0))
+            inspector_origin = inspector.mapToItem(workspace, QPointF(0, 0))
+            timeline_origin = timeline.mapToItem(workspace, QPointF(0, 0))
+            if (
+                abs(tool_origin.x() - gutter) > 2
+                or abs(timeline_origin.x() - gutter) > 2
+                or abs(
+                    preview_origin.x()
+                    - tool_origin.x()
+                    - float(tool_panel.property("width"))
+                    - gutter
+                )
+                > 2
+                or abs(
+                    inspector_origin.x()
+                    - preview_origin.x()
+                    - float(preview_panel.property("width"))
+                    - gutter
+                )
+                > 2
+            ):
+                raise RuntimeError(f"Workspace card gutters drifted at {width}x{height}")
+            if abs(
+                float(preview_control_bar.property("y"))
+                + float(preview_control_bar.property("height"))
+                - float(preview_viewport.property("height"))
+            ) > 2:
+                raise RuntimeError(f"Preview controls are not docked at {width}x{height}")
             if (
                 not bool(project_name.property("visible"))
                 or float(project_name.property("width")) < 80
@@ -170,7 +240,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             navigation_items = {
                 item.objectName(): item for item in visual_items(navigation)
             }
-            for mode in WORKSPACE_MODE_KEYS:
+            for mode in WORKSPACE_NAVIGATION_MODE_KEYS:
                 navigation_item = navigation_items.get(f"navigationItem_{mode}")
                 if navigation_item is None or not navigation_item.isVisible():
                     raise RuntimeError(f"Persistent navigation label is missing for {mode}")

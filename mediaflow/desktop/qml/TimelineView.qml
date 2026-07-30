@@ -8,7 +8,10 @@ Rectangle {
     id: root
     objectName: "timelineView"
     color: Theme.timelineBackground
-    border.color: Theme.transparent
+    radius: Theme.radius
+    border.width: 1
+    border.color: Theme.borderSubtle
+    clip: true
     property real pixelsPerFrame: 3.0
     property string zoomSequenceId: ""
     property bool zoomAwaitingFirstContent: true

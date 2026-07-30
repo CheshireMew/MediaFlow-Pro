@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -7,7 +8,11 @@ from threading import Thread
 from urllib.parse import quote, unquote, urlparse
 
 from mediaflow.application.ports import WebPackageValidatorPort
-from mediaflow.domain.web_media import EditableMediaManifest, WebMediaSourcesManifest
+from mediaflow.domain.web_media import (
+    EditableMediaManifest,
+    WebMediaSourcesManifest,
+    parse_editable_media_manifest,
+)
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 
 
@@ -66,6 +71,39 @@ class WebPackagePreviewServer:
         self.close()
 
 
+def verify_non_monotonic_seek_pixels(
+    page,
+    duration_seconds: float,
+    capture: Callable[[], bytes],
+) -> None:
+    first_probe = max(0.0, duration_seconds * 0.25)
+    alternate_probe = max(first_probe, duration_seconds * 0.75)
+
+    def capture_at(seconds: float) -> bytes:
+        page.evaluate(
+            """async seconds => {
+                await window.__hf.seek(seconds);
+                await new Promise(resolve => requestAnimationFrame(() => resolve()));
+            }""",
+            seconds,
+        )
+        return capture()
+
+    # Prime Chromium's raster surface across both comparison states. With a
+    # transparent CDP surface, the first alternate-state capture can switch
+    # glyph antialiasing mode even after layout and fonts are ready.
+    capture_at(first_probe)
+    capture_at(alternate_probe)
+    reference = capture_at(first_probe)
+    capture_at(alternate_probe)
+    repeated = capture_at(first_probe)
+    page.evaluate("() => window.__hf.seek(0)")
+    if reference != repeated:
+        raise ValueError(
+            "Editable media v3 must render identical pixels after non-monotonic frame seeks"
+        )
+
+
 def validate_editable_media_page(
     page,
     manifest: EditableMediaManifest,
@@ -95,7 +133,7 @@ def validate_editable_media_page(
         }"""
     )
     runtime_manifest = page.evaluate("() => window.editableMedia.getManifest()")
-    if EditableMediaManifest.model_validate(runtime_manifest) != manifest:
+    if parse_editable_media_manifest(runtime_manifest) != manifest:
         raise ValueError("window.editableMedia.getManifest() must expose the imported v3 manifest")
     runtime_media_sources = page.evaluate("() => window.editableMedia.getMediaSources()")
     if WebMediaSourcesManifest.model_validate(runtime_media_sources) != media_sources:
@@ -221,10 +259,28 @@ def validate_editable_media_page(
             "height": variant.canvas.height,
         }:
             raise ValueError(f"Editable media runtime failed to select variant: {variant.id}")
+        expected_layers = {
+            layer.id: manifest.layer_values_for(variant.id, layer.id)
+            for layer in manifest.layers
+        }
+        selected_scenes = selected.get("scenes")
+        if not isinstance(selected_scenes, dict) or any(
+            scene_state.get("layers") != expected_layers
+            for scene_state in selected_scenes.values()
+            if isinstance(scene_state, dict)
+        ):
+            raise ValueError(
+                f"Editable media runtime did not resolve partial variant layers: {variant.id}"
+            )
     page.evaluate("state => window.editableMedia.setState(state)", state)
     bounds = page.evaluate("() => window.editableMedia.getBounds()")
     if not isinstance(bounds, dict) or set(bounds) != set(selectors):
         raise ValueError("window.editableMedia.getBounds() must return every declared layer")
+    verify_non_monotonic_seek_pixels(
+        page,
+        expected_duration,
+        lambda: page.screenshot(type="png", omit_background=True),
+    )
 
 
 class BrowserWebPackageValidator(WebPackageValidatorPort):
