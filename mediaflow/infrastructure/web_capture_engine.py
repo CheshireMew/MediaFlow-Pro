@@ -15,7 +15,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mediaflow.infrastructure.system_resources import available_physical_memory_bytes
-from mediaflow.infrastructure.web_browser import verify_non_monotonic_seek_pixels
+from mediaflow.infrastructure.web_browser import (
+    SEEK_WEB_FRAME_SCRIPT,
+    verify_non_monotonic_seek_pixels,
+)
 
 _BROWSER_IDLE_SECONDS = 30.0
 _FRAME_QUEUE_DEPTH = 2
@@ -27,16 +30,6 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 WebCaptureMode = Literal["auto", "screenshot"]
 WebWorkerSizingBound = Literal["worker_limit", "work", "memory", "pixels"]
-
-_SEEK_FRAME = """
-async time => {
-    await window.editableMedia.ready;
-    await window.__hf.seek(time);
-    await new Promise(resolve => requestAnimationFrame(() => resolve()));
-    const root = document.querySelector("[data-composition-id]");
-    if (!root) throw new Error("Editable media composition root is missing");
-}
-"""
 
 _FAST_CAPTURE_COMPATIBILITY = """
 () => {
@@ -520,7 +513,7 @@ class _BrowserWorker:
                 seconds = frame_index * job.fps_denominator / job.fps_numerator
                 seek_started = time.perf_counter()
                 page.evaluate(
-                    _SEEK_FRAME,
+                    SEEK_WEB_FRAME_SCRIPT,
                     seconds,
                 )
                 seek_seconds += time.perf_counter() - seek_started
@@ -650,7 +643,7 @@ class _BrowserWorker:
         screenshot_seconds = 0.0
         for frame_index in sample_indices:
             seconds = frame_index * job.fps_denominator / job.fps_numerator
-            page.evaluate(_SEEK_FRAME, seconds)
+            page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
             started = time.perf_counter()
             references[frame_index] = self._capture_screenshot(
                 cdp,
@@ -669,7 +662,7 @@ class _BrowserWorker:
                 * job.fps_denominator
                 / job.fps_numerator
             )
-            page.evaluate(_SEEK_FRAME, warm_seconds)
+            page.evaluate(SEEK_WEB_FRAME_SCRIPT, warm_seconds)
             warm_candidate = self._capture_fast(page, job.width, job.height)
             _validate_png(warm_candidate, job.width, job.height)
             warm_comparison = _compare_fast_capture(
@@ -681,7 +674,7 @@ class _BrowserWorker:
             fast_capture_seconds = 0.0
             for frame_index, reference in references.items():
                 seconds = frame_index * job.fps_denominator / job.fps_numerator
-                page.evaluate(_SEEK_FRAME, seconds)
+                page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
                 started = time.perf_counter()
                 candidate = self._capture_fast(page, job.width, job.height)
                 fast_capture_seconds += time.perf_counter() - started

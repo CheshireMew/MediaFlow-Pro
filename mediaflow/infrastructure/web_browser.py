@@ -15,6 +15,18 @@ from mediaflow.domain.web_media import (
 )
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 
+SEEK_WEB_FRAME_SCRIPT = """
+async seconds => {
+    await window.editableMedia.ready;
+    await window.__hf.seek(seconds);
+    const root = document.querySelector("[data-composition-id]");
+    if (!root) throw new Error("Editable media composition root is missing");
+    const bounds = root.getBoundingClientRect();
+    void bounds.width;
+    void getComputedStyle(root).opacity;
+}
+"""
+
 
 class _QuietPackageHandler(SimpleHTTPRequestHandler):
     def log_message(self, _format: str, *args: object) -> None:
@@ -77,13 +89,7 @@ def verify_non_monotonic_seek_pixels(
     capture: Callable[[], bytes],
 ) -> None:
     def capture_at(seconds: float) -> bytes:
-        page.evaluate(
-            """async seconds => {
-                await window.__hf.seek(seconds);
-                await new Promise(resolve => requestAnimationFrame(() => resolve()));
-            }""",
-            seconds,
-        )
+        page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
         return capture()
 
     probes = tuple(

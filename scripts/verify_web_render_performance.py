@@ -54,6 +54,8 @@ def web_render_requirements_met(
     identical_frames: int,
     minimum_frame_psnr_db: float,
     parallel_workers: int,
+    parallel_fast_capture_workers: int,
+    parallel_capture_backend: str,
 ) -> bool:
     return (
         frame_count > 0
@@ -65,6 +67,8 @@ def web_render_requirements_met(
         and identical_frames == frame_count
         and minimum_frame_psnr_db >= MIN_FRAME_PSNR_DB
         and parallel_workers > 1
+        and parallel_fast_capture_workers == parallel_workers
+        and parallel_capture_backend == "drawelement"
     )
 
 
@@ -304,6 +308,8 @@ def verify(frame_count: int, run_root: Path) -> int:
         identical_frames=identical_frames,
         minimum_frame_psnr_db=minimum_frame_psnr_db,
         parallel_workers=int(parallel["worker_count"]),
+        parallel_fast_capture_workers=int(parallel["fast_capture_workers"]),
+        parallel_capture_backend=parallel["capture_backend"],
     )
     report = {
         "schema": "mediaflow-web-render-performance/v1",

@@ -13,6 +13,8 @@ def _requirements(**overrides: object) -> bool:
         "identical_frames": 180,
         "minimum_frame_psnr_db": 80.0,
         "parallel_workers": 2,
+        "parallel_fast_capture_workers": 2,
+        "parallel_capture_backend": "drawelement",
     }
     values.update(overrides)
     return web_render_requirements_met(**values)  # type: ignore[arg-type]
@@ -40,3 +42,14 @@ def test_web_render_contract_rejects_serial_execution() -> None:
 
 def test_web_render_contract_rejects_insufficient_speedup() -> None:
     assert not _requirements(parallel_seconds=25.0)
+
+
+def test_web_render_contract_rejects_screenshot_backend_regression() -> None:
+    assert not _requirements(
+        parallel_fast_capture_workers=0,
+        parallel_capture_backend="screenshot",
+    )
+
+
+def test_web_render_contract_rejects_partial_fast_worker_consensus() -> None:
+    assert not _requirements(parallel_fast_capture_workers=1)
