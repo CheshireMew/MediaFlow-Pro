@@ -5,6 +5,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QUrl
 
+from mediaflow.domain.timebase import reframe_interval
+
 from .base import Projector
 
 
@@ -12,8 +14,11 @@ class AssetProjector(Projector):
     def refresh_assets(self) -> None:
         if not self._session.binding.current:
             self._session.models.assets.set_items([])
+            self._session.models.asset_bins.set_items([])
+            self._session.models.asset_moments.set_items([])
             return
         assets = self._session.binding.current.list_assets()
+        bins = self._session.binding.current.list_asset_bins()
         available_ids = {asset.id for asset in assets}
         self._session.asset_state.thumbnail_paths = {
             asset_id: path
@@ -35,6 +40,7 @@ class AssetProjector(Projector):
                 "path": asset.path,
                 "status": asset.status.value,
                 "managed": asset.managed,
+                "binId": asset.bin_id or "",
                 "durationFrames": asset.metadata.duration_frames,
                 "width": asset.metadata.width or 0,
                 "height": asset.metadata.height or 0,
@@ -53,6 +59,34 @@ class AssetProjector(Projector):
             for asset in assets
         ]
         self._session.models.assets.set_items(rows)
+        bins_by_id = {item.id: item for item in bins}
+
+        def bin_depth(item) -> int:
+            value = 0
+            parent_id = item.parent_id
+            visited = {item.id}
+            while parent_id and parent_id not in visited and parent_id in bins_by_id:
+                visited.add(parent_id)
+                value += 1
+                parent_id = bins_by_id[parent_id].parent_id
+            return value
+
+        self._session.models.asset_bins.set_items(
+            [
+                {
+                    "binId": item.id,
+                    "name": item.name,
+                    "parentId": item.parent_id or "",
+                    "position": item.position,
+                    "depth": bin_depth(item),
+                    "displayName": "　" * bin_depth(item) + item.name,
+                    "assetCount": sum(asset.bin_id == item.id for asset in assets),
+                }
+                for item in bins
+            ]
+        )
+        self.refresh_asset_moments(assets)
+        self._session.projectors.timeline.refresh_timeline()
         for asset in assets:
             self.request_waveform_data(asset.id, asset.waveform_path)
         self._session.selection.asset_ids = [
@@ -117,6 +151,86 @@ class AssetProjector(Projector):
             )
             rows.append(current)
         self._session.models.assets.set_items(rows)
+        self.refresh_asset_moments(assets)
+
+    def refresh_asset_moments(self, assets) -> None:
+        if not self._session.binding.current or not self._session.binding.timeline:
+            self._session.models.asset_moments.set_items([])
+            return
+        project = self._session.binding.current.get_project()
+        main_profile = self._session.binding.current.get_sequence(
+            project.main_sequence_id
+        ).profile
+        active_profile = self._session.binding.timeline.state.sequence.profile
+        assets_by_id = {asset.id: asset for asset in assets}
+        rows: list[dict] = []
+        for document in self._session.binding.current.list_subtitle_documents():
+            asset_id = document.media_asset_id or document.asset_id
+            asset = assets_by_id.get(asset_id)
+            if asset is None:
+                continue
+            source_profile = (
+                self._session.binding.current.get_sequence(document.sequence_id).profile
+                if document.sequence_id else main_profile
+            )
+            for segment in self._session.binding.current.list_subtitle_segments(document.id):
+                start, end = reframe_interval(
+                    segment.start_frame,
+                    segment.end_frame,
+                    source_profile,
+                    active_profile,
+                )
+                rows.append(
+                    {
+                        "momentId": f"spoken:{segment.id}",
+                        "assetId": asset.id,
+                        "assetName": asset.name,
+                        "momentType": "spoken",
+                        "label": segment.text,
+                        "detail": "口述内容",
+                        "startFrame": start,
+                        "endFrame": end,
+                        "previewUrl": self._preview_url(asset.id),
+                        "searchText": f"{asset.name} {segment.text} spoken speech 口述 台词",
+                    }
+                )
+        for highlight in self._session.binding.current.list_highlights():
+            asset = assets_by_id.get(highlight.asset_id)
+            if asset is None:
+                continue
+            source_profile = (
+                self._session.binding.current.get_sequence(highlight.sequence_id).profile
+                if highlight.sequence_id else main_profile
+            )
+            start, end = reframe_interval(
+                highlight.start_frame,
+                highlight.end_frame,
+                source_profile,
+                active_profile,
+            )
+            rows.append(
+                {
+                    "momentId": f"visual:{highlight.id}",
+                    "assetId": asset.id,
+                    "assetName": asset.name,
+                    "momentType": "visual",
+                    "label": highlight.title,
+                    "detail": highlight.reason or "画面时刻",
+                    "startFrame": start,
+                    "endFrame": end,
+                    "previewUrl": self._preview_url(asset.id),
+                    "searchText": (
+                        f"{asset.name} {highlight.title} {highlight.reason} "
+                        "visual moment 画面 时刻"
+                    ),
+                }
+            )
+        rows.sort(key=lambda row: (row["assetName"], row["startFrame"], row["momentId"]))
+        self._session.models.asset_moments.set_items(rows)
+
+    def _preview_url(self, asset_id: str) -> str:
+        path = self._session.asset_state.thumbnail_paths.get(asset_id)
+        return QUrl.fromLocalFile(path).toString() if path else ""
 
     def request_waveform_data(self, asset_id: str, waveform_path: str | None) -> None:
         if not waveform_path or not self._session.binding.current:

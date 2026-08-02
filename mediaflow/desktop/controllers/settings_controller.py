@@ -406,12 +406,45 @@ class SettingsController(ControllerFacet):
         candidate.ui.window_maximized = bool(maximized)
         self._session._commit_settings(candidate)
 
-    @Slot(int, int)
+    @Slot(str)
     @report_ui_errors
-    def savePanelLayout(self, left: int, timeline: int) -> None:
+    def setWorkspaceLayoutPreset(self, preset: str) -> None:
+        if preset not in {"standard", "media", "vertical"}:
+            raise ValueError(f"未知工作区布局：{preset}")
         candidate = self._session.settings.model_copy(deep=True)
-        candidate.ui.left_panel_width = max(340, min(640, int(left)))
-        candidate.ui.timeline_height = max(210, min(640, int(timeline)))
+        candidate.ui.workspace_layout_preset = preset
+        self._session._commit_settings(candidate)
+
+    @Slot(str, int, int, int, bool, bool, bool)
+    @report_ui_errors
+    def saveWorkspaceLayout(
+        self,
+        preset: str,
+        left: int,
+        inspector: int,
+        timeline: int,
+        tool_visible: bool,
+        inspector_visible: bool,
+        timeline_visible: bool,
+    ) -> None:
+        if preset not in {"standard", "media", "vertical"}:
+            raise ValueError(f"未知工作区布局：{preset}")
+        candidate = self._session.settings.model_copy(deep=True)
+        candidate.ui.workspace_layout_preset = preset
+        layout = getattr(candidate.ui.workspace_layouts, preset)
+        layout.left_panel_width = max(340, min(680, int(left)))
+        layout.inspector_panel_width = max(300, min(560, int(inspector)))
+        layout.timeline_height = max(210, min(640, int(timeline)))
+        layout.tool_panel_visible = bool(tool_visible)
+        layout.inspector_panel_visible = bool(inspector_visible)
+        layout.timeline_visible = bool(timeline_visible)
+        self._session._commit_settings(candidate)
+
+    @Slot(bool)
+    @report_ui_errors
+    def setWorkspaceTourCompleted(self, completed: bool) -> None:
+        candidate = self._session.settings.model_copy(deep=True)
+        candidate.ui.workspace_tour_completed = bool(completed)
         self._session._commit_settings(candidate)
 
     @Slot(str)

@@ -13,8 +13,9 @@ Item {
     signal createShortRequested
     signal editProfileRequested
 
-    implicitWidth: sequenceMenuButton.implicitWidth
-    implicitHeight: sequenceMenuButton.implicitHeight
+    implicitWidth: Math.min(520, Math.max(150, sequenceTabs.contentWidth))
+        + createShortButton.implicitWidth + sequenceMenuButton.implicitWidth + 8
+    implicitHeight: Theme.controlHeightCompact
 
     function sequenceDisplayName(kind, name) {
         if (kind === "main" && name === "主序列")
@@ -33,21 +34,68 @@ Item {
         return qsTr("序列");
     }
 
-    AppMenuButton {
-        id: sequenceMenuButton
-        objectName: "sequenceMenuButton"
+    RowLayout {
         anchors.fill: parent
-        text: qsTr("序列")
-        quiet: true
-        onClicked: sequenceMenu.open()
-        ToolTip.visible: hovered
-        ToolTip.text: qsTr("切换序列或管理当前序列")
+        spacing: 4
+
+        ListView {
+            id: sequenceTabs
+            objectName: "sequenceTabs"
+            Layout.preferredWidth: Math.min(520, Math.max(150, contentWidth))
+            Layout.fillHeight: true
+            orientation: ListView.Horizontal
+            spacing: 3
+            clip: true
+            model: workspaceController.sequencesModel
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.horizontal: AppScrollBar {
+                policy: sequenceTabs.contentWidth > sequenceTabs.width
+                    ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+            }
+
+            delegate: AppButton {
+                required property string sequenceId
+                required property string name
+                required property string kind
+                objectName: "sequenceTab_" + sequenceId
+                height: sequenceTabs.height
+                width: Math.min(180, Math.max(86, implicitWidth))
+                text: root.sequenceDisplayName(kind, name)
+                checkable: true
+                checked: workspaceController.activeSequenceId === sequenceId
+                quiet: !checked
+                onClicked: workspaceController.selectSequence(sequenceId)
+                ToolTip.visible: hovered && implicitWidth > width
+                ToolTip.text: text
+            }
+        }
+
+        AppIconButton {
+            id: createShortButton
+            objectName: "createShortSequenceButton"
+            iconName: "add"
+            flat: true
+            enabled: root.actionsEnabled
+            Accessible.name: qsTr("新建短视频序列")
+            toolTipText: Accessible.name
+            onClicked: root.createShortRequested()
+        }
+
+        AppIconButton {
+            id: sequenceMenuButton
+            objectName: "sequenceMenuButton"
+            iconName: "more"
+            flat: true
+            Accessible.name: qsTr("当前序列设置")
+            toolTipText: Accessible.name
+            onClicked: sequenceMenu.open()
+        }
     }
 
     AppPopover {
         id: sequenceMenu
         objectName: "sequenceMenuPopup"
-        x: 0
+        x: Math.max(0, root.width - width)
         y: root.height + 4
         width: 248
         padding: 8
@@ -63,37 +111,6 @@ Item {
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
                 elide: Text.ElideRight
-            }
-            Repeater {
-                model: workspaceController.sequencesModel
-                AppButton {
-                    required property string sequenceId
-                    required property string name
-                    required property string kind
-                    Layout.fillWidth: true
-                    checkable: true
-                    checked: workspaceController.activeSequenceId === sequenceId
-                    text: root.sequenceDisplayName(kind, name)
-                    onClicked: {
-                        workspaceController.selectSequence(sequenceId);
-                        sequenceMenu.close();
-                    }
-                }
-            }
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: Theme.border
-            }
-            AppButton {
-                objectName: "createShortSequenceButton"
-                Layout.fillWidth: true
-                text: qsTr("新建短视频序列")
-                enabled: root.actionsEnabled
-                onClicked: {
-                    root.createShortRequested();
-                    sequenceMenu.close();
-                }
             }
             AppButton {
                 objectName: "archiveActiveSequenceButton"

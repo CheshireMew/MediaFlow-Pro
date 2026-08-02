@@ -9,8 +9,11 @@ from PySide6.QtCore import QObject
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
 from mediaflow.desktop.models import (
+    AssetBinListModel,
     AssetFilterModel,
     AssetListModel,
+    AssetMomentFilterModel,
+    AssetMomentListModel,
     AudioBusListModel,
     AudioEffectListModel,
     AudioEffectParameterListModel,
@@ -45,6 +48,8 @@ class TimelinePlacement:
     playhead_frame: int = 0
     snap_enabled: bool = True
     force_new_track: bool = False
+    source_in_frame: int = 0
+    source_out_frame: int | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +196,9 @@ class AsyncRequestState:
 @dataclass(slots=True)
 class SessionModels:
     assets: AssetListModel
+    asset_bins: AssetBinListModel
+    asset_moments: AssetMomentListModel
+    filtered_asset_moments: AssetMomentFilterModel
     filtered_assets: AssetFilterModel
     sequences: SequenceListModel
     recent_projects: RecentProjectListModel
@@ -216,8 +224,12 @@ class SessionModels:
     @classmethod
     def create(cls, parent: QObject) -> SessionModels:
         assets = AssetListModel(parent)
+        asset_moments = AssetMomentListModel(parent)
         return cls(
             assets=assets,
+            asset_bins=AssetBinListModel(parent),
+            asset_moments=asset_moments,
+            filtered_asset_moments=AssetMomentFilterModel(asset_moments, parent),
             filtered_assets=AssetFilterModel(assets, parent),
             sequences=SequenceListModel(parent),
             recent_projects=RecentProjectListModel(parent),

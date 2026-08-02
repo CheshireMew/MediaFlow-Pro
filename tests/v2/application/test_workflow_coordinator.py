@@ -29,7 +29,12 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 
 def test_workflow_transitions_are_persisted_and_project_override_is_respected(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "mediaflow.infrastructure.project_catalog_repository.now_ms",
+        lambda: 1_000,
+    )
     root = tmp_path / "Workflow"
     with ProjectRepository.create(root, "Workflow") as repository:
         project = repository.catalog.get_project()

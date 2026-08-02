@@ -15,8 +15,8 @@ from mediaflow.domain.enums import (
     TrackKind,
     TransitionKind,
 )
-from mediaflow.domain.project import Asset
 from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.domain.project import Asset
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.domain.timeline import (
     Clip,

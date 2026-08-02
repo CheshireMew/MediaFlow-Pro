@@ -122,6 +122,46 @@ class LlmProviderSettings(DomainModel):
     enabled: bool = True
 
 
+WorkspaceLayoutPreset = Literal["standard", "media", "vertical"]
+
+
+class WorkspacePanelLayoutSettings(DomainModel):
+    left_panel_width: int = 520
+    inspector_panel_width: int = 400
+    timeline_height: int = 330
+    tool_panel_visible: bool = True
+    inspector_panel_visible: bool = True
+    timeline_visible: bool = True
+
+    @field_validator("left_panel_width", "inspector_panel_width", "timeline_height")
+    @classmethod
+    def positive_dimension(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Workspace panel dimensions must be positive")
+        return value
+
+
+class WorkspaceLayoutsSettings(DomainModel):
+    standard: WorkspacePanelLayoutSettings = Field(
+        default_factory=WorkspacePanelLayoutSettings
+    )
+    media: WorkspacePanelLayoutSettings = Field(
+        default_factory=lambda: WorkspacePanelLayoutSettings(
+            left_panel_width=560,
+            inspector_panel_width=360,
+            timeline_height=300,
+        )
+    )
+    vertical: WorkspacePanelLayoutSettings = Field(
+        default_factory=lambda: WorkspacePanelLayoutSettings(
+            left_panel_width=420,
+            inspector_panel_width=360,
+            timeline_height=280,
+            tool_panel_visible=False,
+        )
+    )
+
+
 class UiSettings(DomainModel):
     language: Literal["zh_CN", "en", "ja"] = "zh_CN"
     theme: Literal["dark", "high_contrast"] = "dark"
@@ -129,8 +169,11 @@ class UiSettings(DomainModel):
     window_width: int = 1600
     window_height: int = 980
     window_maximized: bool = False
-    left_panel_width: int = 360
-    timeline_height: int = 330
+    workspace_layout_preset: WorkspaceLayoutPreset = "standard"
+    workspace_layouts: WorkspaceLayoutsSettings = Field(
+        default_factory=WorkspaceLayoutsSettings
+    )
+    workspace_tour_completed: bool = False
     default_project_directory: str = ""
     default_import_directory: str | None = None
     recent_project_paths: list[str] = Field(default_factory=list)
@@ -138,8 +181,6 @@ class UiSettings(DomainModel):
     @field_validator(
         "window_width",
         "window_height",
-        "left_panel_width",
-        "timeline_height",
     )
     @classmethod
     def positive_dimension(cls, value: int) -> int:
@@ -149,7 +190,7 @@ class UiSettings(DomainModel):
 
 
 class GlobalSettings(DomainModel):
-    schema_version: int = 19
+    schema_version: int = 21
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     asr: AsrSettings = Field(default_factory=AsrSettings)

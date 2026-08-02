@@ -13,6 +13,7 @@ from mediaflow.domain.enums import (
     ColorMode,
     TrackKind,
     TransitionKind,
+    VisualEffectKind,
 )
 from mediaflow.domain.task_commands import (
     AnalyzeScenesCommand,
@@ -23,6 +24,7 @@ from mediaflow.domain.timebase import (
     source_frames_for_timeline_frames,
 )
 from mediaflow.domain.timeline import ClipAudio, ClipTransform, Transition
+from mediaflow.domain.visual_effects import VISUAL_EFFECT_SPECS
 
 from .controller_facet import ControllerFacet, report_ui_errors
 
@@ -177,6 +179,90 @@ class TimelineController(ControllerFacet):
     def selectedClipData(self) -> dict:
         row = self._session.models.clips.findRow("clipId", self.selectedClipId)
         return self._session.models.clips.get(row)
+
+    @Property("QVariantList", notify=selectionChanged)
+    def selectedClipReplacementOptions(self) -> list[dict]:
+        if not self._session.binding.current or not self.selectedClipId:
+            return []
+        row = self.selectedClipData
+        track_kind = str(row.get("trackKind", ""))
+        options = []
+        for asset in self._session.binding.current.list_assets():
+            if asset.kind.value == "web" or asset.status.value != "online":
+                continue
+            compatible = (
+                track_kind == TrackKind.VIDEO.value
+                and asset.kind.value in {"video", "image"}
+            ) or (
+                track_kind == TrackKind.AUDIO.value
+                and asset.kind.value in {"video", "audio"}
+                and asset.metadata.has_audio
+            )
+            if compatible:
+                options.append({"label": asset.name, "value": asset.id})
+        return options
+
+    @Property("QVariantList", notify=selectionChanged)
+    def visualEffectOptions(self) -> list[dict]:
+        return [
+            {"label": str(spec["label"]), "value": kind.value}
+            for kind, spec in VISUAL_EFFECT_SPECS.items()
+        ]
+
+    @Property("QVariantList", notify=selectionChanged)
+    def selectedClipVisualEffects(self) -> list[dict]:
+        if not self._session.binding.timeline or not self.selectedClipId:
+            return []
+        clip = next(
+            item
+            for item in self._session.binding.timeline.state.clips
+            if item.id == self.selectedClipId
+        )
+        rows = []
+        for effect in clip.visual_effects:
+            schema = VISUAL_EFFECT_SPECS[effect.kind]
+            rows.append(
+                {
+                    "effectId": effect.id,
+                    "kind": effect.kind.value,
+                    "label": str(schema["label"]),
+                    "position": effect.position,
+                    "enabled": effect.enabled,
+                    "parameters": dict(effect.parameters),
+                    "parameterSpecs": [
+                        {"key": key, **values}
+                        for key, values in schema["parameters"].items()
+                    ],
+                }
+            )
+        return rows
+
+    @Property("QVariantMap", notify=selectionChanged)
+    def selectedClipsSummary(self) -> dict:
+        rows = [
+            self._session.models.clips.get(
+                self._session.models.clips.findRow("clipId", clip_id)
+            )
+            for clip_id in self._session.selection.clip_ids
+        ]
+        rows = [row for row in rows if row]
+        if len(rows) < 2:
+            return {}
+
+        def common(key: str):
+            values = [row.get(key) for row in rows]
+            return values[0] if all(value == values[0] for value in values) else None
+
+        return {
+            "count": len(rows),
+            "totalDurationFrames": sum(int(row["durationFrames"]) for row in rows),
+            "assetKinds": sorted({str(row["assetKind"]) for row in rows}),
+            "gainDb": common("gainDb"),
+            "pan": common("pan"),
+            "fadeInFrames": common("fadeInFrames"),
+            "fadeOutFrames": common("fadeOutFrames"),
+            "opacity": common("opacity"),
+        }
 
     @Property("QVariantMap", notify=selectionChanged)
     def selectedCompoundData(self) -> dict:
@@ -879,6 +965,130 @@ class TimelineController(ControllerFacet):
                 fade_in_frames=max(0, fade_in_frames),
                 fade_out_frames=max(0, fade_out_frames),
             ),
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
+
+    @Slot(str)
+    @report_ui_errors
+    def replaceSelectedClipSource(self, asset_id: str) -> None:
+        self._session._require_writable()
+        if not self.selectedClipId:
+            raise ValueError("请先选择一个片段")
+        self._session.binding.timeline.replace_clip_source(
+            self.selectedClipId,
+            asset_id,
+        )
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
+        self._session._set_status("片段素材已替换")
+
+    @Slot(str)
+    @report_ui_errors
+    def addSelectedClipVisualEffect(self, kind: str) -> None:
+        self._session._require_writable()
+        if not self.selectedClipId:
+            raise ValueError("请先选择一个片段")
+        self._session.binding.timeline.add_clip_visual_effect(
+            self.selectedClipId,
+            VisualEffectKind(kind),
+        )
+        self._after_visual_effect_change("视觉效果已添加")
+
+    @Slot(str, bool)
+    @report_ui_errors
+    def setSelectedClipVisualEffectEnabled(self, effect_id: str, enabled: bool) -> None:
+        self._session._require_writable()
+        clip, effect = self._selected_visual_effect(effect_id)
+        self._session.binding.timeline.update_clip_visual_effect(
+            clip.id,
+            effect.id,
+            enabled=enabled,
+            parameters=effect.parameters,
+        )
+        self._after_visual_effect_change("视觉效果已更新")
+
+    @Slot(str, str, float)
+    @report_ui_errors
+    def setSelectedClipVisualEffectParameter(
+        self,
+        effect_id: str,
+        key: str,
+        value: float,
+    ) -> None:
+        self._session._require_writable()
+        clip, effect = self._selected_visual_effect(effect_id)
+        parameters = dict(effect.parameters)
+        if key not in parameters:
+            raise ValueError("未知的视觉效果参数")
+        parameters[key] = value
+        self._session.binding.timeline.update_clip_visual_effect(
+            clip.id,
+            effect.id,
+            enabled=effect.enabled,
+            parameters=parameters,
+        )
+        self._after_visual_effect_change("视觉效果已更新")
+
+    @Slot(str, int)
+    @report_ui_errors
+    def moveSelectedClipVisualEffect(self, effect_id: str, position: int) -> None:
+        self._session._require_writable()
+        clip, _effect = self._selected_visual_effect(effect_id)
+        self._session.binding.timeline.move_clip_visual_effect(
+            clip.id,
+            effect_id,
+            position,
+        )
+        self._after_visual_effect_change("视觉效果顺序已更新")
+
+    @Slot(str)
+    @report_ui_errors
+    def removeSelectedClipVisualEffect(self, effect_id: str) -> None:
+        self._session._require_writable()
+        clip, _effect = self._selected_visual_effect(effect_id)
+        self._session.binding.timeline.remove_clip_visual_effect(clip.id, effect_id)
+        self._after_visual_effect_change("视觉效果已移除")
+
+    def _selected_visual_effect(self, effect_id: str):
+        if not self._session.binding.timeline or not self.selectedClipId:
+            raise ValueError("请先选择一个片段")
+        clip = next(
+            item
+            for item in self._session.binding.timeline.state.clips
+            if item.id == self.selectedClipId
+        )
+        effect = next(item for item in clip.visual_effects if item.id == effect_id)
+        return clip, effect
+
+    def _after_visual_effect_change(self, status: str) -> None:
+        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.events.selectionChanged.emit()
+        self._session.events.historyChanged.emit()
+        self._session._set_status(status)
+
+    @Slot(float, float, int, int, float)
+    @report_ui_errors
+    def setSelectedClipsProperties(
+        self,
+        gain_db: float,
+        pan: float,
+        fade_in_frames: int,
+        fade_out_frames: int,
+        opacity: float,
+    ) -> None:
+        self._session._require_writable()
+        self._session.binding.timeline.set_clips_properties(
+            self._session.selection.clip_ids,
+            gain_db=max(-60.0, min(24.0, gain_db)),
+            pan=max(-1.0, min(1.0, pan)),
+            fade_in_frames=max(0, fade_in_frames),
+            fade_out_frames=max(0, fade_out_frames),
+            opacity=max(0.0, min(1.0, opacity)),
         )
         self._session.projectors.timeline.refresh_timeline()
         self._session.events.selectionChanged.emit()

@@ -7,6 +7,7 @@ RowLayout {
     id: root
     property string label: ""
     property alias text: editor.text
+    readonly property alias acceptableInput: editor.acceptableInput
     property string placeholderText: ""
     signal valueAccepted
     spacing: 8

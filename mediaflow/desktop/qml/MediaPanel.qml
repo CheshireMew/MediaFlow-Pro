@@ -15,6 +15,8 @@ Item {
     property string relinkAssetId: ""
     property string contextAssetId: ""
     property var taskData: ({})
+    signal sourceRequested(string assetId, int frame)
+    property string searchResultMode: "files"
     readonly property string viewMode: String(
         settingsController.settingsData.assetViewMode || "list")
     readonly property var contextAssetData: mediaController.selectedAssetId === contextAssetId
@@ -24,6 +26,22 @@ Item {
     readonly property bool canEdit:
         workspaceController.actionCapabilities.canEdit
     readonly property bool modalOpen: replaceDialog.opened
+        || newBinDialog.opened
+    property string selectedBinId: ""
+    readonly property var binOptions: {
+        const options = [
+            {label: qsTr("全部素材"), value: ""},
+            {label: qsTr("未归档"), value: "__unfiled__"}
+        ];
+        for (let index = 0; index < mediaController.assetBinsModel.rowCount(); ++index) {
+            const item = mediaController.assetBinsModel.get(index);
+            options.push({
+                label: String(item.displayName) + "  (" + item.assetCount + ")",
+                value: String(item.binId)
+            });
+        }
+        return options;
+    }
 
     function openImportDialog() {
         if (workspaceController.actionCapabilities.canImport)
@@ -85,6 +103,14 @@ Item {
         id: assetContextMenu
         objectName: "mediaAssetContextMenu"
         AppMenuItem {
+            objectName: "assetOpenSourceMenuItem"
+            text: qsTr("在源监视器中打开")
+            enabled: root.contextAssetData.status === "online"
+                && ["video", "audio", "image"].indexOf(
+                    String(root.contextAssetData.kind)) >= 0
+            onTriggered: root.sourceRequested(root.contextAssetId, 0)
+        }
+        AppMenuItem {
             objectName: "assetAddAtPlayheadMenuItem"
             text: qsTr("添加到播放头")
             enabled: root.canEdit
@@ -127,6 +153,9 @@ Item {
                 onAddRequested: function (assetId) {
                     root.addAssetAtPlayhead(assetId);
                 }
+                onOpenRequested: function (assetId) {
+                    root.sourceRequested(assetId, 0);
+                }
             }
         }
     }
@@ -151,6 +180,9 @@ Item {
                 }
                 onAddRequested: function (assetId) {
                     root.addAssetAtPlayhead(assetId);
+                }
+                onOpenRequested: function (assetId) {
+                    root.sourceRequested(assetId, 0);
                 }
             }
         }
@@ -197,6 +229,27 @@ Item {
                 text: qsTr("所选文件的内容指纹与原素材不同：\n%1\n\n确认后会更新关联，并重新生成预览缓存和音频波形。").arg(workspaceController.pendingRelinkPath)
                 color: Theme.text
                 wrapMode: Text.WordWrap
+            }
+        }
+        AppDialog {
+            id: newBinDialog
+            objectName: "newAssetBinDialog"
+            anchors.centerIn: parent
+            width: 380
+            modal: true
+            title: qsTr("新建素材文件夹")
+            standardButtons: Dialog.Ok | Dialog.Cancel
+            onOpened: {
+                newBinName.clear();
+                newBinName.forceActiveFocus();
+            }
+            onAccepted: mediaController.createAssetBin(
+                newBinName.text,
+                root.selectedBinId === "__unfiled__" ? "" : root.selectedBinId)
+            contentItem: AppTextField {
+                id: newBinName
+                objectName: "newAssetBinName"
+                placeholderText: qsTr("文件夹名称")
             }
         }
         Connections {
@@ -281,6 +334,60 @@ Item {
             }
         }
 
+        RowLayout {
+            objectName: "assetBinToolbar"
+            Layout.fillWidth: true
+            spacing: 6
+            AppComboBox {
+                id: assetBinFilter
+                objectName: "assetBinFilter"
+                Layout.fillWidth: true
+                model: root.binOptions
+                textRole: "label"
+                valueRole: "value"
+                onActivated: {
+                    root.selectedBinId = String(currentValue);
+                    mediaController.setAssetBinFilter(root.selectedBinId);
+                }
+            }
+            AppIconButton {
+                objectName: "createAssetBinButton"
+                iconName: "add"
+                flat: true
+                enabled: root.canEdit
+                Accessible.name: qsTr("新建素材文件夹")
+                toolTipText: Accessible.name
+                onClicked: newBinDialog.open()
+            }
+            AppMenuButton {
+                id: moveToBinButton
+                objectName: "moveAssetsToBinButton"
+                text: qsTr("移动到")
+                compact: true
+                quiet: true
+                enabled: root.canEdit
+                    && mediaController.selectedAssetIds.length > 0
+                onClicked: moveToBinMenu.open()
+                AppMenu {
+                    id: moveToBinMenu
+                    y: moveToBinButton.height + 4
+                    AppMenuItem {
+                        text: qsTr("未归档")
+                        onTriggered: mediaController.moveSelectedAssetsToBin("")
+                    }
+                    Repeater {
+                        model: mediaController.assetBinsModel
+                        AppMenuItem {
+                            required property string binId
+                            required property string displayName
+                            text: displayName
+                            onTriggered: mediaController.moveSelectedAssetsToBin(binId)
+                        }
+                    }
+                }
+            }
+        }
+
         AppButton {
             visible: workspaceController.offlineAssetCount > 0
             enabled: root.canEdit
@@ -298,25 +405,135 @@ Item {
             wrapMode: Text.WordWrap
         }
 
+        RowLayout {
+            objectName: "assetSearchResultTabs"
+            Layout.fillWidth: true
+            visible: mediaController.assetSearchText.length > 0
+            spacing: 4
+            AppButton {
+                objectName: "assetSearchFilesTab"
+                text: qsTr("文件 %1").arg(root.filteredAssetCount)
+                compact: true
+                checkable: true
+                checked: root.searchResultMode === "files"
+                quiet: !checked
+                onClicked: root.searchResultMode = "files"
+            }
+            AppButton {
+                objectName: "assetSearchMomentsTab"
+                text: qsTr("内容时刻 %1").arg(
+                    mediaController.filteredAssetMomentsModel.rowCount())
+                compact: true
+                checkable: true
+                checked: root.searchResultMode === "moments"
+                quiet: !checked
+                onClicked: root.searchResultMode = "moments"
+            }
+            Item { Layout.fillWidth: true }
+        }
+
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Loader {
                 id: assetViewLoader
                 anchors.fill: parent
+                visible: mediaController.assetSearchText.length === 0
+                    || root.searchResultMode === "files"
                 sourceComponent: root.viewMode === "list"
                     ? assetListComponent : assetGridComponent
             }
 
+            ListView {
+                id: assetMomentList
+                objectName: "assetMomentList"
+                anchors.fill: parent
+                visible: mediaController.assetSearchText.length > 0
+                    && root.searchResultMode === "moments"
+                clip: true
+                spacing: 5
+                model: mediaController.filteredAssetMomentsModel
+                ScrollBar.vertical: AppScrollBar {}
+                delegate: Rectangle {
+                    required property string assetId
+                    required property string assetName
+                    required property string momentType
+                    required property string label
+                    required property string detail
+                    required property int startFrame
+                    required property int endFrame
+                    required property string previewUrl
+                    width: assetMomentList.width
+                    height: 64
+                    radius: Theme.radiusSmall
+                    color: momentMouse.containsMouse
+                        ? Theme.surfaceHover : Theme.surfaceRaised
+                    border.color: momentMouse.containsMouse
+                        ? Theme.accent : Theme.borderSubtle
+                    Image {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 5
+                        width: 92
+                        source: previewUrl
+                        fillMode: Image.PreserveAspectCrop
+                        visible: previewUrl.length > 0
+                    }
+                    Column {
+                        anchors.left: parent.left
+                        anchors.leftMargin: previewUrl.length > 0 ? 104 : 10
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 3
+                        Text {
+                            width: parent.width
+                            text: (momentType === "spoken" ? qsTr("口述") : qsTr("画面"))
+                                + " · " + label
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSizeBodySmall
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: parent.width
+                            text: assetName + " · " + startFrame + "–" + endFrame
+                                + (detail.length > 0 ? " · " + detail : "")
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSizeCaption
+                            elide: Text.ElideRight
+                        }
+                    }
+                    MouseArea {
+                        id: momentMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onDoubleClicked: root.sourceRequested(assetId, startFrame)
+                    }
+                }
+            }
+
             EmptyState {
                 anchors.fill: parent
-                visible: root.filteredAssetCount === 0
+                visible: (mediaController.assetSearchText.length === 0
+                        || root.searchResultMode === "files")
+                    && root.filteredAssetCount === 0
                 iconName: "add"
                 title: search.text.length === 0
                     ? qsTr("导入第一个素材") : qsTr("没有匹配的素材")
                 description: search.text.length === 0
                     ? qsTr("支持视频、音频、图片、字幕和网页素材。下载的视频也会自动出现在这里。")
                     : qsTr("换个关键词，或清空搜索框查看全部素材。")
+            }
+            EmptyState {
+                anchors.fill: parent
+                visible: mediaController.assetSearchText.length > 0
+                    && root.searchResultMode === "moments"
+                    && mediaController.filteredAssetMomentsModel.rowCount() === 0
+                iconName: "search"
+                title: qsTr("没有匹配的内容时刻")
+                description: qsTr("内容时刻来自真实转写片段和画面高光分析。")
             }
         }
 

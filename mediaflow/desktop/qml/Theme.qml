@@ -111,6 +111,14 @@ QtObject {
     readonly property int radius: 10
     readonly property int radiusLarge: 14
     readonly property int spacing: 12
+    readonly property int workspaceOuterGutter: 10
+    readonly property int workspacePanelGap: 10
+    readonly property int workspaceNavigationHeight: 68
+    readonly property int workspacePanelHeaderHeight: 50
+    readonly property int workspaceToolMinimumWidth: 340
+    readonly property int workspaceInspectorMinimumWidth: 300
+    readonly property int workspacePreviewMinimumWidth: 360
+    readonly property int workspaceTimelineMinimumHeight: 210
     readonly property int controlHeightCompact: 30
     readonly property int controlHeight: 36
     readonly property int controlHeightLarge: 42

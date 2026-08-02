@@ -28,7 +28,7 @@ from mediaflow.domain.enums import (
     WorkflowStage,
     WorkflowStatus,
 )
-from mediaflow.domain.project import ProjectProfile, SequenceInOut
+from mediaflow.domain.project import MediaMetadata, ProjectProfile, SequenceInOut
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
 from mediaflow.domain.storage_names import (
     DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY,
@@ -55,6 +55,7 @@ from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.settings_repository import SettingsRepository
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 
 def test_desktop_application_is_widget_capable_for_runtime_directory_fallback() -> None:
@@ -694,6 +695,7 @@ def test_asset_filter_model_is_the_shared_search_boundary_for_all_views() -> Non
                 "path": f"D:/{name}",
                 "status": "online",
                 "managed": False,
+                "binId": "nested" if asset_id == "two" else "",
                 "durationFrames": 25,
                 "width": 640,
                 "height": 360,
@@ -713,6 +715,128 @@ def test_asset_filter_model_is_the_shared_search_boundary_for_all_views() -> Non
     assert assets.get(filtered.mapToSource(filtered.index(0, 0)).row())["assetId"] == "two"
     filtered.setSearchText("")
     assert filtered.rowCount() == 2
+    filtered.set_bin_scope("parent", {"parent", "nested"})
+    assert filtered.rowCount() == 1
+    assert assets.get(filtered.mapToSource(filtered.index(0, 0)).row())["assetId"] == "two"
+    filtered.set_bin_scope("__unfiled__", set())
+    assert filtered.rowCount() == 1
+    assert assets.get(filtered.mapToSource(filtered.index(0, 0)).row())["assetId"] == "one"
+
+
+def test_source_monitor_uses_real_graph_range_insertion_and_requested_frame(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    application = EditorApplication()
+    source = tmp_path / "source.mp4"
+    generate_real_media(source, application.runtime_paths, width=160, height=90)
+    project = application.create_project(tmp_path / "Source Monitor", "Source Monitor")
+    asset = project.import_external_asset(source, expected_kind=AssetKind.VIDEO)
+    asset = project._repository.catalog.update_asset(
+        asset.model_copy(
+            update={
+                "metadata": MediaMetadata(
+                    duration_frames=25,
+                    width=160,
+                    height=90,
+                    video_codec="h264",
+                    audio_codec="aac",
+                    has_audio=True,
+                )
+            }
+        )
+    )
+    controllers = EditorControllers(application=application)
+    try:
+        controllers.session.lifecycle.replace(project)
+        controllers.media.openSourceMonitor(asset.id)
+        source_state = controllers.media.sourceMonitorData
+        assert source_state["assetId"] == asset.id
+        assert source_state["durationFrames"] == 25
+        assert Path(source_state["graphPath"]).is_file()
+
+        controllers.media.setSourceInFrame(5)
+        controllers.media.setSourceOutFrame(14)
+        controllers.media.addSourceRangeToTimeline(40, 1.0, False)
+        [clip] = controllers.session.binding.timeline.state.clips
+        assert (clip.source_in, clip.duration) == (5, 10)
+
+        controllers.media.captureSourceFrame(0)
+        first_capture = controllers.session.binding.current.resolve_asset_path(
+            controllers.session.binding.current.get_asset(
+                controllers.media.selectedAssetId
+            )
+        )
+        controllers.media.captureSourceFrame(12)
+        second_capture = controllers.session.binding.current.resolve_asset_path(
+            controllers.session.binding.current.get_asset(
+                controllers.media.selectedAssetId
+            )
+        )
+        assert first_capture.is_file() and second_capture.is_file()
+        assert first_capture.read_bytes() != second_capture.read_bytes()
+    finally:
+        controllers.shutdown()
+
+
+def test_moment_search_consumes_persisted_spoken_and_visual_producers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    application = EditorApplication()
+    project = application.create_project(tmp_path / "Moment Search", "Moment Search")
+    source = tmp_path / "interview.mp4"
+    generate_real_media(source, application.runtime_paths, width=160, height=90)
+    asset = project.import_external_asset(source, expected_kind=AssetKind.VIDEO)
+    project_record = project.get_project()
+    document = SubtitleDocument(
+        project_id=project_record.id,
+        asset_id=asset.id,
+        media_asset_id=asset.id,
+        sequence_id=project_record.main_sequence_id,
+        language="zh",
+    )
+    segment = SubtitleSegment(
+        document_id=document.id,
+        start_frame=12,
+        end_frame=38,
+        text="城市夜景中的关键观点",
+    )
+    project._repository.subtitles.create_subtitle_document(document, [segment])
+    highlight = project.add_manual_highlight(
+        asset.id,
+        start_frame=5,
+        end_frame=10,
+        title="人物转身",
+    )
+    controllers = EditorControllers(application=application)
+    try:
+        controllers.session.lifecycle.replace(project)
+        moments = controllers.session.models.asset_moments.snapshot()
+        assert {(row["momentId"], row["momentType"]) for row in moments} == {
+            (f"spoken:{segment.id}", "spoken"),
+            (f"visual:{highlight.id}", "visual"),
+        }
+
+        controllers.media.setAssetSearchText("关键观点")
+        spoken = controllers.media.filteredAssetMomentsModel
+        assert spoken.rowCount() == 1
+        spoken_row = spoken.mapToSource(spoken.index(0, 0)).row()
+        assert controllers.session.models.asset_moments.get(spoken_row)["momentId"] == (
+            f"spoken:{segment.id}"
+        )
+
+        controllers.media.setAssetSearchText("人物转身")
+        visual = controllers.media.filteredAssetMomentsModel
+        assert visual.rowCount() == 1
+        visual_row = visual.mapToSource(visual.index(0, 0)).row()
+        assert controllers.session.models.asset_moments.get(visual_row)["momentId"] == (
+            f"visual:{highlight.id}"
+        )
+    finally:
+        controllers.shutdown()
 
 
 def test_download_plan_queues_selected_entries_as_typed_requests(

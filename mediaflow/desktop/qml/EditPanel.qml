@@ -123,6 +123,28 @@ AppScrollView {
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    AppComboBox {
+                        id: replacementAsset
+                        objectName: "clipReplacementAsset"
+                        Layout.fillWidth: true
+                        textRole: "label"
+                        valueRole: "value"
+                        model: timelineController.selectedClipReplacementOptions
+                        currentIndex: Math.max(0, indexOfValue(
+                            String(timelineController.selectedClipData.assetId || "")))
+                    }
+                    AppButton {
+                        objectName: "replaceClipSourceButton"
+                        text: qsTr("换源")
+                        enabled: Boolean(replacementAsset.currentValue)
+                            && String(replacementAsset.currentValue)
+                                !== String(timelineController.selectedClipData.assetId || "")
+                        onClicked: timelineController.replaceSelectedClipSource(
+                            String(replacementAsset.currentValue))
+                    }
+                }
                 PropertyField {
                     id: sourceIn
                     Layout.fillWidth: true
@@ -322,6 +344,16 @@ AppScrollView {
                     }
                 }
             }
+        }
+
+        VisualEffectStackPanel {
+            Layout.fillWidth: true
+            visible: timelineController.selectedClipId.length > 0
+                && !webController.isWebClip
+                && timelineController.selectedClipData.trackKind === "video"
+            canEdit: root.canEdit
+            effects: timelineController.selectedClipVisualEffects
+            effectOptions: timelineController.visualEffectOptions
         }
 
         Text {

@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
 from mediaflow.application.ports import TimelineEditorDocuments
 from mediaflow.application.timeline_clock import (
+    asset_in_timeline_clock,
     project_frame_profile,
     reframe_timeline_clock,
 )
@@ -14,7 +15,13 @@ from mediaflow.application.timeline_ripple import RippleDeletePolicy
 from mediaflow.application.timeline_rules import TimelineRules
 from mediaflow.application.timeline_validator import TimelineValidator
 from mediaflow.domain.effect_registry import transition_is_available
-from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind, TransitionKind
+from mediaflow.domain.enums import (
+    AssetKind,
+    ClipMediaKind,
+    TrackKind,
+    TransitionKind,
+    VisualEffectKind,
+)
 from mediaflow.domain.frame_clock import MainFrameClockSnapshot
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
@@ -33,6 +40,7 @@ from mediaflow.domain.timeline import (
     Transition,
     default_clip_media_kind,
 )
+from mediaflow.domain.visual_effects import ClipVisualEffect, new_visual_effect
 from mediaflow.domain.web_media import WebClipState
 
 
@@ -538,6 +546,86 @@ class TimelineEditor:
         self._commit("裁剪片段", mutate)
         return self._clip(clip_id)
 
+    def replace_clip_source(self, clip_id: str, asset_id: str) -> Clip:
+        source = self._clip(clip_id)
+        track = self._track(source.track_id)
+        stored_asset = self.repository.catalog.get_asset(asset_id)
+        if stored_asset.kind == AssetKind.WEB:
+            raise ValueError("网页素材必须通过网页换版功能替换")
+        asset = asset_in_timeline_clock(
+            self.repository.catalog,
+            stored_asset,
+            self._state.sequence,
+        )
+        if track.kind == TrackKind.AUDIO:
+            media_kind = ClipMediaKind.AUDIO_ONLY
+        elif track.kind == TrackKind.VIDEO:
+            media_kind = (
+                ClipMediaKind.LINKED_AV
+                if source.media_kind == ClipMediaKind.LINKED_AV
+                and asset.kind == AssetKind.VIDEO
+                and asset.metadata.has_audio
+                else ClipMediaKind.VIDEO_ONLY
+            )
+        else:
+            raise ValueError("字幕轨道不能替换片段素材")
+        TimelineRules.validate_clip_track(
+            asset.kind,
+            media_kind,
+            track.kind,
+            asset.metadata.has_audio,
+        )
+
+        source_in = source.source_in
+        source_duration = asset.metadata.duration_frames
+        if asset.kind == AssetKind.IMAGE:
+            source_in = 0
+        elif source_duration > 0:
+            consumed = source_frames_for_timeline_frames(
+                source.duration,
+                source.speed_numerator,
+                source.speed_denominator,
+            )
+            if source.speed_numerator > 0:
+                source_in = min(source_in, max(0, source_duration - consumed))
+            else:
+                source_in = min(
+                    source_duration - 1,
+                    max(source_in, consumed - 1),
+                )
+        replacement = source.model_copy(
+            update={
+                "asset_id": asset.id,
+                "source_in": source_in,
+                "media_kind": media_kind,
+                "transform_keyframes": [],
+            }
+        )
+        maximum = replacement.maximum_timeline_duration(
+            asset.kind,
+            source_duration,
+        )
+        if maximum is not None and maximum < replacement.duration:
+            if maximum <= 0:
+                raise ValueError("替换素材没有可用的源帧")
+            replacement = replacement.model_copy(update={"duration": maximum})
+
+        def mutate(state: TimelineState) -> None:
+            index = self._clip_index(state, clip_id)
+            state.clips[index] = replacement
+            state.web_states.pop(clip_id, None)
+            if replacement.media_kind == ClipMediaKind.LINKED_AV:
+                self._ensure_linked_audio_track(state, replacement.track_id)
+            clips = {item.id: item for item in state.clips}
+            state.transitions = [
+                item
+                for item in state.transitions
+                if TimelineRules.transition_is_valid(item, clips)
+            ]
+
+        self._commit("替换片段素材", mutate)
+        return self._clip(clip_id)
+
     def set_clip_transform(self, clip_id: str, transform: ClipTransform) -> Clip:
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
@@ -545,6 +633,99 @@ class TimelineEditor:
 
         self._commit("调整画面", mutate)
         return self._clip(clip_id)
+
+    def add_clip_visual_effect(
+        self,
+        clip_id: str,
+        kind: VisualEffectKind,
+    ) -> ClipVisualEffect:
+        clip = self._clip(clip_id)
+        asset = self.repository.catalog.get_asset(clip.asset_id)
+        if asset.kind not in {AssetKind.VIDEO, AssetKind.IMAGE}:
+            raise ValueError("只有视频和图片片段可以添加视觉效果")
+        effect = new_visual_effect(kind, len(clip.visual_effects))
+
+        def mutate(state: TimelineState) -> None:
+            index = self._clip_index(state, clip_id)
+            source = state.clips[index]
+            state.clips[index] = source.model_copy(
+                update={"visual_effects": [*source.visual_effects, effect]}
+            )
+
+        self._commit("添加视觉效果", mutate)
+        return next(item for item in self._clip(clip_id).visual_effects if item.id == effect.id)
+
+    def update_clip_visual_effect(
+        self,
+        clip_id: str,
+        effect_id: str,
+        *,
+        enabled: bool,
+        parameters: dict[str, float],
+    ) -> ClipVisualEffect:
+        clip = self._clip(clip_id)
+        source = next(item for item in clip.visual_effects if item.id == effect_id)
+        updated = ClipVisualEffect.model_validate(
+            {
+                **source.model_dump(mode="python"),
+                "enabled": enabled,
+                "parameters": parameters,
+            }
+        )
+
+        def mutate(state: TimelineState) -> None:
+            index = self._clip_index(state, clip_id)
+            current = state.clips[index]
+            state.clips[index] = current.model_copy(
+                update={
+                    "visual_effects": [
+                        updated if item.id == effect_id else item
+                        for item in current.visual_effects
+                    ]
+                }
+            )
+
+        self._commit("调整视觉效果", mutate)
+        return next(item for item in self._clip(clip_id).visual_effects if item.id == effect_id)
+
+    def move_clip_visual_effect(
+        self,
+        clip_id: str,
+        effect_id: str,
+        position: int,
+    ) -> ClipVisualEffect:
+        clip = self._clip(clip_id)
+        if not 0 <= position < len(clip.visual_effects):
+            raise ValueError("视觉效果位置超出效果链")
+        effects = list(clip.visual_effects)
+        source_index = next(index for index, item in enumerate(effects) if item.id == effect_id)
+        effect = effects.pop(source_index)
+        effects.insert(position, effect)
+        effects = [item.model_copy(update={"position": index}) for index, item in enumerate(effects)]
+
+        def mutate(state: TimelineState) -> None:
+            index = self._clip_index(state, clip_id)
+            state.clips[index] = state.clips[index].model_copy(
+                update={"visual_effects": effects}
+            )
+
+        self._commit("排序视觉效果", mutate)
+        return next(item for item in self._clip(clip_id).visual_effects if item.id == effect_id)
+
+    def remove_clip_visual_effect(self, clip_id: str, effect_id: str) -> None:
+        clip = self._clip(clip_id)
+        if effect_id not in {item.id for item in clip.visual_effects}:
+            raise KeyError(effect_id)
+        effects = [item for item in clip.visual_effects if item.id != effect_id]
+        effects = [item.model_copy(update={"position": index}) for index, item in enumerate(effects)]
+
+        def mutate(state: TimelineState) -> None:
+            index = self._clip_index(state, clip_id)
+            state.clips[index] = state.clips[index].model_copy(
+                update={"visual_effects": effects}
+            )
+
+        self._commit("移除视觉效果", mutate)
 
     def set_clip_transform_keyframes(
         self,
@@ -573,6 +754,46 @@ class TimelineEditor:
 
         self._commit("调整片段音频", mutate)
         return self._clip(clip_id)
+
+    def set_clips_properties(
+        self,
+        clip_ids: Iterable[str],
+        *,
+        gain_db: float,
+        pan: float,
+        fade_in_frames: int,
+        fade_out_frames: int,
+        opacity: float,
+    ) -> list[Clip]:
+        selected_ids = list(dict.fromkeys(clip_ids))
+        if len(selected_ids) < 2:
+            raise ValueError("批量调整需要至少两个片段")
+        selected = [self._clip(clip_id) for clip_id in selected_ids]
+        if fade_in_frames + fade_out_frames > min(clip.duration for clip in selected):
+            raise ValueError("淡入与淡出总长度不能超过最短片段")
+        audio = ClipAudio(
+            gain_db=gain_db,
+            pan=pan,
+            fade_in_frames=fade_in_frames,
+            fade_out_frames=fade_out_frames,
+        )
+
+        def mutate(state: TimelineState) -> None:
+            for clip_id in selected_ids:
+                index = self._clip_index(state, clip_id)
+                clip = state.clips[index]
+                state.clips[index] = clip.model_copy(
+                    update={
+                        "audio": audio,
+                        "transform": clip.transform.model_copy(
+                            update={"opacity": opacity}
+                        ),
+                    }
+                )
+
+        self._commit("批量调整片段", mutate)
+        clips = {clip.id: clip for clip in self._state.clips}
+        return [clips[clip_id] for clip_id in selected_ids]
 
     def set_web_clip_state(
         self,

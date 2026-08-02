@@ -19,6 +19,7 @@ Rectangle {
     property int profileHeight: 1080
     property string subtitleText: ""
     property bool exportPreviewActive: false
+    property bool transformInteractionEnabled: true
     property var exportPreviewOptions: ({})
     property url watermarkSource: ""
     readonly property var subtitlePreviewStyle: exportPreviewOptions.subtitleStyle || ({})
@@ -315,7 +316,8 @@ Rectangle {
         PreviewTransformOverlay {
             anchors.fill: parent
             previewPosition: preview.position
-            interactionVisible: !root.exportPreviewActive
+            interactionVisible: root.transformInteractionEnabled
+                && !root.exportPreviewActive
         }
 
         Image {

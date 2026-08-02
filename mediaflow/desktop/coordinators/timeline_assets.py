@@ -159,7 +159,17 @@ class TimelineAssetOperations(SessionCoordinator):
         main_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
         active_profile = self._session.binding.timeline.state.sequence.profile
         asset = asset.in_frame_clock(main_profile, active_profile)
-        duration = asset.metadata.duration_frames or 150
+        source_in = max(0, placement.source_in_frame)
+        source_out = placement.source_out_frame
+        if source_out is not None:
+            source_out = min(asset.metadata.duration_frames, source_out)
+            if source_out <= source_in:
+                raise ValueError("源素材出点必须晚于入点")
+        duration = (
+            source_out - source_in
+            if source_out is not None
+            else max(1, (asset.metadata.duration_frames or 150) - source_in)
+        )
         start = self._placement_start(placement, 0)
         track = self._resolve_drop_track(target_kind, placement, start, duration)
         if placement.start_frame is None:
@@ -169,7 +179,7 @@ class TimelineAssetOperations(SessionCoordinator):
             track_id=track.id,
             asset_id=asset.id,
             timeline_start=start,
-            source_in=0,
+            source_in=source_in,
             duration=duration,
         )
         self._session.selection.clip_ids = [clip.id]

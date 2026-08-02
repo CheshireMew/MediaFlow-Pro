@@ -333,25 +333,35 @@ Rectangle {
                             anchors.margins: 16
                             spacing: 8
                             Text {
-                                text: qsTr("打开已有项目")
+                                text: qsTr("打开或体验")
                                 color: Theme.text
                                 font.pixelSize: Theme.fontSizeBodyLarge
                                 font.weight: Font.DemiBold
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("打开包含 project.mfp 的项目目录，继续之前的工作。")
+                                text: qsTr("继续已有工作，或创建一份带素材、转场和效果的示例项目。")
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSizeCaption
                                 wrapMode: Text.WordWrap
                             }
                             Item { Layout.fillHeight: true }
-                            AppButton {
-                                objectName: "openExistingProjectButton"
+                            RowLayout {
                                 Layout.fillWidth: true
-                                text: qsTr("打开已有项目")
-                                enabled: workspaceController.actionCapabilities.canOpenProject
-                                onClicked: openFolderDialog.open()
+                                AppButton {
+                                    objectName: "createSampleProjectButton"
+                                    Layout.fillWidth: true
+                                    text: qsTr("体验示例")
+                                    enabled: workspaceController.actionCapabilities.canCreateProject
+                                    onClicked: workspaceController.createSampleProject()
+                                }
+                                AppButton {
+                                    objectName: "openExistingProjectButton"
+                                    Layout.fillWidth: true
+                                    text: qsTr("打开项目")
+                                    enabled: workspaceController.actionCapabilities.canOpenProject
+                                    onClicked: openFolderDialog.open()
+                                }
                             }
                         }
                     }

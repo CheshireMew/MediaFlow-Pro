@@ -7,8 +7,8 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadPlan, DownloadRequest
-from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import DownloadSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_COMPONENT_UTF16_LIMIT,

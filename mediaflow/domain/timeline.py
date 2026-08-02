@@ -8,6 +8,7 @@ from pydantic import Field, computed_field, field_validator, model_validator
 from .enums import AssetKind, ClipMediaKind, TrackKind, TransitionKind
 from .model_base import DomainModel, new_id
 from .project import Sequence
+from .visual_effects import ClipVisualEffect
 from .web_media import WebClipState
 
 
@@ -134,6 +135,7 @@ class Clip(DomainModel):
     transform: ClipTransform = Field(default_factory=ClipTransform)
     transform_keyframes: list[ClipTransformKeyframe] = Field(default_factory=list)
     audio: ClipAudio = Field(default_factory=ClipAudio)
+    visual_effects: list[ClipVisualEffect] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_clip(self) -> Clip:
@@ -149,6 +151,11 @@ class Clip(DomainModel):
         frames = [item.source_frame for item in self.transform_keyframes]
         if frames != sorted(set(frames)):
             raise ValueError("Clip transform keyframes must have unique ordered source frames")
+        effect_positions = [item.position for item in self.visual_effects]
+        if effect_positions != list(range(len(self.visual_effects))):
+            raise ValueError("Clip visual effect positions must be contiguous and ordered")
+        if len({item.id for item in self.visual_effects}) != len(self.visual_effects):
+            raise ValueError("Clip visual effects must have unique identifiers")
         return self
 
     @computed_field

@@ -133,6 +133,7 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.preferredHeight: 48
             hostWindow: window
+            workspaceItem: pageLoader.item
             onExportRequested: {
                 if (pageLoader.item && pageLoader.item.openExportPanel)
                     pageLoader.item.openExportPanel();
@@ -148,6 +149,15 @@ ApplicationWindow {
     }
     Component { id: homeComponent; HomeView {} }
     Component { id: workspaceComponent; Workspace {} }
+
+    WorkspaceTour {
+        id: workspaceTour
+        anchors.fill: parent
+    }
+    Connections {
+        target: workspaceController
+        function onSampleTourRequested() { workspaceTour.open(); }
+    }
 
     FolderDialog {
         id: downloadOutputDirectoryDialog

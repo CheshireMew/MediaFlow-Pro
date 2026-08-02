@@ -29,6 +29,7 @@ from mediaflow.domain.timeline import (
     Track,
     Transition,
 )
+from mediaflow.domain.visual_effects import ClipVisualEffect
 
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
@@ -437,6 +438,10 @@ class TimelineRepository(ProjectRepositoryComponent):
                 for item in json.loads(row["transform_keyframes_json"])
             ],
             audio=ClipAudio.model_validate_json(row["audio_json"]),
+            visual_effects=[
+                ClipVisualEffect.model_validate(item)
+                for item in json.loads(row["visual_effects_json"])
+            ],
         )
 
     @staticmethod
@@ -445,8 +450,9 @@ class TimelineRepository(ProjectRepositoryComponent):
             """INSERT INTO clip(
                 id, track_id, asset_id, timeline_start, source_in, duration, media_kind,
                 speed_numerator, speed_denominator, pitch_compensation,
-                transform_json, transform_keyframes_json, audio_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                transform_json, transform_keyframes_json, audio_json,
+                visual_effects_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 track_id=excluded.track_id, asset_id=excluded.asset_id,
                 timeline_start=excluded.timeline_start, source_in=excluded.source_in,
@@ -456,7 +462,8 @@ class TimelineRepository(ProjectRepositoryComponent):
                 pitch_compensation=excluded.pitch_compensation,
                 transform_json=excluded.transform_json,
                 transform_keyframes_json=excluded.transform_keyframes_json,
-                audio_json=excluded.audio_json""",
+                audio_json=excluded.audio_json,
+                visual_effects_json=excluded.visual_effects_json""",
             (
                 clip.id,
                 clip.track_id,
@@ -476,6 +483,9 @@ class TimelineRepository(ProjectRepositoryComponent):
                     ]
                 ),
                 _model_json(clip.audio),
+                _json(
+                    [item.model_dump(mode="json") for item in clip.visual_effects]
+                ),
             ),
         )
 

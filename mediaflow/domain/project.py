@@ -107,6 +107,7 @@ class Asset(DomainModel):
     origin: AssetOrigin
     path: str
     managed: bool = False
+    bin_id: str | None = None
     proxy_path: str | None = None
     sdr_preview_proxy_path: str | None = None
     waveform_path: str | None = None
@@ -133,6 +134,22 @@ class Asset(DomainModel):
                 )
             }
         )
+
+
+class AssetBin(DomainModel):
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    name: str
+    parent_id: str | None = None
+    position: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def non_empty_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("素材文件夹名称不能为空")
+        return value
 
 
 class SequenceInOut(DomainModel):

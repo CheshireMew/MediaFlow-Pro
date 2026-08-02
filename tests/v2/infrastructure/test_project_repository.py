@@ -1473,6 +1473,44 @@ def test_external_asset_keeps_absolute_path_and_fingerprint(tmp_path: Path) -> N
         assert fingerprint_matches(source, reloaded.fingerprint)
 
 
+def test_asset_bins_persist_hierarchy_casefold_uniqueness_and_membership(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"real-media-fixture")
+    root = tmp_path / "Asset Bins"
+    with ProjectRepository.create(root, "Asset Bins") as repository:
+        parent = repository.catalog.create_asset_bin("Scenes")
+        child = repository.catalog.create_asset_bin("Street", parent.id)
+        sibling = repository.catalog.create_asset_bin("People")
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        moved = repository.catalog.move_assets_to_bin([asset.id, asset.id], child.id)
+
+        assert [item.id for item in repository.catalog.list_asset_bins()] == [
+            parent.id,
+            child.id,
+            sibling.id,
+        ]
+        assert [item.id for item in moved] == [asset.id]
+        assert repository.catalog.get_asset(asset.id).bin_id == child.id
+        with pytest.raises(ValueError, match="重复名称"):
+            repository.catalog.create_asset_bin("scenes")
+        with pytest.raises(KeyError):
+            repository.catalog.move_assets_to_bin([asset.id], "missing-bin")
+
+    with ProjectRepository.open(root, writable=True) as reopened:
+        bins = reopened.catalog.list_asset_bins()
+        assert [(item.name, item.parent_id) for item in bins] == [
+            ("Scenes", None),
+            ("Street", bins[0].id),
+            ("People", None),
+        ]
+        reloaded = reopened.catalog.list_assets()[0]
+        assert reloaded.bin_id == bins[1].id
+        [unfiled] = reopened.catalog.move_assets_to_bin([reloaded.id], None)
+        assert unfiled.bin_id is None
+
+
 def test_timeline_round_trip_persists_actual_asset_reference(tmp_path: Path) -> None:
     source = tmp_path / "clip.mp4"
     source.write_bytes(b"fixture")

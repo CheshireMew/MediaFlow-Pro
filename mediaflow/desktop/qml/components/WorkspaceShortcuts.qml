@@ -8,6 +8,38 @@ Item {
     required property var timelineView
 
     Shortcut {
+        sequence: "Ctrl+Alt+1"
+        enabled: shortcuts.host.shortcutsEnabled
+        onActivated: shortcuts.host.setWorkspaceLayoutPreset("standard")
+    }
+    Shortcut {
+        sequence: "Ctrl+Alt+2"
+        enabled: shortcuts.host.shortcutsEnabled
+        onActivated: shortcuts.host.setWorkspaceLayoutPreset("media")
+    }
+    Shortcut {
+        sequence: "Ctrl+Alt+3"
+        enabled: shortcuts.host.shortcutsEnabled
+        onActivated: shortcuts.host.setWorkspaceLayoutPreset("vertical")
+    }
+    Shortcut {
+        sequence: "Ctrl+Alt+0"
+        enabled: shortcuts.host.shortcutsEnabled
+            && shortcuts.host.maximizedPanel.length > 0
+        onActivated: shortcuts.host.maximizedPanel = ""
+    }
+    Shortcut {
+        sequence: "Ctrl+Alt+P"
+        enabled: shortcuts.host.shortcutsEnabled
+        onActivated: shortcuts.host.togglePanelMaximized("preview")
+    }
+    Shortcut {
+        sequence: "Ctrl+Alt+T"
+        enabled: shortcuts.host.shortcutsEnabled
+        onActivated: shortcuts.host.togglePanelMaximized("timeline")
+    }
+
+    Shortcut {
         sequence: "Ctrl+I"
         enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
         onActivated: shortcuts.host.openMediaImportDialog()
@@ -120,8 +152,14 @@ Item {
     Shortcut {
         sequence: "Escape"
         enabled: shortcuts.host.shortcutsEnabled
-            && timelineController.selectedClipIds.length > 0
-        onActivated: shortcuts.timelineView.clearTimelineSelection()
+            && (shortcuts.host.maximizedPanel.length > 0
+                || timelineController.selectedClipIds.length > 0)
+        onActivated: {
+            if (shortcuts.host.maximizedPanel.length > 0)
+                shortcuts.host.maximizedPanel = "";
+            else
+                shortcuts.timelineView.clearTimelineSelection();
+        }
     }
     Shortcut {
         sequence: "I"

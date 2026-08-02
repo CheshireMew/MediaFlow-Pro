@@ -21,6 +21,7 @@ from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionServic
 from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
+from mediaflow.application.timeline_clock import asset_in_timeline_clock
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcript_editing import TranscriptEditingService
 from mediaflow.application.translation_service import TranslationService
@@ -30,7 +31,10 @@ from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import (
+    AssetKind,
+    AssetOrigin,
     TaskStatus,
+    TrackKind,
 )
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
@@ -47,7 +51,7 @@ from mediaflow.domain.tasks import (
     SequenceBoundaryTaskOutcome,
     Task,
 )
-from mediaflow.domain.timeline import TimelineState
+from mediaflow.domain.timeline import Clip, TimelineState, Track, default_clip_media_kind
 from mediaflow.infrastructure.asr_models import FasterWhisperModelStore
 from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.cookie_store import CookieStore
@@ -343,6 +347,17 @@ class EditorProject:
     def list_assets(self):
         return self._repository.catalog.list_assets()
 
+    def list_asset_bins(self):
+        return self._repository.catalog.list_asset_bins()
+
+    def create_asset_bin(self, name: str, parent_id: str | None = None):
+        self._require_writable()
+        return self._repository.catalog.create_asset_bin(name, parent_id)
+
+    def move_assets_to_bin(self, asset_ids: list[str], bin_id: str | None):
+        self._require_writable()
+        return self._repository.catalog.move_assets_to_bin(asset_ids, bin_id)
+
     def resolve_asset_path(self, asset):
         return self._repository.catalog.resolve_asset_path(asset)
 
@@ -466,6 +481,23 @@ class EditorProject:
 
     def import_external_asset(self, source: str | Path, *, expected_kind=None):
         return self._assets.import_external(source, expected_kind=expected_kind)
+
+    def capture_asset_frame(self, asset_id: str, frame: int, sequence_id: str):
+        self._require_writable()
+        asset = self._repository.catalog.get_asset(asset_id)
+        sequence = self._repository.catalog.get_sequence(sequence_id)
+        asset = asset_in_timeline_clock(
+            self._repository.catalog,
+            asset,
+            sequence,
+        )
+        path = MediaThumbnailService(self._paths).capture_frame(
+            self._repository,
+            asset,
+            frame=max(0, int(frame)),
+            profile=sequence.profile,
+        )
+        return self._assets.register_output(path, AssetOrigin.GENERATED)
 
     def relink_asset(
         self,
@@ -667,6 +699,16 @@ class EditorProject:
 
     def import_web_package(self, source: str | Path):
         return self._web_packages.import_package(source)
+
+    def populate_sample_project(self) -> None:
+        from mediaflow.application.sample_project_service import SampleProjectService
+
+        self._require_writable()
+        SampleProjectService(
+            self._repository,
+            self.timeline,
+            self.project_dir,
+        ).populate()
 
     def inspect_web_asset(self, asset_id: str):
         return self._web_packages.inspect_asset(asset_id)
@@ -1199,6 +1241,62 @@ class EditorApplication:
                 keep=16,
                 max_age_seconds=7 * 24 * 60 * 60,
             )
+        return destination
+
+    def write_asset_preview_snapshot(
+        self,
+        project_dir: str | Path,
+        sequence_id: str,
+        asset_id: str,
+    ) -> Path:
+        with ProjectRepository.open(project_dir, writable=False) as repository:
+            sequence = repository.catalog.get_sequence(sequence_id)
+            project = repository.catalog.get_project()
+            asset = repository.catalog.get_asset(asset_id)
+            if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.IMAGE}:
+                raise ValueError("该素材类型不能在源监视器中播放")
+            main_profile = repository.catalog.get_sequence(project.main_sequence_id).profile
+            timeline_asset = asset.in_frame_clock(main_profile, sequence.profile)
+            duration = timeline_asset.metadata.duration_frames or 150
+            track_kind = (
+                TrackKind.AUDIO if asset.kind == AssetKind.AUDIO else TrackKind.VIDEO
+            )
+            track = Track(
+                id=f"source-track-{asset.id}",
+                sequence_id=sequence.id,
+                name="Source monitor",
+                kind=track_kind,
+                position=0,
+            )
+            clip = Clip(
+                id=f"source-clip-{asset.id}",
+                track_id=track.id,
+                asset_id=asset.id,
+                timeline_start=0,
+                source_in=0,
+                duration=duration,
+                media_kind=default_clip_media_kind(
+                    asset.kind,
+                    has_audio=asset.metadata.has_audio,
+                ),
+            )
+            state = TimelineState(sequence=sequence, tracks=[track], clips=[clip])
+            document = TimelineCompiler(repository).compile(
+                state,
+                use_proxies=True,
+                native_preview=True,
+                prefer_sdr_preview_proxy=True,
+            )
+            namespace = "source-" + hashlib.sha256(asset.id.encode("utf-8")).hexdigest()[:12]
+            preview_cache = self._paths.project_cache_dir(project_dir)
+            destination = content_addressed_child_path(
+                preview_cache / "mlt",
+                document.xml,
+                namespace=namespace,
+                suffix=".mlt",
+            )
+            if not destination.is_file():
+                atomic_write_text(destination, document.xml)
         return destination
 
     def create_project(

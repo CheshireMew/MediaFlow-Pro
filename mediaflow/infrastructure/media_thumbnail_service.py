@@ -8,7 +8,7 @@ from pathlib import Path
 
 from mediaflow.atomic_file import native_temporary_sibling
 from mediaflow.domain.enums import AssetKind
-from mediaflow.domain.project import Asset
+from mediaflow.domain.project import Asset, ProjectProfile
 from mediaflow.domain.storage_names import (
     content_addressed_child_path,
     require_windows_interop_path,
@@ -95,6 +95,65 @@ class MediaThumbnailService:
                 temporary.unlink(missing_ok=True)
         except (OSError, subprocess.SubprocessError):
             return None
+
+    def capture_frame(
+        self,
+        repository: ProjectRepository,
+        asset: Asset,
+        *,
+        frame: int,
+        profile: ProjectProfile,
+    ) -> Path:
+        if asset.kind not in {AssetKind.VIDEO, AssetKind.IMAGE}:
+            raise ValueError("只有视频或图片素材可以截取画面")
+        source = self._visual_source(repository, asset)
+        if source is None:
+            raise FileNotFoundError("素材源文件不可用")
+        bounded_frame = max(
+            0,
+            min(
+                max(0, asset.metadata.duration_frames - 1),
+                int(frame),
+            ),
+        )
+        signature = hashlib.sha256(
+            "|".join(
+                (
+                    "capture-v1",
+                    asset.id,
+                    asset.fingerprint.edge_sha256 if asset.fingerprint else "",
+                    str(bounded_frame),
+                    str(profile.fps_numerator),
+                    str(profile.fps_denominator),
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        destination = content_addressed_child_path(
+            repository.project_dir / "generated" / "captures",
+            f"capture:{signature}",
+            namespace="frame",
+            suffix=".png",
+        )
+        if destination.is_file() and destination.stat().st_size > 0:
+            return destination.resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = native_temporary_sibling(destination, label="capture")
+        seconds = (
+            bounded_frame * profile.fps_denominator / profile.fps_numerator
+        )
+        try:
+            if not self._render_frame(
+                source,
+                temporary,
+                asset.metadata.width or profile.width,
+                asset.metadata.height or profile.height,
+                seek_seconds=seconds,
+            ):
+                raise RuntimeError("无法从素材解码当前画面")
+            temporary.replace(destination)
+            return destination.resolve()
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _render_video(self, source: Path, destination: Path, width: int, height: int) -> bool:
         visible_time = self._first_visible_time(source)

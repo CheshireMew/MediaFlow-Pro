@@ -28,6 +28,7 @@ from mediaflow.infrastructure.editable_media_project_migration import (
     V5_RUNTIME_PATH,
     migrate_editable_media_v4_manifest,
 )
+from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_browser import WebPackagePreviewServer
 
@@ -319,7 +320,7 @@ def test_real_v4_project_upgrades_once_and_reaches_visible_v5_output(
     assert upgrade["ok"] is True
 
     after = _project_web_state(project)
-    assert after["schema_version"] == 36
+    assert after["schema_version"] == PROJECT_SCHEMA_VERSION
     assert after["raw_manifest"]["version"] == 5
     validate_editable_media_document(after["raw_manifest"])
     assert editable_media_source_hash(after["package"]) == after["source_hash"]

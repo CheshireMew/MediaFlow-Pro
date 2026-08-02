@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class WorkspaceController(ControllerFacet):
+    sampleTourRequested = Signal()
     projectStateChanged = Signal()
     selectionChanged = Signal()
     historyChanged = Signal()
@@ -351,6 +352,21 @@ class WorkspaceController(ControllerFacet):
             ensure_unique=True,
         )
         self._session._set_status("项目已创建")
+
+    @Slot()
+    @report_ui_errors
+    def createSampleProject(self) -> None:
+        self._require_project_open_available()
+        self._session.lifecycle.create_sample_and_open(
+            Path(self._session.settings.ui.default_project_directory)
+        )
+        self._session._set_status("示例项目已创建；跟随引导认识主要区域")
+        self.sampleTourRequested.emit()
+
+    @Slot()
+    def showWorkspaceTour(self) -> None:
+        if self.hasProject:
+            self.sampleTourRequested.emit()
 
     @Slot(str)
     @report_ui_errors

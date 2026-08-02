@@ -19,6 +19,7 @@ from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import now_ms
 from mediaflow.domain.project import (
     Asset,
+    AssetBin,
     AssetFingerprint,
     MediaMetadata,
     Project,
@@ -68,8 +69,18 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
         self.get_sequence(run.sequence_id)
         if any(self.get_asset(asset_id).project_id != project.id for asset_id in run.asset_ids):
             raise ValueError("Workflow run contains an asset from another project")
-        updated = run.model_copy(update={"updated_at": now_ms()})
         with self.transaction() as connection:
+            latest_row = connection.execute(
+                "SELECT MAX(updated_at) AS updated_at FROM workflow_run"
+            ).fetchone()
+            latest_updated_at = (
+                int(latest_row["updated_at"])
+                if latest_row is not None and latest_row["updated_at"] is not None
+                else -1
+            )
+            updated = run.model_copy(
+                update={"updated_at": max(now_ms(), latest_updated_at + 1)}
+            )
             connection.execute(
                 """INSERT INTO workflow_run(
                     id, project_id, sequence_id, asset_ids_json, stage, status,
@@ -263,10 +274,10 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO asset(
-                    id, project_id, name, kind, origin, path, managed, proxy_path,
+                    id, project_id, name, kind, origin, path, managed, bin_id, proxy_path,
                     sdr_preview_proxy_path, waveform_path, status, fingerprint_json,
                     metadata_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     asset.id,
                     asset.project_id,
@@ -275,6 +286,7 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
                     asset.origin.value,
                     stored_path,
                     int(asset.managed),
+                    asset.bin_id,
                     proxy_path,
                     sdr_preview_proxy_path,
                     waveform_path,
@@ -360,6 +372,85 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
         rows = self._fetchall("SELECT * FROM asset ORDER BY created_at, name")
         return [self._asset_from_row(row) for row in rows]
 
+    def list_asset_bins(self) -> list[AssetBin]:
+        rows = self._fetchall(
+            "SELECT * FROM asset_bin ORDER BY parent_id, position, name, id"
+        )
+        items = [
+            AssetBin(
+                id=row["id"],
+                project_id=row["project_id"],
+                name=row["name"],
+                parent_id=row["parent_id"],
+                position=row["position"],
+            )
+            for row in rows
+        ]
+        children: dict[str | None, list[AssetBin]] = {}
+        for item in items:
+            children.setdefault(item.parent_id, []).append(item)
+        ordered: list[AssetBin] = []
+
+        def append_children(parent_id: str | None) -> None:
+            for item in children.get(parent_id, []):
+                ordered.append(item)
+                append_children(item.id)
+
+        append_children(None)
+        return ordered
+
+    def create_asset_bin(self, name: str, parent_id: str | None = None) -> AssetBin:
+        project = self.get_project()
+        if parent_id is not None and not any(
+            item.id == parent_id for item in self.list_asset_bins()
+        ):
+            raise KeyError(parent_id)
+        siblings = [item for item in self.list_asset_bins() if item.parent_id == parent_id]
+        asset_bin = AssetBin(
+            project_id=project.id,
+            name=name,
+            parent_id=parent_id,
+            position=len(siblings),
+        )
+        if any(item.name.casefold() == asset_bin.name.casefold() for item in siblings):
+            raise ValueError("同一素材文件夹中不能使用重复名称")
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO asset_bin(id, project_id, name, parent_id, position) VALUES (?, ?, ?, ?, ?)",
+                (
+                    asset_bin.id,
+                    asset_bin.project_id,
+                    asset_bin.name,
+                    asset_bin.parent_id,
+                    asset_bin.position,
+                ),
+            )
+            self._touch_project(connection)
+        return asset_bin
+
+    def move_assets_to_bin(
+        self,
+        asset_ids: list[str],
+        bin_id: str | None,
+    ) -> list[Asset]:
+        selected_ids = list(dict.fromkeys(asset_ids))
+        if not selected_ids:
+            return []
+        if bin_id is not None and not any(
+            item.id == bin_id for item in self.list_asset_bins()
+        ):
+            raise KeyError(bin_id)
+        for asset_id in selected_ids:
+            self.get_asset(asset_id)
+        placeholders = ",".join("?" for _ in selected_ids)
+        with self.transaction() as connection:
+            connection.execute(
+                f"UPDATE asset SET bin_id=? WHERE id IN ({placeholders})",
+                (bin_id, *selected_ids),
+            )
+            self._touch_project(connection)
+        return [self.get_asset(asset_id) for asset_id in selected_ids]
+
     def update_asset(self, asset: Asset) -> Asset:
         current = self.get_asset(asset.id)
         if current.project_id != asset.project_id:
@@ -368,7 +459,7 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
         with self.transaction() as connection:
             connection.execute(
                 """UPDATE asset SET
-                    name=?, kind=?, origin=?, path=?, managed=?, proxy_path=?,
+                    name=?, kind=?, origin=?, path=?, managed=?, bin_id=?, proxy_path=?,
                     sdr_preview_proxy_path=?, waveform_path=?, status=?,
                     fingerprint_json=?, metadata_json=?
                 WHERE id=?""",
@@ -378,6 +469,7 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
                     asset.origin.value,
                     stored_path,
                     int(asset.managed),
+                    asset.bin_id,
                     self._store_optional_path(asset.proxy_path),
                     self._store_optional_path(asset.sdr_preview_proxy_path),
                     self._store_optional_path(asset.waveform_path),
@@ -556,6 +648,7 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
             origin=AssetOrigin(row["origin"]),
             path=row["path"],
             managed=bool(row["managed"]),
+            bin_id=row["bin_id"],
             proxy_path=row["proxy_path"],
             sdr_preview_proxy_path=row["sdr_preview_proxy_path"],
             waveform_path=row["waveform_path"],

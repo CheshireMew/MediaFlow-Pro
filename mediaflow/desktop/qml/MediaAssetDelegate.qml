@@ -18,6 +18,7 @@ Rectangle {
 
     signal contextRequested(string assetId)
     signal addRequested(string assetId)
+    signal openRequested(string assetId)
 
     readonly property bool listMode: viewMode === "list"
     readonly property bool largeThumbnailMode: viewMode === "large_thumbnails"
@@ -48,8 +49,9 @@ Rectangle {
     }
     Keys.onReturnPressed: function (event) {
         mediaController.selectAsset(root.assetId, false);
-        if (root.canEdit && root.status === "online")
-            root.addRequested(root.assetId);
+        if (root.status === "online"
+                && ["video", "audio", "image"].indexOf(root.kind) >= 0)
+            root.openRequested(root.assetId);
         event.accepted = true;
     }
     Keys.onPressed: function (event) {
@@ -198,14 +200,14 @@ Rectangle {
         }
         onCanceled: root.dragPreview.dragActive = false
         onDoubleClicked: function (mouse) {
-            if (root.canEdit && mouse.button === Qt.LeftButton
-                    && root.status === "online")
-                root.addRequested(root.assetId);
+            if (mouse.button === Qt.LeftButton && root.status === "online"
+                    && ["video", "audio", "image"].indexOf(root.kind) >= 0)
+                root.openRequested(root.assetId);
         }
 
         ToolTip.visible: containsMouse && !drag.active && root.status === "online"
         ToolTip.text: root.canEdit
-            ? qsTr("拖到时间轴；双击则添加到播放头")
-            : qsTr("只读项目中可查看素材，但不能加入时间线")
+            ? qsTr("拖到时间轴；双击在源监视器中打开")
+            : qsTr("双击在源监视器中查看素材")
     }
 }

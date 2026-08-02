@@ -102,3 +102,54 @@ def migrate_v34_to_v35(workspace) -> None:
 def migrate_v35_to_v36(workspace) -> None:
     with workspace.transaction():
         migrate_project_editable_media_to_v5(workspace)
+
+
+def migrate_v36_to_v37(workspace) -> None:
+    with workspace.transaction() as connection:
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS asset_bin (
+                   id TEXT PRIMARY KEY,
+                   project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+                   name TEXT NOT NULL,
+                   parent_id TEXT REFERENCES asset_bin(id) ON DELETE CASCADE,
+                   position INTEGER NOT NULL
+               )"""
+        )
+        asset_columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(asset)").fetchall()
+        }
+        if "bin_id" not in asset_columns:
+            connection.execute(
+                "ALTER TABLE asset ADD COLUMN bin_id TEXT REFERENCES asset_bin(id) ON DELETE SET NULL"
+            )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_bin_project ON asset_bin(project_id, parent_id, position)"
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_bin_unique_name
+               ON asset_bin(project_id, COALESCE(parent_id, ''), name COLLATE NOCASE)"""
+        )
+        connection.execute(
+            "UPDATE schema_info SET version=37 WHERE component='project'"
+        )
+
+
+def migrate_v37_to_v38(workspace) -> None:
+    with workspace.transaction() as connection:
+        connection.execute("DROP INDEX IF EXISTS idx_asset_bin_unique_name")
+        connection.execute(
+            """CREATE UNIQUE INDEX idx_asset_bin_unique_name
+               ON asset_bin(project_id, COALESCE(parent_id, ''), name COLLATE NOCASE)"""
+        )
+        clip_columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(clip)").fetchall()
+        }
+        if "visual_effects_json" not in clip_columns:
+            connection.execute(
+                "ALTER TABLE clip ADD COLUMN visual_effects_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        connection.execute(
+            "UPDATE schema_info SET version=38 WHERE component='project'"
+        )

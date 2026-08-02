@@ -252,6 +252,100 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     assert root.find(".//audio") is not None
 
 
+def test_clip_source_and_visual_effects_run_through_public_cli_contract(
+    tmp_path: Path,
+) -> None:
+    application = EditorApplication()
+    project_path = tmp_path / "Public Clip Editing"
+    project = application.create_project(project_path, "Public Clip Editing")
+    try:
+        project.populate_sample_project()
+        sequence_id = project.get_project().main_sequence_id
+        state = project.timeline(sequence_id).state
+        clip_id = state.clips[0].id
+        replacement_id = project.list_assets()[1].id
+    finally:
+        project.close()
+
+    replaced = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "timeline.clip.source.replace",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "asset_id": replacement_id,
+            },
+        },
+        application=application,
+    )["clip"]
+    assert replaced["asset_id"] == replacement_id
+
+    added = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "timeline.clip.effect.add",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "kind": "gaussian_blur",
+            },
+        },
+        application=application,
+    )["clip"]
+    effect_id = added["visual_effects"][0]["id"]
+    updated = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "timeline.clip.effect.update",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "effect_id": effect_id,
+                "enabled": True,
+                "parameters": {"sigma": 7.5},
+            },
+        },
+        application=application,
+    )["clip"]
+    assert updated["visual_effects"][0]["parameters"] == {"sigma": 7.5}
+
+    removed = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "timeline.clip.effect.remove",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "effect_id": effect_id,
+            },
+        },
+        application=application,
+    )["clip"]
+    assert removed["visual_effects"] == []
+
+    described = execute_request(
+        {"protocol": "mediaflow-cli", "version": 2, "operation": "describe"},
+        application=application,
+    )
+    operation_names = {item["name"] for item in described["operations"]}
+    assert {
+        "timeline.clip.source.replace",
+        "timeline.clip.effect.add",
+        "timeline.clip.effect.update",
+        "timeline.clip.effect.move",
+        "timeline.clip.effect.remove",
+    } <= operation_names
+
+
 def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     tmp_path: Path,
     monkeypatch,

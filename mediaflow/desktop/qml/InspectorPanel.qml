@@ -19,10 +19,14 @@ Rectangle {
         || webController.isWebClip
     readonly property bool hasAssetSelection:
         !hasTimelineSelection && mediaController.selectedAssetId.length > 0
+    readonly property bool hasMultipleClips:
+        timelineController.selectedClipIds.length > 1
+        && timelineController.selectedCompoundId.length === 0
     readonly property var assetData:
         hasAssetSelection ? mediaController.selectedAssetData : ({})
     readonly property string panelTitle:
-        hasTimelineSelection ? qsTr("片段参数")
+        hasMultipleClips ? qsTr("批量片段参数")
+        : hasTimelineSelection ? qsTr("片段参数")
         : hasAssetSelection ? qsTr("素材参数") : qsTr("草稿参数")
 
     color: Theme.surface
@@ -111,8 +115,8 @@ Rectangle {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.hasTimelineSelection
-                ? 2 : root.hasAssetSelection ? 1 : 0
+            currentIndex: root.hasMultipleClips ? 3
+                : root.hasTimelineSelection ? 2 : root.hasAssetSelection ? 1 : 0
 
             AppScrollView {
                 id: draftScroll
@@ -293,6 +297,8 @@ Rectangle {
                     root.seekRequested(frame);
                 }
             }
+
+            MultiClipPanel {}
         }
     }
 }

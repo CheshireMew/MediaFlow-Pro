@@ -7,6 +7,7 @@ from pathlib import Path
 from mediaflow.domain.enums import AssetKind, ColorMode
 from mediaflow.domain.project import Asset
 from mediaflow.domain.timeline import Clip, ClipTransform
+from mediaflow.domain.visual_effects import visual_effect_mlt
 from mediaflow.infrastructure.mlt.graph import MltGraph
 
 
@@ -148,6 +149,22 @@ class MltClipGraph:
         native_preview: bool,
     ) -> None:
         transform = clip.transform
+        for effect in clip.visual_effects:
+            if not effect.enabled:
+                continue
+            service, properties = visual_effect_mlt(effect)
+            filter_element = ET.SubElement(
+                producer,
+                "filter",
+                {
+                    "id": f"visual_effect_{effect.id}",
+                    "in": str(producer_start),
+                    "out": str(producer_start + clip.duration - 1),
+                },
+            )
+            MltGraph.property(filter_element, "mlt_service", service)
+            for name, value in properties.items():
+                MltGraph.property(filter_element, name, f"{value:g}")
         if any(
             value > 0.0
             for value in (

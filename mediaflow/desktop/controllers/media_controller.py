@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
+from mediaflow.desktop.session_state import TimelinePlacement
 from mediaflow.domain.enums import AssetKind
 
 from .controller_facet import ControllerFacet, report_ui_errors
@@ -14,6 +15,18 @@ class MediaController(ControllerFacet):
     relinkConfirmationChanged = Signal()
     waveformDataChanged = Signal(str)
     errorOccurred = Signal(str)
+    sourceMonitorChanged = Signal()
+    searchChanged = Signal()
+
+    def __init__(self, session):
+        super().__init__(session)
+        self._source_asset_id = ""
+        self._source_graph_path = ""
+        self._source_name = ""
+        self._source_duration = 0
+        self._source_in = 0
+        self._source_out = 0
+        self._asset_search_text = ""
 
     @Property(QObject, constant=True)
     def assetsModel(self) -> QObject:
@@ -23,9 +36,71 @@ class MediaController(ControllerFacet):
     def filteredAssetsModel(self) -> QObject:
         return self._session.models.filtered_assets
 
+    @Property(QObject, constant=True)
+    def assetBinsModel(self) -> QObject:
+        return self._session.models.asset_bins
+
+    @Property(QObject, constant=True)
+    def filteredAssetMomentsModel(self) -> QObject:
+        return self._session.models.filtered_asset_moments
+
+    @Property(str, notify=searchChanged)
+    def assetSearchText(self) -> str:
+        return self._asset_search_text
+
     @Slot(str)
     def setAssetSearchText(self, value: str) -> None:
+        normalized = value.strip()
+        if normalized == self._asset_search_text:
+            return
+        self._asset_search_text = normalized
         self._session.models.filtered_assets.setSearchText(value)
+        self._session.models.filtered_asset_moments.setSearchText(value)
+        self.searchChanged.emit()
+
+    @Slot(str)
+    def setAssetBinFilter(self, bin_id: str) -> None:
+        normalized = bin_id.strip()
+        descendants = {normalized} if normalized not in {"", "__unfiled__"} else set()
+        rows = self._session.models.asset_bins.snapshot()
+        changed = True
+        while changed:
+            changed = False
+            for row in rows:
+                if row["parentId"] in descendants and row["binId"] not in descendants:
+                    descendants.add(row["binId"])
+                    changed = True
+        self._session.models.filtered_assets.set_bin_scope(normalized, descendants)
+
+    @Slot(str, str)
+    @report_ui_errors
+    def createAssetBin(self, name: str, parent_id: str) -> None:
+        self._session._require_writable()
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("素材文件夹名称不能为空")
+        self._session.binding.current.create_asset_bin(
+            normalized,
+            parent_id.strip() or None,
+        )
+        self._session.projectors.assets.refresh_assets()
+        self._session.events.projectStateChanged.emit()
+        self._session._set_status(f"已创建素材文件夹：{normalized}")
+
+    @Slot(str)
+    @report_ui_errors
+    def moveSelectedAssetsToBin(self, bin_id: str) -> None:
+        self._session._require_writable()
+        if not self._session.selection.asset_ids:
+            raise ValueError("请先选择要移动的素材")
+        self._session.binding.current.move_assets_to_bin(
+            self._session.selection.asset_ids,
+            bin_id.strip() or None,
+        )
+        self._session.projectors.assets.refresh_assets()
+        self._session.events.projectStateChanged.emit()
+        self._session.events.selectionChanged.emit()
+        self._session._set_status("素材文件夹已更新")
 
     @Property("QVariantList", notify=projectStateChanged)
     def watermarkAssetOptions(self) -> list[dict]:
@@ -53,6 +128,114 @@ class MediaController(ControllerFacet):
     def selectedAssetData(self) -> dict:
         row = self._session.models.assets.findRow("assetId", self.selectedAssetId)
         return self._session.models.assets.get(row)
+
+    @Property("QVariantMap", notify=sourceMonitorChanged)
+    def sourceMonitorData(self) -> dict:
+        return {
+            "assetId": self._source_asset_id,
+            "name": self._source_name,
+            "graphPath": self._source_graph_path,
+            "durationFrames": self._source_duration,
+            "inFrame": self._source_in,
+            "outFrame": self._source_out,
+        }
+
+    @Slot(str)
+    @report_ui_errors
+    def openSourceMonitor(self, asset_id: str) -> None:
+        if not self._session.binding.current:
+            raise RuntimeError("当前没有打开的项目")
+        asset = self._session.binding.current.get_asset(asset_id)
+        if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.IMAGE}:
+            raise ValueError("该素材类型不能在源监视器中播放")
+        project = self._session.binding.current.get_project()
+        main_profile = self._session.binding.current.get_sequence(
+            project.main_sequence_id
+        ).profile
+        active_profile = self._session.binding.timeline.state.sequence.profile
+        timeline_asset = asset.in_frame_clock(main_profile, active_profile)
+        duration = timeline_asset.metadata.duration_frames or 150
+        graph = self._session._api.write_asset_preview_snapshot(
+            self._session.binding.current.project_dir,
+            self._session.binding.active_sequence_id,
+            asset.id,
+        )
+        self._source_asset_id = asset.id
+        self._source_graph_path = str(graph)
+        self._source_name = asset.name
+        self._source_duration = duration
+        self._source_in = 0
+        self._source_out = duration
+        self.sourceMonitorChanged.emit()
+
+    @Slot()
+    def closeSourceMonitor(self) -> None:
+        self._source_asset_id = ""
+        self._source_graph_path = ""
+        self._source_name = ""
+        self._source_duration = 0
+        self._source_in = 0
+        self._source_out = 0
+        self.sourceMonitorChanged.emit()
+
+    @Slot(int)
+    @report_ui_errors
+    def setSourceInFrame(self, frame: int) -> None:
+        if not self._source_asset_id:
+            raise RuntimeError("源监视器中没有素材")
+        self._source_in = max(0, min(self._source_out - 1, int(frame)))
+        self.sourceMonitorChanged.emit()
+
+    @Slot(int)
+    @report_ui_errors
+    def setSourceOutFrame(self, frame: int) -> None:
+        if not self._source_asset_id:
+            raise RuntimeError("源监视器中没有素材")
+        self._source_out = max(
+            self._source_in + 1,
+            min(self._source_duration, int(frame) + 1),
+        )
+        self.sourceMonitorChanged.emit()
+
+    @Slot(int, float, bool)
+    @report_ui_errors
+    def addSourceRangeToTimeline(
+        self,
+        start_frame: int,
+        pixels_per_frame: float,
+        snap_enabled: bool,
+    ) -> None:
+        self._session._require_writable()
+        if not self._source_asset_id:
+            raise RuntimeError("源监视器中没有素材")
+        self._session.timeline_assets.queue_for_timeline(
+            [self._source_asset_id],
+            TimelinePlacement(
+                start_frame=max(0, int(start_frame)),
+                pixels_per_frame=float(pixels_per_frame),
+                playhead_frame=max(0, int(start_frame)),
+                snap_enabled=bool(snap_enabled),
+                source_in_frame=self._source_in,
+                source_out_frame=self._source_out,
+            ),
+        )
+
+    @Slot(int)
+    @report_ui_errors
+    def captureSourceFrame(self, frame: int) -> None:
+        self._session._require_writable()
+        if not self._source_asset_id or not self._session.binding.current:
+            raise RuntimeError("源监视器中没有素材")
+        captured = self._session.binding.current.capture_asset_frame(
+            self._source_asset_id,
+            max(0, int(frame)),
+            self._session.binding.active_sequence_id,
+        )
+        self._session.selection.asset_ids = [captured.id]
+        self._session.projectors.assets.refresh_assets()
+        self._session.events.projectStateChanged.emit()
+        self._session.events.selectionChanged.emit()
+        self._session._set_status(f"已将当前画面保存为素材：{captured.name}")
 
     @Slot(str, result=QUrl)
     def assetUrl(self, asset_id: str) -> QUrl:

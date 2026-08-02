@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 
 from mediaflow.automation.operation_context import OperationContext
-from mediaflow.domain.enums import ExportFormat, TrackKind
+from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.domain.timeline import ClipAudio, ClipTransform
@@ -95,6 +95,60 @@ def update_clip_audio(context: OperationContext) -> dict:
         ClipAudio.model_validate(context.required("audio")),
     )
     return {"clip": clip}
+
+
+def replace_clip_source(context: OperationContext) -> dict:
+    clip = context.project.timeline(context.sequence_id()).replace_clip_source(
+        str(context.required("clip_id")),
+        str(context.required("asset_id")),
+    )
+    return {"clip": clip}
+
+
+def add_clip_visual_effect(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.add_clip_visual_effect(
+        clip_id,
+        VisualEffectKind(str(context.required("kind"))),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def update_clip_visual_effect(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.update_clip_visual_effect(
+        clip_id,
+        str(context.required("effect_id")),
+        enabled=bool(context.required("enabled")),
+        parameters={
+            str(key): float(value)
+            for key, value in dict(context.required("parameters")).items()
+        },
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def move_clip_visual_effect(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.move_clip_visual_effect(
+        clip_id,
+        str(context.required("effect_id")),
+        int(context.required("position")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def remove_clip_visual_effect(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.remove_clip_visual_effect(
+        clip_id,
+        str(context.required("effect_id")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
 
 
 def undo(context: OperationContext) -> dict:

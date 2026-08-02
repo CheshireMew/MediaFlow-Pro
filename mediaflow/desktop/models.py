@@ -155,6 +155,7 @@ class AssetListModel(DictListModel):
                 "path",
                 "status",
                 "managed",
+                "binId",
                 "durationFrames",
                 "width",
                 "height",
@@ -189,6 +190,107 @@ class AssetFilterModel(QSortFilterProxyModel):
     def __init__(self, source_model: AssetListModel, parent: QObject | None = None):
         super().__init__(parent)
         self._search_text = ""
+        self._bin_id = ""
+        self._bin_ids: set[str] = set()
+        self.setDynamicSortFilter(True)
+        self.setSourceModel(source_model)
+
+    @Slot(str)
+    def setSearchText(self, value: str) -> None:
+        normalized = value.strip().casefold()
+        if normalized == self._search_text:
+            return
+        self.beginFilterChange()
+        self._search_text = normalized
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
+    def set_bin_scope(self, bin_id: str, bin_ids: set[str]) -> None:
+        normalized = bin_id.strip()
+        if normalized == self._bin_id and bin_ids == self._bin_ids:
+            return
+        self.beginFilterChange()
+        self._bin_id = normalized
+        self._bin_ids = set(bin_ids)
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        source = self.sourceModel()
+        if not isinstance(source, AssetListModel):
+            return False
+        row = source.get(source_row)
+        if self._bin_id == "__unfiled__" and row.get("binId"):
+            return False
+        if self._bin_id not in {"", "__unfiled__"} and row.get("binId") not in self._bin_ids:
+            return False
+        if not self._search_text:
+            return True
+        corpus = str(row.get("searchText") or row.get("name") or "")
+        return self.matches_text(self._search_text, corpus)
+
+    @classmethod
+    def matches_text(cls, query: str, corpus: str) -> bool:
+        corpus = corpus.casefold()
+        if query in corpus:
+            return True
+        query_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", query))
+        if not query_terms:
+            return False
+        corpus_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", corpus))
+        expanded_corpus = set(corpus_terms)
+        for concept in cls._CONCEPTS:
+            if any(term in corpus for term in concept):
+                expanded_corpus.update(concept)
+        return all(
+            any(
+                query == candidate
+                or query in candidate
+                or candidate in query
+                for candidate in expanded_corpus
+            )
+            or any(query in concept and bool(concept & expanded_corpus) for concept in cls._CONCEPTS)
+            for query in query_terms
+        )
+
+
+class AssetBinListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            [
+                "binId",
+                "name",
+                "parentId",
+                "position",
+                "depth",
+                "displayName",
+                "assetCount",
+            ],
+            parent,
+        )
+
+
+class AssetMomentListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            [
+                "momentId",
+                "assetId",
+                "assetName",
+                "momentType",
+                "label",
+                "detail",
+                "startFrame",
+                "endFrame",
+                "previewUrl",
+                "searchText",
+            ],
+            parent,
+        )
+
+
+class AssetMomentFilterModel(QSortFilterProxyModel):
+    def __init__(self, source_model: AssetMomentListModel, parent: QObject | None = None):
+        super().__init__(parent)
+        self._search_text = ""
         self.setDynamicSortFilter(True)
         self.setSourceModel(source_model)
 
@@ -203,31 +305,14 @@ class AssetFilterModel(QSortFilterProxyModel):
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         if not self._search_text:
-            return True
+            return False
         source = self.sourceModel()
-        if not isinstance(source, AssetListModel):
+        if not isinstance(source, AssetMomentListModel):
             return False
         row = source.get(source_row)
-        corpus = str(row.get("searchText") or row.get("name") or "").casefold()
-        if self._search_text in corpus:
-            return True
-        query_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", self._search_text))
-        if not query_terms:
-            return False
-        corpus_terms = set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", corpus))
-        expanded_corpus = set(corpus_terms)
-        for concept in self._CONCEPTS:
-            if any(term in corpus for term in concept):
-                expanded_corpus.update(concept)
-        return all(
-            any(
-                query == candidate
-                or query in candidate
-                or candidate in query
-                for candidate in expanded_corpus
-            )
-            or any(query in concept and bool(concept & expanded_corpus) for concept in self._CONCEPTS)
-            for query in query_terms
+        return AssetFilterModel.matches_text(
+            self._search_text,
+            str(row.get("searchText") or row.get("label") or ""),
         )
 
 
@@ -314,6 +399,7 @@ class ClipListModel(DictListModel):
                 "hasAudio",
                 "audioTrackPosition",
                 "waveformReady",
+                "previewUrl",
                 "x",
                 "y",
                 "scaleX",

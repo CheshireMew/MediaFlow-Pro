@@ -87,6 +87,20 @@ class ProjectLifecycle(SessionCoordinator):
         candidate = self._session._api.create_project(root, display_name, profile)
         self.replace(candidate)
 
+    def create_sample_and_open(self, parent: Path) -> None:
+        root, display_name = self._creation_target(
+            parent,
+            "MediaFlow 示例项目",
+            ensure_unique=True,
+        )
+        candidate = self._session._api.create_project(root, display_name)
+        try:
+            candidate.populate_sample_project()
+        except BaseException:
+            candidate.close()
+            raise
+        self.replace(candidate)
+
     @staticmethod
     def _creation_target(
         parent: Path,

@@ -11,6 +11,7 @@ from mediaflow.domain.enums import (
     ColorMode,
     TrackKind,
     TransitionKind,
+    VisualEffectKind,
 )
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.project import MediaMetadata, ProjectProfile
@@ -111,6 +112,86 @@ def test_known_media_source_bounds_are_enforced_at_edit_and_storage_boundaries(
     )
     with pytest.raises(ValueError, match="source range"):
         repository.timeline.save_timeline(invalid)
+
+
+def test_replace_source_is_one_undoable_edit_and_revalidates_source_bounds(
+    editor_fixture,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    source = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=12,
+        duration=30,
+    )
+    replacement_path = repository.project_dir.parent / "replacement.png"
+    replacement_path.write_bytes(b"real-replacement-output")
+    replacement = repository.catalog.import_external_asset(
+        replacement_path,
+        AssetKind.IMAGE,
+    )
+
+    changed = editor.replace_clip_source(source.id, replacement.id)
+
+    assert changed.asset_id == replacement.id
+    assert changed.source_in == 0
+    assert changed.duration == 30
+    assert changed.media_kind == ClipMediaKind.VIDEO_ONLY
+    assert repository.timeline.load_timeline(editor.sequence_id).clips[0] == changed
+
+    editor.undo()
+    restored = editor.state.clips[0]
+    assert restored.asset_id == asset.id
+    assert restored.source_in == 12
+
+
+def test_visual_effect_stack_is_validated_ordered_persisted_and_undoable(
+    editor_fixture,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=30,
+    )
+    adjustment = editor.add_clip_visual_effect(
+        clip.id,
+        VisualEffectKind.COLOR_ADJUSTMENT,
+    )
+    vignette = editor.add_clip_visual_effect(
+        clip.id,
+        VisualEffectKind.VIGNETTE,
+    )
+    editor.update_clip_visual_effect(
+        clip.id,
+        adjustment.id,
+        enabled=True,
+        parameters={"brightness": 0.15, "contrast": 1.2, "saturation": 1.1},
+    )
+    editor.move_clip_visual_effect(clip.id, vignette.id, 0)
+
+    stored = repository.timeline.load_timeline(editor.sequence_id).clips[0]
+    assert [(item.kind, item.position) for item in stored.visual_effects] == [
+        (VisualEffectKind.VIGNETTE, 0),
+        (VisualEffectKind.COLOR_ADJUSTMENT, 1),
+    ]
+    assert stored.visual_effects[1].parameters["brightness"] == pytest.approx(0.15)
+    with pytest.raises(ValueError, match="outside its range"):
+        editor.update_clip_visual_effect(
+            clip.id,
+            adjustment.id,
+            enabled=True,
+            parameters={"brightness": 4.0, "contrast": 1.0, "saturation": 1.0},
+        )
+
+    editor.undo()
+    assert [item.id for item in editor.state.clips[0].visual_effects] == [
+        adjustment.id,
+        vignette.id,
+    ]
 
 
 def test_split_preserves_valid_incoming_and_outgoing_transitions(editor_fixture) -> None:

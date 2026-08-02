@@ -8,6 +8,7 @@ Rectangle {
     id: root
     objectName: "appTitleBar"
     required property var hostWindow
+    property var workspaceItem: null
     signal exportRequested
     implicitHeight: 48
     color: Theme.surfaceSunken
@@ -54,6 +55,7 @@ Rectangle {
 
         WorkspaceHeader {
             visible: workspaceController.hasProject
+            workspaceItem: root.workspaceItem
             Layout.fillHeight: true
             Layout.minimumWidth: implicitWidth
             Layout.preferredWidth: implicitWidth

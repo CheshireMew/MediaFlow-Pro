@@ -684,7 +684,12 @@
             <translation>Trim &amp; Speed</translation>
         </message>
         <message>
-            <location line="+7" />
+            <location line="+18" />
+            <source>换源</source>
+            <translation>Replace Media</translation>
+        </message>
+        <message>
+            <location line="+11" />
             <source>源入点</source>
             <translation>Source In</translation>
         </message>
@@ -804,7 +809,7 @@
             <translation>Ripple Delete</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+18" />
             <source>视觉资源 · 转场</source>
             <translation>Visual Assets · Transitions</translation>
         </message>
@@ -1552,13 +1557,7 @@
             <translation>Cancel</translation>
         </message>
         <message>
-            <location line="+254" />
-            <location line="+16" />
-            <source>打开已有项目</source>
-            <translation>Open Existing Project</translation>
-        </message>
-        <message>
-            <location line="-79" />
+            <location line="+191" />
             <source>快速开始</source>
             <translation>Quick Start</translation>
         </message>
@@ -1609,12 +1608,7 @@
             <translation>Paste</translation>
         </message>
         <message>
-            <location line="+44" />
-            <source>打开包含 project.mfp 的项目目录，继续之前的工作。</source>
-            <translation>Open a project folder containing project.mfp and continue where you left off.</translation>
-        </message>
-        <message>
-            <location line="+40" />
+            <location line="+94" />
             <source>最近项目</source>
             <translation>Recent Projects</translation>
         </message>
@@ -1673,7 +1667,7 @@
             <translation>Project moved or unavailable</translation>
         </message>
         <message>
-            <location line="-166" />
+            <location line="-176" />
             <source>正在读取视频信息…</source>
             <translation>Reading video info…</translation>
         </message>
@@ -1683,7 +1677,27 @@
             <translation>Download &amp; Create Project</translation>
         </message>
         <message>
-            <location line="+312" />
+            <location line="+24" />
+            <source>打开或体验</source>
+            <translation>Open or Explore</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>继续已有工作，或创建一份带素材、转场和效果的示例项目。</source>
+            <translation>Continue existing work or create a sample project with media, transitions, and effects.</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>体验示例</source>
+            <translation>Try Sample</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>打开项目</source>
+            <translation>Open Project</translation>
+        </message>
+        <message>
+            <location line="+273" />
             <source>离线</source>
             <translation>Offline</translation>
         </message>
@@ -1706,7 +1720,12 @@
     <context>
         <name>InspectorPanel</name>
         <message>
-            <location filename="../../desktop/qml/InspectorPanel.qml" line="+25" />
+            <location filename="../../desktop/qml/InspectorPanel.qml" line="+28" />
+            <source>批量片段参数</source>
+            <translation>Batch Clip Properties</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>片段参数</source>
             <translation>Clip Settings</translation>
         </message>
@@ -1900,7 +1919,7 @@
     <context>
         <name>Main</name>
         <message>
-            <location filename="../../desktop/qml/Main.qml" line="+165" />
+            <location filename="../../desktop/qml/Main.qml" line="+175" />
             <source>确认下载</source>
             <translation>Confirm Download</translation>
         </message>
@@ -1910,7 +1929,7 @@
             <translation>Link analysis complete</translation>
         </message>
         <message>
-            <location line="-147" />
+            <location line="-157" />
             <source>最佳可用质量</source>
             <translation>Best available quality</translation>
         </message>
@@ -1920,7 +1939,7 @@
             <translation>Download Audio Only</translation>
         </message>
         <message>
-            <location line="+118" />
+            <location line="+128" />
             <source>选择媒体默认保存位置</source>
             <translation>Choose Default Media Location</translation>
         </message>
@@ -2053,7 +2072,7 @@
     <context>
         <name>MediaAssetDelegate</name>
         <message>
-            <location filename="../../desktop/qml/MediaAssetDelegate.qml" line="+64" />
+            <location filename="../../desktop/qml/MediaAssetDelegate.qml" line="+66" />
             <source>视频</source>
             <translation>Video</translation>
         </message>
@@ -2089,29 +2108,40 @@
         </message>
         <message>
             <location line="+130" />
-            <source>拖到时间轴；双击则添加到播放头</source>
-            <translation>Drag to the Timeline; double-click to add at the Playhead</translation>
+            <source>拖到时间轴；双击在源监视器中打开</source>
+            <translation>Drag to the timeline; double-click to open in the Source Monitor</translation>
         </message>
         <message>
             <location line="+1" />
-            <source>只读项目中可查看素材，但不能加入时间线</source>
-            <translation>You can view media in a read-only project, but cannot add it to the timeline</translation>
+            <source>双击在源监视器中查看素材</source>
+            <translation>Double-click to view in the Source Monitor</translation>
         </message>
     </context>
     <context>
         <name>MediaPanel</name>
         <message>
-            <location filename="../../desktop/qml/MediaPanel.qml" line="+89" />
+            <location filename="../../desktop/qml/MediaPanel.qml" line="+115" />
             <source>添加到播放头</source>
             <translation>Add at the Playhead</translation>
         </message>
         <message>
-            <location line="-29" />
+            <location line="-37" />
             <source>缩略图</source>
             <translation>Thumbnails</translation>
         </message>
         <message>
-            <location line="+2" />
+            <location line="-45" />
+            <source>全部素材</source>
+            <translation>All Media</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <location line="+341" />
+            <source>未归档</source>
+            <translation>Unfiled</translation>
+        </message>
+        <message>
+            <location line="-295" />
             <source>大缩略图</source>
             <translation>Large Thumbnails</translation>
         </message>
@@ -2121,12 +2151,17 @@
             <translation>List</translation>
         </message>
         <message>
-            <location line="+33" />
+            <location line="+26" />
+            <source>在源监视器中打开</source>
+            <translation>Open in Source Monitor</translation>
+        </message>
+        <message>
+            <location line="+15" />
             <source>打开素材所在文件夹</source>
             <translation>Open Containing Folder</translation>
         </message>
         <message>
-            <location line="+72" />
+            <location line="+78" />
             <source>所有文件 (*)</source>
             <translation>All Files (*)</translation>
         </message>
@@ -2146,7 +2181,18 @@
             <translation>Replace with different content?</translation>
         </message>
         <message>
-            <location line="+30" />
+            <location line="+17" />
+            <location line="+118" />
+            <source>新建素材文件夹</source>
+            <translation>New Media Folder</translation>
+        </message>
+        <message>
+            <location line="-106" />
+            <source>文件夹名称</source>
+            <translation>Folder Name</translation>
+        </message>
+        <message>
+            <location line="+22" />
             <source>搜索素材、转写内容或概念</source>
             <translation>Search media, transcripts, or concepts</translation>
         </message>
@@ -2171,22 +2217,27 @@
             <translation>Download</translation>
         </message>
         <message>
-            <location line="+21" />
+            <location line="+38" />
+            <source>移动到</source>
+            <translation>Move to</translation>
+        </message>
+        <message>
+            <location line="+37" />
             <source>将素材拖到下方时间轴；同一素材可以重复拖入</source>
             <translation>Drag media to the timeline below; the same item can be used more than once</translation>
         </message>
         <message>
-            <location line="-195" />
+            <location line="-276" />
             <source>重新定位</source>
             <translation>Relink</translation>
         </message>
         <message>
-            <location line="+188" />
+            <location line="+269" />
             <source>批量重新定位 (%1)</source>
             <translation>Batch Relink (%1)</translation>
         </message>
         <message>
-            <location line="-91" />
+            <location line="-166" />
             <source>所选文件的内容指纹与原素材不同：
 %1
 
@@ -2207,12 +2258,32 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Media Files (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)</translation>
         </message>
         <message>
-            <location line="+76" />
+            <location line="+97" />
             <source>导入</source>
             <translation>Import</translation>
         </message>
         <message>
-            <location line="+72" />
+            <location line="+118" />
+            <source>文件 %1</source>
+            <translation>Files %1</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>内容时刻 %1</source>
+            <translation>Content Moments %1</translation>
+        </message>
+        <message>
+            <location line="+68" />
+            <source>口述</source>
+            <translation>Spoken</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>画面</source>
+            <translation>Visual</translation>
+        </message>
+        <message>
+            <location line="+32" />
             <source>导入第一个素材</source>
             <translation>Import Your First Media</translation>
         </message>
@@ -2233,6 +2304,16 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+8" />
+            <source>没有匹配的内容时刻</source>
+            <translation>No matching content moments</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>内容时刻来自真实转写片段和画面高光分析。</source>
+            <translation>Content moments come from actual transcript segments and visual highlight analysis.</translation>
+        </message>
+        <message>
+            <location line="+8" />
             <source>媒体处理任务</source>
             <translation>Media Processing Task</translation>
         </message>
@@ -2243,9 +2324,62 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>MultiClipPanel</name>
+        <message>
+            <location filename="../../desktop/qml/components/MultiClipPanel.qml" line="+26" />
+            <source>已选择 %1 个片段，共 %2 帧</source>
+            <translation>%1 clips selected, %2 frames total</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>下面的值会一次应用到全部所选片段，并作为一次操作撤销。混合值显示为“多值”。</source>
+            <translation>The values below apply to every selected clip and undo as one operation. Mixed values appear as “Multiple values”.</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>增益 dB</source>
+            <translation>Gain dB</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>声像</source>
+            <translation>Pan</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>淡入帧</source>
+            <translation>Fade-in Frames</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>淡出帧</source>
+            <translation>Fade-out Frames</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>不透明度</source>
+            <translation>Opacity</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>应用到全部所选片段</source>
+            <translation>Apply to All Selected Clips</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>创建复合片段</source>
+            <translation>Create Compound Clip</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>删除所选</source>
+            <translation>Delete Selected</translation>
+        </message>
+    </context>
+    <context>
         <name>PreviewViewport</name>
         <message>
-            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+359" />
+            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+361" />
             <source>预览不可用：</source>
             <translation>Preview unavailable: </translation>
         </message>
@@ -2454,7 +2588,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Short</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="+11" />
             <source>主序列</source>
             <translation>Main Sequence</translation>
         </message>
@@ -2465,27 +2599,26 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+10" />
-            <location line="+7" />
             <source>序列</source>
             <translation>Sequence</translation>
         </message>
         <message>
-            <location line="+4" />
-            <source>切换序列或管理当前序列</source>
-            <translation>Switch sequences or manage the current sequence</translation>
-        </message>
-        <message>
-            <location line="+18" />
+            <location line="+76" />
             <source>当前：%1</source>
             <translation>Current: %1</translation>
         </message>
         <message>
-            <location line="+29" />
+            <location line="-31" />
             <source>新建短视频序列</source>
             <translation>New Short-Video Sequence</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+10" />
+            <source>当前序列设置</source>
+            <translation>Current Sequence Settings</translation>
+        </message>
+        <message>
+            <location line="+31" />
             <source>移除当前短视频</source>
             <translation>Remove Current Short Video</translation>
         </message>
@@ -4159,17 +4292,27 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TimelineClipLayer</name>
         <message>
-            <location filename="../../desktop/qml/TimelineClipLayer.qml" line="+75" />
+            <location filename="../../desktop/qml/TimelineClipLayer.qml" line="+81" />
             <source>片段 %1，起始帧 %2，持续 %3 帧</source>
             <translation>Clip %1, starts at frame %2, duration %3 frames</translation>
         </message>
         <message>
-            <location line="+49" />
+            <location line="+65" />
             <source>音频 · </source>
             <translation>Audio ·</translation>
         </message>
         <message>
-            <location line="+27" />
+            <location line="+36" />
+            <source>淡入 %1 帧</source>
+            <translation>Fade In %1 Frames</translation>
+        </message>
+        <message>
+            <location line="+35" />
+            <source>淡出 %1 帧</source>
+            <translation>Fade Out %1 Frames</translation>
+        </message>
+        <message>
+            <location line="+23" />
             <source>参数 · </source>
             <translation>Parameter ·</translation>
         </message>
@@ -4944,6 +5087,24 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>VisualEffectStackPanel</name>
+        <message>
+            <location filename="../../desktop/qml/components/VisualEffectStackPanel.qml" line="+26" />
+            <source>视觉效果</source>
+            <translation>Visual Effects</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>添加</source>
+            <translation>Add</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>效果按从上到下的顺序进入预览和导出。</source>
+            <translation>Effects are applied to preview and export from top to bottom.</translation>
+        </message>
+    </context>
+    <context>
         <name>WebEditorCanvas</name>
         <message>
             <location filename="../../desktop/qml/WebEditorCanvas.qml" line="+186" />
@@ -5193,7 +5354,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WindowTitleBar</name>
         <message>
-            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+69" />
+            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+71" />
             <source>最小化窗口</source>
             <translation>Minimize Window</translation>
         </message>
@@ -5359,17 +5520,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>Workspace</name>
         <message>
-            <location filename="../../desktop/qml/Workspace.qml" line="+111" />
+            <location filename="../../desktop/qml/Workspace.qml" line="+189" />
             <source>时间线</source>
             <translation>Timeline</translation>
         </message>
         <message>
-            <location line="+193" />
-            <source>播放器</source>
-            <translation>Player</translation>
-        </message>
-        <message>
-            <location line="+183" />
+            <location line="+357" />
             <source>%1 个素材</source>
             <translation>%1 media items</translation>
         </message>
@@ -5387,7 +5543,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WorkspaceHeader</name>
         <message>
-            <location filename="../../desktop/qml/components/WorkspaceHeader.qml" line="+65" />
+            <location filename="../../desktop/qml/components/WorkspaceHeader.qml" line="+70" />
             <source>只读</source>
             <translation>Read Only</translation>
         </message>
@@ -5407,7 +5563,95 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Redo</translation>
         </message>
         <message>
+            <location line="+18" />
+            <source>任务中心，%1 个活动任务</source>
+            <translation>Task Center, %1 active tasks</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>任务中心</source>
+            <translation>Task Center</translation>
+        </message>
+        <message>
+            <location line="+28" />
+            <location line="+20" />
+            <source>媒体布局</source>
+            <translation>Media Layout</translation>
+        </message>
+        <message>
+            <location line="-19" />
+            <location line="+26" />
+            <source>竖屏布局</source>
+            <translation>Vertical Layout</translation>
+        </message>
+        <message>
+            <location line="-25" />
             <location line="+11" />
+            <source>标准布局</source>
+            <translation>Standard Layout</translation>
+        </message>
+        <message>
+            <location line="+21" />
+            <source>界面导览</source>
+            <translation>Interface Tour</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>工具面板</source>
+            <translation>Tools Panel</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>检查器</source>
+            <translation>Inspector</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>时间线</source>
+            <translation>Timeline</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>还原播放器</source>
+            <translation>Restore Monitor</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>最大化播放器</source>
+            <translation>Maximize Monitor</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>还原工具面板</source>
+            <translation>Restore Tools Panel</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>最大化工具面板</source>
+            <translation>Maximize Tools Panel</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>还原检查器</source>
+            <translation>Restore Inspector</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>最大化检查器</source>
+            <translation>Maximize Inspector</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>还原时间线</source>
+            <translation>Restore Timeline</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>最大化时间线</source>
+            <translation>Maximize Timeline</translation>
+        </message>
+        <message>
+            <location line="+12" />
             <source>版本</source>
             <translation>Versions</translation>
         </message>
@@ -5459,6 +5703,107 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+7" />
             <source>任务</source>
             <translation>Tasks</translation>
+        </message>
+    </context>
+    <context>
+        <name>WorkspacePreviewPanel</name>
+        <message>
+            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+53" />
+            <source>节目</source>
+            <translation>Program</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>源 · %1</source>
+            <translation>Source · %1</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>源</source>
+            <translation>Source</translation>
+        </message>
+        <message>
+            <location line="+19" />
+            <source>入点 %1</source>
+            <translation>In %1</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>出点 %1</source>
+            <translation>Out %1</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>截帧</source>
+            <translation>Capture Frame</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>插入选段</source>
+            <translation>Insert Selection</translation>
+        </message>
+    </context>
+    <context>
+        <name>WorkspaceTour</name>
+        <message>
+            <location filename="../../desktop/qml/components/WorkspaceTour.qml" line="+13" />
+            <source>素材与内容时刻</source>
+            <translation>Media and Content Moments</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>双击素材可在源监视器中预览并设入出点；搜索还能直接定位转写和画面高光。</source>
+            <translation>Double-click media to preview it and set In and Out points in the Source Monitor. Search can also jump directly to transcript and visual highlights.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>源 / 节目监视器</source>
+            <translation>Source / Program Monitors</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>源监视器负责挑选素材范围，节目监视器显示时间线的最终结果。</source>
+            <translation>Use the Source Monitor to select a media range. The Program Monitor shows the final timeline result.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>检查器</source>
+            <translation>Inspector</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>在这里换源、批量调整片段，并建立会进入预览和导出的视觉效果链。</source>
+            <translation>Replace media, adjust clips in batches, and build the visual effect chain used by preview and export here.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>时间线与序列</source>
+            <translation>Timeline and Sequences</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>底部可切换序列、拖动淡入淡出和转场。标题栏还能切换工作区布局并查看全局任务。</source>
+            <translation>Switch sequences and drag fades and transitions at the bottom. The title bar also lets you change workspace layouts and view global tasks.</translation>
+        </message>
+        <message>
+            <location line="+66" />
+            <source>%1 / %2</source>
+            <translation>%1 / %2</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>跳过</source>
+            <translation>Skip</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>完成</source>
+            <translation>Finish</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>下一步</source>
+            <translation>Next</translation>
         </message>
     </context>
 </TS>

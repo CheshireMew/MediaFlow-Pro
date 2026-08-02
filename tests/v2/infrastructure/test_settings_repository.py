@@ -77,7 +77,9 @@ def test_typed_settings_round_trip(tmp_path: Path) -> None:
             style=SubtitleStyle(font_color="#FFFF00", shadow_size=2),
         )
     ]
-    settings.ui.left_panel_width = 340
+    settings.ui.workspace_layout_preset = "media"
+    settings.ui.workspace_layouts.media.left_panel_width = 600
+    settings.ui.workspace_layouts.media.inspector_panel_visible = False
     settings.ui.asset_view_mode = "large_thumbnails"
     repository.save(settings)
 
@@ -88,6 +90,9 @@ def test_typed_settings_round_trip(tmp_path: Path) -> None:
     assert loaded.download.last_url == "https://example.com/remembered-video"
     assert loaded.ui.default_project_directory == str(tmp_path / "Projects")
     assert loaded.ui.asset_view_mode == "large_thumbnails"
+    assert loaded.ui.workspace_layout_preset == "media"
+    assert loaded.ui.workspace_layouts.media.left_panel_width == 600
+    assert loaded.ui.workspace_layouts.media.inspector_panel_visible is False
     assert loaded.translation.target_language == "ru"
     assert loaded.translation.mode == "intelligent"
     assert loaded.translation.glossary_terms[0].target == "媒体流"
@@ -276,11 +281,55 @@ def test_version_twelve_settings_remove_inspector_layout(tmp_path: Path) -> None
     loaded = SettingsRepository(path).load()
 
     assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
-    assert loaded.ui.left_panel_width == 360
+    assert loaded.ui.workspace_layout_preset == "standard"
+    assert loaded.ui.workspace_layouts.standard.left_panel_width == 360
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
-    assert persisted["ui"]["left_panel_width"] == 360
+    assert persisted["ui"]["workspace_layouts"]["standard"]["left_panel_width"] == 360
+    assert "left_panel_width" not in persisted["ui"]
+    assert "timeline_height" not in persisted["ui"]
     assert "inspector_width" not in persisted["ui"]
+
+
+def test_version_nineteen_settings_migrate_complete_workspace_layouts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 19
+    payload["ui"].pop("workspace_layout_preset")
+    payload["ui"].pop("workspace_layouts")
+    payload["ui"]["left_panel_width"] = 610
+    payload["ui"]["timeline_height"] = 420
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.ui.workspace_layout_preset == "standard"
+    assert loaded.ui.workspace_layouts.standard.left_panel_width == 610
+    assert loaded.ui.workspace_layouts.standard.timeline_height == 420
+    assert loaded.ui.workspace_layouts.vertical.tool_panel_visible is False
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
+    assert "left_panel_width" not in persisted["ui"]
+    assert "timeline_height" not in persisted["ui"]
+
+
+def test_version_twenty_settings_add_persisted_workspace_tour_state(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 20
+    payload["ui"].pop("workspace_tour_completed")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.ui.workspace_tour_completed is False
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == SETTINGS_SCHEMA_VERSION
+    assert persisted["ui"]["workspace_tour_completed"] is False
 
 
 def test_version_fourteen_settings_remove_stock_media_configuration(tmp_path: Path) -> None:

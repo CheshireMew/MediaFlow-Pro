@@ -16,7 +16,15 @@ from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.frame_clock import MainFrameClockSnapshot
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.project import Asset, AssetFingerprint, MediaMetadata, Project, ProjectProfile, Sequence
+from mediaflow.domain.project import (
+    Asset,
+    AssetBin,
+    AssetFingerprint,
+    MediaMetadata,
+    Project,
+    ProjectProfile,
+    Sequence,
+)
 from mediaflow.domain.project_records import (
     ExportHistoryRecord,
     ExportQualityReport,
@@ -185,6 +193,11 @@ class AssetDocuments(Protocol):
     def import_external_asset(self, path: str | Path, kind: AssetKind) -> Asset: ...
     def get_asset(self, asset_id: str) -> Asset: ...
     def list_assets(self) -> list[Asset]: ...
+    def list_asset_bins(self) -> list[AssetBin]: ...
+    def create_asset_bin(self, name: str, parent_id: str | None = None) -> AssetBin: ...
+    def move_assets_to_bin(
+        self, asset_ids: list[str], bin_id: str | None
+    ) -> list[Asset]: ...
     def update_asset(self, asset: Asset) -> Asset: ...
     def set_asset_proxy_paths(
         self,

@@ -235,6 +235,31 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.ClipResult,
         timeline.update_clip_audio,
     ),
+    "timeline.clip.source.replace": _write(
+        models.TimelineClipReplaceSourceArguments,
+        models.ClipResult,
+        timeline.replace_clip_source,
+    ),
+    "timeline.clip.effect.add": _write(
+        models.TimelineClipVisualEffectAddArguments,
+        models.ClipResult,
+        timeline.add_clip_visual_effect,
+    ),
+    "timeline.clip.effect.update": _write(
+        models.TimelineClipVisualEffectUpdateArguments,
+        models.ClipResult,
+        timeline.update_clip_visual_effect,
+    ),
+    "timeline.clip.effect.move": _write(
+        models.TimelineClipVisualEffectMoveArguments,
+        models.ClipResult,
+        timeline.move_clip_visual_effect,
+    ),
+    "timeline.clip.effect.remove": _write(
+        models.TimelineClipVisualEffectRemoveArguments,
+        models.ClipResult,
+        timeline.remove_clip_visual_effect,
+    ),
     "timeline.undo": _write(
         models.SequenceArguments,
         models.TimelineResult,

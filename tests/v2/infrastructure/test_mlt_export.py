@@ -21,6 +21,7 @@ from mediaflow.domain.enums import (
     TaskStatus,
     TrackKind,
     TransitionKind,
+    VisualEffectKind,
 )
 from mediaflow.domain.exports import ExportPreset, SubtitleStyle, WatermarkOverlay
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
@@ -709,6 +710,108 @@ def test_video_solo_is_kind_local_and_disabled_offline_tracks_are_not_compiled(
         assert MltGraph.playlist_id(second_track.id) not in producers
         assert MltGraph.producer_id(first_clip.id) in document.xml
         assert str(tmp_path / "never-created.mp4") not in document.xml
+
+
+def test_visual_effect_stack_compiles_in_persisted_order_for_preview_and_export(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"real-source-boundary")
+    with ProjectRepository.create(tmp_path / "Visual Effects", "Visual Effects") as repository:
+        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        project = repository.catalog.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+        adjustment = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.COLOR_ADJUSTMENT,
+        )
+        blur = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.GAUSSIAN_BLUR,
+        )
+        editor.update_clip_visual_effect(
+            clip.id,
+            adjustment.id,
+            enabled=True,
+            parameters={"brightness": 0.2, "contrast": 1.25, "saturation": 0.8},
+        )
+
+        document = TimelineCompiler(repository).compile(editor.state)
+
+        assert document.xml.index(f"visual_effect_{adjustment.id}") < document.xml.index(
+            f"visual_effect_{blur.id}"
+        )
+        assert "avfilter.eq" in document.xml
+        assert "av.brightness" in document.xml
+        assert "0.2" in document.xml
+        assert "avfilter.gblur" in document.xml
+
+
+def test_visual_effect_stack_changes_real_exported_pixels(tmp_path: Path) -> None:
+    paths = RuntimePaths.discover()
+    assert paths.melt is not None
+    source = tmp_path / "source.mp4"
+    generate_real_media(source, paths, width=160, height=90)
+    with ProjectRepository.create(tmp_path / "Visual Effect Render", "Visual Effect Render") as repository:
+        asset = AssetService(repository, MediaProbe(paths)).import_external(source)
+        asset = AssetService(repository, MediaProbe(paths)).adopt_main_profile_from_video(asset.id)
+        project = repository.catalog.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        preset = ExportPreset(
+            name="Visual effect pixels",
+            format=ExportFormat.H264,
+            container="mp4",
+            video_codec="libx264",
+            audio_codec="aac",
+            pixel_format="yuv420p",
+            quality_value=18,
+            preset="ultrafast",
+            gop_frames=25,
+        )
+        service = MltExportService(TimelineCompiler(repository), paths)
+        baseline = service.export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "baseline.mp4",
+        )
+        effect = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.COLOR_ADJUSTMENT,
+        )
+        editor.update_clip_visual_effect(
+            clip.id,
+            effect.id,
+            enabled=True,
+            parameters={"brightness": 0.0, "contrast": 1.0, "saturation": 0.0},
+        )
+        filtered = service.export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "grayscale.mp4",
+        )
+
+        baseline_rgb = _frame_rgb_means(baseline.output_path, paths, [10])[0]
+        filtered_rgb = _frame_rgb_means(filtered.output_path, paths, [10])[0]
+        baseline_spread = max(baseline_rgb) - min(baseline_rgb)
+        filtered_spread = max(filtered_rgb) - min(filtered_rgb)
+        assert baseline_spread > 5
+        assert filtered_spread < baseline_spread * 0.35
 
 
 def test_timeline_compiler_rejects_active_native_source_beyond_shared_budget(

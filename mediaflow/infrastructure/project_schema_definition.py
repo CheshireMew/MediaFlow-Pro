@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 36
+PROJECT_SCHEMA_VERSION = 38
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS sequence (
     timeline_revision INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS asset_bin (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    parent_id TEXT REFERENCES asset_bin(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS asset (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
@@ -48,6 +55,7 @@ CREATE TABLE IF NOT EXISTS asset (
     origin TEXT NOT NULL,
     path TEXT NOT NULL,
     managed INTEGER NOT NULL,
+    bin_id TEXT REFERENCES asset_bin(id) ON DELETE SET NULL,
     proxy_path TEXT,
     sdr_preview_proxy_path TEXT,
     waveform_path TEXT,
@@ -99,7 +107,8 @@ CREATE TABLE IF NOT EXISTS clip (
     pitch_compensation INTEGER NOT NULL,
     transform_json TEXT NOT NULL,
     transform_keyframes_json TEXT NOT NULL DEFAULT '[]',
-    audio_json TEXT NOT NULL
+    audio_json TEXT NOT NULL,
+    visual_effects_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS compound_clip (
     id TEXT PRIMARY KEY,
@@ -322,6 +331,9 @@ CREATE TABLE IF NOT EXISTS workflow_run (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_asset_project ON asset(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_asset_bin_project ON asset_bin(project_id, parent_id, position);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_bin_unique_name
+ON asset_bin(project_id, COALESCE(parent_id, ''), name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_sequence_project ON sequence(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_track_sequence ON track(sequence_id, position);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_track_primary_dialogue

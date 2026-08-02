@@ -6,6 +6,9 @@ import ".."
 Item {
     id: root
     signal exportRequested
+    property var workspaceItem: null
+    readonly property string layoutPreset: workspaceItem
+        ? String(workspaceItem.layoutPreset) : "standard"
 
     ProjectVersionsDialog {
         id: projectVersionsDialog
@@ -23,10 +26,12 @@ Item {
         + 34
         + undoButton.implicitWidth
         + redoButton.implicitWidth
+        + taskActivity.implicitWidth
+        + layoutButton.implicitWidth
         + versionsButton.implicitWidth
         + closeProjectButton.implicitWidth
         + exportButton.implicitWidth
-        + controls.spacing * 5
+        + controls.spacing * 7
     implicitHeight: 42
 
     RowLayout {
@@ -95,6 +100,134 @@ Item {
             enabled: workspaceController.actionCapabilities.canEdit
                 && timelineController.canRedo
             onClicked: timelineController.redo()
+        }
+
+        Item {
+            id: taskActivity
+            objectName: "globalTaskActivity"
+            Layout.preferredWidth: Theme.iconButtonSize
+            Layout.preferredHeight: Theme.iconButtonSize
+            implicitWidth: Theme.iconButtonSize
+            implicitHeight: Theme.iconButtonSize
+            AppIconButton {
+                anchors.fill: parent
+                iconName: "tasks"
+                Accessible.name: taskController.activeTaskCount > 0
+                    ? qsTr("任务中心，%1 个活动任务").arg(taskController.activeTaskCount)
+                    : qsTr("任务中心")
+                toolTipText: Accessible.name
+                onClicked: taskController.openTaskCenter()
+            }
+            Rectangle {
+                visible: taskController.activeTaskCount > 0
+                anchors.right: parent.right
+                anchors.top: parent.top
+                width: Math.max(14, taskCount.implicitWidth + 6)
+                height: 14
+                radius: 7
+                color: taskController.pausedTaskCount > 0
+                    ? Theme.warning : Theme.accent
+                Text {
+                    id: taskCount
+                    anchors.centerIn: parent
+                    text: taskController.activeTaskCount > 99
+                        ? "99+" : String(taskController.activeTaskCount)
+                    color: Theme.onAccent
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                }
+            }
+        }
+
+        AppMenuButton {
+            id: layoutButton
+            objectName: "workspaceLayoutButton"
+            text: root.layoutPreset === "media" ? qsTr("媒体布局")
+                : root.layoutPreset === "vertical" ? qsTr("竖屏布局")
+                : qsTr("标准布局")
+            quiet: true
+            implicitHeight: Theme.controlHeightCompact
+            enabled: root.workspaceItem !== null
+
+            AppMenu {
+                id: layoutMenu
+                y: layoutButton.height + 4
+
+                AppMenuItem {
+                    objectName: "workspaceLayoutStandard"
+                    text: qsTr("标准布局") + "\tCtrl+Alt+1"
+                    checkable: true
+                    checked: root.layoutPreset === "standard"
+                    onTriggered: root.workspaceItem.setWorkspaceLayoutPreset("standard")
+                }
+                AppMenuItem {
+                    objectName: "workspaceLayoutMedia"
+                    text: qsTr("媒体布局") + "\tCtrl+Alt+2"
+                    checkable: true
+                    checked: root.layoutPreset === "media"
+                    onTriggered: root.workspaceItem.setWorkspaceLayoutPreset("media")
+                }
+                AppMenuItem {
+                    objectName: "workspaceLayoutVertical"
+                    text: qsTr("竖屏布局") + "\tCtrl+Alt+3"
+                    checkable: true
+                    checked: root.layoutPreset === "vertical"
+                    onTriggered: root.workspaceItem.setWorkspaceLayoutPreset("vertical")
+                }
+                AppMenuSeparator {}
+                AppMenuItem {
+                    text: qsTr("界面导览")
+                    onTriggered: workspaceController.showWorkspaceTour()
+                }
+                AppMenuSeparator {}
+                AppMenuItem {
+                    objectName: "workspaceToggleTools"
+                    text: qsTr("工具面板")
+                    checkable: true
+                    checked: Boolean(root.workspaceItem)
+                        && Boolean(root.workspaceItem.toolPanelVisible)
+                    onTriggered: root.workspaceItem.toggleWorkspacePanel("tool")
+                }
+                AppMenuItem {
+                    objectName: "workspaceToggleInspector"
+                    text: qsTr("检查器")
+                    checkable: true
+                    checked: Boolean(root.workspaceItem)
+                        && Boolean(root.workspaceItem.inspectorPanelVisible)
+                    onTriggered: root.workspaceItem.toggleWorkspacePanel("inspector")
+                }
+                AppMenuItem {
+                    objectName: "workspaceToggleTimeline"
+                    text: qsTr("时间线")
+                    checkable: true
+                    checked: Boolean(root.workspaceItem)
+                        && Boolean(root.workspaceItem.timelinePanelVisible)
+                    onTriggered: root.workspaceItem.toggleWorkspacePanel("timeline")
+                }
+                AppMenuSeparator {}
+                AppMenuItem {
+                    text: root.workspaceItem && root.workspaceItem.maximizedPanel === "preview"
+                        ? qsTr("还原播放器") : qsTr("最大化播放器")
+                    onTriggered: root.workspaceItem.togglePanelMaximized("preview")
+                }
+                AppMenuItem {
+                    text: root.workspaceItem && root.workspaceItem.maximizedPanel === "tool"
+                        ? qsTr("还原工具面板") : qsTr("最大化工具面板")
+                    onTriggered: root.workspaceItem.togglePanelMaximized("tool")
+                }
+                AppMenuItem {
+                    text: root.workspaceItem && root.workspaceItem.maximizedPanel === "inspector"
+                        ? qsTr("还原检查器") : qsTr("最大化检查器")
+                    onTriggered: root.workspaceItem.togglePanelMaximized("inspector")
+                }
+                AppMenuItem {
+                    text: root.workspaceItem && root.workspaceItem.maximizedPanel === "timeline"
+                        ? qsTr("还原时间线") : qsTr("最大化时间线")
+                    onTriggered: root.workspaceItem.togglePanelMaximized("timeline")
+                }
+            }
+
+            onClicked: layoutMenu.open()
         }
 
         AppIconButton {

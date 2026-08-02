@@ -47,6 +47,8 @@ from .project_migrations_v33_v40 import (
     migrate_v33_to_v34,
     migrate_v34_to_v35,
     migrate_v35_to_v36,
+    migrate_v36_to_v37,
+    migrate_v37_to_v38,
 )
 
 
@@ -93,6 +95,8 @@ PROJECT_MIGRATIONS = (
     ProjectMigration(33, 34, migrate_v33_to_v34),
     ProjectMigration(34, 35, migrate_v34_to_v35),
     ProjectMigration(35, 36, migrate_v35_to_v36),
+    ProjectMigration(36, 37, migrate_v36_to_v37),
+    ProjectMigration(37, 38, migrate_v37_to_v38),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

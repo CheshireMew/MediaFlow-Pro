@@ -133,8 +133,11 @@ def settings_data(settings: GlobalSettings) -> dict:
         "windowWidth": settings.ui.window_width,
         "windowHeight": settings.ui.window_height,
         "windowMaximized": settings.ui.window_maximized,
-        "leftPanelWidth": settings.ui.left_panel_width,
-        "timelineHeight": settings.ui.timeline_height,
+        "workspaceLayoutPreset": settings.ui.workspace_layout_preset,
+        "workspaceLayouts": settings.ui.workspace_layouts.model_dump(
+            mode="json", by_alias=True
+        ),
+        "workspaceTourCompleted": settings.ui.workspace_tour_completed,
         "assetViewMode": settings.ui.asset_view_mode,
         "lastDownloadUrl": settings.download.last_url,
         "subtitleStylePresets": [

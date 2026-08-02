@@ -6,7 +6,7 @@ from pydantic import Field, JsonValue, model_serializer, model_validator
 
 from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.downloads import DownloadPlan
-from mediaflow.domain.enums import ExportFormat, TrackKind
+from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.project import Asset, Project, Sequence
@@ -205,6 +205,34 @@ class TimelineClipTransformArguments(SequenceArguments):
 class TimelineClipAudioArguments(SequenceArguments):
     clip_id: str = Field(min_length=1)
     audio: ClipAudio
+
+
+class TimelineClipReplaceSourceArguments(SequenceArguments):
+    clip_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+
+
+class TimelineClipVisualEffectAddArguments(SequenceArguments):
+    clip_id: str = Field(min_length=1)
+    kind: VisualEffectKind
+
+
+class TimelineClipVisualEffectUpdateArguments(SequenceArguments):
+    clip_id: str = Field(min_length=1)
+    effect_id: str = Field(min_length=1)
+    enabled: bool
+    parameters: dict[str, float]
+
+
+class TimelineClipVisualEffectMoveArguments(SequenceArguments):
+    clip_id: str = Field(min_length=1)
+    effect_id: str = Field(min_length=1)
+    position: int = Field(ge=0)
+
+
+class TimelineClipVisualEffectRemoveArguments(SequenceArguments):
+    clip_id: str = Field(min_length=1)
+    effect_id: str = Field(min_length=1)
 
 
 class SubtitleSegmentUpdateArguments(DomainModel):

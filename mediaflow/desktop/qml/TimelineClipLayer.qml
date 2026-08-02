@@ -44,6 +44,12 @@ Item {
             required property string mediaKind
             required property int audioTrackPosition
             required property bool waveformReady
+            required property string previewUrl
+            required property bool hasAudio
+            required property real gainDb
+            required property real pan
+            required property int fadeInFrames
+            required property int fadeOutFrames
             required property string compoundId
             property real leftTrimOffset: 0
             property real rightTrimOffset: 0
@@ -109,6 +115,22 @@ Item {
                 clipContentX: clipDelegate.x
                 emphasized: clipDelegate.selected
             }
+            Image {
+                anchors.fill: parent
+                visible: clipDelegate.displayedTrackKind === "video"
+                    && ["video", "image"].indexOf(clipDelegate.assetKind) >= 0
+                    && clipDelegate.previewUrl.length > 0
+                    && clipDelegate.width >= 72
+                source: clipDelegate.previewUrl
+                fillMode: Image.TileHorizontally
+                horizontalAlignment: Image.AlignLeft
+                verticalAlignment: Image.AlignVCenter
+                sourceSize.width: 78
+                sourceSize.height: clipDelegate.height
+                asynchronous: false
+                cache: true
+                opacity: clipDelegate.selected ? 0.42 : 0.3
+            }
             Rectangle {
                 anchors.left: parent.left
                 anchors.top: parent.top
@@ -127,6 +149,73 @@ Item {
                 font.weight: Font.Medium
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
+            }
+            Rectangle {
+                id: fadeInHandle
+                objectName: "clipFadeInHandle"
+                visible: clipDelegate.hasAudio && view.canEdit
+                    && clipDelegate.width >= 36
+                x: Math.max(2, Math.min(
+                    clipDelegate.width / 2 - width,
+                    clipDelegate.fadeInFrames * view.pixelsPerFrame - width / 2))
+                y: 2
+                width: 10
+                height: 10
+                radius: 5
+                color: Theme.audio
+                border.color: Theme.textStrong
+                z: 25
+                DragHandler {
+                    target: null
+                    xAxis.enabled: true
+                    yAxis.enabled: false
+                    onActiveChanged: if (!active) {
+                        const next = Math.max(0, Math.min(
+                            clipDelegate.durationFrames - clipDelegate.fadeOutFrames,
+                            Math.round((fadeInHandle.x + width / 2) / view.pixelsPerFrame)));
+                        timelineController.setClipAudio(
+                            clipDelegate.clipId, clipDelegate.gainDb,
+                            clipDelegate.pan, next, clipDelegate.fadeOutFrames);
+                    }
+                }
+                ToolTip.visible: fadeInHover.hovered
+                ToolTip.text: qsTr("淡入 %1 帧").arg(clipDelegate.fadeInFrames)
+                HoverHandler { id: fadeInHover }
+            }
+            Rectangle {
+                id: fadeOutHandle
+                objectName: "clipFadeOutHandle"
+                visible: clipDelegate.hasAudio && view.canEdit
+                    && clipDelegate.width >= 36
+                x: Math.max(clipDelegate.width / 2, Math.min(
+                    clipDelegate.width - width - 2,
+                    clipDelegate.width
+                        - clipDelegate.fadeOutFrames * view.pixelsPerFrame
+                        - width / 2))
+                y: 2
+                width: 10
+                height: 10
+                radius: 5
+                color: Theme.audio
+                border.color: Theme.textStrong
+                z: 25
+                DragHandler {
+                    target: null
+                    xAxis.enabled: true
+                    yAxis.enabled: false
+                    onActiveChanged: if (!active) {
+                        const next = Math.max(0, Math.min(
+                            clipDelegate.durationFrames - clipDelegate.fadeInFrames,
+                            Math.round((clipDelegate.width - fadeOutHandle.x
+                                - width / 2) / view.pixelsPerFrame)));
+                        timelineController.setClipAudio(
+                            clipDelegate.clipId, clipDelegate.gainDb,
+                            clipDelegate.pan, clipDelegate.fadeInFrames, next);
+                    }
+                }
+                ToolTip.visible: fadeOutHover.hovered
+                ToolTip.text: qsTr("淡出 %1 帧").arg(clipDelegate.fadeOutFrames)
+                HoverHandler { id: fadeOutHover }
             }
             Repeater {
                 model: assetKind === "web" && webController.isWebClip && timelineController.isClipSelected(clipId) ? webTimelineController.keyframesData : []

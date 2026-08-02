@@ -17,7 +17,7 @@ from mediaflow.infrastructure.storage_paths import default_media_root, default_p
 
 from .runtime_paths import RuntimePaths
 
-SETTINGS_SCHEMA_VERSION = 19
+SETTINGS_SCHEMA_VERSION = 21
 _SETTINGS_WRITE_LOCK = threading.RLock()
 _UNLOADED = object()
 
@@ -136,6 +136,41 @@ class SettingsRepository:
                 )
             if version < 19:
                 payload.setdefault("asr", {}).setdefault("model_directory", None)
+            if version < 20:
+                ui = payload.setdefault("ui", {})
+                previous_left = max(340, min(640, int(ui.pop("left_panel_width", 520))))
+                previous_timeline = max(210, min(640, int(ui.pop("timeline_height", 330))))
+                ui["workspace_layout_preset"] = "standard"
+                ui["workspace_layouts"] = {
+                    "standard": {
+                        "left_panel_width": previous_left,
+                        "inspector_panel_width": 400,
+                        "timeline_height": previous_timeline,
+                        "tool_panel_visible": True,
+                        "inspector_panel_visible": True,
+                        "timeline_visible": True,
+                    },
+                    "media": {
+                        "left_panel_width": 560,
+                        "inspector_panel_width": 360,
+                        "timeline_height": 300,
+                        "tool_panel_visible": True,
+                        "inspector_panel_visible": True,
+                        "timeline_visible": True,
+                    },
+                    "vertical": {
+                        "left_panel_width": 420,
+                        "inspector_panel_width": 360,
+                        "timeline_height": 280,
+                        "tool_panel_visible": False,
+                        "inspector_panel_visible": True,
+                        "timeline_visible": True,
+                    },
+                }
+            if version < 21:
+                payload.setdefault("ui", {}).setdefault(
+                    "workspace_tour_completed", False
+                )
             payload["schema_version"] = SETTINGS_SCHEMA_VERSION
             settings = self.with_storage_defaults(GlobalSettings.model_validate(payload))
         except SettingsContentError:

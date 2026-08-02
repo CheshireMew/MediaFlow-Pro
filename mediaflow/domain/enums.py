@@ -60,6 +60,12 @@ class TransitionKind(DomainEnum):
     ZOOM = "zoom"
 
 
+class VisualEffectKind(DomainEnum):
+    COLOR_ADJUSTMENT = "color_adjustment"
+    GAUSSIAN_BLUR = "gaussian_blur"
+    VIGNETTE = "vignette"
+
+
 class AudioEffectKind(DomainEnum):
     PARAMETRIC_EQ = "parametric_eq"
     HIGH_PASS = "high_pass"
