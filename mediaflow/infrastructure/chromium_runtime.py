@@ -10,8 +10,13 @@ CHROMIUM_EXECUTABLES = (
 )
 
 
-def find_chromium_executable() -> Path:
+def discover_chromium_executable() -> Path | None:
     executable = next((path for path in CHROMIUM_EXECUTABLES if path.is_file()), None)
+    return executable.resolve() if executable is not None else None
+
+
+def find_chromium_executable() -> Path:
+    executable = discover_chromium_executable()
     if executable is None:
         raise FileNotFoundError("Chrome or Edge is required for editable web media rendering")
-    return executable.resolve()
+    return executable

@@ -67,16 +67,6 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
             emit playingChanged();
         }
     });
-    connect(
-        m_runtime,
-        &MltRuntime::presentationDeadlineMissed,
-        this,
-        [this](int count, quint64 requestId) {
-            if (requestId != m_requestId.load(std::memory_order_acquire) || count <= 0)
-                return;
-            m_droppedFrames += count;
-            emit droppedFramesChanged();
-        });
     connect(m_runtime, &MltRuntime::errorOccurred, this, &MltPreviewItem::receiveError, Qt::QueuedConnection);
     m_workerThread.setObjectName(QStringLiteral("MediaFlowMltPreview"));
     m_workerThread.start();

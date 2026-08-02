@@ -7,6 +7,17 @@ from .project_migrations import MIGRATION_BY_SOURCE_VERSION
 from .project_schema_definition import PROJECT_SCHEMA_VERSION
 
 
+class ProjectUpgradeRequiredError(RuntimeError):
+    def __init__(self, version: int, target_version: int):
+        self.version = version
+        self.target_version = target_version
+        super().__init__(
+            "Project requires a writable one-time upgrade from schema "
+            f"{version} to {target_version}; run project.upgrade or open it "
+            "in the desktop editor"
+        )
+
+
 class ProjectSchemaMigrator:
     def __init__(self, workspace: Any):
         self.workspace = workspace
@@ -15,6 +26,16 @@ class ProjectSchemaMigrator:
         version = self._read_version()
         if version == PROJECT_SCHEMA_VERSION:
             return
+        if (
+            self.workspace.read_only
+            and version is not None
+            and version < PROJECT_SCHEMA_VERSION
+            and version in MIGRATION_BY_SOURCE_VERSION
+        ):
+            raise ProjectUpgradeRequiredError(
+                version,
+                PROJECT_SCHEMA_VERSION,
+            )
         if self.workspace.read_only:
             self._raise_unsupported(version)
         with self.workspace.transaction():

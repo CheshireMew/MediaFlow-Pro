@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QUrl
 
-from mediaflow.application.web_media_service import MANIFEST_FILE_NAME
+from mediaflow.application.web_package_files import MANIFEST_FILE_NAME
 from mediaflow.desktop.session_state import (
     ImportDropBatch,
     PlacedTimelineAsset,
@@ -113,9 +113,7 @@ class TimelineAssetOperations(SessionCoordinator):
             if not segments:
                 raise RuntimeError("字幕文档中没有可放置的字幕")
             project = self._session.binding.current.get_project()
-            main_profile = self._session.binding.current.get_sequence(
-                project.main_sequence_id
-            ).profile
+            main_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
             active_profile = self._session.binding.timeline.state.sequence.profile
             source_start, source_end = reframe_interval(
                 min(item.start_frame for item in segments),
@@ -380,10 +378,7 @@ class TimelineAssetOperations(SessionCoordinator):
         return Path(path).expanduser().resolve()
 
     def schedule_background(self, asset, *, dropped_frames: int) -> None:
-        if (
-            not self._session.binding.current
-            or self._session.binding.current.read_only
-        ):
+        if not self._session.binding.current or self._session.binding.current.read_only:
             return
         prepare_media_managed = (
             dropped_frames <= 0

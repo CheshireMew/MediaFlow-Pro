@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -40,7 +41,27 @@ class WebPackagePreviewServer:
             _QuietPackageHandler,
             directory=str(self.package_root),
         )
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server: ThreadingHTTPServer | None = None
+        last_error: OSError | None = None
+        for _attempt in range(64):
+            # Chromium blocks several legacy service ports, including
+            # 6665-6669. Binding inside the high user-port range avoids a
+            # random OS-assigned unsafe port while the bind itself remains
+            # the atomic authority on whether a candidate is available.
+            port = 20_000 + secrets.randbelow(40_000)
+            try:
+                server = ThreadingHTTPServer(
+                    ("127.0.0.1", port),
+                    handler,
+                )
+                break
+            except OSError as error:
+                last_error = error
+        if server is None:
+            raise OSError(
+                "Could not bind a safe editable-media preview port"
+            ) from last_error
+        self._server = server
         self._server.daemon_threads = True
         self._thread = Thread(
             target=self._server.serve_forever,
@@ -88,9 +109,25 @@ def verify_non_monotonic_seek_pixels(
     duration_seconds: float,
     capture: Callable[[], bytes],
 ) -> None:
-    def capture_at(seconds: float) -> bytes:
+    def pixel_fingerprint(value: bytes) -> bytes | tuple[int, int, bytes]:
+        try:
+            from PySide6.QtGui import QImage
+
+            image = QImage.fromData(value)
+            if image.isNull():
+                return value
+            normalized = image.convertToFormat(QImage.Format.Format_RGBA8888)
+            return (
+                normalized.width(),
+                normalized.height(),
+                bytes(normalized.constBits()),
+            )
+        except (ImportError, RuntimeError):
+            return value
+
+    def capture_at(seconds: float) -> bytes | tuple[int, int, bytes]:
         page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
-        return capture()
+        return pixel_fingerprint(capture())
 
     probes = tuple(
         max(0.0, duration_seconds * fraction)
@@ -109,7 +146,7 @@ def verify_non_monotonic_seek_pixels(
         if capture_at(seconds) != references[seconds]:
             page.evaluate("() => window.__hf.seek(0)")
             raise ValueError(
-                "Editable media v4 must render identical pixels after non-monotonic frame seeks"
+                "Editable media v5 must render identical pixels after non-monotonic frame seeks"
             )
 
 
@@ -128,6 +165,7 @@ def validate_editable_media_page(
             && typeof window.editableMedia.setVariant === 'function'
             && typeof window.editableMedia.setScene === 'function'
             && typeof window.editableMedia.setTime === 'function'
+            && typeof window.editableMedia.getParameters === 'function'
             && typeof window.editableMedia.getBounds === 'function'
             && window.__hf
             && typeof window.__hf.seek === 'function'
@@ -143,11 +181,11 @@ def validate_editable_media_page(
     )
     runtime_manifest = page.evaluate("() => window.editableMedia.getManifest()")
     if parse_editable_media_manifest(runtime_manifest) != manifest:
-        raise ValueError("window.editableMedia.getManifest() must expose the imported v4 manifest")
+        raise ValueError("window.editableMedia.getManifest() must expose the imported v5 manifest")
     runtime_media_sources = page.evaluate("() => window.editableMedia.getMediaSources()")
     if WebMediaSourcesManifest.model_validate(runtime_media_sources) != media_sources:
         raise ValueError(
-            "window.editableMedia.getMediaSources() must expose the imported v4 source manifest"
+            "window.editableMedia.getMediaSources() must expose the imported media-sources v4 manifest"
         )
     expected_duration = sum(item.duration_ms for item in manifest.scenes) / 1000
     frame_protocol = page.evaluate(
@@ -199,7 +237,7 @@ def validate_editable_media_page(
         or not isinstance(root_duration, (int, float))
         or abs(root_duration - expected_duration) > 1e-9
     ):
-        raise ValueError("Editable media v4 root metadata is not synchronized")
+        raise ValueError("Editable media v5 root metadata is not synchronized")
     protocol_duration = frame_protocol.get("duration")
     seek_time_ms = frame_protocol.get("seekTimeMs")
     timeline_duration = frame_protocol.get("timelineDuration")
@@ -212,7 +250,7 @@ def validate_editable_media_page(
         or not isinstance(timeline_duration, (int, float))
         or abs(timeline_duration - expected_duration) > 1e-9
     ):
-        raise ValueError("Editable media v4 frame protocol is not deterministic")
+        raise ValueError("Editable media v5 frame protocol is not deterministic")
     selectors = {layer.id: layer.selector for layer in manifest.layers}
     counts = page.evaluate(
         """selectors => Object.fromEntries(Object.entries(selectors).map(
@@ -228,12 +266,15 @@ def validate_editable_media_page(
         "scenes",
         "theme",
         "theme_bindings",
+        "parameters",
+        "parameter_bindings",
+        "parameter_locks",
         "variant",
         "scene_id",
         "playback",
         "revision",
     }:
-        raise ValueError("window.editableMedia.getState() must return the complete v4 state")
+        raise ValueError("window.editableMedia.getState() must return the complete v5 state")
     scenes = state.get("scenes")
     scene_ids = {item.id for item in manifest.scenes}
     if not isinstance(scenes, dict) or set(scenes) != scene_ids:
@@ -242,12 +283,39 @@ def validate_editable_media_page(
         if not isinstance(scene, dict) or set(scene) != {
             "layers",
             "animations",
+            "parameters",
+            "parameter_animations",
+            "parameter_locks",
             "data",
             "locks",
         }:
             raise ValueError(f"Editable media runtime scene is incomplete: {scene_id}")
         if not isinstance(scene["layers"], dict) or set(scene["layers"]) != set(selectors):
             raise ValueError(f"Editable media runtime scene layers are incomplete: {scene_id}")
+    global_parameter_ids = {
+        item.id for item in manifest.parameters if item.scope == "global"
+    }
+    scene_parameter_ids = {
+        item.id for item in manifest.parameters if item.scope == "scene"
+    }
+    if set(state["parameters"]) != global_parameter_ids:
+        raise ValueError("Editable media runtime global parameters are incomplete")
+    if set(state["parameter_bindings"]) != {
+        item.id for item in manifest.parameters if item.css_variable is not None
+    }:
+        raise ValueError("Editable media runtime parameter bindings are incomplete")
+    if any(
+        set(scene["parameters"]) != scene_parameter_ids
+        for scene in scenes.values()
+    ):
+        raise ValueError("Editable media runtime scene parameters are incomplete")
+    first_scene = manifest.scenes[0]
+    expected_parameters = {
+        item.id: item.default for item in manifest.parameters
+    }
+    expected_parameters.update(first_scene.parameters)
+    if page.evaluate("() => window.editableMedia.getParameters()") != expected_parameters:
+        raise ValueError("window.editableMedia.getParameters() must resolve the active scene")
     roundtrip = page.evaluate(
         """state => {
             window.editableMedia.setState(state);
@@ -256,7 +324,7 @@ def validate_editable_media_page(
         state,
     )
     if roundtrip != state:
-        raise ValueError("window.editableMedia.setState() must round-trip the complete v4 state")
+        raise ValueError("window.editableMedia.setState() must round-trip the complete v5 state")
     for variant in manifest.variants:
         selected = page.evaluate(
             "variantId => window.editableMedia.setVariant(variantId)",
@@ -315,7 +383,11 @@ class BrowserWebPackageValidator(WebPackageValidatorPort):
         }
         validation_error: Exception | None = None
         with WebPackagePreviewServer(package_root) as preview, sync_playwright() as playwright:
-            browser = playwright.chromium.launch(executable_path=str(executable), headless=True)
+            browser = playwright.chromium.launch(
+                executable_path=str(executable),
+                headless=True,
+                args=["--disable-gpu"],
+            )
             context = browser.new_context(
                 viewport={
                     "width": manifest.default_variant.canvas.width,

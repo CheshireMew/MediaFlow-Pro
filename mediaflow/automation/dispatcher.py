@@ -6,11 +6,16 @@ from typing import Any
 from mediaflow.automation.contracts import (
     AutomationRequest,
     describe_contract,
-    validate_arguments,
 )
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.automation.operation_registry import OPERATIONS
 from mediaflow.composition import EditorApplication
+from mediaflow.domain.storage_names import (
+    PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
+    PROJECT_ROOT_PATH_UTF16_LIMIT,
+    safe_child_path,
+)
+from mediaflow.infrastructure.storage_paths import default_project_root
 
 
 def _project_path(value: str | None) -> Path:
@@ -27,31 +32,44 @@ def _execute_registered(
     envelope: AutomationRequest,
 ) -> dict[str, Any]:
     definition = OPERATIONS[envelope.operation]
-    return project.execute_automation_request(
+    result = project.execute_automation_request(
         (
             envelope.request_id
-            if definition.mutates_project
+            if definition.project_access in {"create", "write"}
             else None
         ),
         envelope.operation,
         envelope.arguments,
-        lambda retrying: definition.handler(
-            OperationContext(
-                project,
-                application,
-                envelope,
-                retrying=retrying,
+        lambda retrying: definition.validate_result(
+            definition.handler(
+                OperationContext(
+                    project,
+                    application,
+                    envelope,
+                    retrying=retrying,
+                )
             )
         ),
         atomic=definition.execution_mode == "atomic",
     )
+    return definition.validate_result(result)
 
 
 def _create_project(
     application: EditorApplication,
     envelope: AutomationRequest,
 ) -> dict[str, Any]:
-    root = _project_path(envelope.project)
+    if str(envelope.project or "").strip():
+        raise ValueError(
+            "project.create does not accept project; "
+            "MediaFlow Pro owns the default project root"
+        )
+    root = safe_child_path(
+        default_project_root(),
+        str(envelope.arguments["directory_name"]),
+        max_path_utf16_units=PROJECT_ROOT_PATH_UTF16_LIMIT,
+        max_component_utf16_units=PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
+    )
     requested_name = str(envelope.arguments["name"])
     if envelope.request_id and (root / "project.mfp").is_file():
         with application.open_project(
@@ -85,14 +103,26 @@ def execute_request(
     definition = OPERATIONS.get(operation)
     if definition is None:
         raise ValueError(f"Unknown operation: {operation}")
-    envelope = envelope.model_copy(update={"operation": operation})
-    validate_arguments(operation, envelope.arguments)
+    envelope = envelope.model_copy(
+        update={
+            "operation": operation,
+            "arguments": definition.validate_arguments(envelope.arguments),
+        }
+    )
+
+    if definition.project_access == "none":
+        return definition.validate_result(
+            definition.handler(
+                OperationContext(None, application, envelope)
+            )
+        )
+
     api = application or EditorApplication()
 
-    if definition.open_mode == "create":
+    if definition.project_access == "create":
         return _create_project(api, envelope)
 
-    writable = definition.open_mode == "write"
+    writable = definition.project_access == "write"
     with api.open_project(
         _project_path(envelope.project),
         writable=writable,

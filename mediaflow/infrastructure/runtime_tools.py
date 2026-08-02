@@ -15,21 +15,15 @@ from urllib.request import Request, urlopen
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.settings import AsrSettings
+from mediaflow.domain.settings import GlobalSettings
 
 from .asr_engine import FasterWhisperCliEngine
+from .runtime_components import RuntimeComponentService
 from .runtime_paths import RuntimePaths
-from .subprocess_runner import run_cancellable, run_cancellable_streaming
+from .subprocess_runner import run_cancellable_streaming
 
 ToolProgress = Callable[[OperationProgress], None]
 
-FASTER_WHISPER_CLI_VERSION = "r245.4"
-FASTER_WHISPER_CLI_ARCHIVE = "Faster-Whisper-XXL_r245.4_windows.7z"
-FASTER_WHISPER_CLI_URL = (
-    "https://github.com/Purfview/whisper-standalone-win/releases/download/"
-    f"Faster-Whisper-XXL/{FASTER_WHISPER_CLI_ARCHIVE}"
-)
-FASTER_WHISPER_CLI_SIZE = 1_424_256_246
 PYPI_YTDLP_URL = "https://pypi.org/pypi/yt-dlp/json"
 
 
@@ -52,27 +46,28 @@ def prepare_ytdlp_import(paths: RuntimePaths | None = None) -> Path | None:
 class RuntimeToolService:
     def __init__(
         self,
-        settings: AsrSettings,
+        settings: GlobalSettings,
         paths: RuntimePaths | None = None,
         *,
         ytdlp_metadata_url: str = PYPI_YTDLP_URL,
-        cli_url: str = FASTER_WHISPER_CLI_URL,
-        cli_archive: str = FASTER_WHISPER_CLI_ARCHIVE,
-        cli_size: int = FASTER_WHISPER_CLI_SIZE,
+        component_catalog_path: str | Path | None = None,
     ):
         self.settings = settings
         self.paths = paths or RuntimePaths.discover()
         self.ytdlp_metadata_url = ytdlp_metadata_url
-        self.cli_url = cli_url
-        self.cli_archive = cli_archive
-        self.cli_size = cli_size
+        self.components = (
+            RuntimeComponentService(settings, self.paths)
+            if component_catalog_path is None
+            else RuntimeComponentService(
+                settings,
+                self.paths,
+                catalog_path=component_catalog_path,
+            )
+        )
 
     def status(self, *, inspect_cuda: bool = False) -> dict:
-        cli_path = self.resolve_cli_path()
         result = {
-            "cliInstalled": cli_path is not None,
-            "cliPath": str(cli_path) if cli_path else "",
-            "cliVersion": FASTER_WHISPER_CLI_VERSION if cli_path else "",
+            "components": self.components.status(),
             "ytDlpVersion": self.ytdlp_version() or "",
             "cudaStatus": "unchecked",
             "cudaSummary": "尚未检测 CUDA",
@@ -84,14 +79,8 @@ class RuntimeToolService:
         return result
 
     def resolve_cli_path(self) -> Path | None:
-        candidates = [
-            Path(self.settings.cli_path).expanduser() if self.settings.cli_path else None,
-            self.paths.runtime_dir / "tools" / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe",
-        ]
-        return next(
-            (candidate.resolve() for candidate in candidates if candidate and candidate.is_file()),
-            None,
-        )
+        installation = self.components.resolve("faster-whisper-xxl")
+        return installation.entrypoint if installation else None
 
     def cuda_readiness(self) -> dict:
         gpu_name = ""
@@ -200,50 +189,18 @@ class RuntimeToolService:
         self._write_json(pointer, {"version": version, "path": str(target.resolve())})
         return {"version": version, "path": str(target.resolve())}
 
-    def install_faster_whisper_cli(
+    def install_components(
         self,
+        component_ids: list[str],
         *,
         progress: ToolProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
-    ) -> Path:
-        existing = self.resolve_cli_path()
-        if existing:
-            return existing
-        tools_root = self.paths.runtime_dir / "tools"
-        downloads = self.paths.runtime_dir / "downloads"
-        downloads.mkdir(parents=True, exist_ok=True)
-        usage = shutil.disk_usage(downloads)
-        if usage.free < 4 * 1024**3:
-            raise RuntimeError("安装 Faster-Whisper XXL 至少需要 4 GiB 可用空间")
-        archive_path = downloads / self.cli_archive
-        self._download_with_resume(
-            self.cli_url,
-            archive_path,
-            self.cli_size,
+    ) -> dict[str, str]:
+        return self.components.install_selected(
+            component_ids,
             progress=progress,
             check_cancelled=check_cancelled,
         )
-        if progress:
-            progress(OperationProgress.indeterminate("asr_cli_extracting"))
-        tools_root.mkdir(parents=True, exist_ok=True)
-        if zipfile.is_zipfile(archive_path):
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(tools_root)
-        else:
-            result = run_cancellable(
-                ["tar", "-xf", str(archive_path), "-C", str(tools_root)],
-                check_cancelled=check_cancelled,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=900,
-            )
-            if result.returncode != 0:
-                raise RuntimeError((result.stderr or result.stdout or "CLI 解压失败").strip())
-        cli_path = tools_root / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe"
-        if not cli_path.is_file():
-            raise RuntimeError(f"解压后没有找到 Faster-Whisper CLI：{cli_path}")
-        return cli_path.resolve()
 
     def prewarm_cli(
         self,
@@ -267,10 +224,10 @@ class RuntimeToolService:
             / "cache"
             / "asr-cli"
             / "prewarm"
-            / f"{self.settings.model}-{self.settings.device}"
+            / f"{self.settings.asr.model}-{self.settings.asr.device}"
         )
         output_dir.mkdir(parents=True, exist_ok=True)
-        settings = self.settings.model_copy(update={"cli_path": str(cli_path)})
+        settings = self.settings.asr.model_copy(update={"cli_path": str(cli_path)})
         command = FasterWhisperCliEngine(settings, self.paths).build_command(audio, output_dir)
         if progress:
             progress(OperationProgress.indeterminate("asr_cli_prewarming"))

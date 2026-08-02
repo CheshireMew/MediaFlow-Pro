@@ -35,6 +35,7 @@ from mediaflow.desktop.presentation_catalogs import (
     WORKSPACE_NAVIGATION_MODE_KEYS,
 )
 from mediaflow.domain.enums import TaskKind, TaskStatus, TrackKind
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import (
     AnalyzeDownloadCommand,
@@ -338,6 +339,58 @@ def test_saved_maximized_window_keeps_clamped_normal_geometry(
         assert window.minimumHeight() <= available.height()
         assert window.property("restorableWidth") == expected_width
         assert window.property("restorableHeight") == expected_height
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_settings_exposes_selectable_external_speech_components(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Speech Settings",
+        )
+        assert controllers.workspace.hasProject
+        window = engine.rootObjects()[0]
+        window.setWidth(1600)
+        window.setHeight(980)
+        page_loader = window.findChild(QObject, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        assert workspace is not None
+        dialog = workspace.findChild(QObject, "settingsDialog")
+        tabs = workspace.findChild(QQuickItem, "settingsTabs")
+        xxl = workspace.findChild(QQuickItem, "selectFasterWhisperDownload")
+        gpt = workspace.findChild(QQuickItem, "selectGptSoVitsDownload")
+        download = workspace.findChild(QQuickItem, "downloadSelectedRuntimeComponents")
+        root_field = workspace.findChild(QQuickItem, "gptSoVitsRootField")
+        model_directory_field = workspace.findChild(QQuickItem, "asrModelDirectoryField")
+        assert all(
+            item is not None
+            for item in (dialog, tabs, xxl, gpt, download, root_field, model_directory_field)
+        )
+        assert QMetaObject.invokeMethod(dialog, "open")
+        tabs.setProperty("currentIndex", 1)
+        assert _process_until(lambda: xxl.isVisible() and gpt.isVisible())
+        assert "Faster-Whisper XXL" in str(xxl.property("text"))
+        assert "GPT-SoVITS v2Pro" in str(gpt.property("text"))
+        assert download.property("enabled") is False
+        xxl.setProperty("checked", True)
+        assert _process_until(lambda: download.property("enabled") is True)
+        dialog.close()
     finally:
         controllers.shutdown()
         engine.deleteLater()
@@ -1676,6 +1729,28 @@ print('100%', flush=True)
         QCoreApplication.processEvents()
 
 
+def test_qml_title_bar_uses_the_mediaflow_pro_product_name(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    app = QGuiApplication.instance() or QGuiApplication([])
+    QCoreApplication.setApplicationName(PRODUCT_NAME)
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        root = engine.rootObjects()[0]
+        product_name = root.findChild(QQuickItem, "applicationProductName")
+
+        assert product_name is not None
+        assert product_name.property("text") == "MediaFlow Pro"
+    finally:
+        controllers.workspace.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
 def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch) -> None:
     mlt_environment_before = {
         name: _windows_environment(name) for name in ("MLT_DATA", "MLT_REPOSITORY", "MLT_REPOSITORY_DENY")
@@ -1683,6 +1758,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
     dll_directory_before = _windows_dll_directory()
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = QGuiApplication.instance() or QGuiApplication([])
+    QCoreApplication.setApplicationName(PRODUCT_NAME)
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
@@ -2108,6 +2184,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
 
         root = engine.rootObjects()[0]
         title_bar = root.findChild(QQuickItem, "appTitleBar")
+        product_name = root.findChild(QQuickItem, "applicationProductName")
         minimize_button = root.findChild(QQuickItem, "minimizeWindowButton")
         maximize_button = root.findChild(QQuickItem, "maximizeWindowButton")
         close_button = root.findChild(QQuickItem, "closeWindowButton")
@@ -2120,6 +2197,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 close_button,
             )
         )
+        assert product_name is not None
+        assert product_name.property("text") == "MediaFlow Pro"
         assert QMetaObject.invokeMethod(maximize_button, "click")
         for _ in range(6):
             QCoreApplication.processEvents()

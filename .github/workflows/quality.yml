@@ -10,13 +10,16 @@ permissions:
 
 jobs:
   python:
-    name: Python 3.12 architecture and user-chain checks
+    name: Python 3.12 full media runtime and user-chain checks
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -26,6 +29,47 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --no-deps --no-build-isolation -e .
           python -m pip check
+      - name: Restore the pinned media and Qt runtimes
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ${{ runner.temp }}\mediaflow-runtime
+            ${{ runner.temp }}\Qt
+            ${{ runner.temp }}\ms-playwright
+          key: mediaflow-runtime-${{ runner.os }}-${{ hashFiles('runtime.lock.json', 'requirements.lock') }}
+      - name: Install the exact Qt SDK declared by the runtime lock
+        shell: pwsh
+        run: |
+          $contract = Get-Content -LiteralPath runtime.lock.json -Raw | ConvertFrom-Json
+          $qtBase = Join-Path $env:RUNNER_TEMP "Qt"
+          $qtConfig = Get-ChildItem -Path $qtBase -Filter Qt6Config.cmake -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $qtConfig) {
+            python -m aqt install-qt windows desktop $contract.windows.qt.version $contract.windows.qt.architecture --outputdir $qtBase
+            if ($LASTEXITCODE -ne 0) { throw "Pinned Qt SDK installation failed" }
+            $qtConfig = Get-ChildItem -Path $qtBase -Filter Qt6Config.cmake -Recurse | Select-Object -First 1
+          }
+          if (-not $qtConfig) { throw "Qt6Config.cmake was not installed" }
+          $qtRoot = $qtConfig.Directory.Parent.Parent.Parent.FullName
+          "QT_ROOT_DIR=$qtRoot" | Add-Content -LiteralPath $env:GITHUB_ENV
+      - name: Prepare the checksum-pinned MLT and FFmpeg runtime
+        shell: pwsh
+        run: >-
+          ./scripts/prepare_ci_runtime.ps1
+          -RuntimeRoot "${{ runner.temp }}\mediaflow-runtime"
+      - name: Install the Chromium revision pinned by Playwright
+        shell: pwsh
+        run: |
+          $browserRoot = Join-Path $env:RUNNER_TEMP "ms-playwright"
+          $env:PLAYWRIGHT_BROWSERS_PATH = $browserRoot
+          "PLAYWRIGHT_BROWSERS_PATH=$browserRoot" | Add-Content -LiteralPath $env:GITHUB_ENV
+          python -m playwright install chromium
+      - name: Build the native preview plugin against the pinned Qt SDK
+        shell: pwsh
+        run: |
+          $buildRoot = Join-Path $env:RUNNER_TEMP "mediaflow-native"
+          ./scripts/build_native.ps1 -BuildDir $buildRoot -QtDir $env:QT_ROOT_DIR -PythonExecutable python
+          $nativeQml = Join-Path $buildRoot "qml"
+          "MEDIAFLOW_NATIVE_QML=$nativeQml" | Add-Content -LiteralPath $env:GITHUB_ENV
       - name: Lint V2 source and verification scripts
         run: >-
           python -m ruff check
@@ -33,6 +77,7 @@ jobs:
           tests/v2
           scripts/update_qm_translations.py
           scripts/verify_display_capabilities.py
+          scripts/verify_development_runtime.py
           scripts/verify_license_inventory.py
           scripts/verify_performance.py
           scripts/verify_preview_performance.py
@@ -41,16 +86,23 @@ jobs:
           scripts/verify_ui_matrix.py
       - name: Type-check core application and persistence boundaries
         run: python -m mypy
-      - name: Verify pinned Python license inventory
+      - name: Verify the installed media runtime contract
+        run: python scripts/verify_development_runtime.py
+      - name: Verify native QML loading on the CI display backend
+        run: python scripts/verify_display_capabilities.py
+      - name: Verify the complete pinned license inventory
         run: >-
           python scripts/verify_license_inventory.py
-          --python-only
           --output-dir "${{ runner.temp }}"
       - name: Run hardware-independent V2 tests
-        env:
-          QT_QPA_PLATFORM: offscreen
-          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
         run: python -m pytest tests/v2 -m "not integration and not slow"
+      - name: Run real Chromium and native MLT integration tests
+        run: >-
+          python -m pytest
+          tests/v2/infrastructure/test_web_capture_engine.py::test_real_draw_element_failure_requires_clean_screenshot_retry
+          tests/v2/integration/test_native_preview.py
+      - name: Run the complete real user chain
+        run: python -m scripts.verify_real_user_chain
 
   native-policy:
     name: Native preview source policy
@@ -58,7 +110,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify the native plugin stays isolated
         shell: pwsh
         run: |

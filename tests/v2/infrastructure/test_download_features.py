@@ -502,7 +502,7 @@ def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) ->
         path
         for path in output_dir.rglob("*")
         if path.is_file()
-        and "MediaFlow Failed Downloads"
+        and "MediaFlow Pro Failed Downloads"
         not in path.parts
     ]
     assert visible_files == []

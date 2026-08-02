@@ -129,11 +129,16 @@ Item {
                 verticalAlignment: Text.AlignVCenter
             }
             Repeater {
-                model: assetKind === "web" && webController.isWebClip && timelineController.isClipSelected(clipId) ? webController.keyframesData : []
+                model: assetKind === "web" && webController.isWebClip && timelineController.isClipSelected(clipId) ? webTimelineController.keyframesData : []
                 delegate: Rectangle {
+                    id: keyframeMarker
                     required property var modelData
-                    x: Math.max(5, Math.min(clipDelegate.width - 7, (modelData.frame - clipDelegate.startFrame) * view.pixelsPerFrame - 4))
-                    anchors.verticalCenter: parent.verticalCenter
+                    property int previewFrame: Number(modelData.frame)
+                    x: Math.max(5, Math.min(
+                        clipDelegate.width - 7,
+                        (previewFrame - clipDelegate.startFrame)
+                            * view.pixelsPerFrame - 4))
+                    y: Math.max(0, (clipDelegate.height - height) / 2)
                     width: 8
                     height: 8
                     rotation: 45
@@ -142,9 +147,51 @@ Item {
                     border.color: Theme.textStrong
                     z: 7
                     ToolTip.visible: markerHover.hovered
-                    ToolTip.text: modelData.layerId + "." + modelData.field + " · " + modelData.timeMs + " ms · " + modelData.easing
+                    ToolTip.text: (modelData.target === "parameter"
+                        ? qsTr("参数 · ") + modelData.field
+                        : modelData.layerId + "." + modelData.field)
+                        + " · " + modelData.timeMs + " ms · " + modelData.easing
                     HoverHandler {
                         id: markerHover
+                    }
+                    DragHandler {
+                        target: null
+                        xAxis.enabled: true
+                        yAxis.enabled: false
+                        property int initialFrame: 0
+                        onActiveChanged: {
+                            if (active) {
+                                initialFrame = Number(keyframeMarker.modelData.frame);
+                            } else if (keyframeMarker.previewFrame !== initialFrame) {
+                                webTimelineController.moveTimelineKeyframe(
+                                    String(keyframeMarker.modelData.target),
+                                    String(keyframeMarker.modelData.sourceId),
+                                    Number(keyframeMarker.modelData.timeMs),
+                                    keyframeMarker.previewFrame);
+                            }
+                        }
+                        onTranslationChanged: {
+                            if (!active)
+                                return;
+                            const rawFrame = initialFrame
+                                + translation.x / view.pixelsPerFrame;
+                            keyframeMarker.previewFrame = Math.max(
+                                clipDelegate.startFrame,
+                                Math.min(
+                                    clipDelegate.startFrame
+                                        + clipDelegate.durationFrames - 1,
+                                    Math.round(rawFrame)));
+                            view.seekToFrame(keyframeMarker.previewFrame);
+                            webTimelineController.previewTimelineKeyframe(
+                                String(keyframeMarker.modelData.target),
+                                String(keyframeMarker.modelData.sourceId),
+                                Number(keyframeMarker.modelData.timeMs),
+                                keyframeMarker.previewFrame);
+                        }
+                        onCanceled: {
+                            keyframeMarker.previewFrame = initialFrame;
+                            webTimelineController.cancelTimelinePreview();
+                        }
                     }
                 }
             }

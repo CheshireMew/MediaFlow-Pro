@@ -385,6 +385,9 @@ Rectangle {
                     Layout.fillHeight: true
                     playheadFrame: previewViewport.position
                     onEditProfileRequested: sequenceProfileDialog.open()
+                    onSeekRequested: function(frame) {
+                        previewViewport.seek(frame);
+                    }
                 }
             }
 
@@ -529,172 +532,9 @@ Rectangle {
         }
     }
 
-    Shortcut {
-        sequence: "Ctrl+I"
-        enabled: root.shortcutsEnabled && root.canEdit
-        onActivated: root.openMediaImportDialog()
-    }
-    Shortcut {
-        sequence: "Ctrl+M"
-        enabled: root.shortcutsEnabled
-        onActivated: root.activeMode = "export"
-    }
-    Shortcut {
-        sequence: "Space"
-        enabled: root.shortcutsEnabled
-        autoRepeat: false
-        onActivated: previewViewport.playing || previewViewport.playbackRequested
-            ? previewViewport.pause() : root.playPreview()
-    }
-    Shortcut {
-        sequence: "F11"
-        enabled: root.shortcutsEnabled
-        onActivated: root.toggleFullscreen()
-    }
-    Shortcut {
-        sequence: "J"
-        enabled: root.shortcutsEnabled
-        onActivated: {
-            previewViewport.playbackRate = previewViewport.playing && previewViewport.playbackRate < 0
-                ? Math.max(-4, previewViewport.playbackRate * 2) : -1.0;
-            root.playReversePreview();
-        }
-    }
-    Shortcut {
-        sequence: "K"
-        enabled: root.shortcutsEnabled
-        onActivated: previewViewport.pause()
-    }
-    Shortcut {
-        sequence: "L"
-        enabled: root.shortcutsEnabled
-        onActivated: {
-            previewViewport.playbackRate = previewViewport.playing && previewViewport.playbackRate > 0
-                ? Math.min(4, previewViewport.playbackRate * 2) : 1.0;
-            root.playPreview();
-        }
-    }
-    Shortcut {
-        sequence: "S"
-        enabled: root.shortcutsEnabled
-        onActivated: timeline.snapEnabled = !timeline.snapEnabled
-    }
-    Shortcut {
-        sequence: "Ctrl+K"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.selectedClipId.length > 0
-        onActivated: timelineController.splitClip(
-            timelineController.selectedClipId, previewViewport.position)
-    }
-    Shortcut {
-        sequence: "Ctrl+B"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.selectedClipId.length > 0
-        onActivated: timelineController.splitClip(
-            timelineController.selectedClipId, previewViewport.position)
-    }
-    Shortcut {
-        sequence: "Delete"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.selectedClipIds.length > 0
-        onActivated: timelineController.deleteSelectedClips(false)
-    }
-    Shortcut {
-        sequence: "Shift+Delete"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.selectedClipIds.length > 0
-        onActivated: timelineController.deleteSelectedClips(true)
-    }
-    Shortcut {
-        sequence: "Ctrl+Z"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.canUndo
-        onActivated: timelineController.undo()
-    }
-    Shortcut {
-        sequences: ["Ctrl+Y", "Ctrl+Shift+Z"]
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.canRedo
-        onActivated: timelineController.redo()
-    }
-    Shortcut {
-        sequence: "Ctrl+D"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && timelineController.selectedClipId.length > 0
-        onActivated: timelineController.duplicateClip(
-            timelineController.selectedClipId,
-            timeline.pixelsPerFrame,
-            previewViewport.position)
-    }
-    Shortcut {
-        sequence: "Ctrl+A"
-        enabled: root.shortcutsEnabled
-            && timelineController.clipsModel.rowCount() > 0
-        onActivated: timelineController.selectAllClips()
-    }
-    Shortcut {
-        sequence: "Ctrl+Shift+A"
-        enabled: root.shortcutsEnabled
-        onActivated: timeline.clearTimelineSelection()
-    }
-    Shortcut {
-        sequence: "Escape"
-        enabled: root.shortcutsEnabled
-            && timelineController.selectedClipIds.length > 0
-        onActivated: timeline.clearTimelineSelection()
-    }
-    Shortcut {
-        sequence: "I"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && workspaceController.timelineDurationFrames > 0
-        onActivated: timelineController.setSequenceInPoint(previewViewport.position)
-    }
-    Shortcut {
-        sequence: "O"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && workspaceController.timelineDurationFrames > 0
-        onActivated: timelineController.setSequenceOutPoint(previewViewport.position)
-    }
-    Shortcut {
-        sequence: "Ctrl+Shift+X"
-        enabled: root.shortcutsEnabled && root.canEdit
-            && workspaceController.hasSequenceInOut
-        onActivated: timelineController.clearSequenceInOut()
-    }
-    Shortcut {
-        sequence: "Left"
-        enabled: root.shortcutsEnabled
-        onActivated: previewViewport.seek(previewViewport.position - 1)
-    }
-    Shortcut {
-        sequence: "Right"
-        enabled: root.shortcutsEnabled
-        onActivated: previewViewport.seek(previewViewport.position + 1)
-    }
-    Shortcut {
-        sequence: "Home"
-        enabled: root.shortcutsEnabled
-        onActivated: previewViewport.seek(0)
-    }
-    Shortcut {
-        sequence: "End"
-        enabled: root.shortcutsEnabled
-            && workspaceController.timelineDurationFrames > 0
-        onActivated: previewViewport.seek(workspaceController.timelineDurationFrames - 1)
-    }
-    Shortcut {
-        sequence: "\\"
-        enabled: root.shortcutsEnabled
-        onActivated: timeline.fitTimeline()
-    }
-    Shortcut {
-        sequence: "Ctrl+S"
-        enabled: root.shortcutsEnabled && root.canEdit
-        onActivated: workspaceController.saveProject()
-    }
-    Shortcut {
-        sequence: "M"
-        enabled: root.shortcutsEnabled && root.canEdit
-        onActivated: timelineController.addTimelineMarker(previewViewport.position)
+    WorkspaceShortcuts {
+        host: root
+        preview: previewViewport
+        timelineView: timeline
     }
 }

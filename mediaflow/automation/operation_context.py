@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from mediaflow.domain.web_media import web_asset_spec_document
+
 if TYPE_CHECKING:
     from mediaflow.automation.contracts import AutomationRequest
 
@@ -51,30 +53,25 @@ class OperationContext:
         )
         result = self.project.consume_task_result(completed)
         return {
-            "task": completed.model_dump(mode="json"),
+            "task": completed.model_dump(
+                mode="json",
+                exclude_computed_fields=True,
+            ),
             "result": result.as_dict(),
         }
 
 
 def project_snapshot(project: Any) -> dict[str, Any]:
     return {
-        "project": project.get_project().model_dump(mode="json"),
+        "project": project.get_project(),
         "path": str(project.project_dir),
         "read_only": project.read_only,
-        "sequences": [
-            item.model_dump(mode="json") for item in project.list_sequences()
-        ],
-        "assets": [
-            item.model_dump(mode="json") for item in project.list_assets()
-        ],
+        "sequences": project.list_sequences(),
+        "assets": project.list_assets(),
         "web_assets": [
-            item.model_dump(mode="json") for item in project.list_web_assets()
+            web_asset_spec_document(item)
+            for item in project.list_web_assets()
         ],
-        "active_workflows": [
-            item.model_dump(mode="json")
-            for item in project.list_workflow_runs(active_only=True)
-        ],
-        "tasks": [
-            item.model_dump(mode="json") for item in project.list_tasks()
-        ],
+        "active_workflows": project.list_workflow_runs(active_only=True),
+        "tasks": project.list_tasks(),
     }

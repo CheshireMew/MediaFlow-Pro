@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from mediaflow.atomic_file import unique_temporary_sibling
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.storage_names import (
     OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
     content_addressed_child_path,
@@ -18,7 +19,7 @@ from mediaflow.domain.storage_names import (
 from .runtime_paths import runtime_directory
 
 _ROLLBACK_ATTEMPTS = 3
-_FAILED_EXPORT_DIRECTORY_NAME = "MediaFlow Failed Exports"
+_FAILED_EXPORT_DIRECTORY_NAME = f"{PRODUCT_NAME} Failed Exports"
 _MAXIMUM_TEMPORARY_LABEL = "workspace-max"
 _PYTHON_LONG_PATH_UTF16_LIMIT = 32_000
 

@@ -9,6 +9,35 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "保留人工调整": ("Keep manual changes", "手動調整を保持"),
+    "允许自动化修改": ("Allow automation changes", "自動変更を許可"),
+    "关键帧": ("Keyframe", "キーフレーム"),
+    "动画与效果参数": (
+        "Animation and effect parameters",
+        "アニメーションとエフェクトのパラメータ",
+    ),
+    "参数 ·": ("Parameter ·", "パラメータ ·"),
+    "图层属性": ("Layer properties", "レイヤープロパティ"),
+    "在播放头添加关键帧": (
+        "Add keyframe at playhead",
+        "再生ヘッド位置にキーフレームを追加",
+    ),
+    "场景时间": ("Scene time", "シーン時間"),
+    "场景时间线": ("Scene timeline", "シーンタイムライン"),
+    "已启用": ("Enabled", "有効"),
+    "按已审阅计划重新绑定": (
+        "Rebind using reviewed plan",
+        "レビュー済みプランで再バインド",
+    ),
+    "未启用": ("Disabled", "無効"),
+    "移除播放头处关键帧": (
+        "Remove keyframe at playhead",
+        "再生ヘッド位置のキーフレームを削除",
+    ),
+    "请选择此项如何处理": (
+        "Choose how to handle this item",
+        "この項目の処理方法を選択してください",
+    ),
     "主时间线": ("Main Timeline", "メインタイムライン"),
     "代理": ("Proxy", "プロキシ"),
     "修改时间线设置": ("Edit Timeline Settings", "タイムライン設定を変更"),
@@ -344,6 +373,14 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "最終タイムライン映像をコンパイル中",
     ),
     "正在编译音频图": ("Compiling audio graph", "音声グラフをコンパイル中"),
+    "正在等待相同响度分析": (
+        "Waiting for matching loudness analysis",
+        "同じラウドネス解析の完了を待機中",
+    ),
+    "正在复用响度分析结果": (
+        "Reusing loudness analysis result",
+        "ラウドネス解析結果を再利用中",
+    ),
     "正在翻译": ("Translating", "翻訳中"),
     "正在读取字幕对白范围": (
         "Reading subtitle speech bounds",
@@ -915,6 +952,54 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "留空使用 D 盘运行时安装目录": (
         "Leave blank to use the runtime installation on drive D",
         "空欄の場合はDドライブのランタイムインストール先を使用",
+    ),
+    "Faster-Whisper XXL (faster-whisper-xxl.exe)": (
+        "Faster-Whisper XXL (faster-whisper-xxl.exe)",
+        "Faster-Whisper XXL (faster-whisper-xxl.exe)",
+    ),
+    "Faster-Whisper XXL · %1 GiB · %2": (
+        "Faster-Whisper XXL · %1 GiB · %2",
+        "Faster-Whisper XXL · %1 GiB · %2",
+    ),
+    "GPT-SoVITS v2Pro · %1 GiB · %2": (
+        "GPT-SoVITS v2Pro · %1 GiB · %2",
+        "GPT-SoVITS v2Pro · %1 GiB · %2",
+    ),
+    "GPT-SoVITS 根目录": ("GPT-SoVITS Root Directory", "GPT-SoVITS ルートディレクトリ"),
+    "GPT-SoVITS 设备": ("GPT-SoVITS Device", "GPT-SoVITS デバイス"),
+    "yt-dlp：%1。语音组件按需下载，不进入 MediaFlow Pro 安装包。": (
+        "yt-dlp: %1. Speech components are downloaded on demand and are not included in the MediaFlow Pro installer.",
+        "yt-dlp：%1。音声コンポーネントは必要に応じてダウンロードされ、MediaFlow Pro のインストーラーには含まれません。",
+    ),
+    "下载所选组件": ("Download Selected Components", "選択したコンポーネントをダウンロード"),
+    "可执行文件 (*.exe)": ("Executable Files (*.exe)", "実行ファイル (*.exe)"),
+    "可选运行组件": ("Optional Runtime Components", "オプションのランタイムコンポーネント"),
+    "声音克隆": ("Voice Cloning", "音声クローン"),
+    "尚未安装或选择本地目录": (
+        "Not installed and no local directory selected",
+        "未インストール、またはローカルディレクトリが選択されていません",
+    ),
+    "尚未安装或选择本地程序": (
+        "Not installed and no local program selected",
+        "未インストール、またはローカルプログラムが選択されていません",
+    ),
+    "未就绪": ("Not Ready", "準備未完了"),
+    "选择 Faster-Whisper XXL 可执行文件": (
+        "Choose Faster-Whisper XXL Executable",
+        "Faster-Whisper XXL 実行ファイルを選択",
+    ),
+    "选择 GPT-SoVITS v2Pro 根目录": (
+        "Choose GPT-SoVITS v2Pro Root Directory",
+        "GPT-SoVITS v2Pro ルートディレクトリを選択",
+    ),
+    "模型目录": ("Model Directory", "モデルディレクトリ"),
+    "选择 Faster-Whisper 模型目录": (
+        "Choose Faster-Whisper Model Directory",
+        "Faster-Whisper モデルディレクトリを選択",
+    ),
+    "留空使用 D 盘运行时模型目录": (
+        "Leave blank to use the runtime model directory on drive D",
+        "空欄の場合はDドライブのランタイムモデルディレクトリを使用",
     ),
     "模型": ("Model", "モデル"),
     "例如 large-v3-turbo": ("For example, large-v3-turbo", "例：large-v3-turbo"),

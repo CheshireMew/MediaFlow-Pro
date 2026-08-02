@@ -9,17 +9,12 @@ _TASK_COMMAND_ADAPTER: TypeAdapter[TaskCommand] = TypeAdapter(TaskCommand)
 
 
 def list_tasks(context: OperationContext) -> dict:
-    return {
-        "tasks": [
-            item.model_dump(mode="json")
-            for item in context.project.list_tasks()
-        ]
-    }
+    return {"tasks": context.project.list_tasks()}
 
 
 def get_task(context: OperationContext) -> dict:
     task = context.project.get_task(str(context.required("task_id")))
-    return {"task": task.model_dump(mode="json")}
+    return {"task": task}
 
 
 def start_task(context: OperationContext) -> dict:

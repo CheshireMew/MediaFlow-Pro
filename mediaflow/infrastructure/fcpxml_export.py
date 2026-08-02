@@ -16,6 +16,7 @@ from mediaflow.domain.enums import (
     TransitionKind,
 )
 from mediaflow.domain.project import Asset
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.domain.timeline import (
     Clip,
@@ -129,7 +130,7 @@ class FcpxmlExportService:
                 )
         if unsupported_audio:
             raise ValueError(
-                "FCPXML 没有可可靠重建 MediaFlow 音频总线处理的等价结构："
+                f"FCPXML 没有可可靠重建 {PRODUCT_NAME} 音频总线处理的等价结构："
                 + "；".join(unsupported_audio)
                 + "。如需保持最终声音，请改为导出成片。"
             )
@@ -179,7 +180,7 @@ class FcpxmlExportService:
             "library",
             location=self.documents.project_dir.resolve().as_uri(),
         )
-        event = ET.SubElement(library, "event", name="MediaFlow Pro")
+        event = ET.SubElement(library, "event", name=PRODUCT_NAME)
         project = ET.SubElement(event, "project", name=state.sequence.name)
         duration = max(1, state.duration_frames)
         sequence = ET.SubElement(

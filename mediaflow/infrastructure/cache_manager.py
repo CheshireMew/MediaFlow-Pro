@@ -64,15 +64,9 @@ class CacheManager:
             try:
                 archive.parent.mkdir(parents=True, exist_ok=True)
                 run.replace(archive)
-                error.add_note(
-                    "未完成的缓存运行目录已移到："
-                    f"{archive}"
-                )
+                error.add_note(f"未完成的缓存运行目录已移到：{archive}")
             except BaseException as archive_error:
-                error.add_note(
-                    "缓存运行清单写入失败，且未完成目录归档失败："
-                    f"{archive_error}"
-                )
+                error.add_note(f"缓存运行清单写入失败，且未完成目录归档失败：{archive_error}")
             raise
         return run
 
@@ -83,18 +77,9 @@ class CacheManager:
             raise ValueError(f"Only cache run directories can be removed: {path}")
         manifest = self._run_manifest(path)
         if manifest is None:
-            raise ValueError(
-                "Cache run is not owned by the current run-manifest schema: "
-                f"{path}"
-            )
-        if (
-            manifest.owner_pid != os.getpid()
-            and process_is_alive(manifest.owner_pid)
-        ):
-            raise RuntimeError(
-                "Cache run is still owned by process "
-                f"{manifest.owner_pid}: {path}"
-            )
+            raise ValueError(f"Cache run is not owned by the current run-manifest schema: {path}")
+        if manifest.owner_pid != os.getpid() and process_is_alive(manifest.owner_pid):
+            raise RuntimeError(f"Cache run is still owned by process {manifest.owner_pid}: {path}")
         shutil.rmtree(path)
 
     def prune_runs(self, *, max_age_seconds: int = 24 * 60 * 60) -> None:
@@ -154,16 +139,18 @@ class CacheManager:
                 continue
 
     def _require_managed(self, path: Path) -> None:
+        root = _comparable_resolved_path(self.root)
+        candidate = _comparable_resolved_path(path)
         try:
-            path.relative_to(self.root)
+            common = os.path.commonpath((root, candidate))
         except ValueError as error:
             raise ValueError(f"Cache path is outside the managed root: {path}") from error
+        if common != root:
+            raise ValueError(f"Cache path is outside the managed root: {path}")
 
     def _run_is_live(self, run: Path) -> bool:
         manifest = self._run_manifest(run)
-        return manifest is None or process_is_alive(
-            manifest.owner_pid
-        )
+        return manifest is None or process_is_alive(manifest.owner_pid)
 
     def _run_manifest(
         self,
@@ -184,8 +171,7 @@ class CacheManager:
             return None
         if (
             type(payload["schema_version"]) is not int
-            or payload["schema_version"]
-            != self.RUN_SCHEMA_VERSION
+            or payload["schema_version"] != self.RUN_SCHEMA_VERSION
             or type(payload["owner_pid"]) is not int
             or type(payload["created_at_ns"]) is not int
             or payload["owner_pid"] <= 0
@@ -202,3 +188,14 @@ class CacheManager:
             owner_pid=payload["owner_pid"],
             created_at_ns=payload["created_at_ns"],
         )
+
+
+def _comparable_resolved_path(path: Path) -> str:
+    value = os.path.normcase(os.path.normpath(os.fspath(path.resolve())))
+    if os.name != "nt":
+        return value
+    if value.startswith("\\\\?\\UNC\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return os.path.normcase(os.path.normpath(value))

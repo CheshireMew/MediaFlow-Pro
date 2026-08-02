@@ -14,6 +14,8 @@ from .subtitle_controller import SubtitleController
 from .task_controller import TaskController
 from .timeline_controller import TimelineController
 from .web_controller import WebController
+from .web_delivery_controller import WebDeliveryController
+from .web_timeline_controller import WebTimelineController
 from .workspace_controller import WorkspaceController
 
 
@@ -37,6 +39,8 @@ class EditorControllers:
         self.tasks = TaskController(self.session)
         self.export = ExportController(self.session)
         self.web = WebController(self.session)
+        self.web_timeline = WebTimelineController(self.session, self.web)
+        self.web_delivery = WebDeliveryController(self.session, self.web)
         self.session._attach_controllers(self.context_properties())
 
     def context_properties(self) -> dict[str, QObject]:
@@ -51,6 +55,8 @@ class EditorControllers:
             "taskController": self.tasks,
             "exportController": self.export,
             "webController": self.web,
+            "webTimelineController": self.web_timeline,
+            "webDeliveryController": self.web_delivery,
         }
 
     def shutdown(self) -> None:

@@ -42,6 +42,16 @@ WebDataKind = Literal[
     "json",
 ]
 WebThemeKind = Literal["color", "font", "number", "string"]
+WebParameterKind = Literal[
+    "number",
+    "integer",
+    "boolean",
+    "string",
+    "color",
+    "choice",
+]
+WebParameterScope = Literal["global", "scene"]
+WebParameterControl = Literal["slider", "number", "toggle", "text", "color", "select"]
 WebInterpolation = Literal["continuous", "discrete"]
 WebEasingKind = Literal["linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic_bezier"]
 WebExportFormat = Literal["png", "gif", "alpha_video", "video", "overlay"]
@@ -185,6 +195,114 @@ class WebFieldConstraint(DomainModel):
         return self
 
 
+class WebParameterConstraint(DomainModel):
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = Field(default=None, gt=0)
+    choices: list[str | float | int | bool] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ordered_range(self) -> WebParameterConstraint:
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum > self.maximum
+        ):
+            raise ValueError("Editable parameter minimum cannot exceed maximum")
+        return self
+
+
+def _web_parameter_value_matches(kind: WebParameterKind, value: JsonValue) -> bool:
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind == "boolean":
+        return isinstance(value, bool)
+    return isinstance(value, str)
+
+
+class WebParameterDefinition(DomainModel):
+    id: str
+    name: str
+    description: str = ""
+    group: str = ""
+    kind: WebParameterKind
+    scope: WebParameterScope
+    default: str | float | int | bool
+    animatable: bool
+    unit: str = ""
+    control: WebParameterControl
+    css_variable: str | None = None
+    constraints: WebParameterConstraint = Field(default_factory=WebParameterConstraint)
+
+    @field_validator("id", "name")
+    @classmethod
+    def non_empty_parameter_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Editable parameter identifiers and names cannot be empty")
+        return value
+
+    @field_validator("css_variable")
+    @classmethod
+    def valid_parameter_css_variable(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("--"):
+            raise ValueError("Parameter CSS variables must start with --")
+        return value
+
+    @model_validator(mode="after")
+    def coherent_definition(self) -> WebParameterDefinition:
+        controls: dict[WebParameterKind, set[WebParameterControl]] = {
+            "number": {"slider", "number"},
+            "integer": {"slider", "number"},
+            "boolean": {"toggle"},
+            "string": {"text"},
+            "color": {"color"},
+            "choice": {"select"},
+        }
+        if self.control not in controls[self.kind]:
+            raise ValueError(
+                f"Editable parameter {self.id} control does not match kind {self.kind}"
+            )
+        if not _web_parameter_value_matches(self.kind, self.default):
+            raise ValueError(
+                f"Editable parameter {self.id} default does not match kind {self.kind}"
+            )
+        if self.kind == "choice":
+            if not self.constraints.choices:
+                raise ValueError(f"Choice parameter {self.id} must declare choices")
+            if self.default not in self.constraints.choices:
+                raise ValueError(f"Choice parameter {self.id} default is not a choice")
+        elif self.constraints.choices:
+            raise ValueError("Only choice parameters can declare choices")
+        if isinstance(self.default, (int, float)) and not isinstance(self.default, bool):
+            if (
+                self.constraints.minimum is not None
+                and self.default < self.constraints.minimum
+            ):
+                raise ValueError(f"Editable parameter {self.id} default is below minimum")
+            if (
+                self.constraints.maximum is not None
+                and self.default > self.constraints.maximum
+            ):
+                raise ValueError(f"Editable parameter {self.id} default exceeds maximum")
+        return self
+
+    def validate_value(self, value: JsonValue) -> None:
+        if not _web_parameter_value_matches(self.kind, value):
+            raise ValueError(
+                f"Editable parameter {self.id} value does not match kind {self.kind}"
+            )
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if self.constraints.minimum is not None and value < self.constraints.minimum:
+                raise ValueError(f"Editable parameter {self.id} is below minimum")
+            if self.constraints.maximum is not None and value > self.constraints.maximum:
+                raise ValueError(f"Editable parameter {self.id} exceeds maximum")
+        if self.constraints.choices and value not in self.constraints.choices:
+            raise ValueError(f"Editable parameter {self.id} is not an allowed choice")
+
+
 class WebComponentMetadata(DomainModel):
     id: str
     name: str
@@ -259,14 +377,70 @@ class WebSceneStep(DomainModel):
     id: str
     at_ms: int = Field(ge=0)
     label: str
+    state_kind: Literal["start", "change", "result", "hold"]
+    review: bool
+    description: str
 
-    @field_validator("id", "label")
+    @field_validator("id", "label", "description")
     @classmethod
     def non_empty_step_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("Editable media scene step fields cannot be empty")
         return value
+
+
+class WebCameraDepthLayer(DomainModel):
+    layer_id: str
+    depth: float = Field(ge=-2, le=2)
+
+
+class WebCameraKeyframe(DomainModel):
+    step_id: str
+    x: float
+    y: float
+    zoom: float = Field(ge=0.1, le=4)
+    focus_depth: float = Field(ge=-2, le=2)
+    aperture: float = Field(ge=0, le=40)
+    easing: Literal["linear", "step", "ease_in", "ease_out", "ease_in_out"]
+
+
+class WebSceneCamera(DomainModel):
+    root_layer_id: str
+    depth_layers: list[WebCameraDepthLayer]
+    readability_layer_ids: list[str]
+    keyframes: list[WebCameraKeyframe] = Field(min_length=1)
+
+
+class WebSceneMotion(DomainModel):
+    complexity: Literal["static", "simple", "complex"]
+    driver: Literal["none", "object", "camera", "mixed"]
+    semantic_purpose: str
+    key_state_review: Literal["none", "required"]
+    camera: WebSceneCamera | None
+
+    @field_validator("semantic_purpose")
+    @classmethod
+    def non_empty_semantic_purpose(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Editable scene motion must explain its semantic purpose")
+        return value
+
+    @model_validator(mode="after")
+    def coherent_driver(self) -> WebSceneMotion:
+        camera_driven = self.driver in {"camera", "mixed"}
+        if camera_driven != (self.camera is not None):
+            raise ValueError("Editable scene motion driver and camera must agree")
+        if self.complexity == "static" and (
+            self.driver != "none"
+            or self.camera is not None
+            or self.key_state_review != "none"
+        ):
+            raise ValueError("Static editable scenes cannot declare active motion")
+        if self.complexity != "static" and self.driver == "none":
+            raise ValueError("Non-static editable scenes need a motion driver")
+        return self
 
 
 class WebAssetSlotBinding(DomainModel):
@@ -282,6 +456,8 @@ class WebScene(DomainModel):
     duration_ms: int = Field(gt=0)
     primary_blocks: int = Field(ge=0)
     steps: list[WebSceneStep]
+    motion: WebSceneMotion
+    parameters: dict[str, str | float | int | bool]
     data: dict[str, JsonValue]
     asset_slots: dict[str, WebAssetSlotBinding]
 
@@ -303,6 +479,25 @@ class WebScene(DomainModel):
             raise ValueError("Editable media scene steps must have unique ascending times")
         if times[0] != 0 or times[-1] >= self.duration_ms:
             raise ValueError("Editable media scene steps must start at zero and stay in the scene")
+        if self.steps[0].state_kind != "start":
+            raise ValueError("Editable media scene steps must begin with a start state")
+        if self.motion.complexity == "complex":
+            reviewed = {item.state_kind for item in self.steps if item.review}
+            if self.motion.key_state_review != "required" or not {
+                "start",
+                "change",
+                "result",
+            }.issubset(reviewed):
+                raise ValueError(
+                    "Complex editable scenes need reviewed start, change, and result states"
+                )
+        if self.motion.camera is not None:
+            step_ids = {item.id for item in self.steps}
+            camera_step_ids = [item.step_id for item in self.motion.camera.keyframes]
+            if len(set(camera_step_ids)) != len(camera_step_ids):
+                raise ValueError("Editable camera keyframe step identifiers must be unique")
+            if not set(camera_step_ids).issubset(step_ids):
+                raise ValueError("Editable camera keyframes must reference scene steps")
         return self
 
 
@@ -793,7 +988,7 @@ class WebProductionMetadata(DomainModel):
 
 class EditableMediaManifest(DomainModel):
     protocol: Literal["editable-media"]
-    version: Literal[4]
+    version: Literal[5]
     entry: str
     media_sources: str
     playback: WebPlayback
@@ -801,6 +996,7 @@ class EditableMediaManifest(DomainModel):
     layers: list[WebLayerManifest]
     component: WebComponentMetadata
     theme_variables: list[WebThemeVariable]
+    parameters: list[WebParameterDefinition]
     scenes: list[WebScene]
     layout_contracts: list[WebLayoutContract]
     variants: list[WebVariant]
@@ -956,6 +1152,35 @@ class EditableMediaManifest(DomainModel):
             raise ValueError("Editable media theme variable identifiers must be unique")
         if len({item.css_variable for item in self.theme_variables}) != len(self.theme_variables):
             raise ValueError("Editable media theme CSS variables must be unique")
+        parameter_ids = [item.id for item in self.parameters]
+        if len(set(parameter_ids)) != len(parameter_ids):
+            raise ValueError("Editable media parameter identifiers must be unique")
+        parameter_css_variables = [
+            item.css_variable for item in self.parameters if item.css_variable is not None
+        ]
+        if len(set(parameter_css_variables)) != len(parameter_css_variables):
+            raise ValueError("Editable media parameter CSS variables must be unique")
+        theme_css_variables = {item.css_variable for item in self.theme_variables}
+        overlap = theme_css_variables.intersection(parameter_css_variables)
+        if overlap:
+            raise ValueError(
+                f"Editable media theme and parameter CSS variables overlap: {sorted(overlap)}"
+            )
+        parameters = {item.id: item for item in self.parameters}
+        for scene in self.scenes:
+            unknown_parameters = set(scene.parameters) - set(parameters)
+            if unknown_parameters:
+                raise ValueError(
+                    f"Scene {scene.id} references unknown parameters: "
+                    f"{sorted(unknown_parameters)}"
+                )
+            for parameter_id, value in scene.parameters.items():
+                definition = parameters[parameter_id]
+                if definition.scope != "scene":
+                    raise ValueError(
+                        f"Scene {scene.id} cannot override global parameter {parameter_id}"
+                    )
+                definition.validate_value(value)
 
         unknown_variant_overrides = set(self.quality.variant_overrides) - set(variant_ids)
         if unknown_variant_overrides:
@@ -1079,6 +1304,14 @@ class EditableMediaManifest(DomainModel):
             )
         return values
 
+    def parameter_for(self, parameter_id: str) -> WebParameterDefinition:
+        try:
+            return next(item for item in self.parameters if item.id == parameter_id)
+        except StopIteration as error:
+            raise ValueError(
+                f"Editable media parameter does not exist: {parameter_id}"
+            ) from error
+
 
 def parse_editable_media_manifest(document: object) -> EditableMediaManifest:
     validate_editable_media_document(document)
@@ -1089,10 +1322,40 @@ def parse_editable_media_manifest_json(value: str) -> EditableMediaManifest:
     return parse_editable_media_manifest(json.loads(value))
 
 
+def editable_media_manifest_document(
+    manifest: EditableMediaManifest,
+) -> dict[str, JsonValue]:
+    document = manifest.model_dump(mode="json", exclude_none=True)
+    scenes = document.get("scenes")
+    if not isinstance(scenes, list):
+        raise RuntimeError("Editable media manifest scenes were not serialized")
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            raise RuntimeError(
+                "Editable media manifest scene was not serialized"
+            )
+        motion = scene.get("motion")
+        if not isinstance(motion, dict):
+            raise RuntimeError(
+                "Editable media manifest motion was not serialized"
+            )
+        motion.setdefault("camera", None)
+    validate_editable_media_document(document)
+    return cast(dict[str, JsonValue], document)
+
+
 class WebAssetSpec(DomainModel):
     asset_id: str
     manifest: EditableMediaManifest
     source_hash: str
+
+
+def web_asset_spec_document(spec: WebAssetSpec) -> dict[str, JsonValue]:
+    return {
+        "asset_id": spec.asset_id,
+        "manifest": editable_media_manifest_document(spec.manifest),
+        "source_hash": spec.source_hash,
+    }
 
 
 class WebEasing(DomainModel):
@@ -1129,6 +1392,26 @@ class WebAnimationTrack(DomainModel):
                 for item in self.keyframes
             ):
                 raise ValueError("Continuous keyframe values must be numeric")
+        return self
+
+
+class WebParameterAnimationTrack(DomainModel):
+    parameter_id: str
+    interpolation: WebInterpolation = "continuous"
+    keyframes: list[WebKeyframe]
+
+    @model_validator(mode="after")
+    def valid_keyframes(self) -> WebParameterAnimationTrack:
+        if not self.keyframes:
+            raise ValueError("Editable parameter tracks need at least one keyframe")
+        times = [item.time_ms for item in self.keyframes]
+        if times != sorted(times) or len(set(times)) != len(times):
+            raise ValueError("Editable parameter keyframes need unique ascending times")
+        if self.interpolation == "continuous" and any(
+            not isinstance(item.value, (int, float)) or isinstance(item.value, bool)
+            for item in self.keyframes
+        ):
+            raise ValueError("Continuous parameter keyframes must be numeric")
         return self
 
 
@@ -1204,6 +1487,11 @@ class WebDataSnapshot(DomainModel):
 class WebSceneState(DomainModel):
     layers: dict[str, WebLayerOverride] = Field(default_factory=dict)
     animations: dict[str, dict[WebEditableField, WebAnimationTrack]] = Field(default_factory=dict)
+    parameters: dict[str, str | float | int | bool] = Field(default_factory=dict)
+    parameter_animations: dict[str, WebParameterAnimationTrack] = Field(
+        default_factory=dict
+    )
+    parameter_locks: tuple[str, ...] = ()
     data_snapshot: WebDataSnapshot = Field(default_factory=WebDataSnapshot)
     locks: dict[str, tuple[WebEditableField, ...]] = Field(default_factory=dict)
 
@@ -1216,6 +1504,13 @@ class WebSceneState(DomainModel):
         for layer_id, fields in self.locks.items():
             if len(set(fields)) != len(fields):
                 raise ValueError(f"Locked fields must be unique: {layer_id}")
+        for parameter_id, parameter_track in self.parameter_animations.items():
+            if parameter_id != parameter_track.parameter_id:
+                raise ValueError(
+                    f"Parameter track key does not match its id: {parameter_id}"
+                )
+        if len(set(self.parameter_locks)) != len(self.parameter_locks):
+            raise ValueError("Scene parameter locks must be unique")
         return self
 
 
@@ -1233,6 +1528,8 @@ class WebClipState(DomainModel):
     clip_id: str
     scenes: dict[str, WebSceneState] = Field(default_factory=dict)
     theme: dict[str, str | float] = Field(default_factory=dict)
+    parameters: dict[str, str | float | int | bool] = Field(default_factory=dict)
+    parameter_locks: tuple[str, ...] = ()
     variant: WebRuntimeVariant | None = None
     scene_id: str | None = None
     playback: WebRuntimePlayback | None = None
@@ -1244,6 +1541,8 @@ class WebClipState(DomainModel):
     def coherent_state(self) -> WebClipState:
         if any(not scene_id.strip() for scene_id in self.scenes):
             raise ValueError("Editable media scene state identifiers cannot be empty")
+        if len(set(self.parameter_locks)) != len(self.parameter_locks):
+            raise ValueError("Global parameter locks must be unique")
         return self
 
 
@@ -1256,15 +1555,70 @@ class WebStateDiff(DomainModel):
     locked_paths: list[str] = Field(default_factory=list)
 
 
-class WebRebindReport(DomainModel):
+class WebEditDescriptor(DomainModel):
+    path: str
+    target: Literal["layer", "parameter", "theme", "data"]
+    source_id: str
+    label: str
+    group: str
+    kind: str
+    control: str
+    value: JsonValue
+    default: JsonValue
+    constraints: WebParameterConstraint = Field(default_factory=WebParameterConstraint)
+    unit: str = ""
+    locked: bool = False
+    animatable: bool = False
+    timeline: Literal["none", "keyframe", "interval"] = "none"
+
+
+class WebEditDocument(DomainModel):
+    clip_id: str
+    scene_id: str
+    variant_id: str
+    revision: int
+    scene_duration_ms: int
+    descriptors: list[WebEditDescriptor]
+
+
+class WebRebindConflict(DomainModel):
+    path: str
+    kind: Literal[
+        "removed-layer",
+        "removed-field",
+        "removed-scene",
+        "removed-parameter",
+        "incompatible-value",
+        "out-of-range-keyframe",
+        "removed-data-field",
+        "removed-theme-variable",
+        "removed-variant",
+        "removed-media-source",
+    ]
+    message: str
+    current_value: JsonValue = None
+    allowed_resolutions: tuple[Literal["drop", "default"], ...]
+
+
+class WebRebindPlan(DomainModel):
     asset_id: str
     old_source_hash: str
     new_source_hash: str
+    plan_digest: str
     retained_layers: list[str] = Field(default_factory=list)
     added_layers: list[str] = Field(default_factory=list)
     removed_layers: list[str] = Field(default_factory=list)
     affected_clips: list[str] = Field(default_factory=list)
-    conflicts: list[str] = Field(default_factory=list)
+    conflicts: list[WebRebindConflict] = Field(default_factory=list)
+
+
+class WebRebindCommitReport(DomainModel):
+    asset_id: str
+    old_source_hash: str
+    new_source_hash: str
+    plan_digest: str
+    migrated_clips: list[str] = Field(default_factory=list)
+    resolved_paths: dict[str, Literal["drop", "default"]] = Field(default_factory=dict)
     archive_path: str = ""
 
 
@@ -1346,6 +1700,13 @@ def web_runtime_state(
             )
             resolved_layers[layer.id] = values
         data = resolved_web_scene_data(state, manifest, scene.id)
+        scene_parameters = {
+            item.id: item.default
+            for item in manifest.parameters
+            if item.scope == "scene"
+        }
+        scene_parameters.update(scene.parameters)
+        scene_parameters.update(current.parameters)
         resolved_scenes[scene.id] = cast(
             JsonValue,
             {
@@ -1357,6 +1718,12 @@ def web_runtime_state(
                     }
                     for layer_id, tracks in current.animations.items()
                 },
+                "parameters": cast(JsonValue, scene_parameters),
+                "parameter_animations": {
+                    parameter_id: track.model_dump(mode="json")
+                    for parameter_id, track in current.parameter_animations.items()
+                },
+                "parameter_locks": list(current.parameter_locks),
                 "data": data,
                 "locks": {
                     layer_id: list(fields) for layer_id, fields in current.locks.items()
@@ -1365,12 +1732,23 @@ def web_runtime_state(
         )
     theme = {item.id: item.default for item in manifest.theme_variables}
     theme.update(state.theme)
+    parameters = {
+        item.id: item.default for item in manifest.parameters if item.scope == "global"
+    }
+    parameters.update(state.parameters)
     return {
         "scenes": cast(JsonValue, resolved_scenes),
         "theme": cast(JsonValue, theme),
         "theme_bindings": cast(JsonValue, {
             item.id: item.css_variable for item in manifest.theme_variables
         }),
+        "parameters": cast(JsonValue, parameters),
+        "parameter_bindings": cast(JsonValue, {
+            item.id: item.css_variable
+            for item in manifest.parameters
+            if item.css_variable is not None
+        }),
+        "parameter_locks": list(state.parameter_locks),
         "variant": cast(JsonValue, {
             "id": variant.id,
             "width": variant.canvas.width,

@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -16,10 +17,11 @@ from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
 from mediaflow.infrastructure.process_observers import MeltProgressObserver
+from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
-from .compiler import TimelineCompiler
+from .compiler import MltDocument, TimelineCompiler
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +42,9 @@ class LoudnessMetrics:
 
 class LoudnessAnalysisService:
     """Measure the compiled sequence audio graph with FFmpeg EBU R128 filters."""
+
+    RESULT_SCHEMA_VERSION = 1
+    LOCK_WAIT_TIMEOUT_SECONDS = 10_800
 
     def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths | None = None):
         self.compiler = compiler
@@ -65,6 +70,65 @@ class LoudnessAnalysisService:
         snapshot_hash = self._snapshot_hash(document.xml, document.source_paths)
         graph_path = self.graph_path(project_dir, state.sequence.id, snapshot_hash)
         result_path = self.result_path(project_dir, state.sequence.id, snapshot_hash)
+        cached = self.read_metrics(
+            result_path,
+            expected_sequence_id=state.sequence.id,
+            expected_snapshot_hash=snapshot_hash,
+        )
+        if cached is not None:
+            if progress:
+                progress(OperationProgress.indeterminate("audio_analysis_cache_ready"))
+            return cached, result_path
+        lock = self._acquire_producer_lock(
+            self.lock_path(project_dir, state.sequence.id, snapshot_hash),
+            result_path,
+            sequence_id=state.sequence.id,
+            snapshot_hash=snapshot_hash,
+            check_cancelled=check_cancelled,
+            progress=progress,
+        )
+        try:
+            cached = self.read_metrics(
+                result_path,
+                expected_sequence_id=state.sequence.id,
+                expected_snapshot_hash=snapshot_hash,
+            )
+            if cached is not None:
+                if progress:
+                    progress(
+                        OperationProgress.indeterminate(
+                            "audio_analysis_cache_ready"
+                        )
+                    )
+                return cached, result_path
+            return self._produce(
+                state,
+                document,
+                snapshot_hash=snapshot_hash,
+                graph_path=graph_path,
+                result_path=result_path,
+                check_cancelled=check_cancelled,
+                progress=progress,
+            )
+        finally:
+            lock.release()
+
+    def _produce(
+        self,
+        state: TimelineState,
+        document: MltDocument,
+        *,
+        snapshot_hash: str,
+        graph_path: Path,
+        result_path: Path,
+        check_cancelled=None,
+        progress=None,
+    ) -> tuple[LoudnessMetrics, Path]:
+        melt = self.paths.melt
+        if melt is None:
+            raise FileNotFoundError("MLT melt runtime is not installed")
+        project_dir = self.compiler.repository.project_dir
+        cache_dir = project_dir / "cache" / "l"
         rendered_audio = native_temporary_sibling(
             content_addressed_child_path(
                 cache_dir,
@@ -79,7 +143,7 @@ class LoudnessAnalysisService:
         atomic_write_text(graph_path, document.xml)
         environment = os.environ.copy()
         environment.pop("MLT_REPOSITORY_DENY", None)
-        mlt_root = self.paths.melt.parent
+        mlt_root = melt.parent
         environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
         environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
         total_frames = max(1, document.duration_frames)
@@ -99,7 +163,7 @@ class LoudnessAnalysisService:
         try:
             render = run_cancellable_streaming(
                 [
-                    str(self.paths.melt),
+                    str(melt),
                     "-progress2",
                     str(graph_path),
                     "-consumer",
@@ -177,9 +241,11 @@ class LoudnessAnalysisService:
                 result_path,
                 json.dumps(
                     {
+                        "schema_version": self.RESULT_SCHEMA_VERSION,
                         **asdict(metrics),
                         "sequence_id": state.sequence.id,
                         "snapshot_hash": snapshot_hash,
+                        "producer_pid": os.getpid(),
                         "source_graph": str(
                             graph_path.relative_to(project_dir).as_posix()
                         ),
@@ -280,7 +346,57 @@ class LoudnessAnalysisService:
         )
 
     @staticmethod
+    def lock_path(
+        project_dir: Path,
+        sequence_id: str,
+        snapshot_hash: str,
+    ) -> Path:
+        return content_addressed_child_path(
+            project_dir / "cache" / "l",
+            f"loudness-lock:{sequence_id}:{snapshot_hash}",
+            namespace="ll",
+            suffix=".lock",
+        )
+
+    @classmethod
+    def _acquire_producer_lock(
+        cls,
+        lock_path: Path,
+        result_path: Path,
+        *,
+        sequence_id: str,
+        snapshot_hash: str,
+        check_cancelled=None,
+        progress=None,
+    ) -> ProcessFileLock:
+        deadline = time.monotonic() + cls.LOCK_WAIT_TIMEOUT_SECONDS
+        lock = ProcessFileLock(lock_path)
+        waiting_reported = False
+        while True:
+            if cls.read_metrics(
+                result_path,
+                expected_sequence_id=sequence_id,
+                expected_snapshot_hash=snapshot_hash,
+            ) is not None:
+                if lock.acquire():
+                    return lock
+            elif lock.acquire():
+                return lock
+            if not waiting_reported and progress:
+                progress(OperationProgress.indeterminate("audio_analysis_waiting"))
+                waiting_reported = True
+            if check_cancelled is not None:
+                check_cancelled()
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Timed out waiting for loudness analysis result: "
+                    f"{sequence_id}:{snapshot_hash}"
+                )
+            time.sleep(0.1)
+
+    @classmethod
     def read_metrics(
+        cls,
         path: Path,
         *,
         expected_sequence_id: str,
@@ -288,18 +404,35 @@ class LoudnessAnalysisService:
     ) -> LoudnessMetrics | None:
         if not path.is_file():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
         if (
-            str(payload.get("sequence_id", "")) != expected_sequence_id
-            or str(payload.get("snapshot_hash", "")) != expected_snapshot_hash
+            payload.get("schema_version") != cls.RESULT_SCHEMA_VERSION
+            or payload.get("sequence_id") != expected_sequence_id
+            or payload.get("snapshot_hash") != expected_snapshot_hash
         ):
             return None
-        return LoudnessMetrics(
-            sample_peak_dbfs=float(payload["sample_peak_dbfs"]),
-            true_peak_dbtp=float(payload["true_peak_dbtp"]),
-            short_term_lufs=float(payload["short_term_lufs"]),
-            integrated_lufs=float(payload["integrated_lufs"]),
+        metric_names = (
+            "sample_peak_dbfs",
+            "true_peak_dbtp",
+            "short_term_lufs",
+            "integrated_lufs",
         )
+        values: dict[str, float] = {}
+        for name in metric_names:
+            raw = payload.get(name)
+            if (
+                not isinstance(raw, (int, float))
+                or isinstance(raw, bool)
+                or not math.isfinite(float(raw))
+            ):
+                return None
+            values[name] = float(raw)
+        return LoudnessMetrics(**values)
 
     def _ffmpeg_measure(
         self,

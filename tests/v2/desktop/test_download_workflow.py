@@ -187,7 +187,7 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             Path(__file__).resolve().parents[3]
             / "tests"
             / "fixtures"
-            / "editable-media-v4"
+            / "editable-media-v5"
             / "editable-media.json"
         )
         controllers.media.importFiles(
@@ -309,6 +309,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("MEDIAFLOW_APP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "Video"))
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     web_root = tmp_path / "web"
@@ -373,7 +374,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert subtitles is not None and subtitles.property("checked") is True
         assert project_name is not None and project_name.isVisible()
         project_name.setProperty("text", "AI Industry Project")
-        expected_project_path = tmp_path / "Project" / "AI Industry Project"
+        expected_project_path = tmp_path / "Video" / "AI Industry Project"
         assert window.findChild(QQuickItem, "downloadProjectPathValue") is None
         assert window.findChild(QQuickItem, "chooseDownloadProjectDirectoryButton") is None
         assert destination is not None
@@ -454,7 +455,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert QMetaObject.invokeMethod(settings_dialog, "open")
         settings_tabs.setProperty("currentIndex", 1)
         assert _process_until(
-            lambda: Path(project_directory_setting.property("text")) == tmp_path / "Project"
+            lambda: Path(project_directory_setting.property("text")) == tmp_path / "Video"
             and media_directory_setting.isVisible()
             and Path(media_directory_setting.property("text")) == tmp_path / "WorkSpace"
         )
@@ -481,7 +482,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert downloaded_path.parent.name == "WorkSpace"
         assert (expected_project_path / "project.mfp").is_file()
         persisted_settings = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load()
-        assert persisted_settings.ui.default_project_directory == str((tmp_path / "Project").resolve())
+        assert persisted_settings.ui.default_project_directory == str((tmp_path / "Video").resolve())
         assert persisted_settings.download.output_directory == str((tmp_path / "WorkSpace").resolve())
         assert persisted_settings.download.resolution == "best"
         assert persisted_settings.download.download_subtitles is False

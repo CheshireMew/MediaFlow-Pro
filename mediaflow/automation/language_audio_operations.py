@@ -15,13 +15,13 @@ def list_subtitles(context: OperationContext) -> dict:
     return {
         "documents": [
             {
-                **document.model_dump(mode="json"),
-                "segments": [
-                    segment.model_dump(mode="json")
-                    for segment in context.project.list_subtitle_segments(
-                        document.id
-                    )
-                ],
+                **document.model_dump(
+                    mode="python",
+                    exclude_computed_fields=True,
+                ),
+                "segments": context.project.list_subtitle_segments(
+                    document.id
+                ),
             }
             for document in documents
         ]
@@ -36,7 +36,7 @@ def update_subtitle_segment(context: OperationContext) -> dict:
         end_frame=int(context.required("end_frame")),
         text=str(context.required("text")),
     )
-    return {"segment": segment.model_dump(mode="json")}
+    return {"segment": segment}
 
 
 def get_transcript(context: OperationContext) -> dict:
@@ -48,7 +48,7 @@ def get_transcript(context: OperationContext) -> dict:
             else None
         ),
     )
-    return {"transcript": snapshot.model_dump(mode="json")}
+    return {"transcript": snapshot}
 
 
 def preview_transcript_edit(context: OperationContext) -> dict:
@@ -57,7 +57,7 @@ def preview_transcript_edit(context: OperationContext) -> dict:
         edit,
         context.project.timeline(edit.sequence_id),
     )
-    return {"plan": plan.model_dump(mode="json")}
+    return {"plan": plan}
 
 
 def apply_transcript_edit(context: OperationContext) -> dict:
@@ -73,7 +73,7 @@ def apply_transcript_edit(context: OperationContext) -> dict:
         plan,
         context.project.timeline(plan.sequence_id),
     )
-    return {"edit": result.model_dump(mode="json")}
+    return {"edit": result}
 
 
 def inspect_audio(context: OperationContext) -> dict:
@@ -81,11 +81,11 @@ def inspect_audio(context: OperationContext) -> dict:
     return {
         "buses": [
             {
-                **bus.model_dump(mode="json"),
-                "effects": [
-                    effect.model_dump(mode="json")
-                    for effect in context.project.list_audio_effects(bus.id)
-                ],
+                **bus.model_dump(
+                    mode="python",
+                    exclude_computed_fields=True,
+                ),
+                "effects": context.project.list_audio_effects(bus.id),
             }
             for bus in buses
         ]
@@ -102,14 +102,14 @@ def update_audio_bus(context: OperationContext) -> dict:
     updated = context.project.save_audio_bus(
         bus.model_copy(update=dict(context.required("changes")))
     )
-    return {"bus": updated.model_dump(mode="json")}
+    return {"bus": updated}
 
 
 def save_audio_effect(context: OperationContext) -> dict:
     effect = context.project.save_audio_effect(
         AudioEffect.model_validate(context.required("effect"))
     )
-    return {"effect": effect.model_dump(mode="json")}
+    return {"effect": effect}
 
 
 def remove_audio_effect(context: OperationContext) -> dict:

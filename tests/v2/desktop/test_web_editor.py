@@ -22,7 +22,7 @@ from mediaflow.desktop.app import configure_application_font, create_engine
 from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
-STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v4"
+STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v5"
 
 
 def _process_until(predicate, timeout: float = 10.0) -> bool:
@@ -43,7 +43,7 @@ def _application() -> QGuiApplication:
     return app
 
 
-def test_unified_import_opens_the_v4_package_through_local_preview_server(
+def test_unified_import_opens_the_v5_package_through_local_preview_server(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -53,7 +53,7 @@ def test_unified_import_opens_the_v4_package_through_local_preview_server(
     try:
         controllers.workspace.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
-            "Unified V4 Web Import",
+            "Unified V5 Web Import",
         )
         window = engine.rootObjects()[0]
         loader = window.findChild(QObject, "pageLoader")
@@ -61,9 +61,7 @@ def test_unified_import_opens_the_v4_package_through_local_preview_server(
         assert _process_until(lambda: loader.property("item") is not None)
         workspace = loader.property("item")
 
-        controllers.media.importFiles(
-            [QUrl.fromLocalFile(str(STARTER / "editable-media.json"))]
-        )
+        controllers.media.importFiles([QUrl.fromLocalFile(str(STARTER / "editable-media.json"))])
         assert _process_until(lambda: controllers.media.assetsModel.rowCount() == 1)
         imported = controllers.media.assetsModel.get(0)
         assert imported["kind"] == "web"
@@ -79,9 +77,7 @@ def test_unified_import_opens_the_v4_package_through_local_preview_server(
             False,
         )
         assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 1)
-        state = controllers.session.binding.current.load_timeline(
-            controllers.workspace.activeSequenceId
-        )
+        state = controllers.session.binding.current.load_timeline(controllers.workspace.activeSequenceId)
         assert len(state.clips) == 1
         assert state.clips[0].id in state.web_states
 
@@ -96,12 +92,51 @@ def test_unified_import_opens_the_v4_package_through_local_preview_server(
         web_view = workspace.findChild(QQuickItem, "webEditorWebView")
         assert web_view is not None
         assert _process_until(
-            lambda: controllers.web.browserReady
-            and bool(controllers.web.browserLayerSnapshot),
+            lambda: controllers.web.browserReady and bool(controllers.web.browserLayerSnapshot),
             15,
         )
-        assert controllers.web.manifestData["version"] == 4
+        assert controllers.web.manifestData["version"] == 5
         assert controllers.web.browserRevision == 0
+        controllers.web.selectLayer("title")
+        assert _process_until(
+            lambda: controllers.web.selectedLayerId == "title"
+            and len(controllers.web.parameterDescriptors) == 5
+            and bool(controllers.web.selectedLayerDescriptors)
+        )
+        spring = next(
+            item for item in controllers.web.parameterDescriptors if item["source_id"] == "spring_strength"
+        )
+        assert spring["control"] == "slider"
+        assert spring["unit"] == "ratio"
+        timeline_editor = workspace.findChild(QQuickItem, "webTimelineEditor")
+        assert timeline_editor is not None
+        assert timeline_editor.isVisible()
+        assert {
+            item["label"] for item in controllers.web_timeline.timelineItemsData if item["kind"] == "interval"
+        } == {"显示区间", "动画区间"}
+        assert controllers.web_timeline.snapSceneTimeMs(875) == 900
+
+        controllers.web.updateDescriptorValue(
+            "parameter",
+            "spring_strength",
+            0.86,
+        )
+        controllers.web_timeline.setDescriptorKeyframeAtFrame(
+            "parameter",
+            "spring_strength",
+            0.7,
+            "ease_out",
+            15,
+        )
+        clip_state = controllers.session.binding.current.get_web_clip(state.clips[0].id)
+        assert clip_state.parameters["spring_strength"] == 0.86
+        assert (
+            clip_state.scenes["opening"].parameter_animations["spring_strength"].keyframes[0].time_ms == 500
+        )
+        assert any(
+            item.get("target") == "parameter" and item.get("sourceId") == "spring_strength"
+            for item in controllers.web_timeline.timelineItemsData
+        )
     finally:
         controllers.shutdown()
         engine.deleteLater()
@@ -114,9 +149,9 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    project_path = tmp_path / "Desktop V4 Web Project"
+    project_path = tmp_path / "Desktop V5 Web Project"
     api = EditorApplication()
-    with api.create_project(project_path, "Desktop V4 Web Project") as project:
+    with api.create_project(project_path, "Desktop V5 Web Project") as project:
         asset = project.import_web_package(STARTER)
         sequence_id = project.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
@@ -134,9 +169,7 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
     errors: list[str] = []
     controllers.web.errorOccurred.connect(errors.append)
     try:
-        controllers.workspace.openProject(
-            QUrl.fromLocalFile(str(project_path)).toString()
-        )
+        controllers.workspace.openProject(QUrl.fromLocalFile(str(project_path)).toString())
         controllers.timeline.selectClip(clip.id)
         window = engine.rootObjects()[0]
         loader = window.findChild(QObject, "pageLoader")
@@ -150,8 +183,7 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
         web_view = workspace.findChild(QQuickItem, "webEditorWebView")
         assert web_canvas is not None and web_view is not None
         assert _process_until(
-            lambda: web_canvas.isVisible()
-            and controllers.web.entryUrl.startswith("http://127.0.0.1:"),
+            lambda: web_canvas.isVisible() and controllers.web.entryUrl.startswith("http://127.0.0.1:"),
             15,
         )
         assert _process_until(lambda: controllers.web.browserReady, 15)
@@ -168,9 +200,7 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
         )
         metrics = dict(controllers.web.browserLayerSnapshot)
         title_definition = next(
-            layer
-            for layer in controllers.web.manifestData["layers"]
-            if layer["id"] == "title"
+            layer for layer in controllers.web.manifestData["layers"] if layer["id"] == "title"
         )
         state_x = float(title_definition["default_bounds"]["x"])
         zoom = float(web_view.property("zoomFactor") or 1.0)
@@ -264,14 +294,9 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
             and controllers.web.browserLayerSnapshot.get("x") != metrics["x"],
             15,
         )
-        assert (
-            controllers.web.browserLayerSnapshot["content"]
-            == "One source, three ways to play"
-        )
+        assert controllers.web.browserLayerSnapshot["content"] == "One source, three ways to play"
         web_view.forceActiveFocus()
-        assert _process_until(
-            lambda: not bool(workspace.property("shortcutsEnabled"))
-        )
+        assert _process_until(lambda: not bool(workspace.property("shortcutsEnabled")))
     finally:
         controllers.shutdown()
         engine.deleteLater()

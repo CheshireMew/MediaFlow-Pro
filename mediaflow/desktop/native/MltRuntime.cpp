@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QtMath>
 
+#include <iterator>
 #include <utility>
 
 #ifdef Q_OS_WIN
@@ -276,24 +277,32 @@ void MltRuntime::openGraph(
         }
         m_repository = processState.repository;
     }
-    m_profile = m_api.profileInit(nullptr);
-    if (!m_profile) {
+    m_audioProfile = m_api.profileInit(nullptr);
+    m_videoProfile = m_api.profileInit(nullptr);
+    if (!m_audioProfile || !m_videoProfile) {
         emit errorOccurred(QStringLiteral("MLT profile initialization failed"), requestId);
         closeGraph();
         return;
     }
 
     const QByteArray encodedPath = QDir::toNativeSeparators(graphPath).toUtf8();
-    m_producer = m_api.factoryProducer(m_profile, "xml", encodedPath.constData());
-    if (!m_producer) {
+    m_audioProducer = m_api.factoryProducer(
+        m_audioProfile,
+        "xml",
+        encodedPath.constData());
+    m_videoProducer = m_api.factoryProducer(
+        m_videoProfile,
+        "xml",
+        encodedPath.constData());
+    if (!m_audioProducer || !m_videoProducer) {
         emit errorOccurred(QStringLiteral("MLT could not open the compiled timeline graph"), requestId);
         closeGraph();
         return;
     }
 
-    m_duration = qMax(1, static_cast<int>(m_api.producerLength(m_producer)));
+    m_duration = qMax(1, static_cast<int>(m_api.producerLength(m_videoProducer)));
     m_frameDuration.store(m_duration, std::memory_order_release);
-    m_fps = m_api.producerFps(m_producer);
+    m_fps = m_api.producerFps(m_videoProducer);
     if (m_fps <= 0.0)
         m_fps = 30.0;
     m_position = 0;
@@ -308,7 +317,7 @@ void MltRuntime::play(quint64 requestId)
 {
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
-    if (!m_producer || m_playing)
+    if (!m_audioProducer || !m_videoProducer || m_playing)
         return;
     m_playbackStart = 0;
     m_playbackEnd = m_duration;
@@ -325,7 +334,7 @@ void MltRuntime::playRange(int startFrame, int endFrame, quint64 requestId)
 {
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
-    if (!m_producer)
+    if (!m_audioProducer || !m_videoProducer)
         return;
     if (m_pendingSeekFrame >= 0) {
         const int pendingFrame = std::exchange(m_pendingSeekFrame, -1);
@@ -337,7 +346,7 @@ void MltRuntime::playRange(int startFrame, int endFrame, quint64 requestId)
     m_playbackEnd = qBound(m_playbackStart + 1, endFrame, m_duration);
     if (m_playing) {
         setPlaying(false);
-        closePlaybackConsumer();
+        closePlaybackConsumers();
     }
     startConfiguredPlayback();
 }
@@ -346,17 +355,17 @@ void MltRuntime::pause(quint64 requestId)
 {
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
-    if (!m_playing && !m_consumer)
+    if (!m_playing && !m_audioConsumer && !m_videoConsumer)
         return;
     setPlaying(false);
-    closePlaybackConsumer();
+    closePlaybackConsumers();
 }
 
 void MltRuntime::seek(int frame, quint64 requestId)
 {
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
-    if (!m_producer)
+    if (!m_audioProducer || !m_videoProducer)
         return;
     m_pendingSeekFrame = qBound(0, frame, m_duration - 1);
     if (m_seekScheduled)
@@ -371,7 +380,7 @@ void MltRuntime::seek(int frame, quint64 requestId)
 void MltRuntime::performPendingSeek()
 {
     m_seekScheduled = false;
-    if (!m_producer || m_pendingSeekFrame < 0)
+    if (!m_audioProducer || !m_videoProducer || m_pendingSeekFrame < 0)
         return;
     const int frame = std::exchange(m_pendingSeekFrame, -1);
     seekImmediately(frame);
@@ -379,12 +388,12 @@ void MltRuntime::performPendingSeek()
 
 bool MltRuntime::seekImmediately(int frame)
 {
-    if (!m_producer)
+    if (!m_audioProducer || !m_videoProducer)
         return false;
     const bool resume = m_playing;
     if (resume)
         setPlaying(false);
-    closePlaybackConsumer();
+    closePlaybackConsumers();
     m_position = qBound(0, frame, m_duration - 1);
     if (!decodeStillFrame(m_position))
         return false;
@@ -395,7 +404,7 @@ bool MltRuntime::seekImmediately(int frame)
 
 bool MltRuntime::startConfiguredPlayback()
 {
-    if (!m_producer || m_playing)
+    if (!m_audioProducer || !m_videoProducer || m_playing)
         return false;
     m_playbackStart = qBound(0, m_playbackStart, m_duration - 1);
     m_playbackEnd = qBound(m_playbackStart + 1, m_playbackEnd, m_duration);
@@ -414,7 +423,7 @@ bool MltRuntime::startConfiguredPlayback()
             return seekImmediately(m_playbackStart);
         return true;
     }
-    if (!startPlaybackConsumer())
+    if (!startPlaybackConsumers())
         return false;
     setPlaying(true);
     return true;
@@ -438,10 +447,10 @@ void MltRuntime::setPlaybackRate(double rate)
 void MltRuntime::setVolume(double volume)
 {
     m_volume = qBound(0.0, volume, 1.0);
-    if (m_consumer) {
+    if (m_audioConsumer) {
         const QByteArray encodedVolume = QByteArray::number(m_volume, 'f', 4);
         m_api.propertiesSet(
-            m_api.consumerProperties(m_consumer),
+            m_api.consumerProperties(m_audioConsumer),
             "volume",
             encodedVolume.constData());
     }
@@ -455,8 +464,8 @@ void MltRuntime::setPreviewSize(int width, int height)
     m_previewHeight = requested.height();
     m_frameWidth.store(m_previewWidth, std::memory_order_release);
     m_frameHeight.store(m_previewHeight, std::memory_order_release);
-    if (m_consumer) {
-        MltProperties properties = m_api.consumerProperties(m_consumer);
+    if (m_videoConsumer) {
+        MltProperties properties = m_api.consumerProperties(m_videoConsumer);
         m_api.propertiesSetInt(properties, "width", m_previewWidth);
         m_api.propertiesSetInt(properties, "height", m_previewHeight);
     }
@@ -490,13 +499,19 @@ void MltRuntime::closeGraph()
 {
     m_pendingSeekFrame = -1;
     m_seekScheduled = false;
-    closePlaybackConsumer();
-    if (m_producer && m_api.producerClose)
-        m_api.producerClose(m_producer);
-    m_producer = nullptr;
-    if (m_profile && m_api.profileClose)
-        m_api.profileClose(m_profile);
-    m_profile = nullptr;
+    closePlaybackConsumers();
+    if (m_audioProducer && m_api.producerClose)
+        m_api.producerClose(m_audioProducer);
+    if (m_videoProducer && m_api.producerClose)
+        m_api.producerClose(m_videoProducer);
+    m_audioProducer = nullptr;
+    m_videoProducer = nullptr;
+    if (m_audioProfile && m_api.profileClose)
+        m_api.profileClose(m_audioProfile);
+    if (m_videoProfile && m_api.profileClose)
+        m_api.profileClose(m_videoProfile);
+    m_audioProfile = nullptr;
+    m_videoProfile = nullptr;
     m_position = 0;
     m_duration = 0;
     m_frameDuration.store(0, std::memory_order_release);
@@ -504,113 +519,144 @@ void MltRuntime::closeGraph()
     m_playbackEnd = 0;
 }
 
-bool MltRuntime::startPlaybackConsumer()
+bool MltRuntime::startPlaybackConsumers()
 {
-    closePlaybackConsumer();
-    if (!m_producer || !m_profile)
+    closePlaybackConsumers();
+    if (!m_audioProducer
+        || !m_videoProducer
+        || !m_audioProfile
+        || !m_videoProfile) {
         return false;
+    }
 
 #ifdef Q_OS_WIN
     const ScopedDllDirectory dllSearch(m_runtimeRoot);
 #endif
-    if (m_api.producerSeek(m_producer, m_position) != 0) {
+    if (m_api.producerSeek(m_audioProducer, m_position) != 0
+        || m_api.producerSeek(m_videoProducer, m_position) != 0) {
         emit errorOccurred(
             QStringLiteral("MLT seek failed at frame %1").arg(m_position),
             m_requestId.load(std::memory_order_acquire));
         return false;
     }
-    m_api.producerSetSpeed(m_producer, m_rate);
-    m_consumer = m_api.factoryConsumer(m_profile, "sdl2_audio", nullptr);
-    if (!m_consumer)
-        m_consumer = m_api.factoryConsumer(m_profile, "rtaudio", nullptr);
-    if (!m_consumer) {
+    m_api.producerSetSpeed(m_audioProducer, m_rate);
+    m_api.producerSetSpeed(m_videoProducer, m_rate);
+
+    m_audioConsumer = m_api.factoryConsumer(m_audioProfile, "sdl2_audio", nullptr);
+    if (!m_audioConsumer)
+        m_audioConsumer = m_api.factoryConsumer(m_audioProfile, "rtaudio", nullptr);
+    m_videoConsumer = m_api.factoryConsumer(m_videoProfile, "null", nullptr);
+    if (!m_audioConsumer || !m_videoConsumer) {
         emit errorOccurred(
-            QStringLiteral("MLT could not initialize an audio playback consumer"),
+            QStringLiteral("MLT could not initialize the preview consumers"),
             m_requestId.load(std::memory_order_acquire));
+        closePlaybackConsumers();
         return false;
     }
 
-    MltProperties properties = m_api.consumerProperties(m_consumer);
-    m_api.propertiesSetInt(properties, "real_time", -2);
-    const int playbackBufferFrames = qBound(
-        24,
-        qRound(m_fps),
-        60);
-    m_api.propertiesSetInt(properties, "buffer", playbackBufferFrames);
-    m_api.propertiesSetInt(properties, "prefill", qMin(4, playbackBufferFrames));
-    m_api.propertiesSetInt(properties, "width", m_previewWidth);
-    m_api.propertiesSetInt(properties, "height", m_previewHeight);
-    m_api.propertiesSetInt(properties, "progressive", 1);
-    m_api.propertiesSetInt(properties, "frequency", 48000);
-    m_api.propertiesSetInt(properties, "channels", 2);
-    m_api.propertiesSetInt(properties, "audio_buffer", 2048);
-    m_api.propertiesSetInt(properties, "scrub_audio", 0);
-    m_api.propertiesSetInt(properties, "audio_off", qFuzzyCompare(m_rate, 1.0) ? 0 : 1);
-    m_api.propertiesSet(properties, "mlt_audio_format", "s16");
-    m_api.propertiesSet(properties, "mlt_image_format", m_sourceHdr ? "rgba64" : "rgba");
-    m_api.propertiesSet(properties, "rescale", "bilinear");
+    const int audioBufferFrames = qBound(24, qRound(m_fps), 60);
+    MltProperties audioProperties = m_api.consumerProperties(m_audioConsumer);
+    m_api.propertiesSetInt(audioProperties, "real_time", -1);
+    m_api.propertiesSetInt(audioProperties, "buffer", audioBufferFrames);
+    m_api.propertiesSetInt(audioProperties, "prefill", qMin(4, audioBufferFrames));
+    m_api.propertiesSetInt(audioProperties, "video_off", 1);
+    m_api.propertiesSetInt(audioProperties, "frequency", 48000);
+    m_api.propertiesSetInt(audioProperties, "channels", 2);
+    m_api.propertiesSetInt(audioProperties, "audio_buffer", 2048);
+    m_api.propertiesSetInt(audioProperties, "scrub_audio", 0);
+    m_api.propertiesSetInt(
+        audioProperties,
+        "audio_off",
+        qFuzzyCompare(m_rate, 1.0) ? 0 : 1);
+    m_api.propertiesSet(audioProperties, "mlt_audio_format", "s16");
     const QByteArray encodedVolume = QByteArray::number(m_volume, 'f', 4);
-    m_api.propertiesSet(properties, "volume", encodedVolume.constData());
+    m_api.propertiesSet(audioProperties, "volume", encodedVolume.constData());
 
-    m_renderSequence.store(0, std::memory_order_release);
-    m_renderQueueCapacity.store(playbackBufferFrames * 2, std::memory_order_release);
-    m_nextPresentationSequence = 0;
-    m_nextPresentationDeadlineNs = 0;
+    MltProperties videoProperties = m_api.consumerProperties(m_videoConsumer);
+    m_api.propertiesSetInt(videoProperties, "real_time", 0);
+    m_api.propertiesSetInt(videoProperties, "terminate_on_pause", 1);
+    m_api.propertiesSetInt(videoProperties, "audio_off", 1);
+    m_api.propertiesSetInt(videoProperties, "width", m_previewWidth);
+    m_api.propertiesSetInt(videoProperties, "height", m_previewHeight);
+    m_api.propertiesSetInt(videoProperties, "progressive", 1);
+    m_api.propertiesSet(
+        videoProperties,
+        "mlt_image_format",
+        m_sourceHdr ? "rgba64" : "rgba");
+    m_api.propertiesSet(videoProperties, "rescale", "bilinear");
+
+    m_audioClockPosition.store(m_position, std::memory_order_release);
+    m_presentationStartGeneration.store(-1, std::memory_order_release);
+    m_renderQueueCapacity.store(
+        qBound(24, qRound(m_fps), 60),
+        std::memory_order_release);
     m_presentationGeneration = -1;
-    m_currentDeadlineMisses = 0;
-    m_presentationStarted = false;
+    m_waitingForMissingFrame = false;
     {
         const QMutexLocker locker(&m_renderedFramesMutex);
         m_renderedFrames.clear();
     }
-    m_renderEvent = m_api.eventsListen(
-        properties,
-        this,
-        "consumer-frame-render",
-        &MltRuntime::onConsumerFrameRendered);
-    m_showEvent = m_api.eventsListen(
-        properties,
+    m_videoShowEvent = m_api.eventsListen(
+        videoProperties,
         this,
         "consumer-frame-show",
-        &MltRuntime::onConsumerPlaybackStarted);
-    if (!m_renderEvent
-        || !m_showEvent
-        || m_api.consumerConnect(m_consumer, m_api.producerService(m_producer)) != 0
-        || m_api.consumerStart(m_consumer) != 0) {
+        &MltRuntime::onVideoFrameShown);
+    m_audioShowEvent = m_api.eventsListen(
+        audioProperties,
+        this,
+        "consumer-frame-show",
+        &MltRuntime::onAudioFrameShown);
+    m_playbackConsumersActive.store(true, std::memory_order_release);
+    if (!m_videoShowEvent
+        || !m_audioShowEvent
+        || m_api.consumerConnect(
+            m_videoConsumer,
+            m_api.producerService(m_videoProducer)) != 0
+        || m_api.consumerConnect(
+            m_audioConsumer,
+            m_api.producerService(m_audioProducer)) != 0
+        || m_api.consumerStart(m_videoConsumer) != 0
+        || m_api.consumerStart(m_audioConsumer) != 0) {
         emit errorOccurred(
-            QStringLiteral("MLT audio playback consumer failed to start"),
+            QStringLiteral("MLT preview consumers failed to start"),
             m_requestId.load(std::memory_order_acquire));
-        closePlaybackConsumer();
+        closePlaybackConsumers();
         return false;
     }
     return true;
 }
 
-void MltRuntime::closePlaybackConsumer()
+void MltRuntime::closePlaybackConsumers()
 {
+    m_playbackConsumersActive.store(false, std::memory_order_release);
     m_consumerGeneration.fetch_add(1, std::memory_order_acq_rel);
     {
         const QMutexLocker locker(&m_renderedFramesMutex);
         m_renderQueueNotFull.wakeAll();
     }
-    if (m_presentationTimer)
-        m_presentationTimer->stop();
+    m_presentationTimer->stop();
     m_presentationGeneration = -1;
-    m_currentDeadlineMisses = 0;
-    m_presentationStarted = false;
-    if (m_producer)
-        m_api.producerSetSpeed(m_producer, 0.0);
-    if (m_consumer) {
-        if (m_api.consumerPurge)
-            m_api.consumerPurge(m_consumer);
-        if (m_api.consumerStop)
-            m_api.consumerStop(m_consumer);
-    }
-    if (m_consumer && m_api.consumerClose)
-        m_api.consumerClose(m_consumer);
-    m_consumer = nullptr;
-    m_renderEvent = nullptr;
-    m_showEvent = nullptr;
+    m_waitingForMissingFrame = false;
+    if (m_audioProducer)
+        m_api.producerSetSpeed(m_audioProducer, 0.0);
+    if (m_videoProducer)
+        m_api.producerSetSpeed(m_videoProducer, 0.0);
+    if (m_audioConsumer && m_api.consumerPurge)
+        m_api.consumerPurge(m_audioConsumer);
+    if (m_videoConsumer && m_api.consumerPurge)
+        m_api.consumerPurge(m_videoConsumer);
+    if (m_audioConsumer && m_api.consumerStop)
+        m_api.consumerStop(m_audioConsumer);
+    if (m_videoConsumer && m_api.consumerStop)
+        m_api.consumerStop(m_videoConsumer);
+    if (m_audioConsumer && m_api.consumerClose)
+        m_api.consumerClose(m_audioConsumer);
+    if (m_videoConsumer && m_api.consumerClose)
+        m_api.consumerClose(m_videoConsumer);
+    m_audioConsumer = nullptr;
+    m_videoConsumer = nullptr;
+    m_videoShowEvent = nullptr;
+    m_audioShowEvent = nullptr;
     {
         const QMutexLocker locker(&m_renderedFramesMutex);
         m_renderedFrames.clear();
@@ -620,17 +666,20 @@ void MltRuntime::closePlaybackConsumer()
 
 bool MltRuntime::decodeStillFrame(int frameNumber)
 {
-    if (!m_producer)
+    if (!m_videoProducer)
         return false;
-    m_api.producerSetSpeed(m_producer, 0.0);
-    if (m_api.producerSeek(m_producer, frameNumber) != 0) {
+    m_api.producerSetSpeed(m_videoProducer, 0.0);
+    if (m_api.producerSeek(m_videoProducer, frameNumber) != 0) {
         emit errorOccurred(
             QStringLiteral("MLT seek failed at frame %1").arg(frameNumber),
             m_requestId.load(std::memory_order_acquire));
         return false;
     }
     MltFrame frame = nullptr;
-    if (m_api.serviceGetFrame(m_api.producerService(m_producer), &frame, 0) != 0 || !frame) {
+    if (m_api.serviceGetFrame(
+        m_api.producerService(m_videoProducer),
+        &frame,
+        0) != 0 || !frame) {
         emit errorOccurred(
             QStringLiteral("MLT could not decode frame %1").arg(frameNumber),
             m_requestId.load(std::memory_order_acquire));
@@ -678,58 +727,77 @@ bool MltRuntime::readFrameImage(MltFrame frame, int position, QImage &result)
     return !result.isNull();
 }
 
-void MltRuntime::onConsumerFrameRendered(
+void MltRuntime::onVideoFrameShown(
     MltProperties,
     void *listenerData,
     MltEventData eventData)
 {
     auto *runtime = static_cast<MltRuntime *>(listenerData);
-    if (!runtime)
+    if (!runtime
+        || !runtime->m_playbackConsumersActive.load(std::memory_order_acquire)) {
         return;
+    }
     MltFrame frame = runtime->m_api.eventDataToFrame(eventData);
     if (!frame)
         return;
 
     const int generation = runtime->m_consumerGeneration.load(std::memory_order_acquire);
-    const quint64 sequence = runtime->m_renderSequence.fetch_add(
-        1,
-        std::memory_order_acq_rel);
     const int position = qBound(
         0,
         static_cast<int>(runtime->m_api.frameGetPosition(frame)),
         qMax(0, runtime->m_frameDuration.load(std::memory_order_acquire) - 1));
     QImage image;
-    runtime->readFrameImage(frame, position, image);
-    {
-        QMutexLocker locker(&runtime->m_renderedFramesMutex);
-        const int capacity = runtime->m_renderQueueCapacity.load(std::memory_order_acquire);
-        while (runtime->m_renderedFrames.size() >= capacity
-               && generation
-                   == runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
-            runtime->m_renderQueueNotFull.wait(&runtime->m_renderedFramesMutex);
-        }
-        if (generation != runtime->m_consumerGeneration.load(std::memory_order_acquire))
-            return;
-        runtime->m_renderedFrames.insert(
-            sequence,
-            RenderedFrame{std::move(image), position});
+    if (!runtime->readFrameImage(frame, position, image))
+        return;
+    if (!runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
+        || generation
+            != runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+        return;
     }
+    QMutexLocker locker(&runtime->m_renderedFramesMutex);
+    const int capacity = runtime->m_renderQueueCapacity.load(std::memory_order_acquire);
+    while (runtime->m_renderedFrames.size() >= capacity
+           && runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
+           && generation
+               == runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+        runtime->m_renderQueueNotFull.wait(&runtime->m_renderedFramesMutex);
+    }
+    if (!runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
+        || generation
+            != runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+        return;
+    }
+    runtime->m_renderedFrames.insert(
+        position,
+        RenderedFrame{std::move(image), position});
 }
 
-void MltRuntime::onConsumerPlaybackStarted(
+void MltRuntime::onAudioFrameShown(
     MltProperties,
     void *listenerData,
-    MltEventData)
+    MltEventData eventData)
 {
     auto *runtime = static_cast<MltRuntime *>(listenerData);
-    if (!runtime)
+    if (!runtime
+        || !runtime->m_playbackConsumersActive.load(std::memory_order_acquire)) {
         return;
+    }
+    MltFrame frame = runtime->m_api.eventDataToFrame(eventData);
+    if (!frame)
+        return;
+
     const int generation = runtime->m_consumerGeneration.load(std::memory_order_acquire);
+    const int position = qBound(
+        0,
+        static_cast<int>(runtime->m_api.frameGetPosition(frame)),
+        qMax(0, runtime->m_frameDuration.load(std::memory_order_acquire) - 1));
+    runtime->m_audioClockPosition.store(position, std::memory_order_release);
     const int previousGeneration = runtime->m_presentationStartGeneration.exchange(
         generation,
         std::memory_order_acq_rel);
     if (previousGeneration == generation)
         return;
+
     QMetaObject::invokeMethod(
         runtime,
         [runtime, generation]() {
@@ -741,16 +809,18 @@ void MltRuntime::onConsumerPlaybackStarted(
 void MltRuntime::beginPresentation(int generation)
 {
     if (generation != m_consumerGeneration.load(std::memory_order_acquire)
-        || !m_consumer
+        || !m_audioConsumer
+        || !m_videoConsumer
         || !m_playing
         || m_presentationGeneration == generation) {
         return;
     }
     m_presentationGeneration = generation;
-    m_nextPresentationSequence = 0;
-    m_nextPresentationDeadlineNs = 0;
-    m_currentDeadlineMisses = 0;
-    m_presentationStarted = false;
+    m_expectedPresentationPosition = m_position;
+    m_lastPresentationPosition = -1;
+    m_waitingForMissingFrame = false;
+    m_nextCadenceDeadlineNs = 0;
+    m_cadenceClock.start();
     presentNextFrame();
 }
 
@@ -758,77 +828,126 @@ void MltRuntime::presentNextFrame()
 {
     const int generation = m_presentationGeneration;
     if (generation != m_consumerGeneration.load(std::memory_order_acquire)
-        || !m_consumer
+        || !m_audioConsumer
+        || !m_videoConsumer
         || !m_playing) {
         return;
     }
 
-    if (m_presentationStarted) {
-        const qint64 remainingNs = m_nextPresentationDeadlineNs
-            - m_presentationClock.nsecsElapsed();
-        if (remainingNs > 0) {
-            m_presentationTimer->start(
-                qMax(1, static_cast<int>((remainingNs + 999999) / 1000000)));
-            return;
-        }
-    }
-
-    RenderedFrame rendered;
-    {
-        const QMutexLocker locker(&m_renderedFramesMutex);
-        auto frame = m_renderedFrames.find(m_nextPresentationSequence);
-        if (frame == m_renderedFrames.end()) {
-            if (m_presentationStarted) {
-                const qint64 frameIntervalNs = qMax(
-                    1LL,
-                    qRound64(1000000000.0 / m_fps));
-                const qint64 overdueNs = m_presentationClock.nsecsElapsed()
-                    - m_nextPresentationDeadlineNs;
-                const int deadlineMisses = qMax(
-                    0,
-                    static_cast<int>(overdueNs / frameIntervalNs));
-                if (deadlineMisses > m_currentDeadlineMisses) {
-                    emit presentationDeadlineMissed(
-                        deadlineMisses - m_currentDeadlineMisses,
-                        m_requestId.load(std::memory_order_acquire));
-                    m_currentDeadlineMisses = deadlineMisses;
-                }
-            }
-            m_presentationTimer->start(1);
-            return;
-        }
-        rendered = std::move(frame.value());
-        m_renderedFrames.erase(frame);
-        m_renderQueueNotFull.wakeOne();
-    }
-
-    m_currentDeadlineMisses = 0;
-    if (!m_presentationStarted) {
-        m_presentationClock.start();
-        m_presentationStarted = true;
-    }
-    ++m_nextPresentationSequence;
-    deliverPresentationFrame(rendered.image, rendered.position, generation);
-    if (generation != m_consumerGeneration.load(std::memory_order_acquire)
-        || !m_consumer
-        || !m_playing) {
-        return;
-    }
-
-    const qint64 frameIntervalNs = qMax(
+    const int direction = m_rate < 0.0 ? -1 : 1;
+    const bool unitStep = qFuzzyCompare(qAbs(m_rate), 1.0);
+    const int audioPosition = m_audioClockPosition.load(std::memory_order_acquire);
+    const qint64 nominalIntervalNs = qMax(
         1LL,
         qRound64(1000000000.0 / m_fps));
-    const qint64 nowNs = m_presentationClock.nsecsElapsed();
-    m_nextPresentationDeadlineNs += frameIntervalNs;
-    if (nowNs > m_nextPresentationDeadlineNs + frameIntervalNs)
-        m_nextPresentationDeadlineNs = nowNs + frameIntervalNs;
-    scheduleNextPresentation();
-}
+    const int nominalIntervalMs = qMax(
+        1,
+        static_cast<int>((nominalIntervalNs + 999999) / 1000000));
+    const int allowedLeadFrames = qMax(1, qCeil(qAbs(m_rate)));
+    RenderedFrame rendered;
+    bool frameReady = false;
 
-void MltRuntime::scheduleNextPresentation()
-{
-    const qint64 remainingNs = m_nextPresentationDeadlineNs
-        - m_presentationClock.nsecsElapsed();
+    {
+        const QMutexLocker locker(&m_renderedFramesMutex);
+        if (unitStep) {
+            if (direction > 0) {
+                while (!m_renderedFrames.isEmpty()
+                       && m_renderedFrames.firstKey() < m_expectedPresentationPosition) {
+                    m_renderedFrames.erase(m_renderedFrames.begin());
+                }
+            } else {
+                while (!m_renderedFrames.isEmpty()
+                       && m_renderedFrames.lastKey() > m_expectedPresentationPosition) {
+                    m_renderedFrames.erase(std::prev(m_renderedFrames.end()));
+                }
+            }
+        } else if (m_lastPresentationPosition >= 0) {
+            if (direction > 0) {
+                while (!m_renderedFrames.isEmpty()
+                       && m_renderedFrames.firstKey() < m_lastPresentationPosition) {
+                    m_renderedFrames.erase(m_renderedFrames.begin());
+                }
+            } else {
+                while (!m_renderedFrames.isEmpty()
+                       && m_renderedFrames.lastKey() > m_lastPresentationPosition) {
+                    m_renderedFrames.erase(std::prev(m_renderedFrames.end()));
+                }
+            }
+        }
+
+        auto candidate = m_renderedFrames.end();
+        if (unitStep)
+            candidate = m_renderedFrames.find(m_expectedPresentationPosition);
+        else if (!m_renderedFrames.isEmpty())
+            candidate = direction > 0
+                ? m_renderedFrames.begin()
+                : std::prev(m_renderedFrames.end());
+
+        if (candidate == m_renderedFrames.end() && unitStep && !m_renderedFrames.isEmpty()) {
+            auto future = direction > 0
+                ? m_renderedFrames.lowerBound(m_expectedPresentationPosition)
+                : m_renderedFrames.upperBound(m_expectedPresentationPosition);
+            if (direction < 0) {
+                if (future == m_renderedFrames.begin())
+                    future = m_renderedFrames.end();
+                else
+                    --future;
+            }
+            if (future != m_renderedFrames.end()) {
+                if (!m_waitingForMissingFrame) {
+                    m_missingFrameDeadline = QDeadlineTimer(
+                        nominalIntervalMs,
+                        Qt::PreciseTimer);
+                    m_waitingForMissingFrame = true;
+                }
+                const int audioAdvance = (
+                    audioPosition - m_expectedPresentationPosition) * direction;
+                if (m_missingFrameDeadline.hasExpired() && audioAdvance > 0) {
+                    candidate = future;
+                    m_expectedPresentationPosition = candidate.key();
+                }
+            }
+        }
+
+        if (candidate != m_renderedFrames.end()) {
+            rendered = std::move(candidate.value());
+            m_renderedFrames.erase(candidate);
+            m_renderQueueNotFull.wakeOne();
+            frameReady = true;
+            m_waitingForMissingFrame = false;
+        }
+        m_renderQueueNotFull.wakeAll();
+    }
+
+    if (!frameReady) {
+        m_presentationTimer->start(1);
+        return;
+    }
+
+    m_lastPresentationPosition = rendered.position;
+    if (unitStep)
+        m_expectedPresentationPosition = rendered.position + direction;
+    deliverPresentationFrame(rendered.image, rendered.position, generation);
+    if (generation != m_consumerGeneration.load(std::memory_order_acquire)
+        || !m_audioConsumer
+        || !m_videoConsumer
+        || !m_playing) {
+        return;
+    }
+
+    const int currentAudioPosition = m_audioClockPosition.load(std::memory_order_acquire);
+    const int lagFrames = (currentAudioPosition - rendered.position) * direction;
+    const qint64 nowNs = m_cadenceClock.nsecsElapsed();
+    m_nextCadenceDeadlineNs = qMin(
+        m_nextCadenceDeadlineNs + nominalIntervalNs,
+        nowNs + nominalIntervalNs);
+
+    qint64 remainingNs = m_nextCadenceDeadlineNs - nowNs;
+    if (remainingNs <= 0 || lagFrames > allowedLeadFrames) {
+        const int catchUpIntervalMs = qMax(1, qFloor(500.0 / m_fps));
+        m_presentationTimer->start(catchUpIntervalMs);
+        return;
+    }
     m_presentationTimer->start(
         qMax(1, static_cast<int>((qMax(0LL, remainingNs) + 999999) / 1000000)));
 }
@@ -839,7 +958,8 @@ void MltRuntime::deliverPresentationFrame(
     int generation)
 {
     if (generation != m_consumerGeneration.load(std::memory_order_acquire)
-        || !m_consumer
+        || !m_audioConsumer
+        || !m_videoConsumer
         || !m_playing) {
         return;
     }

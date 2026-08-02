@@ -24,7 +24,8 @@ from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcript_editing import TranscriptEditingService
 from mediaflow.application.translation_service import TranslationService
-from mediaflow.application.web_media_service import WebMediaService, web_package_root
+from mediaflow.application.web_media_service import WebMediaServices
+from mediaflow.application.web_package_files import web_package_root
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.downloads import DownloadPlan
@@ -47,6 +48,7 @@ from mediaflow.domain.tasks import (
     Task,
 )
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.infrastructure.asr_models import FasterWhisperModelStore
 from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.cookie_store import CookieStore
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
@@ -120,31 +122,17 @@ class ProjectTaskResult:
         audio_metrics = values.get("audio_metrics")
         return cls(
             workflow=WorkflowUpdate(
-                selected_asset_ids=[
-                    str(value)
-                    for value in workflow.get("selected_asset_ids") or []
-                ],
+                selected_asset_ids=[str(value) for value in workflow.get("selected_asset_ids") or []],
                 status_message=str(workflow.get("status_message") or ""),
             ),
             imported_asset_id=str(values.get("imported_asset_id") or ""),
-            imported_document_id=str(
-                values.get("imported_document_id") or ""
-            ),
+            imported_document_id=str(values.get("imported_document_id") or ""),
             imported_purpose=str(values.get("imported_purpose") or ""),
-            download_plan=(
-                DownloadPlan.model_validate(download_plan)
-                if download_plan is not None
-                else None
-            ),
-            sequence_bounds_status=str(
-                values.get("sequence_bounds_status") or ""
-            ),
+            download_plan=(DownloadPlan.model_validate(download_plan) if download_plan is not None else None),
+            sequence_bounds_status=str(values.get("sequence_bounds_status") or ""),
             sequence_id=str(values.get("sequence_id") or ""),
             audio_metrics=(
-                {
-                    str(key): float(value)
-                    for key, value in audio_metrics.items()
-                }
+                {str(key): float(value) for key, value in audio_metrics.items()}
                 if isinstance(audio_metrics, dict)
                 else None
             ),
@@ -174,7 +162,11 @@ class EditorProject:
             fingerprint_file,
         )
         web_validator = BrowserWebPackageValidator()
-        self._web = WebMediaService(repository, self.timeline, web_validator)
+        web_services = WebMediaServices(repository, self.timeline, web_validator)
+        self._web_packages = web_services.packages
+        self._web_clips = web_services.clips
+        self._web_batches = web_services.batches
+        self._web_rebind = web_services.rebind
         self._web_preview_server: WebPackagePreviewServer | None = None
         self._web_preview_root: Path | None = None
         self._subtitle_publication = SubtitlePublicationService(repository)
@@ -197,10 +189,7 @@ class EditorProject:
         self._translations = TranslationService(
             repository,
             OpenAIJsonClient,
-            TranslationCache(
-                paths.project_cache_dir(repository.project_dir)
-                / "translations"
-            ),
+            TranslationCache(paths.project_cache_dir(repository.project_dir) / "translations"),
             self._subtitle_publication,
         )
         self._sequences = SequenceService(repository)
@@ -324,9 +313,7 @@ class EditorProject:
                 )
         except BaseException:
             self._history.restore(history_checkpoint)
-            for sequence_id, editor in list(
-                self._timelines.items()
-            ):
+            for sequence_id, editor in list(self._timelines.items()):
                 try:
                     editor.reload()
                 except Exception:
@@ -410,30 +397,26 @@ class EditorProject:
         )
 
     def get_web_asset_spec(self, asset_id: str):
-        return self._web.inspect_asset(asset_id)
+        return self._web_packages.inspect_asset(asset_id)
 
     def list_web_assets(self):
         return self._repository.web.list_web_asset_specs()
 
     def web_editor_entry_url(self, asset_id: str) -> str:
         asset = self._repository.catalog.get_asset(asset_id)
-        spec = self._web.inspect_asset(asset_id)
+        spec = self._web_packages.inspect_asset(asset_id)
         package_root = web_package_root(
             self._repository.catalog.resolve_asset_path(asset),
             spec.manifest,
         )
-        if (
-            self._web_preview_server is None
-            or self._web_preview_root != package_root
-        ):
+        if self._web_preview_server is None or self._web_preview_root != package_root:
             self.close_web_preview()
             self._web_preview_server = WebPackagePreviewServer(package_root)
             self._web_preview_root = package_root
         return self._web_preview_server.url_for(
             spec.manifest.entry,
             query=(
-                f"capture=1&variant={spec.manifest.default_variant_id}"
-                f"&scene={spec.manifest.scenes[0].id}"
+                f"capture=1&variant={spec.manifest.default_variant_id}&scene={spec.manifest.scenes[0].id}"
             ),
         )
 
@@ -683,55 +666,79 @@ class EditorProject:
         self._workflows.reconcile_interrupted()
 
     def import_web_package(self, source: str | Path):
-        return self._web.import_package(source)
+        return self._web_packages.import_package(source)
 
     def inspect_web_asset(self, asset_id: str):
-        return self._web.inspect_asset(asset_id)
+        return self._web_packages.inspect_asset(asset_id)
 
     def get_web_clip(self, clip_id: str):
-        return self._web.get_clip(clip_id)
+        return self._web_clips.get_clip(clip_id)
+
+    def describe_web_clip_editing(self, *args: Any, **kwargs: Any):
+        return self._web_clips.describe_clip_editing(*args, **kwargs)
 
     def update_web_clip(self, *args: Any, **kwargs: Any):
-        return self._web.update_clip(*args, **kwargs)
+        return self._web_clips.update_clip(*args, **kwargs)
 
     def diff_web_clip_update(self, *args: Any, **kwargs: Any):
-        return self._web.diff_clip_update(*args, **kwargs)
+        return self._web_clips.diff_clip_update(*args, **kwargs)
 
     def select_web_variant(self, *args: Any, **kwargs: Any):
-        return self._web.select_variant(*args, **kwargs)
+        return self._web_clips.select_variant(*args, **kwargs)
 
     def commit_web_runtime_state(self, *args: Any, **kwargs: Any):
-        return self._web.commit_runtime_state(*args, **kwargs)
+        return self._web_clips.commit_runtime_state(*args, **kwargs)
 
     def set_web_keyframe(self, *args: Any, **kwargs: Any):
-        return self._web.set_keyframe(*args, **kwargs)
+        return self._web_clips.set_keyframe(*args, **kwargs)
 
     def remove_web_keyframe(self, *args: Any, **kwargs: Any):
-        return self._web.remove_keyframe(*args, **kwargs)
+        return self._web_clips.remove_keyframe(*args, **kwargs)
+
+    def move_web_keyframe(self, *args: Any, **kwargs: Any):
+        return self._web_clips.move_keyframe(*args, **kwargs)
+
+    def update_web_parameter(self, *args: Any, **kwargs: Any):
+        return self._web_clips.update_parameter(*args, **kwargs)
+
+    def set_web_parameter_keyframe(self, *args: Any, **kwargs: Any):
+        return self._web_clips.set_parameter_keyframe(*args, **kwargs)
+
+    def remove_web_parameter_keyframe(self, *args: Any, **kwargs: Any):
+        return self._web_clips.remove_parameter_keyframe(*args, **kwargs)
+
+    def move_web_parameter_keyframe(self, *args: Any, **kwargs: Any):
+        return self._web_clips.move_parameter_keyframe(*args, **kwargs)
+
+    def set_web_parameter_lock(self, *args: Any, **kwargs: Any):
+        return self._web_clips.set_parameter_lock(*args, **kwargs)
 
     def update_web_theme(self, *args: Any, **kwargs: Any):
-        return self._web.update_theme(*args, **kwargs)
+        return self._web_clips.update_theme(*args, **kwargs)
 
     def update_web_data(self, *args: Any, **kwargs: Any):
-        return self._web.update_data(*args, **kwargs)
+        return self._web_clips.update_data(*args, **kwargs)
 
     def update_web_data_from_file(self, *args: Any, **kwargs: Any):
-        return self._web.update_data_from_file(*args, **kwargs)
+        return self._web_clips.update_data_from_file(*args, **kwargs)
 
     def set_web_field_locks(self, *args: Any, **kwargs: Any):
-        return self._web.set_field_locks(*args, **kwargs)
+        return self._web_clips.set_field_locks(*args, **kwargs)
 
     def web_runtime_state(self, *args: Any, **kwargs: Any):
-        return self._web.runtime_state(*args, **kwargs)
+        return self._web_clips.runtime_state(*args, **kwargs)
 
     def create_web_variants(self, *args: Any, **kwargs: Any):
-        return self._web.create_variants(*args, **kwargs)
+        return self._web_batches.create_variants(*args, **kwargs)
 
     def read_web_variant_records(self, source: str | Path):
-        return self._web.read_variant_records(source)
+        return self._web_batches.read_variant_records(source)
 
-    def rebind_web_asset(self, *args: Any, **kwargs: Any):
-        return self._web.rebind_asset(*args, **kwargs)
+    def plan_web_asset_rebind(self, *args: Any, **kwargs: Any):
+        return self._web_rebind.plan_rebind_asset(*args, **kwargs)
+
+    def commit_web_asset_rebind(self, *args: Any, **kwargs: Any):
+        return self._web_rebind.commit_rebind_asset(*args, **kwargs)
 
     def prepare_web_sequence(self, state: TimelineState) -> None:
         WebRenderService(self._repository, self._paths).ensure_sequence(state)
@@ -754,9 +761,7 @@ class EditorProject:
 
     def restore_version(self, version_id: str):
         with self._repository.transaction():
-            record = self._repository.records.restore_project_version(
-                version_id
-            )
+            record = self._repository.records.restore_project_version(version_id)
             self._subtitle_publication.reconcile_document_srts()
         sequence_ids = {
             sequence.id for sequence in self._repository.catalog.list_sequences(include_archived=True)
@@ -1007,20 +1012,15 @@ class EditorProject:
         with self._task_followup_lock:
             previous = self._task_followup_updates.get(task.id)
             current = (
-                self._workflows.handle_task(task)
-                if task.command.workflow is not None
-                else WorkflowUpdate()
+                self._workflows.handle_task(task) if task.command.workflow is not None else WorkflowUpdate()
             )
             if starts_import_workflow:
                 outcome = task.outcome
                 if not isinstance(outcome, ImportedAssetTaskOutcome):
-                    raise RuntimeError(
-                        "Imported task follow-up lost its persisted outcome"
-                    )
+                    raise RuntimeError("Imported task follow-up lost its persisted outcome")
                 current = current.merge(
                     self._workflows.begin_import(
-                        task.sequence_id
-                        or self._repository.catalog.get_project().main_sequence_id,
+                        task.sequence_id or self._repository.catalog.get_project().main_sequence_id,
                         outcome.asset_id,
                         source_task_id=task.id,
                     )
@@ -1128,16 +1128,21 @@ class EditorApplication:
         return subtitle_font_options()
 
     def runtime_tool_status(self) -> dict:
-        return RuntimeToolService(self.settings.asr, self._paths).status()
+        return RuntimeToolService(self.settings, self._paths).status()
+
+    def installed_asr_models(self) -> frozenset[str]:
+        return FasterWhisperModelStore(self.settings.asr, self._paths).installed_models()
 
     def run_runtime_tool(
         self,
         operation: str,
         *,
+        arguments: dict | None = None,
         progress: Callable[[OperationProgress], None],
         check_cancelled: Callable[[], None],
     ) -> object:
-        tools = RuntimeToolService(self.settings.asr, self._paths)
+        tools = RuntimeToolService(self.settings, self._paths)
+        values = arguments or {}
         if operation == "inspect":
             return tools.cuda_readiness()
         if operation == "update_ytdlp":
@@ -1145,12 +1150,11 @@ class EditorApplication:
                 progress=progress,
                 check_cancelled=check_cancelled,
             )
-        if operation == "install_asr_cli":
-            return str(
-                tools.install_faster_whisper_cli(
-                    progress=progress,
-                    check_cancelled=check_cancelled,
-                )
+        if operation == "install_components":
+            return tools.install_components(
+                [str(item) for item in values.get("component_ids") or ()],
+                progress=progress,
+                check_cancelled=check_cancelled,
             )
         if operation == "prewarm_asr_cli":
             return str(
@@ -1179,12 +1183,7 @@ class EditorApplication:
                 native_preview=True,
                 prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
             )
-            sequence_namespace = (
-                "pv-"
-                + hashlib.sha256(
-                    state.sequence.id.encode("utf-8")
-                ).hexdigest()[:12]
-            )
+            sequence_namespace = "pv-" + hashlib.sha256(state.sequence.id.encode("utf-8")).hexdigest()[:12]
             preview_cache = self._paths.project_cache_dir(project_dir)
             destination = content_addressed_child_path(
                 preview_cache / "mlt",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
@@ -134,28 +133,7 @@ class SettingsController(ControllerFacet):
         self._session._set_status("设置已保存；界面语言将在下次启动时生效")
 
     def _installed_asr_models(self) -> frozenset[str]:
-        root = self._session._api.runtime_paths.runtime_dir / "models" / "faster-whisper"
-        if not root.is_dir():
-            return frozenset()
-        installed: set[str] = set()
-        prefix = "models--Systran--faster-whisper-"
-        for candidate in root.iterdir():
-            if not candidate.is_dir():
-                continue
-            model = candidate.name.removeprefix(prefix)
-            if model == candidate.name:
-                model = candidate.name
-            direct_model = candidate / "model.bin"
-            snapshots = candidate / "snapshots"
-            has_snapshot = snapshots.is_dir() and any(
-                (snapshot / "model.bin").is_file() for snapshot in snapshots.iterdir()
-            )
-            if direct_model.is_file() or has_snapshot:
-                installed.add(model)
-        configured = self._session.settings.asr.model.strip()
-        if configured and Path(configured).expanduser().is_dir():
-            installed.add(configured)
-        return frozenset(installed)
+        return self._session._api.installed_asr_models()
 
     @Slot(str)
     @report_ui_errors
@@ -232,9 +210,12 @@ class SettingsController(ControllerFacet):
     def updateYtDlp(self) -> None:
         self._session.runtime_tools.start("update_ytdlp")
 
-    @Slot()
-    def installAsrCli(self) -> None:
-        self._session.runtime_tools.start("install_asr_cli")
+    @Slot("QVariantList")
+    def installRuntimeComponents(self, component_ids: list) -> None:
+        self._session.runtime_tools.start(
+            "install_components",
+            {"component_ids": [str(item) for item in component_ids]},
+        )
 
     @Slot()
     def prewarmAsrCli(self) -> None:

@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 
 APPLICATION_ROOT_ENVIRONMENT_VARIABLE = "MEDIAFLOW_APP_ROOT"
-PROJECT_DIRECTORY_NAME = "Project"
+PROJECT_ROOT_ENVIRONMENT_VARIABLE = "MEDIAFLOW_PROJECT_ROOT"
+DEFAULT_PROJECT_ROOT = Path("E:/Work/Video")
 MEDIA_DIRECTORY_NAME = "WorkSpace"
 
 
@@ -16,7 +17,10 @@ def application_root() -> Path:
 
 
 def default_project_root() -> str:
-    return str((application_root() / PROJECT_DIRECTORY_NAME).resolve())
+    configured = os.environ.get(PROJECT_ROOT_ENVIRONMENT_VARIABLE)
+    if configured:
+        return str(Path(configured).expanduser().resolve())
+    return str(DEFAULT_PROJECT_ROOT.resolve())
 
 
 def default_media_root() -> str:

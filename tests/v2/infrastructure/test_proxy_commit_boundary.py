@@ -258,7 +258,13 @@ def test_hdr_proxy_db_commit_failure_restores_both_registered_outputs(
 
         final_outputs = set((repository.project_dir / "proxies").glob("*.mp4"))
         assert final_outputs == {hdr_path, sdr_path}
-        withdrawn = list((repository.project_dir / "proxies" / "MediaFlow Failed Exports").glob("*.mp4"))
+        withdrawn = list(
+            (
+                repository.project_dir
+                / "proxies"
+                / "MediaFlow Pro Failed Exports"
+            ).glob("*.mp4")
+        )
         assert len(withdrawn) == 2
         assert all(path.stat().st_size > 0 for path in withdrawn)
         assert (

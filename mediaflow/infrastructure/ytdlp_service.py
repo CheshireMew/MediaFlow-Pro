@@ -8,6 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadPlan, DownloadRequest
 from mediaflow.domain.progress import OperationProgress
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.settings import DownloadSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_COMPONENT_UTF16_LIMIT,
@@ -30,7 +31,7 @@ from .runtime_tools import prepare_ytdlp_import
 DownloadProgress = Callable[[OperationProgress], None]
 CancellationCheck = Callable[[], None]
 YTDLP_SOCKET_TIMEOUT_SECONDS = 10.0
-FAILED_DOWNLOAD_DIRECTORY_NAME = "MediaFlow Failed Downloads"
+FAILED_DOWNLOAD_DIRECTORY_NAME = f"{PRODUCT_NAME} Failed Downloads"
 
 
 def _checkpoint(check_cancelled: CancellationCheck | None) -> None:

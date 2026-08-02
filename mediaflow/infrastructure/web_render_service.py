@@ -14,9 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from mediaflow.application.ports import TimelineCompilationDocuments
-from mediaflow.application.web_media_service import (
-    web_package_root,
-)
+from mediaflow.application.web_package_files import web_package_root
 from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.progress import OperationProgress
@@ -103,9 +101,7 @@ class WebNativeMediaPlan:
                     "path": segment.path.as_posix(),
                     "start_ms": fraction_payload(segment.start_ms),
                     "duration_ms": fraction_payload(segment.duration_ms),
-                    "active_duration_ms": fraction_payload(
-                        segment.active_duration_ms
-                    ),
+                    "active_duration_ms": fraction_payload(segment.active_duration_ms),
                     "source_in_ms": segment.source_in_ms,
                     "fit": segment.fit,
                     "playback": segment.playback,
@@ -170,28 +166,17 @@ def require_committed_web_publication(
     asset_id: str,
     source_hash: str,
 ) -> None:
-    publication_root = (
-        project_dir.resolve()
-        / "sources"
-        / "web"
-    )
+    publication_root = project_dir.resolve() / "sources" / "web"
     package_root = package_root.resolve()
     match = re.fullmatch(r"p-([0-9a-f]{24})", package_root.name)
-    if (
-        package_root.parent != publication_root
-        or match is None
-    ):
-        raise RuntimeError(
-            "Editable media rendering requires an immutable managed publication"
-        )
+    if package_root.parent != publication_root or match is None:
+        raise RuntimeError("Editable media rendering requires an immutable managed publication")
     token = match.group(1)
     receipt_path = publication_root / "receipts" / f"r-{token}.json"
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError(
-            "Editable media publication receipt is unreadable"
-        ) from error
+        raise RuntimeError("Editable media publication receipt is unreadable") from error
     expected = {
         "schema_version": 1,
         "asset_id": asset_id,
@@ -201,10 +186,7 @@ def require_committed_web_publication(
         "status": "committed",
     }
     if receipt != expected:
-        raise RuntimeError(
-            "Editable media publication receipt does not match its "
-            "immutable package"
-        )
+        raise RuntimeError("Editable media publication receipt does not match its immutable package")
 
 
 def build_web_render_ffmpeg_command(
@@ -256,9 +238,7 @@ def build_web_render_ffmpeg_command(
             arguments.extend(
                 [
                     "-ss",
-                    _milliseconds_as_seconds(
-                        Fraction(video_segment.source_in_ms)
-                    ),
+                    _milliseconds_as_seconds(Fraction(video_segment.source_in_ms)),
                 ]
             )
         arguments.extend(["-i", str(video_segment.path)])
@@ -272,9 +252,7 @@ def build_web_render_ffmpeg_command(
             arguments.extend(
                 [
                     "-ss",
-                    _milliseconds_as_seconds(
-                        Fraction(audio_segment.source_in_ms)
-                    ),
+                    _milliseconds_as_seconds(Fraction(audio_segment.source_in_ms)),
                 ]
             )
         arguments.extend(["-i", str(audio_segment.path)])
@@ -319,13 +297,9 @@ def build_web_render_ffmpeg_command(
                 if video_segment.playback == "hold"
                 else ""
             )
-            frozen_tail_ms = (
-                video_segment.duration_ms
-                - video_segment.active_duration_ms
-            )
+            frozen_tail_ms = video_segment.duration_ms - video_segment.active_duration_ms
             frozen_tail = (
-                ",tpad=stop_mode=clone:"
-                f"stop_duration={_milliseconds_as_seconds(frozen_tail_ms)}"
+                f",tpad=stop_mode=clone:stop_duration={_milliseconds_as_seconds(frozen_tail_ms)}"
                 if frozen_tail_ms > 0
                 else ""
             )
@@ -354,10 +328,7 @@ def build_web_render_ffmpeg_command(
         if len(timeline_labels) > 1:
             underlay_label = "native_underlay"
             inputs = "".join(f"[{label}]" for label in timeline_labels)
-            filters.append(
-                f"{inputs}concat=n={len(timeline_labels)}:"
-                f"v=1:a=0[{underlay_label}]"
-            )
+            filters.append(f"{inputs}concat=n={len(timeline_labels)}:v=1:a=0[{underlay_label}]")
         filters.extend(
             [
                 "[0:v:0]format=rgba[web_overlay]",
@@ -374,9 +345,7 @@ def build_web_render_ffmpeg_command(
         audio_labels: list[str] = []
         for segment_index, (audio_segment, input_index) in enumerate(audio_inputs):
             if audio_segment.start_ms.denominator != 1:
-                raise ValueError(
-                    "Editable media native audio start must use whole milliseconds"
-                )
+                raise ValueError("Editable media native audio start must use whole milliseconds")
             audio_label = f"native_audio_{segment_index}"
             filters.append(
                 f"[{input_index}:a:0]"
@@ -462,8 +431,7 @@ def build_web_native_media_plan(
         unknown = set(source_ids) - set(sources)
         if unknown:
             raise ValueError(
-                f"Editable media scene {scene.id} references undeclared "
-                f"media sources: {sorted(unknown)}"
+                f"Editable media scene {scene.id} references undeclared media sources: {sorted(unknown)}"
             )
         underlays = [
             source_id
@@ -474,22 +442,15 @@ def build_web_native_media_plan(
             )
         ]
         if len(underlays) > 1:
-            raise ValueError(
-                f"Editable media scene {scene.id} selects more than one "
-                "native video underlay"
-            )
+            raise ValueError(f"Editable media scene {scene.id} selects more than one native video underlay")
 
     def source_path(source_id: str) -> Path:
         relative = sources[source_id].file.split("#", 1)[0]
-        path = package_root.joinpath(
-            *PurePosixPath(relative).parts
-        ).resolve(strict=True)
+        path = package_root.joinpath(*PurePosixPath(relative).parts).resolve(strict=True)
         try:
             path.relative_to(package_root)
         except ValueError as error:
-            raise ValueError(
-                f"Editable media source escaped its package: {source_id}"
-            ) from error
+            raise ValueError(f"Editable media source escaped its package: {source_id}") from error
         return path
 
     video_segments: list[WebNativeVideoSegment] = []
@@ -507,10 +468,7 @@ def build_web_native_media_plan(
                 break
             frozen_tail_ms = (
                 max(Fraction(0), target_duration_ms - cycle_duration_ms)
-                if (
-                    manifest.playback.loop != "repeat"
-                    and scene_index == len(scene_bindings) - 1
-                )
+                if (manifest.playback.loop != "repeat" and scene_index == len(scene_bindings) - 1)
                 else Fraction(0)
             )
             video_duration_ms = active_duration_ms + frozen_tail_ms
@@ -541,19 +499,13 @@ def build_web_native_media_plan(
                                 start_ms=scene_start_ms,
                                 duration_ms=active_duration_ms,
                                 source_in_ms=binding.source_in_ms,
-                                loop=(
-                                    "repeat"
-                                    if binding.playback == "repeat"
-                                    else "none"
-                                ),
+                                loop=("repeat" if binding.playback == "repeat" else "none"),
                                 gain_db=binding.gain_db,
                             )
                         )
                     continue
                 if not isinstance(binding, WebNativeAudioBinding):
-                    raise TypeError(
-                        f"Unknown editable media pipeline: {source_id}"
-                    )
+                    raise TypeError(f"Unknown editable media pipeline: {source_id}")
                 audio_segments.append(
                     WebNativeAudioSegment(
                         source_id=source_id,
@@ -599,9 +551,7 @@ class WebRenderCache:
         clip_state = state.web_states.get(clip.id)
         if clip_state is None:
             raise ValueError(f"Web clip has no editable state: {clip.id}")
-        variant = spec.manifest.variant_for(
-            clip_state.variant.id if clip_state.variant is not None else None
-        )
+        variant = spec.manifest.variant_for(clip_state.variant.id if clip_state.variant is not None else None)
         animated = spec.manifest.duration_ms > 0 or any(
             scene.animations for scene in clip_state.scenes.values()
         )
@@ -628,15 +578,13 @@ class WebRenderCache:
                 "package publication; rebind the package"
             )
         media_sources = WebMediaSourcesManifest.model_validate_json(
-            (package_root / spec.manifest.media_sources).read_text(
-                encoding="utf-8"
-            )
+            (package_root / spec.manifest.media_sources).read_text(encoding="utf-8")
         )
         declared_has_audio = web_media_sources_have_audio(media_sources)
         if declared_has_audio != asset.metadata.has_audio:
             raise RuntimeError(
-                "Editable media audio metadata no longer matches its v4 "
-                "source bindings; reimport the package"
+                "Editable media audio metadata no longer matches its "
+                "media-sources v4 bindings; reimport the package"
             )
         native_media_plan = build_web_native_media_plan(
             package_root=package_root,
@@ -644,9 +592,7 @@ class WebRenderCache:
             media_sources=media_sources,
             clip_state=clip_state,
             target_duration_ms=Fraction(
-                frame_count
-                * state.sequence.profile.fps_denominator
-                * 1000,
+                frame_count * state.sequence.profile.fps_denominator * 1000,
                 state.sequence.profile.fps_numerator,
             ),
         )
@@ -672,9 +618,7 @@ class WebRenderCache:
             },
         }
         digest = hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-                "utf-8"
-            )
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         suffix = ".mkv" if animated else ".png"
         return WebRenderTarget(
@@ -683,11 +627,7 @@ class WebRenderCache:
             # sufficient for the cache filename and keeps deep Windows project
             # paths below legacy path-length limits.
             path=(
-                self.paths.project_cache_dir(
-                    self.documents.project_dir
-                )
-                / "web"
-                / f"{digest[:32]}{suffix}"
+                self.paths.project_cache_dir(self.documents.project_dir) / "web" / f"{digest[:32]}{suffix}"
             ),
             animated=animated,
             frame_count=frame_count,
@@ -722,8 +662,9 @@ class WebRenderService:
     ) -> list[Path]:
         assets = {asset.id: asset for asset in self.documents.catalog.list_assets()}
         web_clips = [
-            clip for clip in state.clips if assets.get(clip.asset_id, None) is not None
-            and assets[clip.asset_id].kind == AssetKind.WEB
+            clip
+            for clip in state.clips
+            if assets.get(clip.asset_id, None) is not None and assets[clip.asset_id].kind == AssetKind.WEB
         ]
         results: list[Path] = []
         for index, clip in enumerate(web_clips):
@@ -843,9 +784,7 @@ class WebRenderService:
             "frame_count": target.frame_count if target.animated else 1,
             "has_audio": target.has_audio,
             "audio_codec_name": "flac" if target.has_audio else None,
-            "audio_sample_rate": (
-                target.audio_sample_rate if target.has_audio else None
-            ),
+            "audio_sample_rate": (target.audio_sample_rate if target.has_audio else None),
             "audio_channels": target.audio_channels if target.has_audio else None,
         }
         if any(probe.get(key) != value for key, value in expected_probe.items()):
@@ -874,9 +813,7 @@ class WebRenderService:
             if lock.acquire():
                 return lock
             if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"Timed out waiting for editable media cache: {target.path}"
-                ) from None
+                raise TimeoutError(f"Timed out waiting for editable media cache: {target.path}") from None
             if check_cancelled is not None:
                 check_cancelled()
             time.sleep(0.1)
@@ -1053,20 +990,13 @@ class WebRenderService:
             fps = profile.fps
             duration = max(1 / fps, clip.duration / fps)
             source_args = self._looped_input(cache_path, fps, duration)
-            audio_output = (
-                ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
-                if target.has_audio
-                else ["-an"]
-            )
+            audio_output = ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"] if target.has_audio else ["-an"]
             self._run_ffmpeg(
                 [
                     "-f",
                     "lavfi",
                     "-i",
-                    (
-                        f"color=c={background}:s={profile.width}x{profile.height}:"
-                        f"r={fps:.6f}:d={duration:.6f}"
-                    ),
+                    (f"color=c={background}:s={profile.width}x{profile.height}:r={fps:.6f}:d={duration:.6f}"),
                     *source_args,
                     "-filter_complex",
                     (
@@ -1178,10 +1108,7 @@ class WebRenderService:
             timeout=1800,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                "FFmpeg editable media export failed: "
-                + result.stderr
-            )
+            raise RuntimeError("FFmpeg editable media export failed: " + result.stderr)
 
     def _render_browser(
         self,
@@ -1198,9 +1125,7 @@ class WebRenderService:
         engine = get_web_capture_engine(executable)
         manifest = spec.manifest
         package_root = web_package_root(entry, manifest)
-        variant = manifest.variant_for(
-            clip_state.variant.id if clip_state.variant is not None else None
-        )
+        variant = manifest.variant_for(clip_state.variant.id if clip_state.variant is not None else None)
         runtime_state = web_runtime_state(clip_state, manifest)
         partial = unique_temporary_sibling(
             target.path,
@@ -1211,10 +1136,7 @@ class WebRenderService:
             with WebPackagePreviewServer(package_root) as preview:
                 capture_url = preview.url_for(
                     manifest.entry,
-                    query=(
-                        f"capture=1&variant={variant.id}"
-                        f"&scene={runtime_state['scene_id']}"
-                    ),
+                    query=(f"capture=1&variant={variant.id}&scene={runtime_state['scene_id']}"),
                 )
                 capture_modes: tuple[WebCaptureMode, ...] = ("auto", "screenshot")
                 if target.animated:
@@ -1232,6 +1154,7 @@ class WebRenderService:
                                 unit="frames",
                             )
                         )
+
                     def report_frame(completed: int) -> None:
                         if progress:
                             progress(
@@ -1272,14 +1195,11 @@ class WebRenderService:
                         ffmpeg_pipe = None
                         if pipe_result.returncode != 0:
                             raise RuntimeError(
-                                "FFmpeg editable web media render failed: "
-                                f"{pipe_result.stderr}"
+                                f"FFmpeg editable web media render failed: {pipe_result.stderr}"
                             )
                         break
                     else:
-                        raise RuntimeError(
-                            "Editable web media capture exhausted its screenshot fallback"
-                        )
+                        raise RuntimeError("Editable web media capture exhausted its screenshot fallback")
                 else:
                     if progress:
                         progress(
@@ -1315,9 +1235,7 @@ class WebRenderService:
                             continue
                         break
                     else:
-                        raise RuntimeError(
-                            "Editable web media capture exhausted its screenshot fallback"
-                        )
+                        raise RuntimeError("Editable web media capture exhausted its screenshot fallback")
                     partial.write_bytes(frames[0])
                     if progress:
                         progress(
@@ -1362,28 +1280,15 @@ class WebRenderService:
             encoding="utf-8",
             errors="replace",
             timeout=30,
-            creationflags=(
-                subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            ),
+            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                "FFprobe rejected editable web media cache: "
-                f"{result.stderr.strip()}"
-            )
+            raise RuntimeError(f"FFprobe rejected editable web media cache: {result.stderr.strip()}")
         try:
             probe_payload = json.loads(result.stdout)
             streams = probe_payload.get("streams") or []
-            video_streams = [
-                stream
-                for stream in streams
-                if stream.get("codec_type") == "video"
-            ]
-            audio_streams = [
-                stream
-                for stream in streams
-                if stream.get("codec_type") == "audio"
-            ]
+            video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+            audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
             if len(video_streams) != 1:
                 raise ValueError("expected exactly one video stream")
             stream = video_streams[0]
@@ -1396,19 +1301,11 @@ class WebRenderService:
             if len(audio_streams) > 1:
                 raise ValueError("expected at most one audio stream")
             audio_stream = audio_streams[0] if audio_streams else None
-            audio_codec_name = (
-                str(audio_stream["codec_name"]) if audio_stream is not None else None
-            )
-            audio_sample_rate = (
-                int(audio_stream["sample_rate"]) if audio_stream is not None else None
-            )
-            audio_channels = (
-                int(audio_stream["channels"]) if audio_stream is not None else None
-            )
+            audio_codec_name = str(audio_stream["codec_name"]) if audio_stream is not None else None
+            audio_sample_rate = int(audio_stream["sample_rate"]) if audio_stream is not None else None
+            audio_channels = int(audio_stream["channels"]) if audio_stream is not None else None
         except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError) as error:
-            raise RuntimeError(
-                "FFprobe returned incomplete editable web media cache metadata"
-            ) from error
+            raise RuntimeError("FFprobe returned incomplete editable web media cache metadata") from error
         expected_codec = "ffv1" if target.animated else "png"
         expected_frame_count = target.frame_count if target.animated else 1
         expected_duration = Fraction(
@@ -1419,15 +1316,10 @@ class WebRenderService:
             codec_name != expected_codec
             or (width, height) != (target.width, target.height)
             or (target.animated and pixel_format != "bgra")
+            or (target.animated and frame_rate != Fraction(target.fps_numerator, target.fps_denominator))
             or (
                 target.animated
-                and frame_rate
-                != Fraction(target.fps_numerator, target.fps_denominator)
-            )
-            or (
-                target.animated
-                and abs(duration - expected_duration)
-                > Fraction(target.fps_denominator, target.fps_numerator)
+                and abs(duration - expected_duration) > Fraction(target.fps_denominator, target.fps_numerator)
             )
             or (audio_stream is not None) != target.has_audio
             or (

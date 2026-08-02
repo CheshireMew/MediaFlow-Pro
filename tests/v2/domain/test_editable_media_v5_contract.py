@@ -14,14 +14,19 @@ from mediaflow.domain.web_media import (
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 PACKAGES = {
-    "starter": FIXTURES / "editable-media-v4",
-    "warm": FIXTURES / "editable-media-v4-cases" / "warm-paper-project-list",
-    "social": FIXTURES / "editable-media-v4-cases" / "social-evidence-variants",
+    "starter": FIXTURES / "editable-media-v5",
+    "warm": FIXTURES / "editable-media-v5-cases" / "warm-paper-project-list",
+    "social": FIXTURES / "editable-media-v5-cases" / "social-evidence-variants",
+}
+PRODUCERS = {
+    "starter": "visual-multimedia/assets/web-media-starter",
+    "warm": "visual-multimedia/assets/web-card-cases/warm-paper-project-list",
+    "social": "visual-multimedia/assets/web-card-cases/social-evidence-variants",
 }
 CORPUS_SCHEMA = (
     FIXTURES
-    / "editable-media-v4-contract"
-    / "editable-media.v4.schema.json"
+    / "editable-media-v5-contract"
+    / "editable-media.v5.schema.json"
 )
 
 
@@ -36,22 +41,37 @@ def _sha256(path: Path) -> str:
 
 
 @pytest.mark.parametrize("name", tuple(PACKAGES))
-def test_generated_packages_match_origins_and_v4_contract(name: str) -> None:
+def test_generated_packages_match_origins_and_v5_contract(name: str) -> None:
     package = PACKAGES[name]
     origin = json.loads((package / "fixture-origin.json").read_text(encoding="utf-8"))
+    assert origin["producer"] == PRODUCERS[name]
+    assert origin["editable_media_version"] == 5
+    assert {
+        path.relative_to(package).as_posix()
+        for path in package.rglob("*")
+        if path.is_file()
+    } == set(origin["files"]) | {"fixture-origin.json"}
     for relative, expected_hash in origin["files"].items():
         path = package.joinpath(*relative.split("/"))
         assert path.is_file()
         assert _sha256(path) == expected_hash
     manifest = parse_editable_media_manifest(_read_manifest(name))
-    assert manifest.version == 4
+    assert manifest.version == 5
 
 
-def test_mediaflow_executes_the_synced_visual_multimedia_v4_schema() -> None:
+def test_mediaflow_executes_the_synced_visual_multimedia_v5_schema() -> None:
     assert EDITABLE_MEDIA_SCHEMA_PATH.read_bytes() == CORPUS_SCHEMA.read_bytes()
 
 
-def test_rich_v4_features_are_first_class_contract_fields() -> None:
+def test_rich_v5_features_are_first_class_contract_fields() -> None:
+    starter = parse_editable_media_manifest(_read_manifest("starter"))
+    parameters = {item.id: item for item in starter.parameters}
+    assert parameters["spring_strength"].control == "slider"
+    assert parameters["stagger_interval_ms"].scope == "scene"
+    assert starter.scenes[0].parameters["orbit_radius_px"] == 32
+    assert starter.scenes[0].motion.camera is not None
+    assert starter.scenes[0].steps[1].state_kind == "change"
+
     warm = parse_editable_media_manifest(_read_manifest("warm"))
     warm_fields = {field.id: field for field in warm.data_fields}
     assert warm_fields["creator_avatar"].kind == "media-source"
@@ -74,7 +94,7 @@ def test_rich_v4_features_are_first_class_contract_fields() -> None:
     assert merged["visible"] is True
 
 
-def test_v4_media_sources_require_an_explicit_pipeline_binding() -> None:
+def test_v5_media_sources_require_an_explicit_pipeline_binding() -> None:
     source_manifest = json.loads(
         (
             PACKAGES["warm"]
@@ -113,7 +133,7 @@ def test_v4_media_sources_require_an_explicit_pipeline_binding() -> None:
         ),
     ),
 )
-def test_v4_rejects_media_type_and_pipeline_mismatches(
+def test_v5_rejects_media_type_and_pipeline_mismatches(
     media_type: str,
     binding: dict[str, object],
     message: str,
@@ -153,7 +173,7 @@ def test_v4_rejects_media_type_and_pipeline_mismatches(
         ),
     ),
 )
-def test_v4_rejects_removed_data_kinds_and_non_package_paths(
+def test_v5_rejects_removed_data_kinds_and_non_package_paths(
     mutate,
     message: str,
 ) -> None:

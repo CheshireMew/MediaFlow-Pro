@@ -38,12 +38,19 @@ class DownloadSettings(DomainModel):
 class AsrSettings(DomainModel):
     engine: Literal["builtin", "faster_whisper_cli"] = "builtin"
     cli_path: str | None = None
+    model_directory: str | None = None
     model: str = "large-v3-turbo"
     device: Literal["auto", "cuda", "cpu"] = "auto"
     compute_type: str = "float16"
     language: str = "auto"
     smart_split_limit: int = 42
     parallel_chunks: int = Field(default=0, ge=0, le=4)
+
+
+class SpeechSynthesisSettings(DomainModel):
+    gpt_sovits_root: str | None = None
+    device: Literal["auto", "cuda", "cpu"] = "auto"
+    startup_timeout_seconds: int = Field(default=300, ge=30, le=900)
 
 
 class GlossaryTermSettings(DomainModel):
@@ -142,10 +149,11 @@ class UiSettings(DomainModel):
 
 
 class GlobalSettings(DomainModel):
-    schema_version: int = 16
+    schema_version: int = 19
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     asr: AsrSettings = Field(default_factory=AsrSettings)
+    speech_synthesis: SpeechSynthesisSettings = Field(default_factory=SpeechSynthesisSettings)
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     preview: PreviewSettings = Field(default_factory=PreviewSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)

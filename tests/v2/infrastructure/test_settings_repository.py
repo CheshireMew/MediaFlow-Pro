@@ -14,6 +14,22 @@ from mediaflow.infrastructure.settings_repository import SETTINGS_SCHEMA_VERSION
 from mediaflow.infrastructure.storage_paths import default_media_root, default_project_root
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_project_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "Video"))
+
+
+def test_production_default_project_root_is_the_video_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MEDIAFLOW_PROJECT_ROOT")
+
+    assert Path(default_project_root()) == Path("E:/Work/Video").resolve()
+
+
 def test_default_repository_honors_isolated_settings_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -101,6 +117,41 @@ def test_version_two_settings_migrate_cli_engine_and_gain_translation(tmp_path: 
     assert persisted["asr"]["engine"] == "builtin"
 
 
+def test_version_seventeen_settings_gain_gpt_sovits_without_losing_xxl_path(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 17
+    payload.pop("speech_synthesis")
+    payload["asr"]["cli_path"] = "D:/Code/MediaFlow/bin/Faster-Whisper-XXL/faster-whisper-xxl.exe"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
+    assert loaded.asr.cli_path == payload["asr"]["cli_path"]
+    assert loaded.speech_synthesis.gpt_sovits_root is None
+    assert loaded.speech_synthesis.device == "auto"
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["speech_synthesis"]["startup_timeout_seconds"] == 300
+
+
+def test_version_eighteen_settings_gain_shared_asr_model_directory(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 18
+    payload["asr"].pop("model_directory")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
+    assert loaded.asr.model_directory is None
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["asr"]["model_directory"] is None
+
+
 def test_version_seven_settings_gain_quick_download_memory(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     payload = GlobalSettings().model_dump(mode="json")
@@ -177,7 +228,7 @@ def test_version_ten_settings_separate_media_and_project_roots(
     SettingsRepository.prepare_storage(loaded)
     assert Path(default_project_root()).is_dir()
     assert Path(default_media_root()).is_dir()
-    assert Path(default_project_root()).parent == application_directory
+    assert Path(default_project_root()).parent == tmp_path
     assert Path(default_media_root()).parent == application_directory
     assert Path(default_project_root()) != Path(default_media_root())
 
@@ -195,6 +246,23 @@ def test_version_eleven_settings_default_to_compatible_download_codec(tmp_path: 
     assert loaded.download.codec == "avc"
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["download"]["codec"] == "avc"
+
+
+def test_version_sixteen_settings_move_new_projects_to_the_video_workspace(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    payload = GlobalSettings().model_dump(mode="json")
+    payload["schema_version"] = 16
+    payload["ui"]["default_project_directory"] = str(tmp_path / "Old Project Root")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = SettingsRepository(path).load()
+
+    assert loaded.schema_version == SETTINGS_SCHEMA_VERSION
+    assert loaded.ui.default_project_directory == default_project_root()
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["ui"]["default_project_directory"] == default_project_root()
 
 
 def test_version_twelve_settings_remove_inspector_layout(tmp_path: Path) -> None:

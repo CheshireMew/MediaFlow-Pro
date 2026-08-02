@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -16,13 +18,10 @@ from mediaflow.infrastructure.mlt import LoudnessAnalysisService, TimelineCompil
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
-def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
-    tmp_path: Path,
-    max_project_path: Path,
-) -> None:
-    paths = RuntimePaths.discover()
-    source = tmp_path / "constant-tone.mp4"
+
+def _generate_tone(paths: RuntimePaths, destination: Path, *, duration: int) -> None:
     generated = subprocess.run(
         [
             str(paths.ffmpeg),
@@ -33,11 +32,11 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
             "-f",
             "lavfi",
             "-i",
-            "color=c=black:s=320x180:r=25:d=5",
+            f"color=c=black:s=320x180:r=25:d={duration}",
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=1000:sample_rate=48000:duration=5",
+            f"sine=frequency=1000:sample_rate=48000:duration={duration}",
             "-c:v",
             "libx264",
             "-preset",
@@ -45,7 +44,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
             "-c:a",
             "aac",
             "-shortest",
-            str(source),
+            str(destination),
         ],
         capture_output=True,
         text=True,
@@ -53,6 +52,15 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         check=False,
     )
     assert generated.returncode == 0, generated.stderr
+
+
+def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
+    tmp_path: Path,
+    max_project_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "constant-tone.mp4"
+    _generate_tone(paths, source, duration=5)
 
     project_dir = max_project_path
     with ProjectRepository.create(project_dir, "Loudness Project") as repository:
@@ -138,28 +146,50 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         )
         changed_hash = service.snapshot_hash(changed_state)
         assert changed_hash != current_hash
+        concurrent_progress = [[], [], []]
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
                 executor.submit(
                     LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
                     current_state,
-                ),
-                executor.submit(
-                    LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
-                    current_state,
+                    progress=concurrent_progress[0].append,
                 ),
                 executor.submit(
                     LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
                     changed_state,
+                    progress=concurrent_progress[1].append,
+                ),
+                executor.submit(
+                    LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
+                    changed_state,
+                    progress=concurrent_progress[2].append,
                 ),
             ]
             concurrent_results = [future.result(timeout=60) for future in futures]
-        assert concurrent_results[0][1] == concurrent_results[1][1] == current_result
-        assert concurrent_results[2][1] != current_result
-        assert concurrent_results[2][1] == service.result_path(
+        assert concurrent_results[0][1] == current_result
+        assert concurrent_results[1][1] == concurrent_results[2][1]
+        assert concurrent_results[1][1] != current_result
+        assert concurrent_results[1][1] == service.result_path(
             project_dir,
             editor.sequence_id,
             changed_hash,
+        )
+        producers = [
+            events
+            for events in concurrent_progress
+            if any(
+                event.message_code == "audio_analysis_rendering"
+                for event in events
+            )
+        ]
+        assert len(producers) == 1
+        assert all(
+            any(
+                event.message_code == "audio_analysis_cache_ready"
+                for event in events
+            )
+            for events in concurrent_progress
+            if events is not producers[0]
         )
         assert not list((project_dir / "cache" / "l").glob("*.wav"))
         assert not list((project_dir / "cache" / "l").glob(".mf-*"))
@@ -231,3 +261,116 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
             expected_snapshot_hash=reopened_hash,
         )
         assert reopened_metrics is not None
+
+
+def test_same_loudness_snapshot_has_one_real_producer_across_processes(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimePaths.discover()
+    source = tmp_path / "cross-process-tone.mp4"
+    _generate_tone(paths, source, duration=3)
+    project_dir = tmp_path / "cross-process-project"
+    with ProjectRepository.create(project_dir, "Cross Process Loudness") as repository:
+        assets = AssetService(repository, MediaProbe(paths))
+        asset = assets.import_external(source)
+        asset = assets.adopt_main_profile_from_video(asset.id)
+        sequence_id = repository.catalog.get_project().main_sequence_id
+        editor = TimelineEditor(repository, sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=75,
+        )
+
+    worker = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+from mediaflow.infrastructure.mlt import LoudnessAnalysisService, TimelineCompiler
+from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_paths import RuntimePaths
+
+project = Path(sys.argv[1])
+start = Path(sys.argv[2])
+ready = Path(sys.argv[3])
+sequence_id = sys.argv[4]
+with ProjectRepository.open(project, writable=False) as repository:
+    state = repository.timeline.load_timeline(sequence_id)
+    service = LoudnessAnalysisService(TimelineCompiler(repository), RuntimePaths.discover())
+    events = []
+    ready.write_text("ready", encoding="utf-8")
+    while not start.exists():
+        time.sleep(0.02)
+    metrics, result = service.analyze(state, progress=events.append)
+    print(json.dumps({
+        "pid": os.getpid(),
+        "produced": any(item.message_code == "audio_analysis_rendering" for item in events),
+        "waited": any(item.message_code == "audio_analysis_waiting" for item in events),
+        "cache_ready": any(item.message_code == "audio_analysis_cache_ready" for item in events),
+        "result": str(result),
+        "integrated_lufs": metrics.integrated_lufs,
+    }))
+"""
+    start = tmp_path / "start-loudness-workers"
+    processes: list[subprocess.Popen[str]] = []
+    ready_paths: list[Path] = []
+    for index in range(2):
+        ready = tmp_path / f"loudness-worker-{index}.ready"
+        ready_paths.append(ready)
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    worker,
+                    str(project_dir),
+                    str(start),
+                    str(ready),
+                    sequence_id,
+                ],
+                cwd=REPOSITORY_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+        )
+    outputs: list[dict[str, object]] = []
+    try:
+        deadline = time.monotonic() + 20
+        while not all(path.is_file() for path in ready_paths):
+            assert all(process.poll() is None for process in processes)
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        start.write_text("start", encoding="utf-8")
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=90)
+            assert process.returncode == 0, stderr
+            assert stderr == ""
+            outputs.append(json.loads(stdout))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                process.communicate(timeout=10)
+
+    assert outputs[0]["result"] == outputs[1]["result"]
+    assert outputs[0]["integrated_lufs"] == outputs[1]["integrated_lufs"]
+    producers = [item for item in outputs if item["produced"]]
+    consumers = [item for item in outputs if not item["produced"]]
+    assert len(producers) == len(consumers) == 1
+    assert consumers[0]["waited"] is True
+    assert consumers[0]["cache_ready"] is True
+    result_path = Path(str(producers[0]["result"]))
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["producer_pid"] == producers[0]["pid"]
+    assert payload["schema_version"] == LoudnessAnalysisService.RESULT_SCHEMA_VERSION
+    assert len(list((project_dir / "generated" / "a").glob("la-*.json"))) == 1
+    assert not list((project_dir / "cache" / "l").glob("*.wav"))
+    assert not list((project_dir / "cache" / "l").glob(".mf-*"))

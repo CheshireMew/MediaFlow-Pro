@@ -23,6 +23,7 @@ from mediaflow.infrastructure.asr_engine import (
     FasterWhisperProcessEngine,
     create_asr_pipeline,
 )
+from mediaflow.infrastructure.asr_models import FasterWhisperModelStore
 from mediaflow.infrastructure.audio_chunking import (
     AudioChunkingService,
     AudioPreparationService,
@@ -156,6 +157,10 @@ def test_cli_engine_process_output_reaches_project_subtitles_and_srt(tmp_path: P
     paths = _runtime_paths(tmp_path)
     source = tmp_path / "speech.wav"
     fake_cli = tmp_path / "fake_faster_whisper.py"
+    model_root = tmp_path / "shared-models"
+    installed_model = model_root / "faster-whisper-tiny.en"
+    installed_model.mkdir(parents=True)
+    (installed_model / "model.bin").write_bytes(b"installed model")
     _generate_audio(source, paths)
     fake_cli.write_text(
         """from pathlib import Path
@@ -163,6 +168,10 @@ import sys
 
 output = Path(sys.argv[sys.argv.index('-o') + 1])
 output.mkdir(parents=True, exist_ok=True)
+Path(__file__).with_name('observed-model-dir.txt').write_text(
+    sys.argv[sys.argv.index('--model_dir') + 1],
+    encoding='utf-8',
+)
 print('25%', flush=True)
 (output / 'result.srt').write_text(
     '1\\n00:00:00,100 --> 00:00:00,900\\nCLI producer output\\n',
@@ -175,6 +184,7 @@ print('100%', flush=True)
     settings = AsrSettings(
         engine="faster_whisper_cli",
         cli_path=str(fake_cli),
+        model_directory=str(model_root),
         model="tiny.en",
         device="cpu",
         language="en",
@@ -227,6 +237,13 @@ print('100%', flush=True)
         assert [word.text for word in words] == ["CLI", "producer", "output"]
         assert all(word.timing_source == "estimated" for word in words)
         assert generated
+        assert (tmp_path / "observed-model-dir.txt").read_text(encoding="utf-8") == str(
+            model_root.resolve()
+        )
+        model_store = FasterWhisperModelStore(settings, paths)
+        assert model_store.installed_models() == frozenset({"tiny.en"})
+        assert model_store.local_model_path() == installed_model.resolve()
+        assert model_store.builtin_model_reference() == str(installed_model.resolve())
         assert "CLI producer output" in generated[0].read_text(encoding="utf-8-sig")
         assert any(item.message_code == "transcribing" for item in progress)
         assert progress[-1].message_code == "completed"
@@ -234,7 +251,7 @@ print('100%', flush=True)
     finally:
         project.close()
     prewarm_progress: list[OperationProgress] = []
-    warmed_cli = RuntimeToolService(settings, paths).prewarm_cli(
+    warmed_cli = RuntimeToolService(GlobalSettings(asr=settings), paths).prewarm_cli(
         progress=prewarm_progress.append
     )
     assert warmed_cli == fake_cli.resolve()
@@ -276,18 +293,50 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
             "Faster-Whisper-XXL/faster-whisper-xxl.exe",
             b"observable CLI artifact",
         )
-    settings = AsrSettings()
+    component_catalog = release_dir / "runtime-components.lock.json"
+    component_catalog.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "components": [
+                    {
+                        "id": "faster-whisper-xxl",
+                        "display_name": "Faster-Whisper XXL",
+                        "version": "test",
+                        "homepage": "https://example.invalid/xxl",
+                        "license": "MIT",
+                        "archive": {
+                            "file_name": cli_archive.name,
+                            "url": cli_archive.as_uri(),
+                            "size_bytes": cli_archive.stat().st_size,
+                            "sha256": "",
+                        },
+                        "install": {
+                            "root": "Faster-Whisper-XXL",
+                            "entrypoint": "faster-whisper-xxl.exe",
+                            "required_paths": ["faster-whisper-xxl.exe"],
+                            "minimum_free_bytes": 0,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = GlobalSettings(asr=AsrSettings())
     service = RuntimeToolService(
         settings,
         paths,
         ytdlp_metadata_url=metadata.as_uri(),
-        cli_url=cli_archive.as_uri(),
-        cli_archive=cli_archive.name,
-        cli_size=cli_archive.stat().st_size,
+        component_catalog_path=component_catalog,
     )
     progress: list[OperationProgress] = []
     updated = service.update_ytdlp(progress=progress.append)
-    cli_path = service.install_faster_whisper_cli(progress=progress.append)
+    installed = service.install_components(
+        ["faster-whisper-xxl"],
+        progress=progress.append,
+    )
+    cli_path = Path(installed["faster-whisper-xxl"]) / "faster-whisper-xxl.exe"
 
     pointer = json.loads((paths.runtime_dir / "tools" / "yt-dlp-active.json").read_text(encoding="utf-8"))
     assert updated["version"] == "2099.1"
@@ -297,12 +346,12 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     assert cli_path.read_bytes() == b"observable CLI artifact"
     assert paths.runtime_dir in cli_path.parents
     assert any(
-        item.message_code == "runtime_tool_downloading"
+        item.message_code == "runtime_component_downloading"
         and item.mode == "determinate"
         and item.unit == "bytes"
         for item in progress
     )
-    assert progress[-1].message_code == "asr_cli_extracting"
+    assert progress[-1].message_code == "runtime_component_extracting"
 
 
 def test_transcription_task_consumes_engine_and_smart_split_settings(tmp_path: Path) -> None:

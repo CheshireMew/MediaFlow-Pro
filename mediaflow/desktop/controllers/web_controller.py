@@ -3,18 +3,16 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Property, QCoreApplication, QObject, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from mediaflow.domain.enums import AssetKind
-from mediaflow.domain.task_commands import ExportWebClipCommand
-from mediaflow.domain.web_media import (
-    WEB_EXPORT_FORMATS,
-    default_web_export_suffix,
-    require_web_export_destination,
-    web_export_suffixes,
-)
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .web_editor_context import (
+    WebEditorContext,
+    coerce_web_descriptor_value,
+    find_web_descriptor,
+)
 
 if TYPE_CHECKING:
     from mediaflow.composition import EditorProject
@@ -39,6 +37,7 @@ class WebController(ControllerFacet):
         self._web_manifest: dict = {}
         self._web_state: dict = {}
         self._runtime_web_state: dict = {}
+        self._edit_document: dict = {}
         self._active_variant_id = ""
         self._active_scene_id = ""
         self._selected_web_layer_id = ""
@@ -47,11 +46,30 @@ class WebController(ControllerFacet):
         self._browser_edit_mode = False
         self._browser_selected_layer_id = ""
         self._browser_ready = False
-        self._rebind_report: dict = {}
-        self._pending_rebind_source = ""
         session.events.selectionChanged.connect(self._refresh)
         session.events.projectStateChanged.connect(self._refresh)
         session.events.historyChanged.connect(self._refresh)
+
+    def context_snapshot(self) -> WebEditorContext:
+        return WebEditorContext(
+            clip_id=self._web_clip_id,
+            asset_id=self._web_asset_id,
+            manifest=self._web_manifest,
+            persistent_state=self._web_state,
+            runtime_state=self._runtime_web_state,
+            edit_document=self._edit_document,
+            active_scene_id=self._active_scene_id,
+            selected_layer_id=self._selected_web_layer_id,
+        )
+
+    def activate_scene(self, scene_id: str) -> None:
+        known = {str(item.get("id")) for item in self._web_manifest.get("scenes", [])}
+        if scene_id == self._active_scene_id or scene_id not in known:
+            return
+        self._active_scene_id = scene_id
+        self._refresh_edit_document()
+        self._refresh_layers()
+        self.webStateChanged.emit()
 
     @Property(QObject, constant=True)
     def layersModel(self) -> QObject:
@@ -119,8 +137,9 @@ class WebController(ControllerFacet):
 
     @Property("QVariantList", notify=webStateChanged)
     def variantOptions(self) -> list[dict]:
-        selected = ((self._web_state.get("variant") or {}).get("id")
-                    or self._web_manifest.get("default_variant_id"))
+        selected = (self._web_state.get("variant") or {}).get("id") or self._web_manifest.get(
+            "default_variant_id"
+        )
         return [
             {
                 "id": item["id"],
@@ -135,133 +154,57 @@ class WebController(ControllerFacet):
         return self._active_scene_id
 
     @Property("QVariantList", notify=webStateChanged)
-    def themeOptions(self) -> list[dict]:
-        overrides = self._web_state.get("theme", {})
+    def editDescriptors(self) -> list[dict]:
+        return [dict(item) for item in self._edit_document.get("descriptors", [])]
+
+    @Property("QVariantList", notify=webSelectionChanged)
+    def selectedLayerDescriptors(self) -> list[dict]:
+        return self._selected_layer_descriptor_rows()
+
+    def _selected_layer_descriptor_rows(self) -> list[dict]:
+        prefix = f"{self._selected_web_layer_id}."
         return [
-            {
-                "id": item["id"],
-                "name": item["name"],
-                "kind": item["kind"],
-                "value": overrides.get(item["id"], item.get("default")),
-            }
-            for item in self._web_manifest.get("theme_variables", [])
+            dict(item)
+            for item in self._edit_document.get("descriptors", [])
+            if item.get("target") == "layer" and str(item.get("source_id", "")).startswith(prefix)
         ]
 
     @Property("QVariantList", notify=webStateChanged)
-    def dataOptions(self) -> list[dict]:
-        scene = (self._web_state.get("scenes") or {}).get(self._active_scene_id, {})
-        values = (scene.get("data_snapshot") or {}).get("values", {})
-        definition: dict = next(
-            (
-                item
-                for item in self._web_manifest.get("scenes", [])
-                if item.get("id") == self._active_scene_id
-            ),
-            {},
-        )
-        scene_values = definition.get("data") or {}
+    def parameterDescriptors(self) -> list[dict]:
+        return [
+            dict(item)
+            for item in self._edit_document.get("descriptors", [])
+            if item.get("target") == "parameter"
+        ]
+
+    @Property("QVariantList", notify=webStateChanged)
+    def themeDescriptors(self) -> list[dict]:
+        return [
+            dict(item) for item in self._edit_document.get("descriptors", []) if item.get("target") == "theme"
+        ]
+
+    @Property("QVariantList", notify=webStateChanged)
+    def dataDescriptors(self) -> list[dict]:
         return [
             {
-                "id": item["id"],
-                "name": item["name"],
-                "kind": item["kind"],
+                **dict(item),
                 "valueText": json.dumps(
-                    values.get(item["id"], scene_values.get(item["id"], item.get("default"))),
+                    item.get("value"),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ),
             }
-            for item in self._web_manifest.get("data_fields", [])
+            for item in self._edit_document.get("descriptors", [])
+            if item.get("target") == "data"
         ]
-
-    @Property("QVariantList", notify=webStateChanged)
-    def keyframesData(self) -> list[dict]:
-        clip = self._selected_clip()
-        if clip is None or self._session.binding.timeline is None:
-            return []
-        profile = self._session.binding.timeline.state.sequence.profile
-        fps = profile.fps
-        scene_start_ms = self._scene_start_ms(self._active_scene_id)
-        values: list[dict] = []
-        scene = (self._web_state.get("scenes") or {}).get(self._active_scene_id, {})
-        for layer_id, tracks in scene.get("animations", {}).items():
-            for field, track in tracks.items():
-                for keyframe in track.get("keyframes", []):
-                    source_frame = round(
-                        (scene_start_ms + int(keyframe["time_ms"])) * fps / 1000
-                    )
-                    speed = abs(clip.speed_numerator) / clip.speed_denominator
-                    if clip.speed_numerator > 0:
-                        local_frame = round((source_frame - clip.source_in) / speed)
-                    else:
-                        local_frame = round((clip.source_in - source_frame) / speed)
-                    frame = clip.timeline_start + local_frame
-                    if clip.timeline_start <= frame < clip.timeline_end:
-                        values.append(
-                            {
-                                "layerId": layer_id,
-                                "field": field,
-                                "timeMs": int(keyframe["time_ms"]),
-                                "frame": frame,
-                                "valueText": json.dumps(keyframe.get("value"), ensure_ascii=False),
-                                "easing": (keyframe.get("easing") or {}).get("kind", "linear"),
-                            }
-                        )
-        return sorted(values, key=lambda item: (item["frame"], item["layerId"], item["field"]))
 
     @Property("QVariantMap", notify=webStateChanged)
     def componentData(self) -> dict:
         return dict(self._web_manifest.get("component") or {})
 
-    @Property("QVariantMap", notify=webStateChanged)
-    def rebindReport(self) -> dict:
-        return dict(self._rebind_report)
-
-    @Property("QVariantList", notify=webStateChanged)
-    def exportFormatOptions(self) -> list[dict]:
-        overlay_suffix = self._overlay_export_suffix()
-        labels = {
-            "png": QCoreApplication.translate("WebExportCatalog", "PNG 单帧"),
-            "gif": QCoreApplication.translate("WebExportCatalog", "GIF 动图"),
-            "alpha_video": QCoreApplication.translate(
-                "WebExportCatalog",
-                "透明视频",
-            ),
-            "video": QCoreApplication.translate("WebExportCatalog", "普通视频"),
-            "overlay": QCoreApplication.translate(
-                "WebExportCatalog",
-                "原样叠加层",
-            ),
-        }
-        options: list[dict] = []
-        for format_name in WEB_EXPORT_FORMATS:
-            suffixes = web_export_suffixes(
-                format_name,
-                overlay_suffix=overlay_suffix if format_name == "overlay" else None,
-            )
-            label = labels[format_name]
-            patterns = " ".join(f"*{suffix}" for suffix in suffixes)
-            options.append(
-                {
-                    "label": label,
-                    "value": format_name,
-                    "suffix": default_web_export_suffix(
-                        format_name,
-                        overlay_suffix=(
-                            overlay_suffix if format_name == "overlay" else None
-                        ),
-                    ).removeprefix("."),
-                    "filter": f"{label} ({patterns})",
-                }
-            )
-        return options
-
     @Property(str, notify=webStateChanged)
     def capabilitiesJson(self) -> str:
-        if (
-            not self._session.binding.current
-            or self._session.binding.current.read_only
-        ):
+        if not self._session.binding.current or self._session.binding.current.read_only:
             return "{}"
         values = {
             layer["id"]: list(layer.get("editable") or []) for layer in self._web_manifest.get("layers", [])
@@ -271,11 +214,6 @@ class WebController(ControllerFacet):
     @Property(str, notify=webSelectionChanged)
     def selectedLayerId(self) -> str:
         return self._selected_web_layer_id
-
-    @Property("QVariantMap", notify=webSelectionChanged)
-    def selectedLayerData(self) -> dict:
-        row = self._session.models.web_layers.findRow("layerId", self._selected_web_layer_id)
-        return self._session.models.web_layers.get(row)
 
     @Property(str, notify=webStateChanged)
     def browserSnapshotScript(self) -> str:
@@ -327,9 +265,7 @@ class WebController(ControllerFacet):
     @Slot(str)
     def selectLayer(self, layer_id: str) -> None:
         if self._set_selected_layer(layer_id):
-            self.browserSelectionRequested.emit(
-                self._selected_web_layer_id
-            )
+            self.browserSelectionRequested.emit(self._selected_web_layer_id)
 
     @Slot(str)
     def selectBrowserLayer(self, layer_id: str) -> None:
@@ -358,14 +294,9 @@ class WebController(ControllerFacet):
                 or not isinstance(selected_layer_id, str)
                 or not isinstance(values, dict)
             ):
-                raise ValueError(
-                    "Browser snapshot must contain revision, edit mode, "
-                    "selection, and layers"
-                )
+                raise ValueError("Browser snapshot must contain revision, edit mode, selection, and layers")
             normalized = {
-                str(layer_id): dict(value)
-                for layer_id, value in values.items()
-                if isinstance(value, dict)
+                str(layer_id): dict(value) for layer_id, value in values.items() if isinstance(value, dict)
             }
             if (
                 revision == self._browser_revision
@@ -414,6 +345,94 @@ class WebController(ControllerFacet):
         )
         self._accept_state(updated)
 
+    @Slot(str, str, "QVariant")
+    @report_ui_errors
+    def updateDescriptorValue(
+        self,
+        target: str,
+        source_id: str,
+        value,
+    ) -> None:
+        current = self._require_mutable_web_clip()
+        descriptor = find_web_descriptor(
+            self._edit_document,
+            target,
+            source_id,
+        )
+        typed_value = coerce_web_descriptor_value(descriptor, value)
+        revision = int(self._web_state.get("revision", 0))
+        if target == "layer":
+            layer_id, field = source_id.rsplit(".", 1)
+            updated = current.update_web_clip(
+                self._session.binding.active_sequence_id,
+                self._web_clip_id,
+                {layer_id: {field: typed_value}},
+                scene_id=self._active_scene_id,
+                expected_revision=revision,
+                actor="human",
+            )
+        elif target == "parameter":
+            updated = current.update_web_parameter(
+                self._session.binding.active_sequence_id,
+                self._web_clip_id,
+                source_id,
+                typed_value,
+                scene_id=self._active_scene_id,
+                expected_revision=revision,
+                actor="human",
+            )
+        elif target == "theme":
+            updated = current.update_web_theme(
+                self._session.binding.active_sequence_id,
+                self._web_clip_id,
+                {source_id: typed_value},
+                expected_revision=revision,
+            )
+        elif target == "data":
+            updated = current.update_web_data(
+                self._session.binding.active_sequence_id,
+                self._web_clip_id,
+                {source_id: typed_value},
+                scene_id=self._active_scene_id,
+                expected_revision=revision,
+            )
+        else:
+            raise ValueError(f"未知的网页编辑目标：{target}")
+        self._accept_state(updated)
+
+    @Slot(str, str, bool)
+    @report_ui_errors
+    def setDescriptorLocked(
+        self,
+        target: str,
+        source_id: str,
+        locked: bool,
+    ) -> None:
+        current = self._require_mutable_web_clip()
+        if target == "layer":
+            layer_id, field = source_id.rsplit(".", 1)
+            updated = current.set_web_field_locks(
+                self._session.binding.active_sequence_id,
+                self._web_clip_id,
+                layer_id,
+                [field],
+                locked,
+                scene_id=self._active_scene_id,
+                expected_revision=int(self._web_state.get("revision", 0)),
+            )
+        elif target == "parameter":
+            updated = current.set_web_parameter_lock(
+                self._session.binding.active_sequence_id,
+                self._web_clip_id,
+                source_id,
+                locked,
+                scene_id=self._active_scene_id,
+                expected_revision=int(self._web_state.get("revision", 0)),
+            )
+        else:
+            raise ValueError("只有图层字段和自定义参数支持锁定")
+        self._accept_state(updated)
+
     @Slot(str)
     @report_ui_errors
     def selectVariant(self, variant_id: str) -> None:
@@ -422,36 +441,6 @@ class WebController(ControllerFacet):
             self._session.binding.active_sequence_id,
             self._web_clip_id,
             variant_id,
-            expected_revision=int(self._web_state.get("revision", 0)),
-        )
-        self._accept_state(updated)
-
-    @Slot(str, str)
-    @report_ui_errors
-    def updateThemeValue(self, variable_id: str, value: str) -> None:
-        current = self._require_mutable_web_clip()
-        item = next(
-            entry for entry in self._web_manifest.get("theme_variables", []) if entry["id"] == variable_id
-        )
-        typed_value: str | float = float(value) if item["kind"] == "number" else value
-        updated = current.update_web_theme(
-            self._session.binding.active_sequence_id,
-            self._web_clip_id,
-            {variable_id: typed_value},
-            expected_revision=int(self._web_state.get("revision", 0)),
-        )
-        self._accept_state(updated)
-
-    @Slot(str, str)
-    @report_ui_errors
-    def updateDataValue(self, field_id: str, value_json: str) -> None:
-        current = self._require_mutable_web_clip()
-        value = json.loads(value_json)
-        updated = current.update_web_data(
-            self._session.binding.active_sequence_id,
-            self._web_clip_id,
-            {field_id: value},
-            scene_id=self._active_scene_id,
             expected_revision=int(self._web_state.get("revision", 0)),
         )
         self._accept_state(updated)
@@ -470,10 +459,6 @@ class WebController(ControllerFacet):
         )
         self._accept_state(updated)
 
-    @Slot(str, str, bool)
-    def setFieldLocked(self, layer_id: str, field: str, locked: bool) -> None:
-        self._set_locks(layer_id, [field], locked)
-
     @Slot(str, bool)
     def setLayerLocked(self, layer_id: str, locked: bool) -> None:
         layer = next(
@@ -482,178 +467,6 @@ class WebController(ControllerFacet):
         )
         if layer is not None:
             self._set_locks(layer_id, list(layer.get("editable") or []), locked)
-
-    @Slot(str, "QVariant", str, int)
-    @report_ui_errors
-    def setKeyframeAtFrame(self, field: str, value, easing: str, frame: int) -> None:
-        current = self._require_mutable_web_clip()
-        if not self._selected_web_layer_id:
-            raise ValueError("请先选择网页图层")
-        scene_id, time_ms = self._scene_time_for_frame(frame)
-        updated = current.set_web_keyframe(
-            self._session.binding.active_sequence_id,
-            self._web_clip_id,
-            self._selected_web_layer_id,
-            field,
-            time_ms,
-            self._coerce_value(field, value),
-            scene_id=scene_id,
-            easing={"kind": easing or "linear"},
-            expected_revision=int(self._web_state.get("revision", 0)),
-            actor="human",
-        )
-        self._accept_state(updated)
-
-    @Slot(str, int)
-    @report_ui_errors
-    def removeKeyframeAtFrame(self, field: str, frame: int) -> None:
-        current = self._require_mutable_web_clip()
-        if not self._selected_web_layer_id:
-            raise ValueError("请先选择网页图层")
-        scene_id, time_ms = self._scene_time_for_frame(frame)
-        updated = current.remove_web_keyframe(
-            self._session.binding.active_sequence_id,
-            self._web_clip_id,
-            self._selected_web_layer_id,
-            field,
-            time_ms,
-            scene_id=scene_id,
-            expected_revision=int(self._web_state.get("revision", 0)),
-        )
-        self._accept_state(updated)
-
-    @Slot(int, result=int)
-    def timeMsForFrame(self, frame: int) -> int:
-        try:
-            return self._time_ms_for_frame(frame)
-        except RuntimeError:
-            return 0
-
-    @Slot(int)
-    def setActiveFrame(self, frame: int) -> None:
-        try:
-            scene_id, _local_time_ms = self._scene_time_for_frame(frame)
-        except RuntimeError:
-            return
-        if scene_id == self._active_scene_id:
-            return
-        self._active_scene_id = scene_id
-        self._refresh_layers()
-        self.webStateChanged.emit()
-
-    @Slot(str, str, str)
-    @report_ui_errors
-    def createBatchVariants(
-        self,
-        records_json: str,
-        bindings_json: str,
-        name_template: str,
-    ) -> None:
-        current = self._require_mutable_web_clip()
-        records = json.loads(records_json)
-        bindings = json.loads(bindings_json)
-        if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
-            raise ValueError("Batch records must be a JSON array of objects")
-        if not isinstance(bindings, dict):
-            raise ValueError("Batch bindings must be a JSON object")
-        current.create_web_variants(
-            self._session.binding.active_sequence_id,
-            self._web_clip_id,
-            records,
-            {str(key): str(value) for key, value in bindings.items()},
-            name_template=name_template or "版本 {index}",
-            actor="human",
-        )
-        self._session.events.projectStateChanged.emit()
-
-    @Slot(QUrl, str, str)
-    @report_ui_errors
-    def createBatchVariantsFromFile(
-        self,
-        source_url: QUrl,
-        bindings_json: str,
-        name_template: str,
-    ) -> None:
-        current = self._require_mutable_web_clip()
-        records = current.read_web_variant_records(source_url.toLocalFile())
-        bindings = json.loads(bindings_json)
-        if not isinstance(bindings, dict):
-            raise ValueError("Batch bindings must be a JSON object")
-        current.create_web_variants(
-            self._session.binding.active_sequence_id,
-            self._web_clip_id,
-            records,
-            {str(key): str(value) for key, value in bindings.items()},
-            name_template=name_template or "版本 {index}",
-            actor="human",
-        )
-        self._session.events.projectStateChanged.emit()
-
-    @Slot(QUrl)
-    @report_ui_errors
-    def inspectRebind(self, source_url: QUrl) -> None:
-        current = self._require_mutable_web_clip()
-        if not self._web_asset_id:
-            raise ValueError("请先选择网页素材")
-        self._pending_rebind_source = source_url.toLocalFile()
-        report = current.rebind_web_asset(
-            self._web_asset_id,
-            self._pending_rebind_source,
-            dry_run=True,
-        )
-        self._rebind_report = report.model_dump(mode="json")
-        self.webStateChanged.emit()
-
-    @Slot(bool)
-    @report_ui_errors
-    def commitRebind(self, allow_conflicts: bool) -> None:
-        current = self._require_mutable_web_clip()
-        if not self._web_asset_id or not self._pending_rebind_source:
-            raise ValueError("请先检查新版网页包")
-        report = current.rebind_web_asset(
-            self._web_asset_id,
-            self._pending_rebind_source,
-            dry_run=False,
-            allow_conflicts=allow_conflicts,
-        )
-        self._rebind_report = report.model_dump(mode="json")
-        self._session.events.projectStateChanged.emit()
-
-    @Slot(QUrl, str, int, str, bool)
-    @report_ui_errors
-    def exportSelected(
-        self,
-        output_url: QUrl,
-        format_name: str,
-        time_ms: int,
-        background: str,
-        overwrite: bool,
-    ) -> None:
-        self._require_mutable_web_clip()
-        export_format = next(
-            (value for value in WEB_EXPORT_FORMATS if value == format_name),
-            None,
-        )
-        if export_format is None:
-            raise ValueError(f"未知的网页导出格式：{format_name}")
-        overlay_suffix = self._overlay_export_suffix()
-        destination = require_web_export_destination(
-            output_url.toLocalFile(),
-            export_format,
-            overlay_suffix=(
-                overlay_suffix if export_format == "overlay" else None
-            ),
-        )
-        command = ExportWebClipCommand(
-            sequence_id=self._session.binding.active_sequence_id,
-            clip_id=self._web_clip_id,
-            output_path=str(destination),
-            format=export_format,
-            time_ms=max(0, int(time_ms)),
-            background=background or "#000000",
-            overwrite=overwrite,
-        )
-        self._session.tasks.start(command, sequence_id=self._session.binding.active_sequence_id)
 
     @report_ui_errors
     def _set_locks(self, layer_id: str, fields: list[str], locked: bool) -> None:
@@ -672,6 +485,7 @@ class WebController(ControllerFacet):
     def _accept_state(self, state) -> None:
         self._web_state = state.model_dump(mode="json")
         self._refresh_runtime_state()
+        self._refresh_edit_document()
         self._refresh_layers()
         self.webSelectionChanged.emit()
         self.webStateChanged.emit()
@@ -684,20 +498,25 @@ class WebController(ControllerFacet):
                 self._session.binding.active_sequence_id,
                 self._web_clip_id,
             )
-            self._active_variant_id = str(
-                (self._runtime_web_state.get("variant") or {}).get("id") or ""
-            )
-            known_scenes = {
-                item.get("id") for item in self._web_manifest.get("scenes", [])
-            }
+            self._active_variant_id = str((self._runtime_web_state.get("variant") or {}).get("id") or "")
+            known_scenes = {item.get("id") for item in self._web_manifest.get("scenes", [])}
             if self._active_scene_id not in known_scenes:
-                self._active_scene_id = str(
-                    self._runtime_web_state.get("scene_id") or ""
-                )
+                self._active_scene_id = str(self._runtime_web_state.get("scene_id") or "")
         else:
             self._runtime_web_state = {}
             self._active_variant_id = ""
             self._active_scene_id = ""
+
+    def _refresh_edit_document(self) -> None:
+        if not self._session.binding.current or not self._web_clip_id:
+            self._edit_document = {}
+            return
+        document = self._session.binding.current.describe_web_clip_editing(
+            self._session.binding.active_sequence_id,
+            self._web_clip_id,
+            scene_id=self._active_scene_id or None,
+        )
+        self._edit_document = document.model_dump(mode="json")
 
     def _require_mutable_web_clip(self) -> EditorProject:
         self._session._require_writable()
@@ -709,84 +528,13 @@ class WebController(ControllerFacet):
         return current
 
     def _set_selected_layer(self, layer_id: str) -> bool:
-        known = {
-            layer["id"]
-            for layer in self._web_manifest.get("layers", [])
-        }
+        known = {layer["id"] for layer in self._web_manifest.get("layers", [])}
         value = layer_id if layer_id in known else ""
         if value == self._selected_web_layer_id:
             return False
         self._selected_web_layer_id = value
         self.webSelectionChanged.emit()
         return True
-
-    def _overlay_export_suffix(self) -> str:
-        animated = int(self._web_manifest.get("duration_ms") or 0) > 0 or any(
-            bool(scene.get("animations"))
-            for scene in (self._web_state.get("scenes") or {}).values()
-            if isinstance(scene, dict)
-        )
-        return ".mkv" if animated else ".png"
-
-    def _selected_clip(self):
-        if self._session.binding.timeline is None or not self._web_clip_id:
-            return None
-        return next(
-            (item for item in self._session.binding.timeline.state.clips if item.id == self._web_clip_id),
-            None,
-        )
-
-    def _time_ms_for_frame(self, frame: int) -> int:
-        clip = self._selected_clip()
-        if clip is None or self._session.binding.timeline is None:
-            raise RuntimeError("No editable web clip is selected")
-        profile = self._session.binding.timeline.state.sequence.profile
-        local_frame = max(0, min(clip.duration - 1, int(frame) - clip.timeline_start))
-        consumed = round(local_frame * abs(clip.speed_numerator) / clip.speed_denominator)
-        source_frame = clip.source_in + consumed if clip.speed_numerator > 0 else clip.source_in - consumed
-        return max(0, round(source_frame * 1000 / profile.fps))
-
-    def _scene_time_for_frame(self, frame: int) -> tuple[str, int]:
-        global_time_ms = self._time_ms_for_frame(frame)
-        elapsed = 0
-        scenes = self._web_manifest.get("scenes", [])
-        for scene in scenes:
-            duration = int(scene.get("duration_ms") or 0)
-            if global_time_ms < elapsed + duration:
-                return str(scene["id"]), max(0, global_time_ms - elapsed)
-            elapsed += duration
-        if not scenes:
-            raise RuntimeError("Editable media manifest has no scenes")
-        last = scenes[-1]
-        return str(last["id"]), max(0, int(last.get("duration_ms") or 1) - 1)
-
-    def _scene_start_ms(self, scene_id: str) -> int:
-        elapsed = 0
-        for scene in self._web_manifest.get("scenes", []):
-            if scene.get("id") == scene_id:
-                return elapsed
-            elapsed += int(scene.get("duration_ms") or 0)
-        return 0
-
-    @staticmethod
-    def _coerce_value(field: str, value):
-        if field in {
-            "font_size",
-            "x",
-            "y",
-            "width",
-            "height",
-            "rotation",
-            "opacity",
-        }:
-            return float(value)
-        if field in {"z_index", "enter_ms", "exit_ms", "delay_ms", "duration_ms"}:
-            return int(float(value))
-        if field == "visible":
-            if isinstance(value, str):
-                return value.strip().lower() in {"1", "true", "yes", "on"}
-            return bool(value)
-        return value
 
     @Slot()
     def _refresh(self) -> None:
@@ -798,6 +546,7 @@ class WebController(ControllerFacet):
         self._web_manifest = {}
         self._web_state = {}
         self._runtime_web_state = {}
+        self._edit_document = {}
         self._active_variant_id = ""
         self._active_scene_id = ""
         if (
@@ -816,12 +565,11 @@ class WebController(ControllerFacet):
                     state = self._session.binding.timeline.state.web_states[clip.id]
                     self._web_clip_id = clip.id
                     self._web_asset_id = asset.id
-                    self._web_entry_url = (
-                        self._session.binding.current.web_editor_entry_url(asset.id)
-                    )
+                    self._web_entry_url = self._session.binding.current.web_editor_entry_url(asset.id)
                     self._web_manifest = spec.manifest.model_dump(mode="json")
                     self._web_state = state.model_dump(mode="json")
                     self._refresh_runtime_state()
+                    self._refresh_edit_document()
         if self._web_clip_id != previous_clip_id:
             self._browser_values = {}
             self._browser_revision = 0
@@ -840,7 +588,7 @@ class WebController(ControllerFacet):
             self._browser_selected_layer_id = ""
             self._browser_ready = False
             self._selected_web_layer_id = ""
-        elif self._session.binding.current.read_only:
+        elif self._session.binding.current is not None and self._session.binding.current.read_only:
             self._web_edit_mode = False
         self._refresh_layers()
         self.webSelectionChanged.emit()
@@ -849,69 +597,27 @@ class WebController(ControllerFacet):
         self.webStateChanged.emit()
 
     def _refresh_layers(self) -> None:
-        runtime_scene = (
-            (self._runtime_web_state.get("scenes") or {}).get(
-                self._active_scene_id, {}
-            )
-            or {}
-        )
-        persistent_scene = (
-            (self._web_state.get("scenes") or {}).get(self._active_scene_id, {})
-            or {}
-        )
+        runtime_scene = (self._runtime_web_state.get("scenes") or {}).get(self._active_scene_id, {}) or {}
+        persistent_scene = (self._web_state.get("scenes") or {}).get(self._active_scene_id, {}) or {}
         overrides = runtime_scene.get("layers", {})
         locks = persistent_scene.get("locks", {})
         animations = persistent_scene.get("animations", {})
-        scene_definition: dict = next(
-            (
-                item
-                for item in self._web_manifest.get("scenes", [])
-                if item.get("id") == self._active_scene_id
-            ),
-            {},
-        )
         rows = []
         for layer in self._web_manifest.get("layers", []):
             override = dict(overrides.get(layer["id"]) or {})
-            browser = self._browser_values.get(layer["id"], {})
-            bounds = layer["default_bounds"]
-
-            def value(field: str, fallback, *, _override=override, _browser=browser):
-                if field in _override and _override[field] is not None:
-                    return _override[field]
-                return _browser.get(field, fallback)
-
             rows.append(
                 {
                     "layerId": layer["id"],
                     "name": layer["name"],
                     "kind": layer["kind"],
                     "parentId": layer.get("parent_id") or "",
-                    "editable": list(layer.get("editable") or []),
-                    "content": value("content", ""),
-                    "color": value("color", ""),
-                    "fontFamily": value("font_family", ""),
-                    "fontSize": value("font_size", 16),
-                    "image": value("image", ""),
-                    "x": value("x", bounds["x"]),
-                    "y": value("y", bounds["y"]),
-                    "width": value("width", bounds["width"]),
-                    "height": value("height", bounds["height"]),
-                    "rotation": value("rotation", bounds.get("rotation", 0)),
-                    "opacity": value("opacity", 1.0),
-                    "zIndex": value("z_index", 0),
-                    "layerVisible": value("visible", True),
-                    "lockedFields": list(locks.get(layer["id"]) or []),
+                    "layerVisible": bool(override.get("visible", True)),
                     "allFieldsLocked": bool(layer.get("editable"))
                     and set(layer.get("editable") or []).issubset(set(locks.get(layer["id"]) or [])),
                     "keyframeCount": sum(
                         len(track.get("keyframes") or [])
                         for track in animations.get(layer["id"], {}).values()
                     ),
-                    "enterMs": value("enter_ms", 0),
-                    "exitMs": value("exit_ms", scene_definition.get("duration_ms", 0)),
-                    "delayMs": value("delay_ms", 0),
-                    "durationMs": value("duration_ms", 0),
                 }
             )
         self._session.models.web_layers.set_items(rows)

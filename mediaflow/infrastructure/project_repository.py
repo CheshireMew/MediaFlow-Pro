@@ -23,6 +23,9 @@ from mediaflow.domain.project import (
 from mediaflow.domain.storage_names import require_project_root_path
 
 from .audio_repository import AudioRepository
+from .editable_media_project_migration import (
+    reconcile_editable_media_v4_archives,
+)
 from .highlight_repository import HighlightRepository
 from .project_catalog_repository import ProjectCatalogRepository
 from .project_lock import ProcessFileLock
@@ -196,6 +199,7 @@ class ProjectRepository:
                 write_lock=lock,
             )
             ProjectSchemaMigrator(repository).validate()
+            reconcile_editable_media_v4_archives(repository)
             repository.acknowledge_content_revision()
             if not read_only:
                 for directory in MANAGED_DIRECTORIES:

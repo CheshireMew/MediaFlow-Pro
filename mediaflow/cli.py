@@ -7,8 +7,18 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from mediaflow.automation.contracts import AUTOMATION_PROTOCOL, AUTOMATION_VERSION
+from mediaflow.automation.contracts import (
+    AUTOMATION_PROTOCOL,
+    AUTOMATION_VERSION,
+    AutomationError,
+    AutomationFailureResponse,
+    AutomationSuccessResponse,
+)
 from mediaflow.automation.dispatcher import execute_request
+from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.infrastructure.project_migration_runner import (
+    ProjectUpgradeRequiredError,
+)
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -19,7 +29,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = JsonArgumentParser(
         prog="mediaflow-cli",
-        description="MediaFlow Pro headless editor interface. All output is JSON.",
+        description=f"{PRODUCT_NAME} headless editor interface. All output is JSON.",
     )
     commands = parser.add_subparsers(dest="subcommand", required=True)
     commands.add_parser("describe", help="Print the versioned capability contract")
@@ -47,6 +57,8 @@ def _request_from_args(args: argparse.Namespace) -> dict:
 
 
 def _error_code(error: Exception) -> str:
+    if isinstance(error, ProjectUpgradeRequiredError):
+        return "upgrade_required"
     if isinstance(error, ValidationError):
         return "validation_error"
     if isinstance(error, (FileNotFoundError, KeyError)):
@@ -67,26 +79,20 @@ def main(argv: list[str] | None = None) -> int:
         request = _request_from_args(parser.parse_args(argv))
         request_id = request.get("request_id")
         result = execute_request(request)
-        output = {
-            "protocol": AUTOMATION_PROTOCOL,
-            "version": AUTOMATION_VERSION,
-            "request_id": request_id,
-            "ok": True,
-            "result": result,
-        }
+        output = AutomationSuccessResponse(
+            request_id=request_id,
+            result=result,
+        ).model_dump(mode="json")
         code = 0
     except Exception as error:
-        output = {
-            "protocol": AUTOMATION_PROTOCOL,
-            "version": AUTOMATION_VERSION,
-            "request_id": request_id,
-            "ok": False,
-            "error": {
-                "code": _error_code(error),
-                "type": type(error).__name__,
-                "message": str(error),
-            },
-        }
+        output = AutomationFailureResponse(
+            request_id=request_id,
+            error=AutomationError(
+                code=_error_code(error),
+                type=type(error).__name__,
+                message=str(error),
+            ),
+        ).model_dump(mode="json")
         code = 1
     sys.stdout.write(json.dumps(output, ensure_ascii=False, indent=2) + "\n")
     return code

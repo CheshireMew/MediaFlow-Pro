@@ -15,10 +15,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from scripts.run_artifacts import verification_run
 
 LOCK_FILE = ROOT / "requirements.lock"
+RUNTIME_LOCK_FILE = ROOT / "runtime.lock.json"
 PYTHON_COMPONENTS = {
+    "aqtinstall": {"MIT", "MIT License"},
     "PySide6": {"LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"},
     "pydantic": {"MIT"},
     "yt-dlp": {"Unlicense"},
@@ -97,8 +100,14 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     if arguments.python_only:
         external = {"checked": False, "reason": "python-only"}
     else:
-        ffmpeg = Path("D:/Tools/MediaFlow/deps/shotcut-26.6.25/Shotcut/ffmpeg.exe")
-        melt = Path("D:/Tools/MediaFlow/deps/shotcut-26.6.25/Shotcut/melt.exe")
+        runtime_contract = json.loads(
+            RUNTIME_LOCK_FILE.read_text(encoding="utf-8")
+        )["windows"]["shotcut"]
+        paths = RuntimePaths.discover()
+        if paths.melt is None:
+            raise RuntimeError("MLT is required for the full license inventory")
+        ffmpeg = paths.ffmpeg
+        melt = paths.melt
         ffmpeg_configuration = subprocess.run(
             [str(ffmpeg), "-version"],
             check=True,
@@ -111,12 +120,15 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
             "checked": True,
             "mlt": command_first_line(melt, "-version"),
             "ffmpeg": command_first_line(ffmpeg, "-version"),
+            "expected_mlt_version": runtime_contract["melt_version"],
+            "expected_ffmpeg_version": runtime_contract["ffmpeg_version"],
             "ffmpeg_gpl_v3_configuration": "--enable-gpl" in ffmpeg_configuration
             and "--enable-version3" in ffmpeg_configuration,
         }
     report = {
         "project_license": "GPL-3.0-only",
         "dependency_lock": str(LOCK_FILE),
+        "runtime_lock": str(RUNTIME_LOCK_FILE),
         "gpl_text_present": "GNU GENERAL PUBLIC LICENSE" in gpl_text and "Version 3" in gpl_text,
         "font_ofl_text_present": "SIL OPEN FONT LICENSE" in ofl_text and "Version 1.1" in ofl_text,
         "python_components": packages,
@@ -128,7 +140,11 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
         and all(row["passed"] for row in packages)
     )
     runtime_passed = arguments.python_only or (
-        str(external["mlt"]).startswith("melt.exe 7.40.0")
+        str(external["mlt"])
+        == f"melt.exe {external['expected_mlt_version']}"
+        and str(external["ffmpeg"]).startswith(
+            f"ffmpeg version {external['expected_ffmpeg_version']} "
+        )
         and bool(external["ffmpeg_gpl_v3_configuration"])
     )
     report["passed"] = base_passed and runtime_passed

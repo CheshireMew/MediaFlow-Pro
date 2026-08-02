@@ -653,13 +653,13 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
             path
             for path in selected_output.rglob("*")
             if path.is_file()
-            and "MediaFlow Failed Downloads"
+            and "MediaFlow Pro Failed Downloads"
             not in path.parts
         ]
         archived_files = list(
             (
                 selected_output
-                / "MediaFlow Failed Downloads"
+                / "MediaFlow Pro Failed Downloads"
             ).rglob("*.mp4")
         )
         assert visible_files == []

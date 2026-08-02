@@ -7,6 +7,7 @@ from pydantic import Field, computed_field, field_validator, model_validator
 from .enums import AssetKind, AssetOrigin, AssetStatus, ColorMode, SequenceKind
 from .exports import ExportPreset
 from .model_base import DomainModel, new_id, now_ms
+from .product_identity import PRODUCT_NAME
 from .timebase import reframe_frames
 
 
@@ -31,7 +32,7 @@ class ProjectProfile(DomainModel):
         if self.color_mode == ColorMode.HDR10_BT2020_PQ and self.bit_depth < 10:
             raise ValueError("HDR10 projects require at least 10-bit processing")
         if self.audio_sample_rate != 48_000:
-            raise ValueError("MediaFlow Pro projects use a 48 kHz audio clock")
+            raise ValueError(f"{PRODUCT_NAME} projects use a 48 kHz audio clock")
         if self.audio_channels not in {1, 2, 6}:
             raise ValueError("Audio channels must be mono, stereo, or 5.1")
         return self

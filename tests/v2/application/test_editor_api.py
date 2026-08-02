@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import struct
 import subprocess
 import sys
 import wave
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -15,9 +17,12 @@ from mediaflow.automation.contracts import describe_contract
 from mediaflow.cli import execute_request, main
 from mediaflow.composition import EditorApplication
 from mediaflow.domain.enums import AssetKind, TrackKind
+from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.domain.runtime_capabilities import RUNTIME_CAPABILITY_IDS
 from mediaflow.domain.storage_names import utf16_units
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.storage_paths import default_project_root
 
 
 def _write_wave(path: Path) -> None:
@@ -44,7 +49,7 @@ def _run_cli_request(
         json.dumps(
             {
                 "protocol": "mediaflow-cli",
-                "version": 1,
+                "version": 2,
                 "operation": operation,
                 "project": str(project_path),
                 "arguments": arguments or {},
@@ -71,9 +76,19 @@ def _run_cli_request(
 
 
 def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> None:
+    contract = describe_contract()
+    assert contract["product"] == PRODUCT_NAME
+    assert contract["version"] == 2
+    assert contract["default_project_root"] == default_project_root()
+    assert "$ref" not in json.dumps(contract)
+    assert "#/$defs/" not in json.dumps(contract)
     operations = {
         item["name"]: item
-        for item in describe_contract()["operations"]
+        for item in contract["operations"]
+    }
+    assert set(operations["project.create"]["arguments_schema"]["required"]) == {
+        "name",
+        "directory_name",
     }
     edit_schema = operations["transcript.edit.preview"]["arguments_schema"][
         "properties"
@@ -86,7 +101,155 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
         "properties"
     ]["plan"]
     assert "plan_digest" in plan_schema["required"]
-    assert "$ref" not in json.dumps(plan_schema)
+    assert operations["transcript.edit.apply"]["result_schema"]["required"] == [
+        "edit"
+    ]
+    assert operations["runtime.inspect"]["project_access"] == "none"
+    assert operations["speech.transcribe"]["project_access"] == "none"
+    assert operations["speech.transcribe"]["required_capabilities"] == [
+        "faster-whisper-xxl"
+    ]
+    assert set(operations["speech.transcribe"]["arguments_schema"]["required"]) == {
+        "input_path",
+        "output_path",
+    }
+    assert operations["speech.synthesize"]["project_access"] == "none"
+    assert operations["speech.synthesize"]["required_capabilities"] == [
+        "gpt-sovits-v2pro"
+    ]
+    assert set(operations["speech.synthesize"]["arguments_schema"]["required"]) == {
+        "text",
+        "text_language",
+        "reference_audio",
+        "reference_text",
+        "reference_language",
+        "output_path",
+    }
+    assert operations["export.fcpxml"]["required_capabilities"] == [
+        "project-editing",
+        "fcpxml-export",
+        "chromium",
+        "ffmpeg",
+        "ffprobe",
+    ]
+    assert all(
+        set(operation) == {
+            "name",
+            "project_access",
+            "execution_mode",
+            "idempotency",
+            "required_capabilities",
+            "arguments_schema",
+            "result_schema",
+        }
+        for operation in operations.values()
+    )
+
+
+def test_runtime_inspection_is_projectless_and_reports_every_runtime_capability() -> None:
+    inspected = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "runtime.inspect",
+        }
+    )
+
+    assert {item["id"] for item in inspected["capabilities"]} == set(
+        RUNTIME_CAPABILITY_IDS
+    )
+    assert all(
+        item["status"] in {"ready", "unavailable", "unverified"}
+        for item in inspected["capabilities"]
+    )
+
+
+def test_fcpxml_export_runs_through_the_public_cli_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
+    application = EditorApplication()
+    created = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "project.create",
+            "arguments": {
+                "name": "FCPXML CLI Project",
+                "directory_name": "fcpxml-cli-project",
+            },
+        },
+        application=application,
+    )
+    project_path = Path(created["path"])
+    assert project_path == (tmp_path / "fcpxml-cli-project").resolve()
+    source = tmp_path / "handoff-tone.wav"
+    _write_wave(source)
+    imported = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "asset.import",
+            "project": str(project_path),
+            "arguments": {"source": str(source)},
+        },
+        application=application,
+    )
+    sequence_id = created["project"]["main_sequence_id"]
+    track = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "timeline.track.add",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id, "kind": "audio"},
+        },
+        application=application,
+    )["track"]
+    execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "timeline.clip.add",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "track_id": track["id"],
+                "asset_id": imported["asset"]["id"],
+                "timeline_start": 0,
+                "source_in": 0,
+                "duration": min(
+                    25,
+                    imported["asset"]["metadata"]["duration_frames"],
+                ),
+            },
+        },
+        application=application,
+    )
+    output = tmp_path / "handoff.fcpxml"
+
+    exported = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "export.fcpxml",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "output_path": str(output),
+            },
+        },
+        application=application,
+    )
+
+    assert exported["format"] == "fcpxml"
+    assert Path(exported["output_path"]) == output
+    assert exported["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    root = ET.parse(output).getroot()
+    assert root.tag == "fcpxml"
+    assert root.find(".//asset") is not None
+    assert root.find(".//audio") is not None
 
 
 def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
@@ -95,19 +258,23 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     capsys,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
     application = EditorApplication()
-    project_path = tmp_path / "Headless Project"
 
     created = execute_request(
         {
             "protocol": "mediaflow-cli",
-            "version": 1,
+            "version": 2,
             "operation": "project.create",
-            "project": str(project_path),
-            "arguments": {"name": "Headless Project"},
+            "arguments": {
+                "name": "Headless Project",
+                "directory_name": "headless-project",
+            },
         },
         application=application,
     )
+    project_path = Path(created["path"])
+    assert project_path == (tmp_path / "headless-project").resolve()
     assert created["project"]["name"] == "Headless Project"
     assert created["sequences"][0]["id"] == created["project"]["main_sequence_id"]
 
@@ -116,7 +283,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     imported = execute_request(
         {
             "protocol": "mediaflow-cli",
-            "version": 1,
+            "version": 2,
             "operation": "asset.import",
             "project": str(project_path),
             "arguments": {"source": str(source)},
@@ -128,7 +295,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     completed = execute_request(
         {
             "protocol": "mediaflow-cli",
-            "version": 1,
+            "version": 2,
             "operation": "task.start",
             "project": str(project_path),
             "arguments": {
@@ -148,7 +315,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     inspected = execute_request(
         {
             "protocol": "mediaflow-cli",
-            "version": 1,
+            "version": 2,
             "operation": "project.inspect",
             "project": str(project_path),
         },
@@ -164,7 +331,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
         json.dumps(
             {
                 "protocol": "mediaflow-cli",
-                "version": 1,
+                "version": 2,
                 "operation": "project.inspect",
                 "project": str(project_path),
             }
@@ -182,24 +349,28 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
     application = EditorApplication()
-    project_path = tmp_path / "Idempotent CLI Project"
     create_request = {
         "protocol": "mediaflow-cli",
-        "version": 1,
+        "version": 2,
         "operation": "project.create",
-        "project": str(project_path),
         "request_id": "create-project-once",
-        "arguments": {"name": "Idempotent CLI Project"},
+        "arguments": {
+            "name": "Idempotent CLI Project",
+            "directory_name": "idempotent-cli-project",
+        },
     }
     first_project = execute_request(create_request, application=application)
     repeated_project = execute_request(create_request, application=application)
     assert repeated_project == first_project
+    project_path = Path(first_project["path"])
+    assert project_path == (tmp_path / "idempotent-cli-project").resolve()
 
     sequence_id = first_project["project"]["main_sequence_id"]
     add_track_request = {
         "protocol": "mediaflow-cli",
-        "version": 1,
+        "version": 2,
         "operation": "timeline.track.add",
         "project": str(project_path),
         "request_id": "add-track-once",
@@ -216,7 +387,7 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     visible = execute_request(
         {
             "protocol": "mediaflow-cli",
-            "version": 1,
+            "version": 2,
             "operation": "timeline.get",
             "project": str(project_path),
             "arguments": {"sequence_id": sequence_id},

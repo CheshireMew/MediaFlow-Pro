@@ -20,7 +20,10 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
+from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.infrastructure.application_logging import configure_application_logging
 from mediaflow.infrastructure.font_assets import register_application_fonts
+from mediaflow.infrastructure.runtime_paths import runtime_directory
 from mediaflow.infrastructure.settings_repository import SettingsLoadResult, SettingsRepository
 
 STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
@@ -68,7 +71,10 @@ def create_engine(
     engine.warnings.connect(lambda warnings: qml_errors.extend(item.toString() for item in warnings))
     api = application or EditorApplication()
     if api.native_qml_root is None:
-        raise RuntimeError("MediaFlow Native preview is not built. Run scripts/build_native.ps1 first.")
+        raise RuntimeError(
+            f"{PRODUCT_NAME} native preview is not built. "
+            "Run scripts/build_native.ps1 first."
+        )
     engine.addImportPath(str(api.native_qml_root))
     controllers = EditorControllers(engine, application=api)
     engine.rootContext().setContextProperty(
@@ -171,7 +177,7 @@ def create_desktop_application(argv: list[str] | None = None) -> QApplication:
 
 
 def _saved_runtime_directory() -> Path | None:
-    bootstrap = QSettings("MediaFlow Pro", "MediaFlow Pro Bootstrap")
+    bootstrap = QSettings(PRODUCT_NAME, f"{PRODUCT_NAME} Bootstrap")
     saved_value = str(bootstrap.value("runtimeDirectory", "")).strip()
     if not saved_value:
         return None
@@ -190,11 +196,7 @@ def startup_settings_path() -> Path | None:
         runtime_directory = Path("D:/Tools/MediaFlow/runtime")
     else:
         runtime_directory = _saved_runtime_directory()
-    return (
-        (runtime_directory / "settings.json").resolve()
-        if runtime_directory is not None
-        else None
-    )
+    return (runtime_directory / "settings.json").resolve() if runtime_directory is not None else None
 
 
 def load_startup_settings(settings_path: Path | None) -> SettingsLoadResult:
@@ -206,11 +208,7 @@ def load_startup_settings(settings_path: Path | None) -> SettingsLoadResult:
 def configure_startup_surface(
     settings: SettingsLoadResult | Path | None,
 ) -> bool:
-    loaded = (
-        settings
-        if isinstance(settings, SettingsLoadResult)
-        else load_startup_settings(settings)
-    )
+    loaded = settings if isinstance(settings, SettingsLoadResult) else load_startup_settings(settings)
     preview = loaded.settings.preview
     if preview.hdr_preview:
         surface_format = QSurfaceFormat.defaultFormat()
@@ -224,7 +222,7 @@ def show_startup_settings_recovery(settings: SettingsLoadResult) -> bool:
         return False
     QMessageBox.warning(
         None,
-        "MediaFlow Pro",
+        PRODUCT_NAME,
         "设置文件无法读取，已原样移到归档目录：\n"
         f"{settings.archived_path}\n\n"
         "本次将使用默认设置继续启动。\n"
@@ -242,20 +240,20 @@ def ensure_runtime_directory() -> bool:
         return True
     selected = QFileDialog.getExistingDirectory(
         None,
-        "选择 MediaFlow Pro 运行环境目录",
+        f"选择 {PRODUCT_NAME} 运行环境目录",
         str(Path.home()),
         QFileDialog.Option.ShowDirsOnly,
     )
     if not selected:
         QMessageBox.critical(
             None,
-            "MediaFlow Pro",
+            PRODUCT_NAME,
             "D 盘不可用。请选择用于依赖、模型和缓存的目录后再启动。",
         )
         return False
     runtime_directory = Path(selected).resolve()
     os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(runtime_directory)
-    bootstrap = QSettings("MediaFlow Pro", "MediaFlow Pro Bootstrap")
+    bootstrap = QSettings(PRODUCT_NAME, f"{PRODUCT_NAME} Bootstrap")
     bootstrap.setValue("runtimeDirectory", str(runtime_directory))
     bootstrap.sync()
     return True
@@ -263,15 +261,15 @@ def ensure_runtime_directory() -> bool:
 
 def main() -> int:
     multiprocessing.freeze_support()
-    QCoreApplication.setOrganizationName("MediaFlow Pro")
-    QCoreApplication.setApplicationName("MediaFlow Pro")
+    QCoreApplication.setOrganizationName(PRODUCT_NAME)
+    QCoreApplication.setApplicationName(PRODUCT_NAME)
     QCoreApplication.setApplicationVersion("2.0.0")
     settings_path = startup_settings_path()
     startup_settings = load_startup_settings(settings_path)
     configure_startup_surface(startup_settings)
     if settings_path is None:
         print(
-            "MediaFlow Pro: no runtime directory is known before the first-launch chooser; "
+            f"{PRODUCT_NAME}: no runtime directory is known before the first-launch chooser; "
             "using the HDR-capable default surface for this launch.",
             file=sys.stderr,
         )
@@ -279,6 +277,7 @@ def main() -> int:
     app = create_desktop_application()
     if not ensure_runtime_directory():
         return 2
+    configure_application_logging(runtime_directory())
     show_startup_settings_recovery(startup_settings)
     # Runtime discovery is deliberately after the desktop fallback above. This
     # keeps machines without D: usable instead of failing before the chooser can
@@ -286,7 +285,7 @@ def main() -> int:
     api = EditorApplication()
     configure_application_font(app)
     configure_application_icon(app)
-    app.setDesktopFileName("MediaFlow Pro")
+    app.setDesktopFileName(PRODUCT_NAME)
     engine, controllers = create_engine(app, api)
     publish_startup_ready(engine)
     app.aboutToQuit.connect(controllers.shutdown)

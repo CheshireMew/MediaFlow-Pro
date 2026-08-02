@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-FIXTURE = ROOT / "tests" / "fixtures" / "editable-media-v4"
+FIXTURE = ROOT / "tests" / "fixtures" / "editable-media-v5"
 DEFAULT_RUN_ROOT = Path("D:/Tools/MediaFlow/test-runs/web-render-performance")
 MIN_PARALLEL_SPEEDUP = 1.35
 MIN_FRAME_PSNR_DB = 60.0

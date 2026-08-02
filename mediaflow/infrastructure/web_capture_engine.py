@@ -420,6 +420,7 @@ class _BrowserWorker:
                                 "--disable-renderer-backgrounding",
                                 "--disable-background-timer-throttling",
                                 "--disable-backgrounding-occluded-windows",
+                                "--disable-gpu",
                                 "--enable-features=CanvasDrawElement",
                                 "--force-color-profile=srgb",
                                 "--hide-scrollbars",

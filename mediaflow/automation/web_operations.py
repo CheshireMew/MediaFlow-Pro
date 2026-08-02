@@ -10,15 +10,15 @@ from mediaflow.domain.task_commands import (
     ExportWebClipCommand,
     RenderWebClipCommand,
 )
-from mediaflow.domain.web_media import WebExportFormat
+from mediaflow.domain.web_media import WebExportFormat, web_asset_spec_document
 
 
 def import_web(context: OperationContext) -> dict:
     asset = context.project.import_web_package(str(context.required("source")))
     return {
-        "asset": asset.model_dump(mode="json"),
-        "web_asset": context.project.inspect_web_asset(asset.id).model_dump(
-            mode="json"
+        "asset": asset,
+        "web_asset": web_asset_spec_document(
+            context.project.inspect_web_asset(asset.id)
         ),
     }
 
@@ -27,12 +27,25 @@ def inspect_web(context: OperationContext) -> dict:
     spec = context.project.inspect_web_asset(
         str(context.required("asset_id"))
     )
-    return {"web_asset": spec.model_dump(mode="json")}
+    return {"web_asset": web_asset_spec_document(spec)}
 
 
 def get_web_clip(context: OperationContext) -> dict:
     state = context.project.get_web_clip(str(context.required("clip_id")))
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
+
+
+def describe_web_clip_editing(context: OperationContext) -> dict:
+    document = context.project.describe_web_clip_editing(
+        str(context.required("sequence_id")),
+        str(context.required("clip_id")),
+        scene_id=(
+            str(context.arguments["scene_id"])
+            if context.arguments.get("scene_id")
+            else None
+        ),
+    )
+    return {"edit_document": document}
 
 
 def update_web_clip(context: OperationContext) -> dict:
@@ -48,7 +61,7 @@ def update_web_clip(context: OperationContext) -> dict:
         expected_revision=_expected_revision(context),
         actor=context.actor(),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def diff_web_clip(context: OperationContext) -> dict:
@@ -64,7 +77,7 @@ def diff_web_clip(context: OperationContext) -> dict:
         expected_revision=_expected_revision(context),
         actor=context.actor(),
     )
-    return {"diff": diff.model_dump(mode="json")}
+    return {"diff": diff}
 
 
 def select_variant(context: OperationContext) -> dict:
@@ -74,7 +87,7 @@ def select_variant(context: OperationContext) -> dict:
         str(context.required("variant_id")),
         expected_revision=_expected_revision(context),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def set_keyframe(context: OperationContext) -> dict:
@@ -90,7 +103,7 @@ def set_keyframe(context: OperationContext) -> dict:
         expected_revision=_expected_revision(context),
         actor=context.actor(),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def remove_keyframe(context: OperationContext) -> dict:
@@ -103,7 +116,67 @@ def remove_keyframe(context: OperationContext) -> dict:
         scene_id=str(context.required("scene_id")),
         expected_revision=_expected_revision(context),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
+
+
+def update_parameter(context: OperationContext) -> dict:
+    state = context.project.update_web_parameter(
+        str(context.required("sequence_id")),
+        str(context.required("clip_id")),
+        str(context.required("parameter_id")),
+        cast(JsonValue, context.arguments["value"]),
+        scene_id=(
+            str(context.arguments["scene_id"])
+            if context.arguments.get("scene_id")
+            else None
+        ),
+        expected_revision=_expected_revision(context),
+        actor=context.actor(),
+    )
+    return {"web_clip_state": state}
+
+
+def set_parameter_keyframe(context: OperationContext) -> dict:
+    state = context.project.set_web_parameter_keyframe(
+        str(context.required("sequence_id")),
+        str(context.required("clip_id")),
+        str(context.required("parameter_id")),
+        int(context.required("time_ms")),
+        cast(JsonValue, context.arguments["value"]),
+        scene_id=str(context.required("scene_id")),
+        easing=dict(context.arguments.get("easing") or {}),
+        expected_revision=_expected_revision(context),
+        actor=context.actor(),
+    )
+    return {"web_clip_state": state}
+
+
+def remove_parameter_keyframe(context: OperationContext) -> dict:
+    state = context.project.remove_web_parameter_keyframe(
+        str(context.required("sequence_id")),
+        str(context.required("clip_id")),
+        str(context.required("parameter_id")),
+        int(context.required("time_ms")),
+        scene_id=str(context.required("scene_id")),
+        expected_revision=_expected_revision(context),
+    )
+    return {"web_clip_state": state}
+
+
+def update_parameter_lock(context: OperationContext) -> dict:
+    state = context.project.set_web_parameter_lock(
+        str(context.required("sequence_id")),
+        str(context.required("clip_id")),
+        str(context.required("parameter_id")),
+        bool(context.required("locked")),
+        scene_id=(
+            str(context.arguments["scene_id"])
+            if context.arguments.get("scene_id")
+            else None
+        ),
+        expected_revision=_expected_revision(context),
+    )
+    return {"web_clip_state": state}
 
 
 def update_theme(context: OperationContext) -> dict:
@@ -113,7 +186,7 @@ def update_theme(context: OperationContext) -> dict:
         dict(context.required("changes")),
         expected_revision=_expected_revision(context),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def update_data(context: OperationContext) -> dict:
@@ -129,7 +202,7 @@ def update_data(context: OperationContext) -> dict:
         source_label=str(context.arguments.get("source_label", "")),
         expected_revision=_expected_revision(context),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def snapshot_data(context: OperationContext) -> dict:
@@ -145,7 +218,7 @@ def snapshot_data(context: OperationContext) -> dict:
         ),
         expected_revision=_expected_revision(context),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def update_locks(context: OperationContext) -> dict:
@@ -158,7 +231,7 @@ def update_locks(context: OperationContext) -> dict:
         scene_id=str(context.required("scene_id")),
         expected_revision=_expected_revision(context),
     )
-    return {"web_clip_state": state.model_dump(mode="json")}
+    return {"web_clip_state": state}
 
 
 def render_web_clip(context: OperationContext) -> dict:
@@ -229,20 +302,31 @@ def create_batch(context: OperationContext) -> dict:
         actor=context.actor(),
     )
     return {
-        "variants": [item.model_dump(mode="json") for item in variants]
+        "variants": variants
     }
 
 
-def rebind_asset(context: OperationContext) -> dict:
-    report = context.project.rebind_web_asset(
+def plan_rebind_asset(context: OperationContext) -> dict:
+    plan = context.project.plan_web_asset_rebind(
         str(context.required("asset_id")),
         str(context.required("source")),
-        dry_run=bool(context.arguments.get("dry_run", True)),
-        allow_conflicts=bool(
-            context.arguments.get("allow_conflicts", False)
-        ),
     )
-    return {"rebind": report.model_dump(mode="json")}
+    return {"rebind_plan": plan}
+
+
+def commit_rebind_asset(context: OperationContext) -> dict:
+    report = context.project.commit_web_asset_rebind(
+        str(context.required("asset_id")),
+        str(context.required("source")),
+        str(context.required("plan_digest")),
+        {
+            str(path): str(resolution)
+            for path, resolution in dict(
+                context.required("resolutions")
+            ).items()
+        },
+    )
+    return {"rebind_commit": report}
 
 
 def _expected_revision(context: OperationContext) -> int | None:

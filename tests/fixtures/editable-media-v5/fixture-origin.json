@@ -1,0 +1,12 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/web-media-starter",
+  "editable_media_version": 5,
+  "files": {
+    "editable-media-runtime.js": "460ad7a3b16738659dccbcc6cfb325470472a43d8ef16666c92a858a8798403a",
+    "editable-media.json": "e86f6f821114704eb780b2ce3eed106d26205503ce1b367dcd2737ecdb6ae914",
+    "index.html": "628ac87f21bc97ecad41ee3427d77789189554bc6dbdcdfe65426348695040c1",
+    "media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce"
+  }
+}

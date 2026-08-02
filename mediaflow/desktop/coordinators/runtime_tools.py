@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -22,7 +23,7 @@ class RuntimeToolOperations(SessionCoordinator):
         self._bridge = _RuntimeToolBridge(session)
         self._bridge.eventReceived.connect(self._on_event)
 
-    def start(self, operation: str) -> None:
+    def start(self, operation: str, arguments: dict | None = None) -> None:
         if self._session.runtime_state.thread and self._session.runtime_state.thread.is_alive():
             self._session.events.errorOccurred.emit("已有运行时工具操作正在执行")
             return
@@ -57,6 +58,7 @@ class RuntimeToolOperations(SessionCoordinator):
             try:
                 result = self._session._api.run_runtime_tool(
                     operation,
+                    arguments=arguments,
                     progress=report,
                     check_cancelled=check_cancelled,
                 )
@@ -93,9 +95,15 @@ class RuntimeToolOperations(SessionCoordinator):
             self._session.events.runtimeToolsChanged.emit()
             return
         operation = str(event.get("operation") or "")
-        if event_type == "completed" and operation == "install_asr_cli":
+        if event_type == "completed" and operation == "install_components":
+            installed = dict(event.get("result") or {})
             candidate = self._session.settings.model_copy(deep=True)
-            candidate.asr.cli_path = str(event.get("result") or "") or None
+            if xxl_root := str(installed.get("faster-whisper-xxl") or ""):
+                candidate.asr.cli_path = str(
+                    Path(xxl_root) / "faster-whisper-xxl.exe"
+                )
+            if gpt_root := str(installed.get("gpt-sovits-v2pro") or ""):
+                candidate.speech_synthesis.gpt_sovits_root = gpt_root
             self._session._commit_settings(candidate)
         if event_type == "completed" and operation == "inspect":
             self._session.runtime_state.status = {

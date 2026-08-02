@@ -1,0 +1,16 @@
+{
+  "protocol": "mediaflow-real-project-fixture",
+  "version": 1,
+  "producer": "MediaFlow Pro v2 + visual-multimedia editable-media v4",
+  "captured_at": "2026-07-30",
+  "project_schema_version": 35,
+  "editable_media_version": 4,
+  "files": {
+    "project.mfp": "9894600ce77e9830afbcc1b2ca551d70258f69df3a9a51013d594b9b3f63bc11",
+    "sources/web/p-452607bea3e0892e029f8773/editable-media-runtime.js": "d31871c244816a6ee0065d0b57e487d461cdd2074e96c33d8d34482ca2cdb755",
+    "sources/web/p-452607bea3e0892e029f8773/editable-media.json": "a80feada3110fc1301bd13a6cf749ca42283bc0e1a81828ecb711b037251132a",
+    "sources/web/p-452607bea3e0892e029f8773/index.html": "8d15c8a476ef947881c1610a2633b443ae12452b534a7579f86b8b79749f48e0",
+    "sources/web/p-452607bea3e0892e029f8773/media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce",
+    "sources/web/receipts/r-452607bea3e0892e029f8773.json": "9d5ed732824d0054978742700a667d98dfa0ee244eae871201ebf0f5da84c164"
+  }
+}

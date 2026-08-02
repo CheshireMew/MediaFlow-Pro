@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 35
+PROJECT_SCHEMA_VERSION = 36
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -111,6 +111,17 @@ CREATE TABLE IF NOT EXISTS web_clip_state (
     clip_id TEXT PRIMARY KEY REFERENCES clip(id) ON DELETE CASCADE,
     state_json TEXT NOT NULL,
     revision INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS editable_media_upgrade (
+    asset_id TEXT PRIMARY KEY REFERENCES asset(id) ON DELETE CASCADE,
+    source_version INTEGER NOT NULL,
+    target_version INTEGER NOT NULL,
+    old_source_hash TEXT NOT NULL,
+    new_source_hash TEXT NOT NULL,
+    old_package_path TEXT NOT NULL,
+    new_package_path TEXT NOT NULL,
+    archive_package_path TEXT NOT NULL,
+    migrated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS transition (
     id TEXT PRIMARY KEY,

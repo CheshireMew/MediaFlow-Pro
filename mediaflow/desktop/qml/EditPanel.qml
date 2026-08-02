@@ -10,6 +10,7 @@ AppScrollView {
     clip: true
     contentWidth: availableWidth
     property int playheadFrame: 0
+    signal seekRequested(int frame)
 
     ColumnLayout {
         id: root
@@ -43,7 +44,12 @@ AppScrollView {
             function onHistoryChanged() { root.loadSelectedTransition(); }
         }
 
-        WebLayerPanel { playheadFrame: editScroll.playheadFrame }
+        WebLayerPanel {
+            playheadFrame: editScroll.playheadFrame
+            onSeekRequested: function(frame) {
+                editScroll.seekRequested(frame);
+            }
+        }
 
         Panel {
             objectName: "editCompoundClipPanel"

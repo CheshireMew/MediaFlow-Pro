@@ -19,9 +19,7 @@ def test_cache_run_owned_by_current_process_cleans_up_normally(
     manager = CacheManager(tmp_path / "cache")
     run = manager.create_run("exports")
 
-    payload = json.loads(
-        (run / manager.RUN_MANIFEST).read_text(encoding="utf-8")
-    )
+    payload = json.loads((run / manager.RUN_MANIFEST).read_text(encoding="utf-8"))
     assert payload == {
         "schema_version": manager.RUN_SCHEMA_VERSION,
         "owner_pid": os.getpid(),
@@ -58,13 +56,7 @@ def test_cache_run_manifest_failure_archives_unpublished_directory(
 
     runs = manager.root / "exports" / "runs"
     assert not runs.exists() or not list(runs.iterdir())
-    archived = list(
-        (
-            manager.root
-            / "archive"
-            / "failed-run-creation"
-        ).iterdir()
-    )
+    archived = list((manager.root / "archive" / "failed-run-creation").iterdir())
     assert len(archived) == 1
     assert archived[0].is_dir()
 
@@ -102,10 +94,7 @@ def test_prune_runs_observes_real_child_process_without_terminating_it(
         line = process.stdout.readline().strip()
         if not line:
             assert process.stderr is not None
-            pytest.fail(
-                "Child did not create a cache run: "
-                + process.stderr.read()
-            )
+            pytest.fail("Child did not create a cache run: " + process.stderr.read())
         run = Path(line)
 
         manager.prune_runs(max_age_seconds=0)
@@ -223,3 +212,16 @@ def test_prune_files_tolerates_a_candidate_disappearing_during_collection(
     )
 
     assert unstable_stat_calls == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path syntax")
+def test_managed_path_accepts_the_same_root_with_windows_extended_prefix(
+    tmp_path: Path,
+) -> None:
+    manager = CacheManager(tmp_path / "cache")
+    managed = Path("\\\\?\\" + str(manager.root / "asr" / "runs"))
+    manager._require_managed(managed)
+
+    outside = Path("\\\\?\\" + str(tmp_path.parent / "outside"))
+    with pytest.raises(ValueError, match="outside the managed root"):
+        manager._require_managed(outside)

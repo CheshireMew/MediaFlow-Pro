@@ -20,6 +20,7 @@ from mediaflow.domain.asr import RegionAsrPipeline
 from mediaflow.domain.downloads import DownloadPlan, DownloadRequest
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.progress import OperationProgress
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.project import Asset, AssetFingerprint, ProjectProfile
 from mediaflow.domain.project_records import ExportQualityReport
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
@@ -305,7 +306,7 @@ class InfrastructureExportTaskRuntime:
                         f"Export quality evidence is not a directory: {report_dir}"
                     )
                 archive_root = (
-                    report_dir.parent / "MediaFlow Failed Export QA"
+                    report_dir.parent / f"{PRODUCT_NAME} Failed Export QA"
                 )
                 attempt = 1
                 while True:

@@ -17,7 +17,7 @@ from mediaflow.infrastructure.storage_paths import default_media_root, default_p
 
 from .runtime_paths import RuntimePaths
 
-SETTINGS_SCHEMA_VERSION = 16
+SETTINGS_SCHEMA_VERSION = 19
 _SETTINGS_WRITE_LOCK = threading.RLock()
 _UNLOADED = object()
 
@@ -123,6 +123,19 @@ class SettingsRepository:
                 payload.pop("stock_media", None)
             if version < 16:
                 payload.setdefault("asr", {}).setdefault("parallel_chunks", 0)
+            if version < 17:
+                payload.setdefault("ui", {})["default_project_directory"] = default_project_root()
+            if version < 18:
+                payload.setdefault(
+                    "speech_synthesis",
+                    {
+                        "gpt_sovits_root": None,
+                        "device": "auto",
+                        "startup_timeout_seconds": 300,
+                    },
+                )
+            if version < 19:
+                payload.setdefault("asr", {}).setdefault("model_directory", None)
             payload["schema_version"] = SETTINGS_SCHEMA_VERSION
             settings = self.with_storage_defaults(GlobalSettings.model_validate(payload))
         except SettingsContentError:

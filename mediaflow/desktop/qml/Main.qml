@@ -16,7 +16,7 @@ ApplicationWindow {
         ? Math.min(720, Screen.desktopAvailableHeight) : 720
     visible: true
     flags: Qt.Window | Qt.FramelessWindowHint
-    title: workspaceController.hasProject ? workspaceController.projectName : "MediaFlow Pro"
+    title: workspaceController.hasProject ? workspaceController.projectName : Qt.application.name
     readonly property bool downloadPlanVisible: downloadPlanDialog.visible
     property bool projectVersionsVisible: false
     readonly property int downloadPlanEntryCount: downloadEntries.count

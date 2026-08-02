@@ -16,13 +16,15 @@ from xml.etree import ElementTree as ET
 import pytest
 from pydantic import ValidationError
 
-import mediaflow.application.web_media_service as web_media_module
 import mediaflow.infrastructure.web_render_service as web_render_module
+from mediaflow.application import web_package_files as web_package_module
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.web_media_service import (
+    WebMediaServices,
+)
+from mediaflow.application.web_package_files import (
     MANIFEST_FILE_NAME,
-    WebMediaService,
     editable_media_source_hash,
     web_package_root,
 )
@@ -55,21 +57,19 @@ from mediaflow.infrastructure.web_render_service import WebRenderService
 STARTER = Path(
     os.environ.get(
         "MEDIAFLOW_EDITABLE_MEDIA_PACKAGE",
-        Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v4",
+        Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v5",
     )
 ).resolve()
-MEDIA_CASES = STARTER.parent / "editable-media-v4-cases"
+MEDIA_CASES = STARTER.parent / "editable-media-v5-cases"
 
 
-def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaService]:
+def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaServices]:
     project = repository.catalog.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
-    return editor, WebMediaService(
+    return editor, WebMediaServices(
         repository,
         lambda sequence_id: (
-            editor
-            if sequence_id == project.main_sequence_id
-            else TimelineEditor(repository, sequence_id)
+            editor if sequence_id == project.main_sequence_id else TimelineEditor(repository, sequence_id)
         ),
         BrowserWebPackageValidator(),
     )
@@ -78,12 +78,12 @@ def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaSer
 def _add_web_clip(
     repository: ProjectRepository,
     editor: TimelineEditor,
-    service: WebMediaService,
+    service: WebMediaServices,
     *,
     duration: int = 3,
 ):
     project = repository.catalog.get_project()
-    asset = service.import_package(STARTER)
+    asset = service.packages.import_package(STARTER)
     track = editor.add_track(TrackKind.VIDEO)
     clip = editor.add_clip(
         track_id=track.id,
@@ -291,10 +291,10 @@ def _build_native_media_package(tmp_path: Path) -> Path:
     return package_root
 
 
-def test_editable_media_v4_full_chain(
+def test_editable_media_v5_full_chain(
     tmp_path: Path,
 ) -> None:
-    repository = ProjectRepository.create(tmp_path / "V4 Web Project", "V4 Web Project")
+    repository = ProjectRepository.create(tmp_path / "V5 Web Project", "V5 Web Project")
     editor, service = _service(repository)
     application: EditorProject | None = None
     try:
@@ -303,21 +303,12 @@ def test_editable_media_v4_full_chain(
             repository.catalog.resolve_asset_path(asset),
             repository.web.get_web_asset_spec(asset.id).manifest,
         )
-        receipt = next(
-            (
-                repository.project_dir
-                / "sources"
-                / "web"
-                / "receipts"
-            ).glob("r-*.json")
-        )
+        receipt = next((repository.project_dir / "sources" / "web" / "receipts").glob("r-*.json"))
         assert asset.kind == AssetKind.WEB
         assert copied_root.name.startswith("p-")
         assert json.loads(receipt.read_text(encoding="utf-8"))["status"] == "committed"
         assert asset.metadata.width == asset.metadata.height == 1080
-        copied_files = {
-            path.name for path in copied_root.iterdir() if path.is_file()
-        }
+        copied_files = {path.name for path in copied_root.iterdir() if path.is_file()}
         expected_files = {
             "editable-media.json",
             "editable-media-runtime.js",
@@ -327,11 +318,14 @@ def test_editable_media_v4_full_chain(
         assert expected_files <= copied_files
         assert copied_files <= expected_files | {"fixture-origin.json"}
 
-        initial_runtime = service.runtime_state(project.main_sequence_id, clip.id)
+        initial_runtime = service.clips.runtime_state(project.main_sequence_id, clip.id)
         assert set(initial_runtime) == {
             "scenes",
             "theme",
             "theme_bindings",
+            "parameters",
+            "parameter_bindings",
+            "parameter_locks",
             "variant",
             "scene_id",
             "playback",
@@ -343,11 +337,9 @@ def test_editable_media_v4_full_chain(
             "width": 1080,
             "height": 1080,
         }
-        assert initial_runtime["scenes"]["opening"]["data"]["title"] == (
-            "One source, three ways to play"
-        )
+        assert initial_runtime["scenes"]["opening"]["data"]["title"] == ("One source, three ways to play")
 
-        updated = service.update_clip(
+        updated = service.clips.update_clip(
             project.main_sequence_id,
             clip.id,
             {"title": {"content": "Edited in MediaFlow", "x": 72}},
@@ -362,17 +354,11 @@ def test_editable_media_v4_full_chain(
         editor.undo()
         assert repository.web.get_web_clip_state(clip.id).scenes == {}
         editor.redo()
-        assert (
-            repository.web.get_web_clip_state(clip.id)
-            .scenes["opening"]
-            .layers["title"]
-            .x
-            == 72
-        )
+        assert repository.web.get_web_clip_state(clip.id).scenes["opening"].layers["title"].x == 72
 
-        browser_state = service.runtime_state(project.main_sequence_id, clip.id)
+        browser_state = service.clips.runtime_state(project.main_sequence_id, clip.id)
         browser_state["scenes"]["opening"]["layers"]["title"]["x"] = 96
-        committed = service.commit_runtime_state(
+        committed = service.clips.commit_runtime_state(
             project.main_sequence_id,
             clip.id,
             browser_state,
@@ -385,7 +371,7 @@ def test_editable_media_v4_full_chain(
         copied_state = repository.web.get_web_clip_state(copied.id)
         assert copied_state.scenes["opening"].layers["title"].content == "Edited in MediaFlow"
         assert copied_state.revision == 0
-        copied_state = service.update_clip(
+        copied_state = service.clips.update_clip(
             project.main_sequence_id,
             copied.id,
             {
@@ -483,11 +469,9 @@ def test_editable_media_v4_full_chain(
                 overwrite=True,
             )
         assert protected_video.read_bytes() == protected_video_bytes
-        assert not list(
-            tmp_path.glob(".mf-web-video-*.tmp.mp4")
-        )
+        assert not list(tmp_path.glob(".mf-web-video-*.tmp.mp4"))
         failed_exports = list(
-            (tmp_path / "MediaFlow Failed Exports").glob(
+            (tmp_path / "MediaFlow Pro Failed Exports").glob(
                 "mf-web-video-*.tmp.mp4"
             )
         )
@@ -501,14 +485,14 @@ def test_editable_media_v4_full_chain(
         assert str(cache) in document.xml
         assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
 
-        output = tmp_path / "v4-web-final.mp4"
+        output = tmp_path / "v5-web-final.mp4"
         result = MltExportService(
             TimelineCompiler(repository),
             RuntimePaths.discover(),
         ).export(
             timeline,
             ExportPreset(
-                name="V4 web verification",
+                name="V5 web verification",
                 format=ExportFormat.H264,
                 container="mp4",
                 video_codec="libx264",
@@ -523,18 +507,12 @@ def test_editable_media_v4_full_chain(
             project.main_sequence_id,
             0,
             3,
-            name="V4 Web short",
+            name="V5 Web short",
         )
         short_state = repository.timeline.load_timeline(short.id)
-        assert (
-            short_state.web_states[short_state.clips[0].id]
-            .scenes["opening"]
-            .layers["title"]
-            .x
-            == 96
-        )
+        assert short_state.web_states[short_state.clips[0].id].scenes["opening"].layers["title"].x == 96
 
-        copied_state = service.update_clip(
+        copied_state = service.clips.update_clip(
             project.main_sequence_id,
             copied.id,
             {
@@ -545,12 +523,8 @@ def test_editable_media_v4_full_chain(
             scene_id="opening",
             expected_revision=copied_state.revision,
         )
-        handoff_state = repository.timeline.load_timeline(
-            project.main_sequence_id
-        )
-        handoff_clips = {
-            item.id: item for item in handoff_state.clips
-        }
+        handoff_state = repository.timeline.load_timeline(project.main_sequence_id)
+        handoff_clips = {item.id: item for item in handoff_state.clips}
         expected_targets = {
             renderer.cache.target(
                 handoff_state,
@@ -564,9 +538,7 @@ def test_editable_media_v4_full_chain(
             ).path.resolve(),
         }
         assert len(expected_targets) == 2
-        unrendered_targets = {
-            path for path in expected_targets if not path.exists()
-        }
+        unrendered_targets = {path for path in expected_targets if not path.exists()}
         assert unrendered_targets
 
         application = EditorProject(
@@ -583,32 +555,19 @@ def test_editable_media_v4_full_chain(
                 protected_handoff,
             )
         assert protected_handoff.read_bytes() == protected_bytes
-        assert all(
-            not path.exists() for path in unrendered_targets
-        )
+        assert all(not path.exists() for path in unrendered_targets)
 
         handoff = application.export_fcpxml(
             project.main_sequence_id,
-            tmp_path / "v4-web-handoff.fcpxml",
+            tmp_path / "v5-web-handoff.fcpxml",
         )
-        assert all(
-            path.is_file() and path.stat().st_size > 0
-            for path in expected_targets
-        )
+        assert all(path.is_file() and path.stat().st_size > 0 for path in expected_targets)
         handoff_root = ET.parse(handoff).getroot()
         resource_uris = {
-            media_rep.attrib["src"]
-            for media_rep in handoff_root.findall(
-                "./resources/asset/media-rep"
-            )
+            media_rep.attrib["src"] for media_rep in handoff_root.findall("./resources/asset/media-rep")
         }
-        assert resource_uris == {
-            path.as_uri() for path in expected_targets
-        }
-        assert all(
-            not uri.lower().endswith("/index.html")
-            for uri in resource_uris
-        )
+        assert resource_uris == {path.as_uri() for path in expected_targets}
+        assert all(not uri.lower().endswith("/index.html") for uri in resource_uris)
     finally:
         if application is not None:
             application.close()
@@ -627,7 +586,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
     editor, service = _service(repository)
     try:
         project = repository.catalog.get_project()
-        asset = service.import_package(package)
+        asset = service.packages.import_package(package)
         video_track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
             track_id=video_track.id,
@@ -640,9 +599,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         assert asset.metadata.has_audio is True
         assert clip.media_kind == ClipMediaKind.LINKED_AV
         linked_track = next(
-            track
-            for track in editor.state.tracks
-            if track.id == editor.state.tracks[0].linked_audio_track_id
+            track for track in editor.state.tracks if track.id == editor.state.tracks[0].linked_audio_track_id
         )
         assert linked_track.kind == TrackKind.AUDIO
 
@@ -672,12 +629,8 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
             check=True,
         )
         streams = json.loads(probe.stdout)["streams"]
-        video_stream = next(
-            stream for stream in streams if stream["codec_type"] == "video"
-        )
-        audio_stream = next(
-            stream for stream in streams if stream["codec_type"] == "audio"
-        )
+        video_stream = next(stream for stream in streams if stream["codec_type"] == "video")
+        audio_stream = next(stream for stream in streams if stream["codec_type"] == "audio")
         assert video_stream["codec_name"] == "ffv1"
         assert video_stream["pix_fmt"] == "bgra"
         assert audio_stream == {
@@ -815,13 +768,11 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         assert decoded_audio
         assert any(decoded_audio)
         with pytest.raises(ValueError, match="native audio"):
-            service.rebind_asset(asset.id, STARTER, dry_run=True)
+            service.rebind.plan_rebind_asset(asset.id, STARTER)
         assert repository.catalog.get_asset(asset.id).metadata.has_audio is True
 
         detached_video, detached_audio = editor.detach_clip_audio(clip.id)
-        detached_timeline = repository.timeline.load_timeline(
-            project.main_sequence_id
-        )
+        detached_timeline = repository.timeline.load_timeline(project.main_sequence_id)
         assert detached_timeline.web_states[detached_audio.id].clip_id == detached_audio.id
         video_target = renderer.cache.target(
             detached_timeline,
@@ -835,10 +786,13 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         )
         assert video_target.key == audio_target.key
         assert video_target.path == audio_target.path == cache
-        assert renderer.render_clip(
-            detached_timeline,
-            detached_audio.id,
-        ) == cache
+        assert (
+            renderer.render_clip(
+                detached_timeline,
+                detached_audio.id,
+            )
+            == cache
+        )
     finally:
         repository.close()
 
@@ -849,9 +803,7 @@ def test_native_media_cannot_be_misbound_to_a_browser_asset_slot(
     package = _build_native_media_package(tmp_path)
     manifest_path = package / "editable-media.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["scenes"][0]["asset_slots"] = {
-        "invalid-native-slot": {"data_field": "native_video"}
-    }
+    manifest["scenes"][0]["asset_slots"] = {"invalid-native-slot": {"data_field": "native_video"}}
     manifest["layout_contracts"][0]["asset_slots"].append(
         {
             "id": "invalid-native-slot",
@@ -872,7 +824,7 @@ def test_native_media_cannot_be_misbound_to_a_browser_asset_slot(
     _editor, service = _service(repository)
     try:
         with pytest.raises(ValueError, match="browser-rendered image source"):
-            service.import_package(package)
+            service.packages.import_package(package)
         assert repository.catalog.list_assets() == []
     finally:
         repository.close()
@@ -1034,10 +986,7 @@ def test_web_export_rejects_an_unusable_temporary_sibling_before_render(
         cache_target = renderer.cache.target(timeline, clip)
         output_parent = tmp_path
         destination = output_parent / "overlay.mkv"
-        while (
-            utf16_units(str(output_parent.resolve())) + 1 + 64
-            <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        ):
+        while utf16_units(str(output_parent.resolve())) + 1 + 64 <= WINDOWS_INTEROP_PATH_UTF16_LIMIT:
             output_parent /= "deep-web-export-directory"
             destination = output_parent / "overlay.mkv"
 
@@ -1069,9 +1018,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
     project: EditorProject | None = None
     try:
         project_record, _, clip = _add_web_clip(repository, editor, service)
-        timeline = repository.timeline.load_timeline(
-            project_record.main_sequence_id
-        )
+        timeline = repository.timeline.load_timeline(project_record.main_sequence_id)
         paths = RuntimePaths.discover()
         cache_target = WebRenderService(
             repository,
@@ -1109,9 +1056,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
 
         successful_output = tmp_path / "new-web-sequence.mp4"
         successful_task = project.start_task(
-            command.model_copy(
-                update={"output_path": str(successful_output)}
-            )
+            command.model_copy(update={"output_path": str(successful_output)})
         )
         successful = project.wait_for_task(
             successful_task.id,
@@ -1130,7 +1075,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
             repository.close()
 
 
-def test_editable_media_v4_contract_rejections(
+def test_editable_media_v5_contract_rejections(
     tmp_path: Path,
 ) -> None:
     manifest = json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8"))
@@ -1145,16 +1090,14 @@ def test_editable_media_v4_contract_rejections(
 
     missing_sources = tmp_path / "missing-media-sources"
     shutil.copytree(STARTER, missing_sources)
-    (missing_sources / "media-sources.json").rename(
-        missing_sources / "media-sources.unavailable"
-    )
-    repository = ProjectRepository.create(tmp_path / "Invalid V3 Project", "Invalid V3")
+    (missing_sources / "media-sources.json").rename(missing_sources / "media-sources.unavailable")
+    repository = ProjectRepository.create(tmp_path / "Invalid V5 Project", "Invalid V5")
     editor, service = _service(repository)
     try:
         with pytest.raises(FileNotFoundError, match="media-sources"):
-            service.import_package(missing_sources)
+            service.packages.import_package(missing_sources)
 
-        remote = tmp_path / "remote-v4-package"
+        remote = tmp_path / "remote-v5-package"
         shutil.copytree(STARTER, remote)
         entry = remote / "index.html"
         entry.write_text(
@@ -1165,9 +1108,9 @@ def test_editable_media_v4_contract_rejections(
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="remote resources"):
-            service.import_package(remote)
+            service.packages.import_package(remote)
 
-        non_deterministic = tmp_path / "non-deterministic-v4-package"
+        non_deterministic = tmp_path / "non-deterministic-v5-package"
         shutil.copytree(STARTER, non_deterministic)
         entry = non_deterministic / "index.html"
         entry.write_text(
@@ -1188,7 +1131,7 @@ window.addEventListener("editablemediatime", () => {
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="non-monotonic frame seeks"):
-            service.import_package(non_deterministic)
+            service.packages.import_package(non_deterministic)
 
         corrupted_media = tmp_path / "corrupted-media-integrity"
         shutil.copytree(
@@ -1198,7 +1141,7 @@ window.addEventListener("editablemediatime", () => {
         avatar = corrupted_media / "assets" / "creator-avatar.png"
         avatar.write_bytes(avatar.read_bytes() + b"corruption")
         with pytest.raises(ValueError, match="source integrity"):
-            service.import_package(corrupted_media)
+            service.packages.import_package(corrupted_media)
 
         incorrect_mime = tmp_path / "incorrect-media-mime"
         shutil.copytree(
@@ -1213,7 +1156,7 @@ window.addEventListener("editablemediatime", () => {
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="MIME type"):
-            service.import_package(incorrect_mime)
+            service.packages.import_package(incorrect_mime)
     finally:
         repository.close()
 
@@ -1224,19 +1167,14 @@ def test_web_package_deep_tree_is_rejected_before_any_project_copy(
 ) -> None:
     source = tmp_path / "deep-web-package"
     shutil.copytree(STARTER, source)
-    deep_file = (
-        source
-        / ("a" * 25)
-        / ("b" * 25)
-        / "unreferenced-extra.json"
-    )
+    deep_file = source / ("a" * 25) / ("b" * 25) / "unreferenced-extra.json"
     deep_file.parent.mkdir(parents=True)
     deep_file.write_text("{}", encoding="utf-8")
     repository = ProjectRepository.create(max_project_path, "Deep Web")
     _editor, service = _service(repository)
     try:
         with pytest.raises(ValueError, match="路径过深"):
-            service.import_package(source)
+            service.packages.import_package(source)
 
         assert not list((repository.project_dir / "sources" / "web").glob("p-*"))
         assert not list((repository.project_dir / "staging" / "web").glob("s-*"))
@@ -1252,23 +1190,14 @@ def test_web_package_accepts_the_deepest_complete_tree_that_fits_all_roots(
 ) -> None:
     source = tmp_path / "boundary-web-package"
     shutil.copytree(STARTER, source)
-    placeholder_root = (
-        max_project_path
-        / "sources"
-        / "web"
-        / f"p-{'0' * 24}"
-    )
-    component_units = (
-        WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        - utf16_units(str(placeholder_root))
-        - 1
-    )
+    placeholder_root = max_project_path / "sources" / "web" / f"p-{'0' * 24}"
+    component_units = WINDOWS_INTEROP_PATH_UTF16_LIMIT - utf16_units(str(placeholder_root)) - 1
     boundary_name = f"{'x' * (component_units - len('.txt'))}.txt"
     (source / boundary_name).write_text("boundary", encoding="utf-8")
     repository = ProjectRepository.create(max_project_path, "Boundary Web")
     _editor, service = _service(repository)
     try:
-        asset = service.import_package(source)
+        asset = service.packages.import_package(source)
         spec = repository.web.get_web_asset_spec(asset.id)
         package_root = web_package_root(
             repository.catalog.resolve_asset_path(asset),
@@ -1277,10 +1206,7 @@ def test_web_package_accepts_the_deepest_complete_tree_that_fits_all_roots(
         copied_boundary = package_root / boundary_name
 
         assert copied_boundary.is_file()
-        assert (
-            utf16_units(str(copied_boundary))
-            == WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        )
+        assert utf16_units(str(copied_boundary)) == WINDOWS_INTEROP_PATH_UTF16_LIMIT
         assert not list((repository.project_dir / "staging" / "web").glob("s-*"))
         assert not list((repository.project_dir / "archive" / "web").glob("f-*"))
     finally:
@@ -1294,7 +1220,7 @@ def test_web_package_copy_failure_leaves_only_a_failure_archive(
     repository = ProjectRepository.create(tmp_path / "Copy Failure", "Copy Failure")
     _editor, service = _service(repository)
     copied = 0
-    original_copy = web_media_module._copy_web_package_file
+    original_copy = web_package_module.copy_web_package_file
 
     def fail_after_one_file(
         source: str,
@@ -1307,13 +1233,13 @@ def test_web_package_copy_failure_leaves_only_a_failure_archive(
         return original_copy(source, destination)
 
     monkeypatch.setattr(
-        web_media_module,
-        "_copy_web_package_file",
+        web_package_module,
+        "copy_web_package_file",
         fail_after_one_file,
     )
     try:
         with pytest.raises(OSError, match="injected package copy failure"):
-            service.import_package(STARTER)
+            service.packages.import_package(STARTER)
 
         assert copied == 1
         assert not list((repository.project_dir / "sources" / "web").glob("p-*"))
@@ -1344,19 +1270,13 @@ def test_web_package_database_failure_rolls_back_records_and_archives_publicatio
     )
     try:
         with pytest.raises(OSError, match="injected web spec failure"):
-            service.import_package(STARTER)
+            service.packages.import_package(STARTER)
 
-        assert not [
-            asset
-            for asset in repository.catalog.list_assets()
-            if asset.kind == AssetKind.WEB
-        ]
+        assert not [asset for asset in repository.catalog.list_assets() if asset.kind == AssetKind.WEB]
         assert not list((repository.project_dir / "sources" / "web").glob("p-*"))
         assert not list((repository.project_dir / "staging" / "web").glob("s-*"))
         failed = list((repository.project_dir / "archive" / "web").glob("f-*"))
-        failed_receipts = list(
-            (repository.project_dir / "archive" / "web").glob("r-*.json")
-        )
+        failed_receipts = list((repository.project_dir / "archive" / "web").glob("r-*.json"))
         assert len(failed) == len(failed_receipts) == 1
         assert editable_media_source_hash(failed[0]) == source_hash
         assert editable_media_source_hash(STARTER) == source_hash
@@ -1377,10 +1297,7 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
     nested_entry.write_text(
         nested_entry.read_text(encoding="utf-8").replace(
             '<script src="editable-media-runtime.js"></script>',
-            (
-                '<script src="../editable-media-runtime.js" '
-                'data-manifest="../editable-media.json"></script>'
-            ),
+            ('<script src="../editable-media-runtime.js" data-manifest="../editable-media.json"></script>'),
         ),
         encoding="utf-8",
     )
@@ -1394,7 +1311,7 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
     repository = ProjectRepository.create(tmp_path / "Nested Entry", "Nested Entry")
     _editor, service = _service(repository)
     try:
-        asset = service.import_package(source)
+        asset = service.packages.import_package(source)
         spec = repository.web.get_web_asset_spec(asset.id)
         imported_entry = repository.catalog.resolve_asset_path(asset)
         imported_root = web_package_root(imported_entry, spec.manifest)
@@ -1407,34 +1324,34 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
         repository.close()
 
 
-def test_editable_media_v4_scene_features(
+def test_editable_media_v5_scene_features(
     tmp_path: Path,
 ) -> None:
-    repository = ProjectRepository.create(tmp_path / "Extended V4 Web", "Extended V4 Web")
+    repository = ProjectRepository.create(tmp_path / "Extended V5 Web", "Extended V5 Web")
     editor, service = _service(repository)
     try:
         project, asset, clip = _add_web_clip(repository, editor, service, duration=4)
-        state = service.select_variant(
+        state = service.clips.select_variant(
             project.main_sequence_id,
             clip.id,
             "portrait",
             expected_revision=0,
         )
-        state = service.update_clip(
+        state = service.clips.update_clip(
             project.main_sequence_id,
             clip.id,
             {"title": {"content": "Opening title", "x": 120}},
             scene_id="opening",
             expected_revision=state.revision,
         )
-        state = service.update_clip(
+        state = service.clips.update_clip(
             project.main_sequence_id,
             clip.id,
             {"title": {"content": "Delivery title", "x": 180}},
             scene_id="delivery",
             expected_revision=state.revision,
         )
-        state = service.set_keyframe(
+        state = service.clips.set_keyframe(
             project.main_sequence_id,
             clip.id,
             "title",
@@ -1445,13 +1362,73 @@ def test_editable_media_v4_scene_features(
             easing={"kind": "ease_in_out"},
             expected_revision=state.revision,
         )
-        state = service.update_theme(
+        state = service.clips.move_keyframe(
+            project.main_sequence_id,
+            clip.id,
+            "title",
+            "opacity",
+            900,
+            960,
+            scene_id="opening",
+            expected_revision=state.revision,
+        )
+        state = service.clips.update_parameter(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            0.9,
+            expected_revision=state.revision,
+        )
+        state = service.clips.update_parameter(
+            project.main_sequence_id,
+            clip.id,
+            "stagger_interval_ms",
+            220,
+            scene_id="opening",
+            expected_revision=state.revision,
+        )
+        state = service.clips.set_parameter_keyframe(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            600,
+            0.82,
+            scene_id="opening",
+            easing={"kind": "ease_out"},
+            expected_revision=state.revision,
+        )
+        state = service.clips.move_parameter_keyframe(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            600,
+            720,
+            scene_id="opening",
+            expected_revision=state.revision,
+        )
+        state = service.clips.set_parameter_lock(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            True,
+            expected_revision=state.revision,
+        )
+        with pytest.raises(PermissionError, match="locked"):
+            service.clips.update_parameter(
+                project.main_sequence_id,
+                clip.id,
+                "spring_strength",
+                0.5,
+                expected_revision=state.revision,
+                actor="automation",
+            )
+        state = service.clips.update_theme(
             project.main_sequence_id,
             clip.id,
             {"accent": "#ff0066"},
             expected_revision=state.revision,
         )
-        state = service.update_data(
+        state = service.clips.update_data(
             project.main_sequence_id,
             clip.id,
             {"left_value": "Delivery data"},
@@ -1463,14 +1440,14 @@ def test_editable_media_v4_scene_features(
             json.dumps({"right_value": "From JSON"}),
             encoding="utf-8",
         )
-        state = service.update_data_from_file(
+        state = service.clips.update_data_from_file(
             project.main_sequence_id,
             clip.id,
             snapshot_file,
             scene_id="delivery",
             expected_revision=state.revision,
         )
-        state = service.set_field_locks(
+        state = service.clips.set_field_locks(
             project.main_sequence_id,
             clip.id,
             "title",
@@ -1480,7 +1457,7 @@ def test_editable_media_v4_scene_features(
             expected_revision=state.revision,
         )
 
-        diff = service.diff_clip_update(
+        diff = service.clips.diff_clip_update(
             project.main_sequence_id,
             clip.id,
             {"title": {"content": "Automation replacement", "opacity": 0.7}},
@@ -1489,7 +1466,7 @@ def test_editable_media_v4_scene_features(
         )
         assert diff.locked_paths == ["scenes.opening.layers.title.content"]
         with pytest.raises(PermissionError, match="locked"):
-            service.update_clip(
+            service.clips.update_clip(
                 project.main_sequence_id,
                 clip.id,
                 {"title": {"content": "Automation replacement"}},
@@ -1498,14 +1475,44 @@ def test_editable_media_v4_scene_features(
                 expected_revision=state.revision,
             )
 
-        runtime = service.runtime_state(project.main_sequence_id, clip.id)
+        runtime = service.clips.runtime_state(project.main_sequence_id, clip.id)
         assert runtime["variant"]["id"] == "portrait"
         assert runtime["scenes"]["opening"]["layers"]["title"]["x"] == 120
         assert runtime["scenes"]["delivery"]["layers"]["title"]["x"] == 180
         assert runtime["scenes"]["delivery"]["data"]["right_value"] == "From JSON"
         assert runtime["theme"]["accent"] == "#ff0066"
+        assert runtime["parameters"]["spring_strength"] == 0.9
+        assert runtime["parameter_locks"] == ["spring_strength"]
+        assert runtime["scenes"]["opening"]["parameters"]["stagger_interval_ms"] == 220
+        assert (
+            runtime["scenes"]["opening"]["parameter_animations"]["spring_strength"]["keyframes"][0]["time_ms"]
+            == 720
+        )
+        assert (
+            runtime["scenes"]["opening"]["animations"]["title"]["opacity"]["keyframes"][0]["time_ms"] == 960
+        )
 
-        variants = service.create_variants(
+        edit_document = service.clips.describe_clip_editing(
+            project.main_sequence_id,
+            clip.id,
+            scene_id="opening",
+        )
+        descriptors = {item.path: item for item in edit_document.descriptors}
+        spring = descriptors["parameters.spring_strength"]
+        stagger = descriptors["scenes.opening.parameters.stagger_interval_ms"]
+        enter = descriptors["scenes.opening.layers.title.enter_ms"]
+        assert spring.value == 0.9
+        assert spring.control == "slider"
+        assert spring.constraints.minimum == 0
+        assert spring.constraints.maximum == 1
+        assert spring.unit == "ratio"
+        assert spring.locked is True
+        assert spring.animatable is True and spring.timeline == "keyframe"
+        assert stagger.value == 220 and stagger.kind == "integer"
+        assert stagger.unit == "ms"
+        assert enter.timeline == "interval"
+
+        variants = service.batches.create_variants(
             project.main_sequence_id,
             clip.id,
             [
@@ -1523,12 +1530,9 @@ def test_editable_media_v4_scene_features(
         for result, expected in zip(variants, ["Alice", "Bob"], strict=True):
             variant_state = repository.web.get_web_clip_state(result.clip_id)
             assert variant_state.batch_name == f"Card {expected}"
-            assert (
-                variant_state.scenes["opening"].layers["title"].content
-                == expected
-            )
+            assert variant_state.scenes["opening"].layers["title"].content == expected
 
-        replacement = tmp_path / "replacement-v4-package"
+        replacement = tmp_path / "replacement-v5-package"
         shutil.copytree(STARTER, replacement)
         manifest_path = replacement / "editable-media.json"
         replacement_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1537,13 +1541,20 @@ def test_editable_media_v4_scene_features(
             json.dumps(replacement_manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        report = service.rebind_asset(asset.id, replacement, dry_run=True)
+        report = service.rebind.plan_rebind_asset(asset.id, replacement)
         assert not report.conflicts and clip.id in report.affected_clips
-        committed = service.rebind_asset(asset.id, replacement, dry_run=False)
+        committed = service.rebind.commit_rebind_asset(
+            asset.id,
+            replacement,
+            report.plan_digest,
+            {},
+        )
         rebound = repository.web.get_web_clip_state(clip.id)
         assert committed.new_source_hash != committed.old_source_hash
         assert rebound.source_hash == committed.new_source_hash
         assert rebound.scenes["delivery"].layers["title"].x == 180
+        assert rebound.parameters["spring_strength"] == 0.9
+        assert rebound.scenes["opening"].parameter_animations["spring_strength"].keyframes[0].time_ms == 720
     finally:
         repository.close()
 
@@ -1554,7 +1565,7 @@ def test_rebind_database_failure_keeps_the_old_package_readable(
 ) -> None:
     repository = ProjectRepository.create(tmp_path / "Rebind Failure", "Rebind Failure")
     _editor, service = _service(repository)
-    asset = service.import_package(STARTER)
+    asset = service.packages.import_package(STARTER)
     old_spec = repository.web.get_web_asset_spec(asset.id)
     old_root = web_package_root(
         repository.catalog.resolve_asset_path(asset),
@@ -1578,8 +1589,14 @@ def test_rebind_database_failure_keeps_the_old_package_readable(
 
     monkeypatch.setattr(repository.web, "save_web_asset_spec", fail_new_spec)
     try:
+        plan = service.rebind.plan_rebind_asset(asset.id, replacement)
         with pytest.raises(OSError, match="injected rebind database failure"):
-            service.rebind_asset(asset.id, replacement, dry_run=False)
+            service.rebind.commit_rebind_asset(
+                asset.id,
+                replacement,
+                plan.plan_digest,
+                {},
+            )
 
         current_asset = repository.catalog.get_asset(asset.id)
         current_spec = repository.web.get_web_asset_spec(asset.id)
@@ -1599,13 +1616,99 @@ def test_rebind_database_failure_keeps_the_old_package_readable(
         repository.close()
 
 
+def test_rebind_requires_exact_conflict_decisions_and_an_unchanged_plan(
+    tmp_path: Path,
+) -> None:
+    repository = ProjectRepository.create(
+        tmp_path / "Strict Rebind",
+        "Strict Rebind",
+    )
+    editor, service = _service(repository)
+    try:
+        project, asset, clip = _add_web_clip(repository, editor, service)
+        state = service.clips.update_parameter(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            0.9,
+            expected_revision=0,
+        )
+        state = service.clips.set_parameter_keyframe(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            600,
+            0.75,
+            scene_id="opening",
+            expected_revision=state.revision,
+        )
+        state = service.clips.set_parameter_lock(
+            project.main_sequence_id,
+            clip.id,
+            "spring_strength",
+            True,
+            expected_revision=state.revision,
+        )
+
+        replacement = tmp_path / "replacement-without-spring"
+        shutil.copytree(STARTER, replacement)
+        manifest_path = replacement / MANIFEST_FILE_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["component"]["name"] = "Replacement without spring"
+        manifest["parameters"] = [item for item in manifest["parameters"] if item["id"] != "spring_strength"]
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        plan = service.rebind.plan_rebind_asset(asset.id, replacement)
+        assert {item.kind for item in plan.conflicts} == {"removed-parameter"}
+        assert len(plan.conflicts) == 2
+        decisions = {item.path: item.allowed_resolutions[0] for item in plan.conflicts}
+        with pytest.raises(ValueError, match="one decision for every conflict"):
+            service.rebind.commit_rebind_asset(
+                asset.id,
+                replacement,
+                plan.plan_digest,
+                {},
+            )
+
+        manifest["component"]["name"] = "Changed after review"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="plan changed"):
+            service.rebind.commit_rebind_asset(
+                asset.id,
+                replacement,
+                plan.plan_digest,
+                decisions,
+            )
+
+        reviewed = service.rebind.plan_rebind_asset(asset.id, replacement)
+        report = service.rebind.commit_rebind_asset(
+            asset.id,
+            replacement,
+            reviewed.plan_digest,
+            {item.path: item.allowed_resolutions[0] for item in reviewed.conflicts},
+        )
+        migrated = repository.web.get_web_clip_state(clip.id)
+        assert set(report.resolved_paths) == {item.path for item in reviewed.conflicts}
+        assert "spring_strength" not in migrated.parameters
+        assert "spring_strength" not in migrated.parameter_locks
+        assert "spring_strength" not in (migrated.scenes["opening"].parameter_animations)
+    finally:
+        repository.close()
+
+
 def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
     tmp_path: Path,
 ) -> None:
     repository = ProjectRepository.create(tmp_path / "Web Version", "Web Version")
     _editor, service = _service(repository)
     try:
-        asset = service.import_package(STARTER)
+        asset = service.packages.import_package(STARTER)
         old_spec = repository.web.get_web_asset_spec(asset.id)
         old_root = web_package_root(
             repository.catalog.resolve_asset_path(asset),
@@ -1622,7 +1725,13 @@ def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
             encoding="utf-8",
         )
 
-        report = service.rebind_asset(asset.id, replacement, dry_run=False)
+        plan = service.rebind.plan_rebind_asset(asset.id, replacement)
+        report = service.rebind.commit_rebind_asset(
+            asset.id,
+            replacement,
+            plan.plan_digest,
+            {},
+        )
         rebound_asset = repository.catalog.get_asset(asset.id)
         rebound_spec = repository.web.get_web_asset_spec(asset.id)
         rebound_root = web_package_root(
@@ -1655,7 +1764,7 @@ def test_publication_reconciliation_is_write_only_and_preserves_referenced_packa
     project_dir = tmp_path / "Publication Recovery"
     repository = ProjectRepository.create(project_dir, "Publication Recovery")
     _editor, service = _service(repository)
-    asset = service.import_package(STARTER)
+    asset = service.packages.import_package(STARTER)
     spec = repository.web.get_web_asset_spec(asset.id)
     referenced_root = web_package_root(
         repository.catalog.resolve_asset_path(asset),
@@ -1697,18 +1806,14 @@ def test_publication_reconciliation_is_write_only_and_preserves_referenced_packa
         assert referenced_root.is_dir()
         assert orphan_root.is_dir()
         assert staging_root.is_dir()
-        assert json.loads(
-            referenced_receipt.read_text(encoding="utf-8")
-        )["status"] == "pending"
+        assert json.loads(referenced_receipt.read_text(encoding="utf-8"))["status"] == "pending"
 
     with ProjectRepository.open(project_dir, writable=True) as writable:
         _service(writable)
         assert referenced_root.is_dir()
         assert not orphan_root.exists()
         assert not staging_root.exists()
-        assert json.loads(
-            referenced_receipt.read_text(encoding="utf-8")
-        )["status"] == "committed"
+        assert json.loads(referenced_receipt.read_text(encoding="utf-8"))["status"] == "committed"
         failures = list((project_dir / "archive" / "web").glob("f-*"))
         assert len(failures) == 2
         current_asset = writable.catalog.get_asset(asset.id)
@@ -1744,7 +1849,7 @@ def test_reopening_rejects_an_empty_directory_added_to_a_published_web_package(
     project_dir = tmp_path / f"Tampered {receipt_status} Publication"
     repository = ProjectRepository.create(project_dir, "Tampered Publication")
     _editor, service = _service(repository)
-    asset = service.import_package(STARTER)
+    asset = service.packages.import_package(STARTER)
     spec = repository.web.get_web_asset_spec(asset.id)
     package_root = web_package_root(
         repository.catalog.resolve_asset_path(asset),
@@ -1766,23 +1871,35 @@ def test_reopening_rejects_an_empty_directory_added_to_a_published_web_package(
             _service(reopened)
 
 
-def test_v4_cli_chain(
+def test_v5_cli_chain(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    project_path = tmp_path / "CLI V4 Web Project"
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
+
+    created = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "project.create",
+            "arguments": {
+                "name": "CLI V5 Web Project",
+                "directory_name": "cli-v5-web-project",
+            },
+        }
+    )
+    project_path = Path(created["path"])
 
     def request(operation: str, arguments: dict | None = None) -> dict:
         return {
             "protocol": "mediaflow-cli",
-            "version": 1,
+            "version": 2,
             "operation": operation,
             "project": str(project_path),
             "arguments": arguments or {},
         }
 
-    created = execute_request(request("project.create", {"name": "CLI V4 Web Project"}))
     sequence_id = created["project"]["main_sequence_id"]
     imported = execute_request(request("web.import", {"source": str(STARTER)}))
     asset_id = imported["asset"]["id"]
@@ -1846,6 +1963,68 @@ def test_v4_cli_chain(
     )
     revision = data_updated["web_clip_state"]["revision"]
 
+    described = execute_request(
+        request(
+            "web.clip.edit.describe",
+            {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "scene_id": "opening",
+            },
+        )
+    )["edit_document"]
+    descriptor_paths = {item["path"]: item for item in described["descriptors"]}
+    assert descriptor_paths["parameters.spring_strength"]["control"] == "slider"
+    assert descriptor_paths["parameters.spring_strength"]["unit"] == "ratio"
+    assert descriptor_paths["scenes.opening.parameters.stagger_interval_ms"]["kind"] == "integer"
+
+    parameter_updated = execute_request(
+        request(
+            "web.clip.parameter.update",
+            {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "parameter_id": "spring_strength",
+                "value": 0.88,
+                "expected_revision": revision,
+                "actor": "automation",
+            },
+        )
+    )
+    revision = parameter_updated["web_clip_state"]["revision"]
+    parameter_animated = execute_request(
+        request(
+            "web.clip.parameter.keyframe.set",
+            {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "scene_id": "opening",
+                "parameter_id": "spring_strength",
+                "time_ms": 480,
+                "value": 0.7,
+                "easing": {"kind": "ease_out"},
+                "expected_revision": revision,
+                "actor": "automation",
+            },
+        )
+    )
+    revision = parameter_animated["web_clip_state"]["revision"]
+    parameter_locked = execute_request(
+        request(
+            "web.clip.parameter.lock.update",
+            {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "parameter_id": "spring_strength",
+                "locked": True,
+                "expected_revision": revision,
+            },
+        )
+    )
+    revision = parameter_locked["web_clip_state"]["revision"]
+    version = execute_request(request("project.version.create", {"name": "Before CLI render"}))
+    assert version["version"]["name"] == "Before CLI render"
+
     completed = subprocess.run(
         [sys.executable, "-m", "mediaflow.cli", "execute", "--request", "-"],
         input=json.dumps(request("web.clip.get", {"clip_id": clip_id})),
@@ -1858,10 +2037,14 @@ def test_v4_cli_chain(
     assert payload["ok"] is True
     clip_state = payload["result"]["web_clip_state"]
     assert clip_state["scenes"]["opening"]["layers"]["title"]["content"] == "CLI edit"
-    assert clip_state["scenes"]["delivery"]["data_snapshot"]["values"]["left_value"] == (
-        "CLI data"
-    )
+    assert clip_state["scenes"]["delivery"]["data_snapshot"]["values"]["left_value"] == ("CLI data")
     assert clip_state["variant"]["id"] == "landscape"
+    assert clip_state["parameters"]["spring_strength"] == 0.88
+    assert clip_state["parameter_locks"] == ["spring_strength"]
+    assert (
+        clip_state["scenes"]["opening"]["parameter_animations"]["spring_strength"]["keyframes"][0]["time_ms"]
+        == 480
+    )
     assert clip_state["revision"] == revision
 
     render = subprocess.run(
@@ -1880,9 +2063,7 @@ def test_v4_cli_chain(
     rendered = json.loads(render.stdout)
     assert rendered["ok"] is True
     assert rendered["result"]["task"]["status"] == "completed"
-    artifact = ArtifactReference.model_validate(
-        rendered["result"]["task"]["artifacts"][0]
-    )
+    artifact = ArtifactReference.model_validate(rendered["result"]["task"]["artifacts"][0])
     assert artifact.resolve(project_path).is_file()
 
     variants = execute_request(
@@ -1943,9 +2124,7 @@ def test_v17_rejects_v1(
                     clip.id,
                 ),
             )
-        connection.execute(
-            "UPDATE schema_info SET version=17 WHERE component='project'"
-        )
+        connection.execute("UPDATE schema_info SET version=17 WHERE component='project'")
 
-    with pytest.raises(RuntimeError, match="旧版 editable-media"):
+    with pytest.raises(RuntimeError, match="历史 editable-media"):
         ProjectRepository.open(root, writable=True)

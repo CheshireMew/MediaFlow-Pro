@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 
-from mediaflow.domain.web_media import WebAssetSpec, WebClipState
+from mediaflow.domain.web_media import (
+    WebAssetSpec,
+    WebClipState,
+    editable_media_manifest_document,
+)
 
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
-from .project_serialization import model_json as _model_json
 
 
 class WebMediaRepository(ProjectRepositoryComponent):
@@ -21,7 +24,13 @@ class WebMediaRepository(ProjectRepositoryComponent):
                    ON CONFLICT(asset_id) DO UPDATE SET
                        manifest_json=excluded.manifest_json,
                        source_hash=excluded.source_hash""",
-                (spec.asset_id, _model_json(spec.manifest), spec.source_hash),
+                (
+                    spec.asset_id,
+                    _json(
+                        editable_media_manifest_document(spec.manifest)
+                    ),
+                    spec.source_hash,
+                ),
             )
             self._touch_project(connection)
         return spec

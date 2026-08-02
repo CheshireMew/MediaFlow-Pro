@@ -41,28 +41,13 @@ Rectangle {
             Layout.preferredHeight: 28
         }
 
-        RowLayout {
-            spacing: 3
-            Text {
-                text: "MediaFlow"
-                color: Theme.textStrong
-                font.pixelSize: Theme.fontSizeTitleSmall
-                font.weight: Font.DemiBold
-                font.letterSpacing: 0.2
-            }
-            Text {
-                text: "/"
-                color: Theme.textDisabled
-                font.pixelSize: Theme.fontSizeBody
-                font.weight: Font.Bold
-            }
-            Text {
-                text: "PRO"
-                color: Theme.accent
-                font.pixelSize: Theme.fontSizeCaption
-                font.weight: Font.DemiBold
-                font.letterSpacing: 1.2
-            }
+        Text {
+            objectName: "applicationProductName"
+            text: Qt.application.name
+            color: Theme.textStrong
+            font.pixelSize: Theme.fontSizeTitleSmall
+            font.weight: Font.DemiBold
+            font.letterSpacing: 0.2
         }
 
         Item { Layout.fillWidth: true }

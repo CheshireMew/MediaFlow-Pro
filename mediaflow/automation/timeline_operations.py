@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.enums import ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
@@ -8,11 +10,7 @@ from mediaflow.domain.timeline import ClipAudio, ClipTransform
 
 
 def get_timeline(context: OperationContext) -> dict:
-    return {
-        "timeline": context.project.timeline(context.sequence_id()).state.model_dump(
-            mode="json"
-        )
-    }
+    return {"timeline": context.project.timeline(context.sequence_id()).state}
 
 
 def add_track(context: OperationContext) -> dict:
@@ -24,7 +22,7 @@ def add_track(context: OperationContext) -> dict:
             else None
         ),
     )
-    return {"track": track.model_dump(mode="json")}
+    return {"track": track}
 
 
 def add_clip(context: OperationContext) -> dict:
@@ -37,7 +35,7 @@ def add_clip(context: OperationContext) -> dict:
         speed_numerator=int(context.arguments.get("speed_numerator", 1)),
         speed_denominator=int(context.arguments.get("speed_denominator", 1)),
     )
-    return {"clip": clip.model_dump(mode="json")}
+    return {"clip": clip}
 
 
 def move_clip(context: OperationContext) -> dict:
@@ -50,7 +48,7 @@ def move_clip(context: OperationContext) -> dict:
             else None
         ),
     )
-    return {"clip": clip.model_dump(mode="json")}
+    return {"clip": clip}
 
 
 def copy_clip(context: OperationContext) -> dict:
@@ -63,7 +61,7 @@ def copy_clip(context: OperationContext) -> dict:
             else None
         ),
     )
-    return {"clip": clip.model_dump(mode="json")}
+    return {"clip": clip}
 
 
 def split_clip(context: OperationContext) -> dict:
@@ -71,7 +69,7 @@ def split_clip(context: OperationContext) -> dict:
         str(context.required("clip_id")),
         int(context.required("split_frame")),
     )
-    return {"clips": [clip.model_dump(mode="json") for clip in clips]}
+    return {"clips": list(clips)}
 
 
 def delete_clips(context: OperationContext) -> dict:
@@ -80,7 +78,7 @@ def delete_clips(context: OperationContext) -> dict:
         [str(value) for value in context.required("clip_ids")],
         ripple=bool(context.arguments.get("ripple", False)),
     )
-    return {"timeline": editor.state.model_dump(mode="json")}
+    return {"timeline": editor.state}
 
 
 def transform_clip(context: OperationContext) -> dict:
@@ -88,7 +86,7 @@ def transform_clip(context: OperationContext) -> dict:
         str(context.required("clip_id")),
         ClipTransform.model_validate(context.required("transform")),
     )
-    return {"clip": clip.model_dump(mode="json")}
+    return {"clip": clip}
 
 
 def update_clip_audio(context: OperationContext) -> dict:
@@ -96,17 +94,17 @@ def update_clip_audio(context: OperationContext) -> dict:
         str(context.required("clip_id")),
         ClipAudio.model_validate(context.required("audio")),
     )
-    return {"clip": clip.model_dump(mode="json")}
+    return {"clip": clip}
 
 
 def undo(context: OperationContext) -> dict:
     state = context.project.timeline(context.sequence_id()).undo()
-    return {"timeline": state.model_dump(mode="json")}
+    return {"timeline": state}
 
 
 def redo(context: OperationContext) -> dict:
     state = context.project.timeline(context.sequence_id()).redo()
-    return {"timeline": state.model_dump(mode="json")}
+    return {"timeline": state}
 
 
 def render_preview(context: OperationContext) -> dict:
@@ -140,3 +138,25 @@ def export_sequence(context: OperationContext) -> dict:
             idempotency_key=context.task_idempotency(),
         )
     )
+
+
+def export_fcpxml(context: OperationContext) -> dict:
+    sequence_id = context.sequence_id()
+    state = context.project.timeline(sequence_id).state
+    output = context.project.export_fcpxml(
+        sequence_id,
+        str(context.required("output_path")),
+        overwrite=bool(context.arguments.get("overwrite", False)),
+    )
+    digest = hashlib.sha256()
+    with output.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return {
+        "format": "fcpxml",
+        "project_id": context.project.get_project().id,
+        "sequence_id": sequence_id,
+        "timeline_revision": state.sequence.timeline_revision,
+        "output_path": str(output),
+        "sha256": digest.hexdigest(),
+    }

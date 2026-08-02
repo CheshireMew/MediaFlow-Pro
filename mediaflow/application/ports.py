@@ -383,7 +383,7 @@ class TimelineValidationDocuments(Protocol):
     def catalog(self) -> ProjectCatalogDocuments: ...
 
 
-class WebMediaServiceDocuments(
+class WebApplicationDocuments(
     ProjectAccess,
     Protocol,
 ):

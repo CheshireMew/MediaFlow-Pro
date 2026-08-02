@@ -27,12 +27,15 @@ class SettingsForm(BaseModel):
     download_codec: Literal["best", "avc"] = Field(alias="downloadCodec")
     asr_engine: Literal["builtin", "faster_whisper_cli"] = Field(alias="asrEngine")
     asr_cli_path: str = Field(alias="asrCliPath")
+    asr_model_directory: str = Field(alias="asrModelDirectory")
     asr_model: str = Field(alias="asrModel")
     asr_device: Literal["auto", "cuda", "cpu"] = Field(alias="asrDevice")
     asr_compute_type: str = Field(alias="asrComputeType")
     asr_language: str = Field(alias="asrLanguage")
     asr_smart_split_limit: int = Field(alias="asrSmartSplitLimit", ge=1, le=200)
     asr_parallel_chunks: int = Field(alias="asrParallelChunks", ge=0, le=4)
+    gpt_sovits_root: str = Field(alias="gptSoVitsRoot")
+    gpt_sovits_device: Literal["auto", "cuda", "cpu"] = Field(alias="gptSoVitsDevice")
     translation_target_language: str = Field(alias="translationTargetLanguage")
     translation_mode: TranslationMode = Field(alias="translationMode")
     automatic_proxy: bool = Field(alias="automaticProxy")
@@ -61,12 +64,15 @@ class SettingsForm(BaseModel):
                 "download_codec": settings.download.codec,
                 "asr_engine": settings.asr.engine,
                 "asr_cli_path": settings.asr.cli_path or "",
+                "asr_model_directory": settings.asr.model_directory or "",
                 "asr_model": settings.asr.model,
                 "asr_device": settings.asr.device,
                 "asr_compute_type": settings.asr.compute_type,
                 "asr_language": settings.asr.language,
                 "asr_smart_split_limit": settings.asr.smart_split_limit,
                 "asr_parallel_chunks": settings.asr.parallel_chunks,
+                "gpt_sovits_root": settings.speech_synthesis.gpt_sovits_root or "",
+                "gpt_sovits_device": settings.speech_synthesis.device,
                 "translation_target_language": settings.translation.target_language,
                 "translation_mode": settings.translation.mode,
                 "automatic_proxy": settings.preview.automatic_proxy,
@@ -101,12 +107,15 @@ class SettingsForm(BaseModel):
         candidate.download.codec = self.download_codec
         candidate.asr.engine = self.asr_engine
         candidate.asr.cli_path = self.asr_cli_path.strip() or None
+        candidate.asr.model_directory = self.asr_model_directory.strip() or None
         candidate.asr.model = self.asr_model
         candidate.asr.device = self.asr_device
         candidate.asr.compute_type = self.asr_compute_type
         candidate.asr.language = self.asr_language
         candidate.asr.smart_split_limit = self.asr_smart_split_limit
         candidate.asr.parallel_chunks = self.asr_parallel_chunks
+        candidate.speech_synthesis.gpt_sovits_root = self.gpt_sovits_root.strip() or None
+        candidate.speech_synthesis.device = self.gpt_sovits_device
         candidate.translation.target_language = self.translation_target_language
         candidate.translation.mode = self.translation_mode
         candidate.preview.automatic_proxy = self.automatic_proxy

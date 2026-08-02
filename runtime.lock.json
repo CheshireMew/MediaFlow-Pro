@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "windows": {
+    "shotcut": {
+      "version": "26.6.25",
+      "archive_url": "https://github.com/mltframework/shotcut/releases/download/v26.6.25/shotcut-win64-26.6.25.zip",
+      "archive_sha256": "e44a28442c5686895e59eb5d4f4f86d9a71e9f5c008e0a4c35be78717ea15690",
+      "archive_root": "Shotcut",
+      "melt_version": "7.40.0",
+      "ffmpeg_version": "n8.1.2"
+    },
+    "qt": {
+      "version": "6.11.1",
+      "architecture": "win64_msvc2022_64"
+    }
+  }
+}

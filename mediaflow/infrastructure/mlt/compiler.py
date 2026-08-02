@@ -12,6 +12,7 @@ from mediaflow.domain.exports import (
     SubtitleStyle,
     WatermarkOverlay,
 )
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.sequence_audio import (
     output_audio_clips_for_track,
     select_audible_sequence_audio,
@@ -72,7 +73,7 @@ class TimelineCompiler:
             root,
             "profile",
             {
-                "description": "MediaFlow Pro",
+                "description": PRODUCT_NAME,
                 "width": str(profile.width),
                 "height": str(profile.height),
                 "progressive": "1",

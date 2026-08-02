@@ -234,7 +234,7 @@ def test_atomic_export_batch_archives_staged_output_when_a_later_render_fails(
 
         assert not first_output.exists()
         assert not second_output.exists()
-        failed_directory = first_output.parent / "MediaFlow Failed Exports"
+        failed_directory = first_output.parent / "MediaFlow Pro Failed Exports"
         archived = list(failed_directory.glob("*.mp4"))
         assert archived
         consumable = []
@@ -445,7 +445,7 @@ def test_output_set_fault_matrix_restores_every_precommit_state(
     archived_contents = {
         item.read_bytes()
         for item in (
-            tmp_path / "MediaFlow Failed Exports"
+            tmp_path / "MediaFlow Pro Failed Exports"
         ).iterdir()
     }
     assert archived_contents == {b"new-video", b"new-subtitle"}
@@ -520,7 +520,7 @@ def test_output_set_retries_transient_failures_during_rollback_and_archive(
                 if (
                     not failed_archive
                     and target.parent.name
-                    == "MediaFlow Failed Exports"
+                    == "MediaFlow Pro Failed Exports"
                 ):
                     failed_archive = True
                     raise OSError("archive interruption")
@@ -546,7 +546,7 @@ def test_output_set_retries_transient_failures_during_rollback_and_archive(
     archived_contents = {
         item.read_bytes()
         for item in (
-            tmp_path / "MediaFlow Failed Exports"
+            tmp_path / "MediaFlow Pro Failed Exports"
         ).iterdir()
     }
     assert archived_contents == {b"new-video", b"new-subtitle"}
@@ -1062,7 +1062,7 @@ def test_export_history_failure_withdraws_real_published_output(
         archived_quality = list(
             (
                 quality_directory.parent
-                / "MediaFlow Failed Export QA"
+                / "MediaFlow Pro Failed Export QA"
             ).glob("qa-*")
         )
         assert len(archived_quality) == 1
@@ -1074,7 +1074,7 @@ def test_export_history_failure_withdraws_real_published_output(
         assert all(path.is_file() for path in archived_proof_frames)
         archived = list(
             (
-                output.parent / "MediaFlow Failed Exports"
+                output.parent / "MediaFlow Pro Failed Exports"
             ).glob("*.mp4")
         )
         assert len(archived) == 1
@@ -1149,7 +1149,7 @@ def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
             repository.project_dir
         )
         assert archived_attempt.is_file()
-        assert archived_attempt.parent.name == "MediaFlow Failed Exports"
+        assert archived_attempt.parent.name == "MediaFlow Pro Failed Exports"
         assert any(
             item.step == "export_hardware_encoder_fallback"
             and item.status == "success"
@@ -2292,7 +2292,7 @@ def test_external_subtitle_commit_failure_restores_complete_previous_output_set(
         assert sidecar.read_bytes() == previous_subtitle
         archived = list(
             (
-                output.parent / "MediaFlow Failed Exports"
+                output.parent / "MediaFlow Pro Failed Exports"
             ).iterdir()
         )
         archived_video = next(

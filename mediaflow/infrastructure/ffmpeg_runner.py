@@ -93,6 +93,82 @@ class FfmpegInputPipe:
             self._process.wait()
 
 
+class FfmpegOutputPipe:
+    """A byte output pipe whose process lifecycle stays owned by the FFmpeg boundary."""
+
+    def __init__(self, command: list[str], creationflags: int) -> None:
+        self._process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags,
+        )
+        if self._process.stdout is None or self._process.stderr is None:
+            self.abort()
+            raise RuntimeError("FFmpeg output pipe was not created")
+        self._stderr_chunks: list[bytes] = []
+        self._stderr_reader = threading.Thread(
+            target=self._read_stderr,
+            name="mediaflow-ffmpeg-stderr",
+            daemon=True,
+        )
+        self._stderr_reader.start()
+        self._finished = False
+
+    def _read_stderr(self) -> None:
+        assert self._process.stderr is not None
+        try:
+            while chunk := self._process.stderr.read(64 * 1024):
+                self._stderr_chunks.append(chunk)
+        finally:
+            self._process.stderr.close()
+
+    def read(self, size: int) -> bytes:
+        if self._finished:
+            raise RuntimeError("FFmpeg output pipe is already closed")
+        if size <= 0:
+            raise ValueError("FFmpeg output pipe read size must be positive")
+        assert self._process.stdout is not None
+        return self._process.stdout.read(size)
+
+    def finish(self, *, timeout: float | None = None) -> FfmpegPipeResult:
+        if self._finished:
+            raise RuntimeError("FFmpeg output pipe is already closed")
+        self._finished = True
+        assert self._process.stdout is not None
+        self._process.stdout.close()
+        try:
+            returncode = self._process.wait(timeout=timeout)
+        except BaseException:
+            self._stop_process()
+            raise
+        finally:
+            self._stderr_reader.join(timeout=2)
+        return FfmpegPipeResult(
+            returncode=returncode,
+            stderr=b"".join(self._stderr_chunks).decode("utf-8", errors="replace"),
+        )
+
+    def abort(self) -> None:
+        if not self._finished:
+            self._finished = True
+            if self._process.stdout is not None:
+                self._process.stdout.close()
+        self._stop_process()
+        self._stderr_reader.join(timeout=2)
+
+    def _stop_process(self) -> None:
+        if self._process.poll() is not None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+
+
 class _FfmpegProgressParser:
     def __init__(self, total_seconds: float, on_position: Callable[[float], None]):
         if total_seconds <= 0:
@@ -206,6 +282,12 @@ class FfmpegRunner:
 
     def open_input_pipe(self, arguments: Sequence[str | Path]) -> FfmpegInputPipe:
         return FfmpegInputPipe(
+            self.command(arguments),
+            self._creationflags,
+        )
+
+    def open_output_pipe(self, arguments: Sequence[str | Path]) -> FfmpegOutputPipe:
+        return FfmpegOutputPipe(
             self.command(arguments),
             self._creationflags,
         )

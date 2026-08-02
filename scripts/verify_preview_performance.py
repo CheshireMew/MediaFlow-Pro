@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,7 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QUrl
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QEventLoop,
+    QObject,
+    Qt,
+    QTimer,
+    QUrl,
+)
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -94,27 +103,47 @@ def samples_in_window(
     return [sample for sample in samples if started <= sample[0] <= ended]
 
 
-def cadence_seconds(samples: list[tuple[float, int]]) -> tuple[float, float]:
+def cadence_seconds(
+    samples: list[tuple[float, int]],
+) -> tuple[float, float, int | None, int | None]:
     intervals = [
-        current[0] - previous[0]
+        (current[0] - previous[0], previous[1], current[1])
         for previous, current in zip(samples, samples[1:], strict=False)
         if current[1] != previous[1]
     ]
     if not intervals:
-        return float("inf"), float("inf")
-    ordered = sorted(intervals)
+        return float("inf"), float("inf"), None, None
+    ordered = sorted(interval[0] for interval in intervals)
     p95_index = min(len(ordered) - 1, int(len(ordered) * 0.95))
-    return ordered[p95_index], max(ordered)
+    maximum = max(intervals)
+    return ordered[p95_index], maximum[0], maximum[1], maximum[2]
 
 
-def pump_until(predicate, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        QCoreApplication.processEvents()
+def pump_until(predicate: Callable[[], bool], timeout: float) -> None:
+    if predicate():
+        return
+
+    loop = QEventLoop()
+    poll_timer = QTimer()
+    poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
+    poll_timer.setInterval(5)
+    timeout_timer = QTimer()
+    timeout_timer.setTimerType(Qt.TimerType.PreciseTimer)
+    timeout_timer.setSingleShot(True)
+
+    def finish_when_ready() -> None:
         if predicate():
-            return
-        time.sleep(0.005)
-    raise TimeoutError("Preview condition was not reached before the deadline")
+            loop.quit()
+
+    poll_timer.timeout.connect(finish_when_ready)
+    timeout_timer.timeout.connect(loop.quit)
+    poll_timer.start()
+    timeout_timer.start(max(1, round(timeout * 1000)))
+    loop.exec()
+    poll_timer.stop()
+    timeout_timer.stop()
+    if not predicate():
+        raise TimeoutError("Preview condition was not reached before the deadline")
 
 
 def ensure_fixture(path: Path, paths: RuntimePaths, duration_seconds: int) -> None:
@@ -302,8 +331,11 @@ ApplicationWindow {
             check_started,
             playback_ended,
         )
-        presentation_p95, presentation_max = cadence_seconds(
+        presentation_p95, presentation_max, maximum_from_frame, maximum_to_frame = cadence_seconds(
             final_presentation_samples)
+        visible_p95, visible_max, visible_maximum_from_frame, visible_maximum_to_frame = (
+            cadence_seconds(final_visible_samples)
+        )
         report = {
             "fixture": str(fixture),
             "resolution": "1920x1080",
@@ -333,6 +365,12 @@ ApplicationWindow {
             "presentation_p95_limit_seconds": CADENCE_P95_LIMIT_SECONDS,
             "presentation_max_seconds": presentation_max,
             "presentation_max_limit_seconds": CADENCE_MAX_LIMIT_SECONDS,
+            "presentation_max_from_frame": maximum_from_frame,
+            "presentation_max_to_frame": maximum_to_frame,
+            "visible_p95_seconds": visible_p95,
+            "visible_max_seconds": visible_max,
+            "visible_max_from_frame": visible_maximum_from_frame,
+            "visible_max_to_frame": visible_maximum_to_frame,
         }
         report["passed"] = preview_requirements_met(
             open_seconds=open_seconds,

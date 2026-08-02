@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 
+from .editable_media_project_migration import (
+    migrate_project_editable_media_to_v5,
+)
+
 
 def migrate_v33_to_v34(workspace) -> None:
     with workspace.transaction() as connection:
@@ -93,3 +97,8 @@ def migrate_v34_to_v35(workspace) -> None:
             "UPDATE schema_info SET version=? WHERE component='project'",
             (35,),
         )
+
+
+def migrate_v35_to_v36(workspace) -> None:
+    with workspace.transaction():
+        migrate_project_editable_media_to_v5(workspace)

@@ -5,107 +5,133 @@ from typing import Any, Literal
 from pydantic import Field
 
 from mediaflow.domain.model_base import DomainModel
+from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.domain.runtime_capabilities import (
+    CAPABILITY_CATALOG,
+    CapabilityDefinition,
+)
 
 AUTOMATION_PROTOCOL: Literal["mediaflow-cli"] = "mediaflow-cli"
-AUTOMATION_VERSION: Literal[1] = 1
+AUTOMATION_VERSION: Literal[2] = 2
 
 
 class AutomationRequest(DomainModel):
     protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
-    version: Literal[1] = AUTOMATION_VERSION
+    version: Literal[2] = AUTOMATION_VERSION
     operation: str
     project: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = None
 
 
+class AutomationError(DomainModel):
+    code: str
+    type: str
+    message: str
+
+
+class AutomationSuccessResponse(DomainModel):
+    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
+    version: Literal[2] = AUTOMATION_VERSION
+    request_id: str | None = None
+    ok: Literal[True] = True
+    result: dict[str, Any]
+
+
+class AutomationFailureResponse(DomainModel):
+    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
+    version: Literal[2] = AUTOMATION_VERSION
+    request_id: str | None = None
+    ok: Literal[False] = False
+    error: AutomationError
+
+
+class AutomationTransport(DomainModel):
+    lifecycle: Literal["short-process"] = "short-process"
+    input: str = "single JSON object from a file or stdin"
+    output: str = "single JSON object on stdout"
+
+
+class AutomationOperationContract(DomainModel):
+    name: str
+    project_access: Literal["none", "create", "read", "write"]
+    execution_mode: Literal["atomic", "task"]
+    idempotency: Literal["none", "optional"]
+    required_capabilities: list[str]
+    arguments_schema: dict[str, Any]
+    result_schema: dict[str, Any]
+
+
+class AutomationContract(DomainModel):
+    product: str = PRODUCT_NAME
+    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
+    version: Literal[2] = AUTOMATION_VERSION
+    default_project_root: str
+    transport: AutomationTransport = Field(default_factory=AutomationTransport)
+    request_schema: dict[str, Any]
+    success_response_schema: dict[str, Any]
+    error_response_schema: dict[str, Any]
+    capabilities: list[CapabilityDefinition]
+    operations: list[AutomationOperationContract]
+
+
+def inline_model_schema(model: type[DomainModel]) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    definitions = schema.pop("$defs", {})
+
+    def resolve(value: Any) -> Any:
+        if isinstance(value, list):
+            return [resolve(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        reference = value.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#/$defs/"):
+            name = reference.rsplit("/", 1)[-1]
+            merged = {
+                **definitions[name],
+                **{
+                    key: item
+                    for key, item in value.items()
+                    if key != "$ref"
+                },
+            }
+            return resolve(merged)
+        resolved = {key: resolve(item) for key, item in value.items()}
+        discriminator = resolved.get("discriminator")
+        if isinstance(discriminator, dict):
+            resolved["discriminator"] = {
+                key: item
+                for key, item in discriminator.items()
+                if key != "mapping"
+            }
+        return resolved
+
+    return resolve(schema)
+
+
 def describe_contract() -> dict[str, Any]:
     from mediaflow.automation.operation_registry import OPERATIONS
+    from mediaflow.infrastructure.storage_paths import default_project_root
 
-    return {
-        "protocol": AUTOMATION_PROTOCOL,
-        "version": AUTOMATION_VERSION,
-        "transport": {
-            "lifecycle": "short-process",
-            "input": "single JSON object from a file or stdin",
-            "output": "single JSON object on stdout",
-        },
-        "features": {
-            "editable_web_media": True,
-            "cooperative_desktop_updates": True,
-            "remote_web_pages": False,
-            "persistent_service": False,
-            "web_keyframes": True,
-            "web_brand_themes": True,
-            "web_responsive_variants": True,
-            "web_data_snapshots": True,
-            "web_batch_variants": True,
-            "web_field_locks_and_diff": True,
-            "web_template_rebinding": True,
-            "web_multi_format_export": True,
-            "ai_transcript_edit_plans": True,
-        },
-        "operations": [
-            {
-                "name": name,
-                "mutates_project": definition.mutates_project,
-                "arguments_schema": definition.arguments_schema,
-            }
+    contract = AutomationContract(
+        default_project_root=default_project_root(),
+        request_schema=inline_model_schema(AutomationRequest),
+        success_response_schema=inline_model_schema(AutomationSuccessResponse),
+        error_response_schema=inline_model_schema(AutomationFailureResponse),
+        capabilities=list(CAPABILITY_CATALOG),
+        operations=[
+            AutomationOperationContract(
+                name=name,
+                project_access=definition.project_access,
+                execution_mode=definition.execution_mode,
+                idempotency=definition.idempotency,
+                required_capabilities=list(definition.required_capabilities),
+                arguments_schema=inline_model_schema(
+                    definition.arguments_model
+                ),
+                result_schema=inline_model_schema(definition.result_model),
+            )
             for name, definition in OPERATIONS.items()
         ],
-    }
-
-
-def validate_arguments(operation: str, arguments: dict[str, Any]) -> None:
-    from mediaflow.automation.operation_registry import OPERATIONS
-
-    schema = OPERATIONS[operation].arguments_schema
-    properties = schema["properties"]
-    unknown = set(arguments) - set(properties)
-    if unknown:
-        raise ValueError(
-            f"Unknown arguments for {operation}: {sorted(unknown)}"
-        )
-    missing = [
-        name for name in schema["required"] if name not in arguments
-    ]
-    if missing:
-        raise ValueError(f"Missing arguments for {operation}: {missing}")
-    expected_types: dict[str, type | tuple[type, ...]] = {
-        "string": str,
-        "integer": int,
-        "number": (int, float),
-        "boolean": bool,
-        "object": dict,
-        "array": list,
-    }
-    for name, value in arguments.items():
-        rule = properties[name]
-        expected = rule.get("type")
-        if expected and (
-            not isinstance(value, expected_types[expected])
-            or (
-                expected in {"integer", "number"}
-                and isinstance(value, bool)
-            )
-        ):
-            raise ValueError(f"arguments.{name} must be {expected}")
-        if "enum" in rule and value not in rule["enum"]:
-            raise ValueError(
-                f"arguments.{name} must be one of {rule['enum']}"
-            )
-        item_rule = rule.get("items")
-        if (
-            item_rule
-            and isinstance(value, list)
-            and any(
-                not isinstance(
-                    item,
-                    expected_types[item_rule["type"]],
-                )
-                for item in value
-            )
-        ):
-            raise ValueError(
-                f"arguments.{name} contains an invalid item"
-            )
+    )
+    return contract.model_dump(mode="json")

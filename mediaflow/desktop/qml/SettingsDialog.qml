@@ -26,6 +26,12 @@ AppDialog {
         return 0
     }
 
+    function runtimeComponent(componentId) {
+        const status = settingsController.runtimeToolStatus || {}
+        const components = status.components || {}
+        return components[componentId] || {}
+    }
+
     function syncFromController() {
         var data = settingsController.settingsData
         syncForm(data)
@@ -49,6 +55,7 @@ AppDialog {
         downloadCodec.currentIndex = root.indexOfValue(downloadCodec.model, data.downloadCodec)
         asrEngine.currentIndex = root.indexOfValue(asrEngine.model, data.asrEngine)
         asrCliPath.text = data.asrCliPath
+        asrModelDirectory.text = data.asrModelDirectory
         asrModel.text = data.asrModel
         asrDevice.currentIndex = root.indexOfValue(asrDevice.model, data.asrDevice)
         computeType.text = data.asrComputeType
@@ -56,6 +63,9 @@ AppDialog {
         asrSmartSplitLimit.value = Number(data.asrSmartSplitLimit ?? 42)
         asrParallelChunks.currentIndex = root.indexOfValue(
             asrParallelChunks.model, Number(data.asrParallelChunks ?? 0))
+        gptSoVitsRoot.text = data.gptSoVitsRoot
+        gptSoVitsDevice.currentIndex = root.indexOfValue(
+            gptSoVitsDevice.model, data.gptSoVitsDevice)
         translationTargetLanguage.currentIndex = root.indexOfValue(
             translationTargetLanguage.model, data.translationTargetLanguage)
         translationMode.currentIndex = root.indexOfValue(
@@ -136,12 +146,15 @@ AppDialog {
             downloadCodec: downloadCodec.currentValue,
             asrEngine: asrEngine.currentValue,
             asrCliPath: asrCliPath.text,
+            asrModelDirectory: asrModelDirectory.text,
             asrModel: asrModel.text,
             asrDevice: asrDevice.currentValue,
             asrComputeType: computeType.text,
             asrLanguage: asrLanguage.text,
             asrSmartSplitLimit: asrSmartSplitLimit.value,
             asrParallelChunks: asrParallelChunks.currentValue,
+            gptSoVitsRoot: gptSoVitsRoot.text,
+            gptSoVitsDevice: gptSoVitsDevice.currentValue,
             translationTargetLanguage: translationTargetLanguage.currentValue,
             translationMode: translationMode.currentValue,
             automaticProxy: automaticProxy.checked,
@@ -195,6 +208,32 @@ AppDialog {
         title: qsTr("选择媒体默认保存位置")
         onAccepted: {
             downloadDirectory.text = selectedFolder.toLocalFile()
+            root.scheduleSettingsSave()
+        }
+    }
+    FileDialog {
+        id: xxlExecutableDialog
+        title: qsTr("选择 Faster-Whisper XXL 可执行文件")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [qsTr("Faster-Whisper XXL (faster-whisper-xxl.exe)"), qsTr("可执行文件 (*.exe)")]
+        onAccepted: {
+            asrCliPath.text = selectedFile.toLocalFile()
+            root.scheduleSettingsSave()
+        }
+    }
+    FolderDialog {
+        id: asrModelDirectoryDialog
+        title: qsTr("选择 Faster-Whisper 模型目录")
+        onAccepted: {
+            asrModelDirectory.text = selectedFolder.toLocalFile()
+            root.scheduleSettingsSave()
+        }
+    }
+    FolderDialog {
+        id: gptSoVitsRootDialog
+        title: qsTr("选择 GPT-SoVITS v2Pro 根目录")
+        onAccepted: {
+            gptSoVitsRoot.text = selectedFolder.toLocalFile()
             root.scheduleSettingsSave()
         }
     }
@@ -377,6 +416,7 @@ AppDialog {
 
             AppScrollView {
                 id: downloadSettingsScroll
+                objectName: "downloadSettingsScroll"
                 clip: true
                 ColumnLayout {
                     width: downloadSettingsScroll.availableWidth
@@ -545,15 +585,48 @@ AppDialog {
                             anchors.fill: parent
                             anchors.margins: 9
                             spacing: 7
-                            Text { text: qsTr("运行时工具"); color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold }
+                            Text { text: qsTr("可选运行组件"); color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("yt-dlp：%1 · Faster-Whisper XXL：%2")
+                                text: qsTr("yt-dlp：%1。语音组件按需下载，不进入 MediaFlow Pro 安装包。")
                                     .arg(settingsController.runtimeToolStatus.ytDlpVersion || qsTr("未检测"))
-                                    .arg(settingsController.runtimeToolStatus.cliInstalled ? qsTr("已安装") : qsTr("未安装"))
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSizeCaption
                                 wrapMode: Text.WordWrap
+                            }
+                            AppCheckBox {
+                                id: selectXxlDownload
+                                objectName: "selectFasterWhisperDownload"
+                                Layout.fillWidth: true
+                                text: qsTr("Faster-Whisper XXL · %1 GiB · %2")
+                                    .arg(root.runtimeComponent("faster-whisper-xxl").downloadGiB || "1.33")
+                                    .arg(root.runtimeComponent("faster-whisper-xxl").ready ? qsTr("可用") : qsTr("未就绪"))
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.runtimeComponent("faster-whisper-xxl").path
+                                    || root.runtimeComponent("faster-whisper-xxl").reason
+                                    || qsTr("尚未安装或选择本地程序")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                                elide: Text.ElideMiddle
+                            }
+                            AppCheckBox {
+                                id: selectGptSoVitsDownload
+                                objectName: "selectGptSoVitsDownload"
+                                Layout.fillWidth: true
+                                text: qsTr("GPT-SoVITS v2Pro · %1 GiB · %2")
+                                    .arg(root.runtimeComponent("gpt-sovits-v2pro").downloadGiB || "7.59")
+                                    .arg(root.runtimeComponent("gpt-sovits-v2pro").ready ? qsTr("可用") : qsTr("未就绪"))
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.runtimeComponent("gpt-sovits-v2pro").path
+                                    || root.runtimeComponent("gpt-sovits-v2pro").reason
+                                    || qsTr("尚未安装或选择本地目录")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSizeCaption
+                                elide: Text.ElideMiddle
                             }
                             Text {
                                 Layout.fillWidth: true
@@ -579,8 +652,22 @@ AppDialog {
                                 Layout.fillWidth: true
                                 AppButton { Layout.fillWidth: true; enabled: !settingsController.runtimeToolStatus.busy; text: qsTr("检测 CUDA"); onClicked: settingsController.inspectRuntimeTools() }
                                 AppButton { Layout.fillWidth: true; enabled: !settingsController.runtimeToolStatus.busy; text: qsTr("更新 yt-dlp"); onClicked: settingsController.updateYtDlp() }
-                                AppButton { Layout.fillWidth: true; enabled: !settingsController.runtimeToolStatus.busy; text: qsTr("安装 XXL"); onClicked: settingsController.installAsrCli() }
-                                AppButton { Layout.fillWidth: true; enabled: !settingsController.runtimeToolStatus.busy && settingsController.runtimeToolStatus.cliInstalled; text: qsTr("预热 XXL"); onClicked: settingsController.prewarmAsrCli() }
+                                AppButton {
+                                    objectName: "downloadSelectedRuntimeComponents"
+                                    Layout.fillWidth: true
+                                    enabled: !settingsController.runtimeToolStatus.busy
+                                        && (selectXxlDownload.checked || selectGptSoVitsDownload.checked)
+                                    text: qsTr("下载所选组件")
+                                    onClicked: {
+                                        const selected = []
+                                        if (selectXxlDownload.checked)
+                                            selected.push("faster-whisper-xxl")
+                                        if (selectGptSoVitsDownload.checked)
+                                            selected.push("gpt-sovits-v2pro")
+                                        settingsController.installRuntimeComponents(selected)
+                                    }
+                                }
+                                AppButton { Layout.fillWidth: true; enabled: !settingsController.runtimeToolStatus.busy && root.runtimeComponent("faster-whisper-xxl").ready; text: qsTr("预热 XXL"); onClicked: settingsController.prewarmAsrCli() }
                                 AppButton { visible: settingsController.runtimeToolStatus.busy; danger: true; text: qsTr("取消"); onClicked: settingsController.cancelRuntimeToolOperation() }
                             }
                         }
@@ -611,6 +698,20 @@ AppDialog {
                             color: Theme.text
                             onEditingFinished: root.scheduleSettingsSave()
                         }
+                        AppButton { text: qsTr("选择"); onClicked: xxlExecutableDialog.open() }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: qsTr("模型目录"); color: Theme.textMuted; Layout.preferredWidth: 180 }
+                        AppTextField {
+                            id: asrModelDirectory
+                            objectName: "asrModelDirectoryField"
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("留空使用 D 盘运行时模型目录")
+                            color: Theme.text
+                            onEditingFinished: root.scheduleSettingsSave()
+                        }
+                        AppButton { text: qsTr("选择"); onClicked: asrModelDirectoryDialog.open() }
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -677,6 +778,31 @@ AppDialog {
                             Layout.fillWidth: true
                             textRole: "text"; valueRole: "value"
                             model: settingsController.asrParallelOptions
+                            onActivated: root.scheduleSettingsSave()
+                        }
+                    }
+                    Text { text: qsTr("声音克隆"); color: Theme.text; font.pixelSize: Theme.fontSizeBodyLarge; font.weight: Font.DemiBold }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: qsTr("GPT-SoVITS 根目录"); color: Theme.textMuted; Layout.preferredWidth: 180 }
+                        AppTextField {
+                            id: gptSoVitsRoot
+                            objectName: "gptSoVitsRootField"
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("留空使用 D 盘运行时安装目录")
+                            color: Theme.text
+                            onEditingFinished: root.scheduleSettingsSave()
+                        }
+                        AppButton { text: qsTr("选择"); onClicked: gptSoVitsRootDialog.open() }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: qsTr("GPT-SoVITS 设备"); color: Theme.textMuted; Layout.preferredWidth: 180 }
+                        AppComboBox {
+                            id: gptSoVitsDevice
+                            Layout.fillWidth: true
+                            textRole: "text"; valueRole: "value"
+                            model: [{text: qsTr("自动"), value: "auto"}, {text: "CUDA", value: "cuda"}, {text: "CPU", value: "cpu"}]
                             onActivated: root.scheduleSettingsSave()
                         }
                     }

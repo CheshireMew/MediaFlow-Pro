@@ -14,13 +14,20 @@ def inspect_project(context: OperationContext) -> dict:
     return project_snapshot(context.project)
 
 
-def list_versions(context: OperationContext) -> dict:
+def upgrade_project(context: OperationContext) -> dict:
     return {
-        "versions": [
-            item.model_dump(mode="json")
-            for item in context.project.list_versions()
-        ]
+        "upgraded": True,
+        **project_snapshot(context.project),
     }
+
+
+def list_versions(context: OperationContext) -> dict:
+    return {"versions": context.project.list_versions()}
+
+
+def create_version(context: OperationContext) -> dict:
+    record = context.project.create_version(str(context.required("name")))
+    return {"version": record}
 
 
 def restore_version(context: OperationContext) -> dict:
@@ -28,18 +35,13 @@ def restore_version(context: OperationContext) -> dict:
         str(context.required("version_id"))
     )
     return {
-        "restored_version": record.model_dump(mode="json"),
+        "restored_version": record,
         **project_snapshot(context.project),
     }
 
 
 def list_assets(context: OperationContext) -> dict:
-    return {
-        "assets": [
-            item.model_dump(mode="json")
-            for item in context.project.list_assets()
-        ]
-    }
+    return {"assets": context.project.list_assets()}
 
 
 def import_asset(context: OperationContext) -> dict:
@@ -54,9 +56,7 @@ def import_asset(context: OperationContext) -> dict:
     imported_id = result["result"]["imported_asset_id"]
     return {
         **result,
-        "asset": context.project.get_asset(imported_id).model_dump(
-            mode="json"
-        ),
+        "asset": context.project.get_asset(imported_id),
     }
 
 
@@ -67,4 +67,4 @@ def create_short_sequence(context: OperationContext) -> dict:
         int(context.required("end_frame")),
         name=str(context.arguments.get("name") or "短视频"),
     )
-    return {"sequence": sequence.model_dump(mode="json")}
+    return {"sequence": sequence}

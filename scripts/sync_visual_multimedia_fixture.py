@@ -4,20 +4,22 @@ import argparse
 import hashlib
 import json
 import shutil
+import tempfile
 from pathlib import Path
 
 PACKAGE_SOURCES = (
-    ("assets/web-media-starter", "editable-media-v4"),
+    ("assets/web-media-starter", "editable-media-v5"),
     (
         "assets/web-card-cases/warm-paper-project-list",
-        "editable-media-v4-cases/warm-paper-project-list",
+        "editable-media-v5-cases/warm-paper-project-list",
     ),
     (
         "assets/web-card-cases/social-evidence-variants",
-        "editable-media-v4-cases/social-evidence-variants",
+        "editable-media-v5-cases/social-evidence-variants",
     ),
 )
-SCHEMA_SOURCE = "schemas/editable-media.v4.schema.json"
+SCHEMA_SOURCE = "schemas/editable-media.v5.schema.json"
+RUNTIME_SOURCE = "assets/web-media-starter/editable-media-runtime.js"
 
 
 def sha256(path: Path) -> str:
@@ -49,31 +51,114 @@ def sync_package(
     source = source.resolve(strict=True)
     destination = destination.expanduser().resolve()
     manifest = json.loads((source / "editable-media.json").read_text(encoding="utf-8"))
-    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 4:
-        raise ValueError("The producer fixture must use editable-media v4")
+    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 5:
+        raise ValueError("The producer fixture must use editable-media v5")
     files = package_files(source)
-    destination.mkdir(parents=True, exist_ok=True)
-    for source_file in files:
-        relative = source_file.relative_to(source)
-        destination_file = destination / relative
-        destination_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source_file, destination_file)
-    hashes = {
-        path.relative_to(source).as_posix(): sha256(destination / path.relative_to(source))
-        for path in files
-    }
-    origin = {
-        "protocol": "mediaflow-generated-test-fixture",
-        "version": 1,
-        "producer": producer,
-        "editable_media_version": 4,
-        "files": hashes,
-    }
-    (destination / "fixture-origin.json").write_text(
-        f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
-        encoding="utf-8",
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.sync-",
+            dir=destination.parent,
+        )
     )
-    return origin
+    try:
+        for source_file in files:
+            relative = source_file.relative_to(source)
+            destination_file = staging / relative
+            destination_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_file, destination_file)
+        hashes = {
+            path.relative_to(source).as_posix(): sha256(
+                staging / path.relative_to(source)
+            )
+            for path in files
+        }
+        origin = {
+            "protocol": "mediaflow-generated-test-fixture",
+            "version": 1,
+            "producer": producer,
+            "editable_media_version": 5,
+            "files": hashes,
+        }
+        (staging / "fixture-origin.json").write_text(
+            f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
+            encoding="utf-8",
+        )
+        if destination.exists():
+            if not destination.is_dir():
+                raise ValueError(f"Fixture destination is not a directory: {destination}")
+            shutil.rmtree(destination)
+        staging.replace(destination)
+        return origin
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def sync_schema(source: Path, destination: Path) -> Path:
+    source = source.resolve(strict=True)
+    destination = destination.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    current = destination / source.name
+    if current.is_file() and sha256(source) == sha256(current):
+        return current
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.sync-",
+            dir=destination.parent,
+        )
+    )
+    try:
+        copied = staging / source.name
+        shutil.copyfile(source, copied)
+        if destination.exists():
+            if not destination.is_dir():
+                raise ValueError(f"Schema destination is not a directory: {destination}")
+            shutil.rmtree(destination)
+        staging.replace(destination)
+        return destination / source.name
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def sync_runtime_contract(source: Path, destination_name: str) -> Path:
+    destination = (
+        Path(__file__).resolve().parents[1]
+        / "mediaflow"
+        / "resources"
+        / "contracts"
+        / destination_name
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = source.resolve(strict=True)
+    if destination.is_file() and sha256(source) == sha256(destination):
+        return destination
+    temporary = destination.with_name(f".{destination.name}.sync")
+    shutil.copyfile(source, temporary)
+    temporary.replace(destination)
+    return destination
+
+
+def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
+    schema_source = skill_root / SCHEMA_SOURCE
+    schema_destination = sync_schema(
+        schema_source,
+        destination / "editable-media-v5-contract",
+    )
+    runtime_contract = sync_runtime_contract(
+        schema_source,
+        "editable-media.v5.schema.json",
+    )
+    runtime_script = sync_runtime_contract(
+        skill_root / RUNTIME_SOURCE,
+        "editable-media-runtime.v5.js",
+    )
+    return {
+        "schema_sha256": sha256(schema_destination),
+        "runtime_contract_sha256": sha256(runtime_contract),
+        "runtime_script_sha256": sha256(runtime_script),
+    }
 
 
 def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
@@ -86,21 +171,18 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
             destination / destination_relative,
             producer=f"visual-multimedia/{source_relative}",
         )
-    schema_source = skill_root / SCHEMA_SOURCE
-    schema_destination = destination / "editable-media-v4-contract" / schema_source.name
-    schema_destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(schema_source, schema_destination)
+    contracts = sync_contracts(skill_root, destination)
     return {
         "protocol": "mediaflow-editable-media-test-corpus",
         "version": 1,
-        "schema_sha256": sha256(schema_destination),
+        **contracts,
         "packages": packages,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sync MediaFlow's editable-media v4 corpus from visual-multimedia."
+        description="Sync MediaFlow Pro's editable-media v5 corpus from visual-multimedia."
     )
     parser.add_argument("visual_multimedia_root", type=Path)
     parser.add_argument(
@@ -108,10 +190,26 @@ def main() -> int:
         type=Path,
         default=Path("tests/fixtures"),
     )
+    parser.add_argument(
+        "--contracts-only",
+        action="store_true",
+        help="Sync the schema and standard runtime without replacing fixtures.",
+    )
     args = parser.parse_args()
+    skill_root = args.visual_multimedia_root.expanduser().resolve(strict=True)
+    destination = args.destination.expanduser().resolve()
+    result = (
+        {
+            "protocol": "mediaflow-editable-media-contracts",
+            "version": 1,
+            **sync_contracts(skill_root, destination),
+        }
+        if args.contracts_only
+        else sync_corpus(skill_root, destination)
+    )
     print(
         json.dumps(
-            sync_corpus(args.visual_multimedia_root, args.destination),
+            result,
             ensure_ascii=False,
             indent=2,
         )

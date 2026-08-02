@@ -5,13 +5,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from mediaflow.domain.storage_names import (
-    PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
-    PROJECT_ROOT_PATH_UTF16_LIMIT,
-    safe_child_path,
-    utf16_units,
-)
-
 
 def _run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -45,25 +38,22 @@ def test_cli_unknown_commands_use_the_versioned_json_error_contract() -> None:
     assert output["error"]["code"] == "invalid_request"
 
 
-def test_cli_project_create_rejects_over_budget_root_without_writing(
+def test_cli_project_create_rejects_legacy_caller_owned_root_without_writing(
     tmp_path: Path,
 ) -> None:
-    project_path = safe_child_path(
-        tmp_path,
-        "CLI-Over-Budget-Project-Root-" * 20,
-        max_path_utf16_units=PROJECT_ROOT_PATH_UTF16_LIMIT + 1,
-        max_component_utf16_units=PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
-    )
-    assert utf16_units(str(project_path)) == PROJECT_ROOT_PATH_UTF16_LIMIT + 1
-    request_path = tmp_path / "over-budget-project-create.json"
+    project_path = tmp_path / "caller-owned-project"
+    request_path = tmp_path / "legacy-project-create.json"
     request_path.write_text(
         json.dumps(
             {
                 "protocol": "mediaflow-cli",
-                "version": 1,
+                "version": 2,
                 "operation": "project.create",
                 "project": str(project_path),
-                "arguments": {"name": "Must Not Exist"},
+                "arguments": {
+                    "name": "Must Not Exist",
+                    "directory_name": "must-not-exist",
+                },
             }
         ),
         encoding="utf-8",
@@ -77,5 +67,35 @@ def test_cli_project_create_rejects_over_budget_root_without_writing(
     assert output["ok"] is False
     assert output["error"]["code"] == "invalid_request"
     assert output["error"]["type"] == "ValueError"
-    assert "路径过深" in output["error"]["message"]
+    assert "does not accept project" in output["error"]["message"]
+    assert not project_path.exists()
+
+
+def test_cli_rejects_the_removed_v1_protocol_without_creating_a_project(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Must Not Exist"
+    request_path = tmp_path / "removed-v1-request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "protocol": "mediaflow-cli",
+                "version": 1,
+                "operation": "project.create",
+                "project": str(project_path),
+                "arguments": {
+                    "name": "Must Not Exist",
+                    "directory_name": "must-not-exist",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli("execute", "--request", str(request_path))
+
+    assert result.returncode == 1
+    output = json.loads(result.stdout)
+    assert output["version"] == 2
+    assert output["error"]["code"] == "validation_error"
     assert not project_path.exists()

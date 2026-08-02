@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_MEDIA_STARTER = Path(
     os.environ.get(
         "MEDIAFLOW_EDITABLE_MEDIA_PACKAGE",
-        ROOT / "tests" / "fixtures" / "editable-media-v4",
+        ROOT / "tests" / "fixtures" / "editable-media-v5",
     )
 ).resolve()
 
@@ -56,6 +56,27 @@ def process_events(errors: list[str]) -> None:
     QCoreApplication.processEvents()
     time.sleep(0.02)
     raise_ui_errors(errors)
+
+
+def wait_project_release(
+    controller: EditorControllers,
+    *,
+    timeout: float = 30,
+    errors: list[str],
+) -> None:
+    deadline = time.monotonic() + timeout
+    while controller.workspace.projectReleasePending and time.monotonic() < deadline:
+        process_events(errors)
+        if controller.workspace.projectCloseFailed:
+            raise RuntimeError(
+                "Project resources could not be released: "
+                f"{controller.workspace.projectCloseError}"
+            )
+    if controller.workspace.projectReleasePending:
+        raise TimeoutError(
+            "Project resources were not released before reopening: "
+            f"{controller.workspace.closingProjectPath}"
+        )
 
 
 def failed_task(controller: EditorControllers):
@@ -752,10 +773,26 @@ def verify(project_parent: Path) -> None:
         web_clip_id = controller.timeline.selectedClipId
         controller.web.selectLayer("title")
         controller.web.updateLayer("title", {"content": "Real editable web chain"})
-        controller.web.setKeyframeAtFrame("opacity", 0.4, "ease_in_out", 0)
-        controller.web.setKeyframeAtFrame("opacity", 1.0, "ease_out", 25)
-        controller.web.updateThemeValue("accent", "#e6007a")
-        controller.web.updateDataValue("left_value", '"Desktop and CLI share state"')
+        controller.web_timeline.setDescriptorKeyframeAtFrame(
+            "layer",
+            "title.opacity",
+            0.4,
+            "ease_in_out",
+            0,
+        )
+        controller.web_timeline.setDescriptorKeyframeAtFrame(
+            "layer",
+            "title.opacity",
+            1.0,
+            "ease_out",
+            25,
+        )
+        controller.web.updateDescriptorValue("theme", "accent", "#e6007a")
+        controller.web.updateDescriptorValue(
+            "data",
+            "left_value",
+            '"Desktop and CLI share state"',
+        )
         persisted_web = project.get_web_clip(web_clip_id)
         if (
             persisted_web.scenes["opening"].layers["title"].content
@@ -855,6 +892,7 @@ def verify(project_parent: Path) -> None:
         project_root = project.project_dir
         task_count = len(project.list_tasks())
         controller.workspace.closeProject()
+        wait_project_release(controller, errors=errors)
         controller.workspace.openProject(QUrl.fromLocalFile(str(project_root)).toString())
         reopened = controller.session.binding.current
         if reopened is None:

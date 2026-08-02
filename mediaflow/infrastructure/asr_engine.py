@@ -15,10 +15,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from mediaflow.domain.asr import AsrEngine, AsrProgress, AsrResult, AsrSegment, AsrWord
+from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitle_file import SubtitleFile
 
+from .asr_models import FasterWhisperModelStore
 from .audio_chunking import AudioChunkingService, AudioPreparationService
 from .cache_manager import CacheManager
 from .runtime_paths import RuntimePaths
@@ -340,10 +342,10 @@ class FasterWhisperEngine:
         compute_type = self.settings.compute_type
         if device == "cpu" and compute_type in {"float16", "int8_float16"}:
             compute_type = "int8"
-        model_root = self.paths.runtime_dir / "models" / "faster-whisper"
-        model_root.mkdir(parents=True, exist_ok=True)
+        model_store = FasterWhisperModelStore(self.settings, self.paths)
+        model_root = model_store.prepare()
         self._model = WhisperModel(
-            self.settings.model,
+            model_store.builtin_model_reference(),
             device=device,
             compute_type=compute_type,
             download_root=str(model_root),
@@ -442,7 +444,7 @@ class FasterWhisperProcessEngine:
                 str(source),
                 language,
             ),
-            name="MediaFlow-ASR",
+            name=f"{PRODUCT_NAME} ASR",
         )
         process.start()
         try:
@@ -621,7 +623,7 @@ class FasterWhisperCliEngine:
                 "--model",
                 Path(self.settings.model).name,
                 "--model_dir",
-                str(self.paths.runtime_dir / "models" / "faster-whisper"),
+                str(FasterWhisperModelStore(self.settings, self.paths).prepare()),
                 "-o",
                 str(Path(output_dir).resolve()),
                 "--output_format",

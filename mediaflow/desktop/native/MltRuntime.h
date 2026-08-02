@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QLibrary>
@@ -44,7 +45,6 @@ signals:
     void frameReady(const QImage &image, int frame, int duration, quint64 requestId);
     void durationChanged(int duration, quint64 requestId);
     void playingChanged(bool playing, quint64 requestId);
-    void presentationDeadlineMissed(int count, quint64 requestId);
     void errorOccurred(const QString &message, quint64 requestId);
 
 private:
@@ -154,33 +154,35 @@ private:
     void performPendingSeek();
     bool seekImmediately(int frame);
     bool startConfiguredPlayback();
-    bool startPlaybackConsumer();
-    void closePlaybackConsumer();
+    bool startPlaybackConsumers();
+    void closePlaybackConsumers();
     bool decodeStillFrame(int frame);
     bool readFrameImage(MltFrame frame, int position, QImage &image);
-    static void onConsumerFrameRendered(
+    static void onVideoFrameShown(
         MltProperties owner,
         void *listenerData,
         MltEventData eventData);
-    static void onConsumerPlaybackStarted(
+    static void onAudioFrameShown(
         MltProperties owner,
         void *listenerData,
         MltEventData eventData);
     void beginPresentation(int generation);
     void presentNextFrame();
     void deliverPresentationFrame(const QImage &image, int frame, int generation);
-    void scheduleNextPresentation();
     void setPlaying(bool playing);
 
     QLibrary m_library;
     QString m_runtimeRoot;
     Api m_api;
     MltRepository m_repository = nullptr;
-    MltProfile m_profile = nullptr;
-    MltProducer m_producer = nullptr;
-    MltConsumer m_consumer = nullptr;
-    MltEvent m_renderEvent = nullptr;
-    MltEvent m_showEvent = nullptr;
+    MltProfile m_audioProfile = nullptr;
+    MltProfile m_videoProfile = nullptr;
+    MltProducer m_audioProducer = nullptr;
+    MltProducer m_videoProducer = nullptr;
+    MltConsumer m_audioConsumer = nullptr;
+    MltConsumer m_videoConsumer = nullptr;
+    MltEvent m_videoShowEvent = nullptr;
+    MltEvent m_audioShowEvent = nullptr;
     int m_position = 0;
     int m_duration = 0;
     int m_playbackStart = 0;
@@ -202,17 +204,19 @@ private:
     std::atomic<bool> m_frameOutputHdr{false};
     std::atomic<quint64> m_requestId{0};
     std::atomic<int> m_consumerGeneration{0};
+    std::atomic<bool> m_playbackConsumersActive{false};
     std::atomic<int> m_presentationStartGeneration{-1};
-    std::atomic<quint64> m_renderSequence{0};
+    std::atomic<int> m_audioClockPosition{0};
     std::atomic<int> m_renderQueueCapacity{60};
     QMutex m_renderedFramesMutex;
     QWaitCondition m_renderQueueNotFull;
-    QMap<quint64, RenderedFrame> m_renderedFrames;
+    QMultiMap<int, RenderedFrame> m_renderedFrames;
     QTimer *m_presentationTimer = nullptr;
-    QElapsedTimer m_presentationClock;
-    quint64 m_nextPresentationSequence = 0;
-    qint64 m_nextPresentationDeadlineNs = 0;
+    QElapsedTimer m_cadenceClock;
+    QDeadlineTimer m_missingFrameDeadline;
+    qint64 m_nextCadenceDeadlineNs = 0;
+    int m_expectedPresentationPosition = 0;
+    int m_lastPresentationPosition = -1;
     int m_presentationGeneration = -1;
-    int m_currentDeadlineMisses = 0;
-    bool m_presentationStarted = false;
+    bool m_waitingForMissingFrame = false;
 };

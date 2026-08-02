@@ -10,6 +10,7 @@ Rectangle {
 
     property int playheadFrame: 0
     signal editProfileRequested
+    signal seekRequested(int frame)
 
     readonly property bool hasTimelineSelection:
         timelineController.selectedClipId.length > 0
@@ -288,6 +289,9 @@ Rectangle {
 
             EditPanel {
                 playheadFrame: root.playheadFrame
+                onSeekRequested: function(frame) {
+                    root.seekRequested(frame);
+                }
             }
         }
     }

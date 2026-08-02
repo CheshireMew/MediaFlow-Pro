@@ -47,7 +47,7 @@ Rectangle {
         if (!visible || webView.loading || !webController.isWebClip)
             return;
         const generation = ++root.syncGeneration;
-        webController.setActiveFrame(root.playheadFrame);
+        webTimelineController.setActiveFrame(root.playheadFrame);
         const selected = JSON.stringify(webController.selectedLayerId);
         webView.runJavaScript(`
             (() => {
@@ -60,7 +60,7 @@ Rectangle {
                     window.__mediaFlowSynchronizing = true;
                     try {
                         window.editableMedia.setState(${webController.stateJson});
-                        window.editableMedia.setTime(${webController.timeMsForFrame(root.playheadFrame)});
+                        window.editableMedia.setTime(${webTimelineController.timeMsForFrame(root.playheadFrame)});
                         if (typeof window.editableMedia.setEditCapabilities === "function")
                             window.editableMedia.setEditCapabilities(${webController.capabilitiesJson});
                         window.editableMedia.setEditMode(${webController.editMode});
@@ -89,6 +89,22 @@ Rectangle {
         webView.runJavaScript(`
             Promise.resolve(window.editableMedia.ready).then(() =>
                 window.editableMedia.selectLayer(${selected}))`);
+    }
+
+    function previewRuntimeState(payload) {
+        if (!visible || webView.loading || !webController.isWebClip)
+            return;
+        webView.runJavaScript(`
+            Promise.resolve(window.editableMedia.ready).then(() => {
+                window.__mediaFlowSynchronizing = true;
+                try {
+                    window.editableMedia.setState(${payload});
+                    window.editableMedia.setTime(
+                        ${webTimelineController.timeMsForFrame(root.playheadFrame)});
+                } finally {
+                    window.__mediaFlowSynchronizing = false;
+                }
+            })`);
     }
 
     QtObject {
@@ -140,12 +156,19 @@ Rectangle {
         }
     }
 
+    Connections {
+        target: webTimelineController
+        function onBrowserRuntimePreviewRequested(payload) {
+            root.previewRuntimeState(payload);
+        }
+    }
+
     onPlayheadFrameChanged: {
         if (!visible || webView.loading || !webController.isWebClip)
             return;
-        webController.setActiveFrame(root.playheadFrame);
+        webTimelineController.setActiveFrame(root.playheadFrame);
         webView.runJavaScript(`Promise.resolve(window.editableMedia.ready).then(() =>
-            window.editableMedia.setTime(${webController.timeMsForFrame(root.playheadFrame)}))`);
+            window.editableMedia.setTime(${webTimelineController.timeMsForFrame(root.playheadFrame)}))`);
     }
 
     Rectangle {

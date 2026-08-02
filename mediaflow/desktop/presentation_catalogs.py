@@ -502,6 +502,12 @@ def task_message_label(code: str) -> str:
             "TaskMessageCatalog", "正在保存下载分析结果"
         ),
         "audio_analysis_compiling": QCoreApplication.translate("TaskMessageCatalog", "正在编译音频图"),
+        "audio_analysis_waiting": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在等待相同响度分析"
+        ),
+        "audio_analysis_cache_ready": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在复用响度分析结果"
+        ),
         "audio_analysis_rendering": QCoreApplication.translate("TaskMessageCatalog", "正在渲染分析音频"),
         "audio_analysis_measuring_loudness": QCoreApplication.translate("TaskMessageCatalog", "正在测量响度"),
         "audio_analysis_measuring_peak": QCoreApplication.translate("TaskMessageCatalog", "正在测量峰值"),
