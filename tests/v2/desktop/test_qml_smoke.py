@@ -1858,7 +1858,7 @@ def test_qml_title_bar_uses_the_mediaflow_pro_product_name(
         assert product_name is not None
         assert product_name.property("text") == "MediaFlow Pro"
     finally:
-        controllers.workspace.shutdown()
+        controllers.shutdown()
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         QCoreApplication.processEvents()
@@ -3773,7 +3773,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert str(removed_project_path) not in persisted_recent_paths
         assert (removed_project_path / "project.mfp").is_file()
     finally:
-        controllers.workspace.shutdown()
+        controllers.shutdown()
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         QCoreApplication.processEvents()
