@@ -16,6 +16,11 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+      MEDIAFLOW_DEV_ROOT: ${{ runner.temp }}\mediaflow-dev
+      MEDIAFLOW_PROJECT_ROOT: ${{ runner.temp }}\mediaflow-projects
+      MEDIAFLOW_MEDIA_ROOT: ${{ runner.temp }}\mediaflow-media
+      MEDIAFLOW_TEST_ROOT: ${{ runner.temp }}\mediaflow-test-runs
+      MEDIAFLOW_TEST_FIXTURE_ROOT: ${{ runner.temp }}\mediaflow-test-fixtures
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

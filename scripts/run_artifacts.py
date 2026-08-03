@@ -16,8 +16,8 @@ from types import TracebackType
 from typing import BinaryIO, Literal
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.environment import test_run_root
 
-DEFAULT_SCRIPT_RUN_ROOT = Path("D:/Tools/MediaFlow/test-runs/scripts")
 MANIFEST_FILENAME = "run-result.json"
 MANIFEST_SCHEMA = "mediaflow-script-run/v1"
 
@@ -179,7 +179,8 @@ class VerificationRun:
             raise RuntimeError(f"Verification run is already active: {self.path}")
         isolated = {
             "MEDIAFLOW_SETTINGS_PATH": self.path / "settings" / "settings.json",
-            "MEDIAFLOW_APP_ROOT": self.path / "app",
+            "MEDIAFLOW_MEDIA_ROOT": self.path / "media",
+            "MEDIAFLOW_PROJECT_ROOT": self.path / "projects",
         }
         self._previous_environment = {
             name: os.environ.get(name) for name in isolated
@@ -277,7 +278,7 @@ def verification_run(
     *,
     explicit_root: Path | None = None,
     explicit_parent: Path | None = None,
-    managed_root: Path = DEFAULT_SCRIPT_RUN_ROOT,
+    managed_root: Path | None = None,
 ) -> VerificationRun:
     category = _validate_category(category)
     if explicit_root is not None and explicit_parent is not None:
@@ -287,7 +288,8 @@ def verification_run(
     managed = explicit_root is None and explicit_parent is None
     category_root: Path | None = None
     if managed:
-        requested_base = managed_root.expanduser().absolute()
+        selected_root = managed_root if managed_root is not None else test_run_root() / "scripts"
+        requested_base = selected_root.expanduser().absolute()
         if requested_base.exists() and _is_link(requested_base):
             raise RuntimeError(
                 f"Managed script run root cannot be linked: {requested_base}"

@@ -55,23 +55,23 @@ def test_windows_media_runtime_has_one_checksum_pinned_contract() -> None:
     assert "aqtinstall==3.3.0" in requirements
 
 
-def test_isolated_cache_root_reuses_the_default_pinned_media_runtime(
+def test_isolated_runtime_reuses_the_environment_owned_pinned_toolchain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     isolated_runtime = tmp_path / "isolated" / "runtime"
-    default_runtime = tmp_path / "reviewed" / "runtime"
+    development_root = tmp_path / "reviewed"
     contract = load_runtime_contract()
-    shotcut = contract.shotcut_directory(default_runtime.parent)
+    shotcut = contract.shotcut_directory(development_root)
     shotcut.mkdir(parents=True)
     for name in ("ffmpeg.exe", "ffprobe.exe", "melt.exe"):
         (shotcut / name).write_bytes(b"reviewed runtime")
 
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(isolated_runtime))
+    monkeypatch.setenv("MEDIAFLOW_DEV_ROOT", str(development_root))
     monkeypatch.delenv("MEDIAFLOW_FFMPEG", raising=False)
     monkeypatch.delenv("MEDIAFLOW_FFPROBE", raising=False)
     monkeypatch.delenv("MEDIAFLOW_MELT", raising=False)
-    monkeypatch.setattr(runtime_paths, "DEFAULT_RUNTIME_DIRECTORY", default_runtime)
     monkeypatch.setattr(runtime_paths.shutil, "which", lambda _command: None)
 
     discovered = runtime_paths.RuntimePathDiscovery.discover()
@@ -97,6 +97,16 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
         "scripts.verify_reference_comparison_chain",
     )
     assert all(step in workflow for step in required_steps)
+    assert all(
+        variable in workflow
+        for variable in (
+            "MEDIAFLOW_DEV_ROOT",
+            "MEDIAFLOW_PROJECT_ROOT",
+            "MEDIAFLOW_MEDIA_ROOT",
+            "MEDIAFLOW_TEST_ROOT",
+            "MEDIAFLOW_TEST_FIXTURE_ROOT",
+        )
+    )
     assert "--python-only" not in workflow
     assert "if: ${{ vars.MEDIAFLOW_RUN_ONLINE_E2E == 'true' }}" in workflow
     assert not re.search(

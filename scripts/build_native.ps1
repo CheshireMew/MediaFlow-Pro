@@ -6,20 +6,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "load_environment.ps1")
 $root = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $root "mediaflow\desktop\native"
 if (-not $BuildDir) {
     $BuildDir = if ($env:MEDIAFLOW_NATIVE_BUILD_DIR) {
         $env:MEDIAFLOW_NATIVE_BUILD_DIR
     } else {
-        "D:\Tools\MediaFlow\build\native-qt611"
+        Join-Path $env:MEDIAFLOW_DEV_ROOT "build\native-qt611"
     }
 }
 if (-not $QtDir) {
     $QtDir = if ($env:QT_ROOT_DIR) {
         $env:QT_ROOT_DIR
     } else {
-        "D:\Tools\MediaFlow\qt"
+        Join-Path $env:MEDIAFLOW_DEV_ROOT "qt"
     }
 }
 if (-not $VsDir) {

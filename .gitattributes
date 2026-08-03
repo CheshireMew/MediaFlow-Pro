@@ -1,1 +1,4 @@
+tests/fixtures/editable-media-v5/** -text -diff
+tests/fixtures/editable-media-v5-cases/** -text -diff
+archive/editable-media-v4-20260731/** -text -diff
 archive/synced-visual-fixtures/** -text -diff

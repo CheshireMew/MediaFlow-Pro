@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -16,8 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from mediaflow.environment import test_run_root
+
 FIXTURE = ROOT / "tests" / "fixtures" / "editable-media-v5"
-DEFAULT_RUN_ROOT = Path("D:/Tools/MediaFlow/test-runs/web-render-performance")
+DEFAULT_RUN_ROOT = test_run_root() / "web-render-performance"
 MIN_PARALLEL_SPEEDUP = 1.35
 MIN_FRAME_PSNR_DB = 60.0
 
@@ -78,6 +82,8 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
     os.environ["MEDIAFLOW_SETTINGS_PATH"] = str(
         run_dir / f"settings-{workers}" / "settings.json"
     )
+    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(run_dir / f"media-{workers}")
+    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(run_dir / f"projects-{workers}")
 
     from mediaflow.application.timeline_editor import TimelineEditor
     from mediaflow.application.web_media_service import WebMediaServices

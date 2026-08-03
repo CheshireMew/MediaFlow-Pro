@@ -827,6 +827,7 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "プロジェクトフォルダーは直接コピーまたは移動できます",
     ),
     "项目已移动或不可用": ("Project moved or unavailable", "プロジェクトが移動されたか利用できません"),
+    "不可用": ("Unavailable", "利用不可"),
     "离线": ("Offline", "オフライン"),
     "还没有最近项目": ("No recent projects yet", "最近のプロジェクトはありません"),
     "创建第一个项目后，下载、字幕、短视频和导出结果都会集中保存在项目目录中。": (
@@ -949,9 +950,9 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     ),
     "转录": ("Transcription", "文字起こし"),
     "转录程序路径": ("Transcription Program Path", "文字起こしプログラムのパス"),
-    "留空使用 D 盘运行时安装目录": (
-        "Leave blank to use the runtime installation on drive D",
-        "空欄の場合はDドライブのランタイムインストール先を使用",
+    "留空使用环境文件中的运行时安装目录": (
+        "Leave blank to use the runtime installation from the environment file",
+        "空欄の場合は環境ファイルのランタイムインストール先を使用",
     ),
     "Faster-Whisper XXL (faster-whisper-xxl.exe)": (
         "Faster-Whisper XXL (faster-whisper-xxl.exe)",
@@ -997,9 +998,9 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "Choose Faster-Whisper Model Directory",
         "Faster-Whisper モデルディレクトリを選択",
     ),
-    "留空使用 D 盘运行时模型目录": (
-        "Leave blank to use the runtime model directory on drive D",
-        "空欄の場合はDドライブのランタイムモデルディレクトリを使用",
+    "留空使用环境文件中的运行时模型目录": (
+        "Leave blank to use the runtime model directory from the environment file",
+        "空欄の場合は環境ファイルのランタイムモデルディレクトリを使用",
     ),
     "模型": ("Model", "モデル"),
     "例如 large-v3-turbo": ("For example, large-v3-turbo", "例：large-v3-turbo"),
@@ -1170,9 +1171,9 @@ TRANSLATIONS.update(
         ),
         "Faster-Whisper XXL CLI": ("Faster-Whisper XXL CLI", "Faster-Whisper XXL CLI"),
         "SRT 字幕 (*.srt)": ("SRT Subtitles (*.srt)", "SRT字幕 (*.srt)"),
-        "faster-whisper-xxl.exe 路径；留空使用 D 盘运行时安装目录": (
-            "Path to faster-whisper-xxl.exe; leave blank to use the D-drive runtime installation",
-            "faster-whisper-xxl.exe のパス。空欄の場合はDドライブのランタイム先を使用",
+        "faster-whisper-xxl.exe 路径；留空使用环境文件中的运行时安装目录": (
+            "Path to faster-whisper-xxl.exe; leave blank to use the runtime installation from the environment file",
+            "faster-whisper-xxl.exe のパス。空欄の場合は環境ファイルのランタイム先を使用",
         ),
         "yt-dlp：%1 · Faster-Whisper XXL：%2": (
             "yt-dlp: %1 · Faster-Whisper XXL: %2",

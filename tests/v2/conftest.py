@@ -24,10 +24,11 @@ from mediaflow.domain.storage_names import (
     safe_child_path,
     utf16_units,
 )
+from mediaflow.environment import test_run_root
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
-TEST_RUN_ROOT = Path("D:/Tools/MediaFlow/test-runs")
+TEST_RUN_ROOT = test_run_root()
 MANAGED_PYTEST_ROOT = TEST_RUN_ROOT / "pytest"
 MANIFEST_SCHEMA = "mediaflow-pytest-run/v1"
 _LEGACY_MANAGED_RUN_PATTERN = re.compile(
@@ -412,12 +413,13 @@ def max_project_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def isolated_settings_path(
+def isolated_storage_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
-    """Prevent tests from adding fixture projects to the user's recent-project index."""
+    """Keep settings, media, and automatic project creation inside the test case."""
     path = tmp_path / "_settings" / "settings.json"
     monkeypatch.setenv("MEDIAFLOW_SETTINGS_PATH", str(path))
-    monkeypatch.setenv("MEDIAFLOW_APP_ROOT", str(path.parent / "app"))
+    monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(path.parent / "media"))
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "_projects"))
     return path

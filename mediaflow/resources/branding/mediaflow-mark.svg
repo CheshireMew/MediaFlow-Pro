@@ -1,4 +1,5 @@
 <svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>MediaFlow Pro</title>
   <rect width="256" height="256" rx="52" fill="#17181A"/>
   <path d="M88 34H34V88M168 34H222V88M34 168V222H88M222 168V222H168" stroke="#8E9197" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M48 168L82 88L128 168L176 84L208 140" stroke="#20C7D4" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>

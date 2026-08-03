@@ -1,12 +1,24 @@
+<p align="center">
+  <img src="mediaflow/resources/branding/mediaflow-mark.svg" width="112" alt="MediaFlow Pro 标志">
+</p>
+
 # MediaFlow Pro
 
 MediaFlow Pro 是面向 Windows 10/11 x64 的本地视频创作工作站。把视频、音频、图片、字幕或 `editable-media` 网页包交给它，可以在同一个可移动工程中完成素材管理、转写、剪辑、多轨时间线、实时预览、混音、质量检查和最终导出；`project.mfp` 是工程的唯一数据来源。
+
+![MediaFlow Pro 中文桌面工作区](docs/images/mediaflow-workspace-zh-cn.png)
+
+<p align="center"><sub>真实 Qt/QML 界面验收截图：素材、预览、检查器和多轨时间线位于同一个桌面工作区。</sub></p>
 
 项目使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出。所有内部控制通信都在桌面进程内完成，不启动常驻 API 服务。解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
 
 项目采用 GPLv3，下载能力以随运行环境提供的 yt-dlp 为准。
 
 当前仓库提供源码、固定依赖清单和可重复构建入口，不提供便携包或安装器。希望从源码运行、研究或扩展本地媒体工作流，可以从[开发运行环境](#开发运行环境)开始；希望先确认产品覆盖范围，可以先看下面的能力与制作路径。
+
+![MediaFlow Pro 中文首页](docs/images/mediaflow-home-zh-cn.png)
+
+<p align="center"><sub>首页可以新建空白工程、粘贴链接开始下载，或打开和体验已有项目。</sub></p>
 
 ## 选择制作路径
 
@@ -63,7 +75,7 @@ editable-media 的包导入、片段编辑、批量生成和素材换版由四�
 ## 项目目录
 
 ```text
-E:\Work\Video\
+<MEDIAFLOW_PROJECT_ROOT>\
   <ProjectName>\
     project.mfp
     generated/
@@ -72,7 +84,7 @@ E:\Work\Video\
     exports/
 ```
 
-`E:\Work\Video` 是新工程的默认根目录，也是自动化创建工程的唯一位置。公开 `project.create` 只接收安全目录名、显示名称和完整项目 profile，由 MediaFlow Pro 在该根目录中创建工程并返回绝对路径；调用端不能提交其它工程路径，也不能依赖隐式分辨率或帧率默认值。桌面端同样默认在这里新建，只有用户主动选择其它目录时才偏离默认值。下载的视频与原始字幕继续进入应用级 `WorkSpace`，不会与工程互相嵌套。合集按标题在 `WorkSpace` 中建立子目录，条目使用稳定序号、标题和媒体 ID 命名；工程通过绝对路径引用这些媒体。工程生成的字幕、代理、波形、分析结果和导出仍由各自工程目录管理。素材失踪时会保持为离线记录，重新定位需要指纹验证或用户明确确认。
+`MEDIAFLOW_PROJECT_ROOT` 是新工程的唯一默认根，`MEDIAFLOW_MEDIA_ROOT` 则保存下载或导入的源媒体。两者都来自当前机器的 `.env`，源码不会根据盘符猜测目录。公开 `project.create` 只接收安全目录名、显示名称和完整项目 profile，由 MediaFlow Pro 在项目根下创建工程并返回绝对路径；调用端不能提交其它工程路径，也不能依赖隐式分辨率或帧率默认值。桌面端只有在用户主动选择其它目录时才偏离该默认值。工程生成的字幕、代理、波形、分析结果和导出仍由各自工程目录管理；素材失踪时保持为离线记录，重新定位需要指纹验证或用户明确确认。
 
 ## 开发运行环境
 
@@ -86,25 +98,36 @@ E:\Work\Video\
 - OpenCV 5.0.0（场景与主体运动分析）
 - FFmpeg n8.1.2（GPLv3 构建）
 
-`runtime.lock.json` 是 Windows Qt、MLT 与 FFmpeg 版本、官方归档地址和校验和的唯一清单；`requirements.lock` 则固定 Python、测试和构建工具的完整依赖图。依赖、模型和构建缓存默认位于 `D:\Tools\MediaFlow`。若没有 D 盘，首次启动会要求用户明确选择运行环境目录，不会静默占用 C 盘；也可以预先设置 `MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`MEDIAFLOW_FFMPEG` 和 `MEDIAFLOW_FFPROBE`。
+`runtime.lock.json` 是 Windows Qt、MLT 与 FFmpeg 版本、官方归档地址和校验和的唯一清单；`requirements.lock` 固定 Python、测试和构建工具的完整依赖图；[`.env.example`](.env.example) 则是机器路径变量的唯一公开合同。复制为被 Git 忽略的 `.env` 后，至少配置开发工具根、工程根和媒体根：
+
+| 变量 | 用途 |
+| --- | --- |
+| `MEDIAFLOW_DEV_ROOT` | Python 环境、SDK、运行时、构建、缓存和测试产物的共同父目录 |
+| `MEDIAFLOW_PROJECT_ROOT` | 新建 MediaFlow Pro 工程的默认根 |
+| `MEDIAFLOW_MEDIA_ROOT` | 下载、导入和转写源媒体的应用级根 |
+| `VISUAL_MULTIMEDIA_ROOT` | 需要同步 `editable-media` 合同样本时使用的生产者仓库位置 |
+
+进程中已经设置的环境变量优先于 `.env`；`MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_FFMPEG`、`MEDIAFLOW_FFPROBE`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`QT_ROOT_DIR` 和各类测试目录可以按需覆盖共同开发根下的标准布局。程序不会保留某个盘符作为隐藏后备路径。
 
 创建开发环境：
 
 ```powershell
-py -3.12 -m venv D:\Tools\MediaFlow\.venv
-$env:PIP_CACHE_DIR = "D:\Tools\MediaFlow\pip-cache"
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pip install --no-deps --no-build-isolation -e .
+Copy-Item .env.example .env
+# 编辑 .env 后加载当前机器配置
+. .\scripts\load_environment.ps1
+$venvRoot = Split-Path -Parent (Split-Path -Parent $env:MEDIAFLOW_PYTHON)
+py -3.12 -m venv $venvRoot
+& $env:MEDIAFLOW_PYTHON -m pip install --require-hashes -r requirements.lock
+& $env:MEDIAFLOW_PYTHON -m pip install --no-deps --no-build-isolation -e .
 ```
 
 `pyproject.toml` 只声明直接依赖，`requirements.lock` 是开发、测试和构建环境实际安装版本的唯一清单。修改依赖后，使用锁文件中固定的 `pip-tools` 重新生成并审查完整依赖图：
 
 ```powershell
-$env:PIP_CACHE_DIR = "D:\Tools\MediaFlow\pip-cache"
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m piptools compile pyproject.toml --extra dev --extra build --generate-hashes --resolver backtracking --allow-unsafe --strip-extras --output-file requirements.lock
+& $env:MEDIAFLOW_PYTHON -m piptools compile pyproject.toml --extra dev --extra build --generate-hashes --resolver backtracking --allow-unsafe --strip-extras --output-file requirements.lock
 ```
 
-原生预览插件要求 MSVC 2022、完整 Qt 6.11.1 SDK 以及 CMake/Ninja。默认路径可通过脚本参数覆盖：
+原生预览插件要求 MSVC 2022、完整 Qt 6.11.1 SDK 以及 CMake/Ninja。脚本会先加载同一份 `.env`，并允许用参数或对应环境变量覆盖：
 
 ```powershell
 .\scripts\prepare_mlt_preview.ps1
@@ -116,7 +139,7 @@ CI 使用 `scripts/prepare_ci_runtime.ps1` 校验 SHA-256 后展开固定的 Sho
 启动应用：
 
 ```powershell
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m mediaflow.desktop.app
+.\scripts\launch.ps1
 ```
 
 也可以把项目目录作为首个参数直接打开。
@@ -143,7 +166,7 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
   "protocol": "mediaflow-cli",
   "version": 2,
   "operation": "task.start",
-  "project": "D:\\Projects\\Demo",
+    "project": "<absolute-project-directory>",
   "arguments": {
     "task_command": {
       "command_type": "generate_waveform",
@@ -180,14 +203,15 @@ MediaFlow Pro 可导入 `editable-media` v5 本地网页包。网页包用 `wind
 ## 测试与真实验收
 
 ```powershell
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pytest tests\v2
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_development_runtime --profile core
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_ui_matrix
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_performance
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_preview_performance
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_web_render_performance
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_reference_comparison_chain --package tests\fixtures\editable-media-v5
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_display_capabilities
+. .\scripts\load_environment.ps1
+& $env:MEDIAFLOW_PYTHON -m pytest tests\v2
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_development_runtime --profile core
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_ui_matrix
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_performance
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_preview_performance
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_web_render_performance
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_reference_comparison_chain --package tests\fixtures\editable-media-v5
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_display_capabilities
 ```
 
 测试覆盖领域计算、SQLite 事务、QML 页面、原生预览、代理、下载、转录、翻译、高光、MLT 导出、HDR 元数据及预览/导出抽帧比对。上述默认验收均可离线运行。`scripts.verify_real_user_chain` 需要真实 `OPENAI_API_KEY` 和在线模型，只在明确配置 `MEDIAFLOW_RUN_ONLINE_E2E=true` 的凭据环境执行；它不会在没有凭据时伪造生产结果或冒充完整链路通过。

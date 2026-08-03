@@ -6,22 +6,33 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from mediaflow.environment import (
+    RUNTIME_DIRECTORY_VARIABLE,
+    configured_path,
+    development_root,
+)
 from mediaflow.infrastructure.runtime_contract import (
     RuntimeContract,
     load_runtime_contract,
 )
 
-DEFAULT_RUNTIME_DIRECTORY = Path("D:/Tools/MediaFlow/runtime")
+
+def configured_runtime_directory() -> Path | None:
+    configured = configured_path(RUNTIME_DIRECTORY_VARIABLE)
+    if configured is not None:
+        return configured
+    root = development_root(required=False)
+    return (root / "runtime").resolve() if root is not None else None
 
 
 def runtime_directory() -> Path:
-    configured = os.environ.get("MEDIAFLOW_RUNTIME_DIR")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    drive = Path("D:/")
-    if not drive.exists():
-        raise RuntimeError("D: drive is unavailable. Set MEDIAFLOW_RUNTIME_DIR to a non-system drive.")
-    return DEFAULT_RUNTIME_DIRECTORY
+    configured = configured_runtime_directory()
+    if configured is None:
+        raise RuntimeError(
+            "MEDIAFLOW_RUNTIME_DIR or MEDIAFLOW_DEV_ROOT is required for the media runtime. "
+            "Copy .env.example to .env and configure this machine before starting MediaFlow Pro."
+        )
+    return configured
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +102,13 @@ class RuntimePathDiscovery:
             if contract is not None
             else None
         )
-        default_shotcut_dir = (
-            contract.shotcut_directory(DEFAULT_RUNTIME_DIRECTORY.parent)
+        root = development_root(required=False)
+        reviewed_runtime = (root / "runtime").resolve() if root is not None else None
+        reviewed_shotcut_dir = (
+            contract.shotcut_directory(reviewed_runtime.parent)
             if contract is not None
-            and runtime_dir.parent != DEFAULT_RUNTIME_DIRECTORY.parent
+            and reviewed_runtime is not None
+            and reviewed_runtime != runtime_dir
             else None
         )
         ffmpeg = cls._optional_tool(
@@ -103,8 +117,8 @@ class RuntimePathDiscovery:
             [
                 shotcut_dir / "ffmpeg.exe" if shotcut_dir is not None else None,
                 (
-                    default_shotcut_dir / "ffmpeg.exe"
-                    if default_shotcut_dir is not None
+                    reviewed_shotcut_dir / "ffmpeg.exe"
+                    if reviewed_shotcut_dir is not None
                     else None
                 ),
             ],
@@ -116,8 +130,8 @@ class RuntimePathDiscovery:
             [
                 shotcut_dir / "ffprobe.exe" if shotcut_dir is not None else None,
                 (
-                    default_shotcut_dir / "ffprobe.exe"
-                    if default_shotcut_dir is not None
+                    reviewed_shotcut_dir / "ffprobe.exe"
+                    if reviewed_shotcut_dir is not None
                     else None
                 ),
             ],
@@ -130,8 +144,8 @@ class RuntimePathDiscovery:
                 runtime_dir / "deps/mlt/bin/melt.exe",
                 shotcut_dir / "melt.exe" if shotcut_dir is not None else None,
                 (
-                    default_shotcut_dir / "melt.exe"
-                    if default_shotcut_dir is not None
+                    reviewed_shotcut_dir / "melt.exe"
+                    if reviewed_shotcut_dir is not None
                     else None
                 ),
                 Path(system_melt) if system_melt else None,
@@ -142,7 +156,7 @@ class RuntimePathDiscovery:
                 Path(os.environ["MEDIAFLOW_NATIVE_QML"]).expanduser()
                 if os.environ.get("MEDIAFLOW_NATIVE_QML")
                 else None,
-                Path("D:/Tools/MediaFlow/build/native-qt611/qml"),
+                root / "build/native-qt611/qml" if root is not None else None,
             ]
         )
         return cls(

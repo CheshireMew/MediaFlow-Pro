@@ -308,7 +308,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("MEDIAFLOW_APP_ROOT", str(tmp_path))
+    monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(tmp_path / "WorkSpace"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "Video"))
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)

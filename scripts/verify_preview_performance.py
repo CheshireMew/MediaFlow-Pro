@@ -35,13 +35,14 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.desktop.app import configure_application_identity
 from mediaflow.domain.enums import TrackKind
+from mediaflow.environment import test_fixture_root
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from scripts.run_artifacts import verification_run
 
-FIXTURE_ROOT = Path("D:/Tools/MediaFlow/test-fixtures")
+FIXTURE_ROOT = test_fixture_root()
 PREVIEW_FPS = 30
 OPEN_LIMIT_SECONDS = 0.8
 STARTUP_LIMIT_SECONDS = 1.0

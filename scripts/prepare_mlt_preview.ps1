@@ -1,8 +1,18 @@
 param(
-    [string]$MltRoot = "D:\Tools\MediaFlow\deps\shotcut-26.6.25\Shotcut"
+    [string]$MltRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "load_environment.ps1")
+if (-not $MltRoot) {
+    $MltRoot = if ($env:MEDIAFLOW_MLT_ROOT) {
+        $env:MEDIAFLOW_MLT_ROOT
+    } elseif ($env:MEDIAFLOW_MELT) {
+        Split-Path -Parent $env:MEDIAFLOW_MELT
+    } else {
+        throw "MEDIAFLOW_MLT_ROOT or MEDIAFLOW_MELT is required to prepare the MLT preview plugin set"
+    }
+}
 $source = Join-Path $MltRoot "lib\mlt"
 $destination = Join-Path $MltRoot "lib\mlt-preview"
 $archive = Join-Path $MltRoot "archive\mlt-preview-nonplugins"

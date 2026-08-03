@@ -22,12 +22,13 @@ def _isolate_default_project_root(
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "Video"))
 
 
-def test_production_default_project_root_is_the_video_workspace(
+def test_project_root_has_no_machine_specific_production_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("MEDIAFLOW_PROJECT_ROOT")
 
-    assert Path(default_project_root()) == Path("E:/Work/Video").resolve()
+    with pytest.raises(RuntimeError, match="MEDIAFLOW_PROJECT_ROOT"):
+        default_project_root()
 
 
 def test_default_repository_honors_isolated_settings_path(
@@ -212,8 +213,8 @@ def test_version_ten_settings_separate_media_and_project_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    application_directory = tmp_path / "MediaFlow Pro"
-    monkeypatch.setenv("MEDIAFLOW_APP_ROOT", str(application_directory))
+    media_directory = tmp_path / "MediaFlow Pro" / "Media"
+    monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(media_directory))
     path = tmp_path / "settings.json"
     payload = GlobalSettings().model_dump(mode="json")
     payload["schema_version"] = 10
@@ -234,7 +235,7 @@ def test_version_ten_settings_separate_media_and_project_roots(
     assert Path(default_project_root()).is_dir()
     assert Path(default_media_root()).is_dir()
     assert Path(default_project_root()).parent == tmp_path
-    assert Path(default_media_root()).parent == application_directory
+    assert Path(default_media_root()) == media_directory.resolve()
     assert Path(default_project_root()) != Path(default_media_root())
 
 
@@ -253,7 +254,7 @@ def test_version_eleven_settings_default_to_compatible_download_codec(tmp_path: 
     assert persisted["download"]["codec"] == "avc"
 
 
-def test_version_sixteen_settings_move_new_projects_to_the_video_workspace(
+def test_version_sixteen_settings_move_new_projects_to_the_environment_root(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "settings.json"

@@ -26,7 +26,10 @@ from mediaflow.infrastructure.application_logging import (
     shutdown_application_logging,
 )
 from mediaflow.infrastructure.font_assets import register_application_fonts
-from mediaflow.infrastructure.runtime_paths import runtime_directory
+from mediaflow.infrastructure.runtime_paths import (
+    configured_runtime_directory,
+    runtime_directory,
+)
 from mediaflow.infrastructure.settings_repository import SettingsLoadResult, SettingsRepository
 
 STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
@@ -198,14 +201,12 @@ def startup_settings_path() -> Path | None:
     configured_settings = os.environ.get("MEDIAFLOW_SETTINGS_PATH")
     if configured_settings:
         return Path(configured_settings).expanduser().resolve()
-    configured_runtime = os.environ.get("MEDIAFLOW_RUNTIME_DIR")
-    if configured_runtime:
-        runtime_directory = Path(configured_runtime).expanduser().resolve()
-    elif Path("D:/").exists():
-        runtime_directory = Path("D:/Tools/MediaFlow/runtime")
-    else:
-        runtime_directory = _saved_runtime_directory()
-    return (runtime_directory / "settings.json").resolve() if runtime_directory is not None else None
+    selected_runtime = configured_runtime_directory() or _saved_runtime_directory()
+    return (
+        (selected_runtime / "settings.json").resolve()
+        if selected_runtime is not None
+        else None
+    )
 
 
 def load_startup_settings(settings_path: Path | None) -> SettingsLoadResult:
@@ -241,7 +242,9 @@ def show_startup_settings_recovery(settings: SettingsLoadResult) -> bool:
 
 
 def ensure_runtime_directory() -> bool:
-    if os.environ.get("MEDIAFLOW_RUNTIME_DIR") or Path("D:/").exists():
+    configured = configured_runtime_directory()
+    if configured is not None:
+        os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(configured)
         return True
     saved = _saved_runtime_directory()
     if saved is not None:
@@ -257,7 +260,7 @@ def ensure_runtime_directory() -> bool:
         QMessageBox.critical(
             None,
             PRODUCT_NAME,
-            "D 盘不可用。请选择用于依赖、模型和缓存的目录后再启动。",
+            "运行环境目录尚未配置。请选择用于依赖、模型和缓存的目录后再启动。",
         )
         return False
     runtime_directory = Path(selected).resolve()

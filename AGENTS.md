@@ -8,7 +8,7 @@ MediaFlow Pro 是通用的本地媒体编辑器。它正式消费 `visual-multim
 
 ## 共享边界与唯一真源
 
-- `E:\Work\BaiduSyncdisk\Code\Cheshire-skill\visual-multimedia\schemas\editable-media.v5.schema.json` 是 `editable-media` v5 清单结构的唯一真源。
+- `$env:VISUAL_MULTIMEDIA_ROOT\schemas\editable-media.v5.schema.json` 是 `editable-media` v5 清单结构的唯一真源；生产者仓库位置由本机 `.env` 提供，不写死在项目规则中。
 - `tests/fixtures/editable-media-v5*` 和 `mediaflow/resources/contracts/editable-media.v5.schema.json` 是从生产者同步得到的消费快照，不是独立设计入口，禁止直接手改。
 - `scripts/sync_visual_multimedia_fixture.py` 是更新 schema、starter、真实案例和来源哈希的唯一同步入口。
 - `window.editableMedia` 是网页结构化状态入口，`window.__hf.duration/seek(seconds)` 是确定性逐帧时间入口。导入、编辑、预览、缓存和导出只能共同消费这套边界。
@@ -17,7 +17,7 @@ MediaFlow Pro 是通用的本地媒体编辑器。它正式消费 `visual-multim
 
 ## 何时必须联动 visual-multimedia
 
-修改以下任一边界前，必须同时检查 `E:\Work\BaiduSyncdisk\Code\Cheshire-skill\visual-multimedia`：
+修改以下任一边界前，必须同时检查 `$env:VISUAL_MULTIMEDIA_ROOT`：
 
 - editable-media schema 副本、解析模型、校验规则、默认值继承、场景、变体、图层或素材槽；
 - 网页包导入、发布、换版、稳定 ID 迁移、`WebClipState` 或网页片段公开编辑操作；
@@ -46,7 +46,8 @@ MediaFlow 新增能力时优先扩展公开、通用的编辑器合同。visual-
 涉及共享边界时，先从真实生产者同步：
 
 ```powershell
-D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\sync_visual_multimedia_fixture.py "E:\Work\BaiduSyncdisk\Code\Cheshire-skill\visual-multimedia" --destination tests\fixtures
+. .\scripts\load_environment.ps1
+& $env:MEDIAFLOW_PYTHON scripts\sync_visual_multimedia_fixture.py $env:VISUAL_MULTIMEDIA_ROOT --destination tests\fixtures
 ```
 
 同步完成后检查 diff，确认 schema、网页包和 `fixture-origin.json` 来自当前生产者；不得保留手写 fixture 与同步结果并行。
@@ -54,13 +55,13 @@ D:\Tools\MediaFlow\.venv\Scripts\python.exe scripts\sync_visual_multimedia_fixtu
 至少运行：
 
 ```powershell
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pytest tests\v2\domain\test_editable_media_v5_contract.py
+& $env:MEDIAFLOW_PYTHON -m pytest tests\v2\domain\test_editable_media_v5_contract.py
 ```
 
 并根据改动覆盖受影响的网页导入、项目仓储、CLI、桌面编辑、浏览器捕获、原生媒体合成、缓存、时间线、预览和导出测试。修改共享渲染或交互主链时还必须运行：
 
 ```powershell
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_real_user_chain
+& $env:MEDIAFLOW_PYTHON -m scripts.verify_real_user_chain
 ```
 
 同时在 visual-multimedia 中运行 `node scripts/check-skill.mjs`。验收必须从它实际生产的 starter 或合同案例开始，让 MediaFlow 完成导入、保存、读取或修改、浏览器逐帧渲染、时间线消费和真实导出，并查看最终画面或成片。只有解析测试、手写 manifest、伪造缓存、mock 核心链路或“文件存在”检查不能证明兼容。

@@ -1624,25 +1624,25 @@
         </message>
         <message>
             <location line="+1" />
-            <location line="+46" />
+            <location line="+47" />
             <source>运行 %1</source>
             <translation>Running %1</translation>
         </message>
         <message>
-            <location line="-45" />
-            <location line="+39" />
+            <location line="-46" />
+            <location line="+40" />
             <source>失败 %1</source>
             <translation>Failed %1</translation>
         </message>
         <message>
-            <location line="-38" />
-            <location line="+40" />
+            <location line="-39" />
+            <location line="+41" />
             <source>离线素材 %1</source>
             <translation>Offline media %1</translation>
         </message>
         <message>
-            <location line="-39" />
-            <location line="+41" />
+            <location line="-40" />
+            <location line="+42" />
             <source>待确认 %1</source>
             <translation>Awaiting confirmation %1</translation>
         </message>
@@ -1657,6 +1657,11 @@
             <translation>Open</translation>
         </message>
         <message>
+            <location line="+0" />
+            <source>不可用</source>
+            <translation>Unavailable</translation>
+        </message>
+        <message>
             <location line="+76" />
             <source>从列表移除</source>
             <translation>Remove from List</translation>
@@ -1667,7 +1672,7 @@
             <translation>Project moved or unavailable</translation>
         </message>
         <message>
-            <location line="-176" />
+            <location line="-177" />
             <source>正在读取视频信息…</source>
             <translation>Reading video info…</translation>
         </message>
@@ -1697,12 +1702,7 @@
             <translation>Open Project</translation>
         </message>
         <message>
-            <location line="+273" />
-            <source>离线</source>
-            <translation>Offline</translation>
-        </message>
-        <message>
-            <location line="+66" />
+            <location line="+340" />
             <source>最近产物</source>
             <translation>Recent Output</translation>
         </message>
@@ -2947,7 +2947,18 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Faster-Whisper XXL CLI</translation>
         </message>
         <message>
-            <location line="+44" />
+            <location line="+12" />
+            <location line="+95" />
+            <source>留空使用环境文件中的运行时安装目录</source>
+            <translation>Leave blank to use the runtime installation from the environment file</translation>
+        </message>
+        <message>
+            <location line="-82" />
+            <source>留空使用环境文件中的运行时模型目录</source>
+            <translation>Leave blank to use the runtime model directory from the environment file</translation>
+        </message>
+        <message>
+            <location line="+19" />
             <source>设备</source>
             <translation>Device</translation>
         </message>
@@ -3159,23 +3170,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Transcription Program Path</translation>
         </message>
         <message>
-            <location line="+4" />
-            <location line="+95" />
-            <source>留空使用 D 盘运行时安装目录</source>
-            <translation>Leave blank to use the runtime installation on drive D</translation>
-        </message>
-        <message>
-            <location line="-87" />
+            <location line="+12" />
             <source>模型目录</source>
             <translation>Model Directory</translation>
         </message>
         <message>
-            <location line="+5" />
-            <source>留空使用 D 盘运行时模型目录</source>
-            <translation>Leave blank to use the runtime model directory on drive D</translation>
-        </message>
-        <message>
-            <location line="+8" />
+            <location line="+13" />
             <source>模型</source>
             <translation>Model</translation>
         </message>

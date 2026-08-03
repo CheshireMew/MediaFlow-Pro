@@ -32,7 +32,8 @@ def probe(root: Path, language: str, scale: str) -> dict:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["QT_SCALE_FACTOR"] = scale
     os.environ["MEDIAFLOW_SETTINGS_PATH"] = str(root / "settings" / "settings.json")
-    os.environ["MEDIAFLOW_APP_ROOT"] = str(root / "app")
+    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(root / "media")
+    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(root / "projects")
 
     from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPointF, QUrl
     from PySide6.QtGui import QGuiApplication

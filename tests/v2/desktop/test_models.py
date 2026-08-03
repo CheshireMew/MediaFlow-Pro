@@ -269,18 +269,15 @@ def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(
     )
 
     monkeypatch.delenv("MEDIAFLOW_RUNTIME_DIR")
+    configured_development_root = tmp_path / "configured-development"
+    monkeypatch.setenv("MEDIAFLOW_DEV_ROOT", str(configured_development_root))
+    assert desktop_app.startup_settings_path() == (
+        configured_development_root / "runtime" / "settings.json"
+    ).resolve()
+
+    monkeypatch.delenv("MEDIAFLOW_DEV_ROOT")
     saved_runtime = tmp_path / "saved-runtime"
     saved_runtime.mkdir()
-    original_exists = Path.exists
-    monkeypatch.setattr(
-        Path,
-        "exists",
-        lambda path: (
-            False
-            if path == Path("D:/")
-            else original_exists(path)
-        ),
-    )
     monkeypatch.setattr(
         desktop_app,
         "QSettings",

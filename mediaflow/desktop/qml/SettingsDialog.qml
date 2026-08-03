@@ -694,7 +694,7 @@ AppDialog {
                         AppTextField {
                             id: asrCliPath
                             Layout.fillWidth: true
-                            placeholderText: qsTr("留空使用 D 盘运行时安装目录")
+                            placeholderText: qsTr("留空使用环境文件中的运行时安装目录")
                             color: Theme.text
                             onEditingFinished: root.scheduleSettingsSave()
                         }
@@ -707,7 +707,7 @@ AppDialog {
                             id: asrModelDirectory
                             objectName: "asrModelDirectoryField"
                             Layout.fillWidth: true
-                            placeholderText: qsTr("留空使用 D 盘运行时模型目录")
+                            placeholderText: qsTr("留空使用环境文件中的运行时模型目录")
                             color: Theme.text
                             onEditingFinished: root.scheduleSettingsSave()
                         }
@@ -789,7 +789,7 @@ AppDialog {
                             id: gptSoVitsRoot
                             objectName: "gptSoVitsRootField"
                             Layout.fillWidth: true
-                            placeholderText: qsTr("留空使用 D 盘运行时安装目录")
+                            placeholderText: qsTr("留空使用环境文件中的运行时安装目录")
                             color: Theme.text
                             onEditingFinished: root.scheduleSettingsSave()
                         }
