@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import sqlite3
 from pathlib import Path
 
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from mediaflow.file_digest import sha256_file
 
 
 def _validate_source(source: Path) -> None:
@@ -72,7 +65,7 @@ def sync_fixture(source: Path, destination: Path) -> dict[str, object]:
     _validate_source(source)
     source_files = _source_files(source)
     staging = destination.with_name(
-        f".{destination.name}.sync-{_sha256(source / 'project.mfp')[:12]}"
+        f".{destination.name}.sync-{sha256_file(source / 'project.mfp')[:12]}"
     )
     if staging.exists():
         raise FileExistsError(staging)
@@ -83,7 +76,7 @@ def sync_fixture(source: Path, destination: Path) -> dict[str, object]:
         target = staging / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_file, target)
-        hashes[relative.as_posix()] = _sha256(target)
+        hashes[relative.as_posix()] = sha256_file(target)
     origin = {
         "protocol": "mediaflow-real-project-fixture",
         "version": 1,

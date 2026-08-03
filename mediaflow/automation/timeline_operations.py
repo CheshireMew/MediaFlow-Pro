@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
 from mediaflow.domain.exports import ExportPreset
@@ -10,7 +8,8 @@ from mediaflow.domain.task_commands import (
     ExportSequenceCommand,
     SequenceBuildUnit,
 )
-from mediaflow.domain.timeline import ClipAudio, ClipTransform
+from mediaflow.domain.timeline import ClipAddRequest, ClipAudio, ClipTransform
+from mediaflow.file_digest import sha256_file
 
 
 def get_timeline(context: OperationContext) -> dict:
@@ -45,7 +44,7 @@ def add_clip(context: OperationContext) -> dict:
 def add_clips(context: OperationContext) -> dict:
     editor = context.project.timeline(context.sequence_id())
     clips = editor.add_clips(
-        [dict(value) for value in context.required("clips")]
+        [ClipAddRequest.model_validate(value) for value in context.required("clips")]
     )
     return {"clips": clips}
 
@@ -239,15 +238,11 @@ def export_fcpxml(context: OperationContext) -> dict:
         str(context.required("output_path")),
         overwrite=bool(context.arguments.get("overwrite", False)),
     )
-    digest = hashlib.sha256()
-    with output.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
     return {
         "format": "fcpxml",
         "project_id": context.project.get_project().id,
         "sequence_id": sequence_id,
         "timeline_revision": state.sequence.timeline_revision,
         "output_path": str(output),
-        "sha256": digest.hexdigest(),
+        "sha256": sha256_file(output),
     }

@@ -17,7 +17,12 @@ from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.project import MediaMetadata, ProjectProfile
 from mediaflow.domain.sequence_audio import audio_clips_for_track
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
-from mediaflow.domain.timeline import ClipAudio, ClipTransformKeyframe, TimelineMarker
+from mediaflow.domain.timeline import (
+    ClipAddRequest,
+    ClipAudio,
+    ClipTransformKeyframe,
+    TimelineMarker,
+)
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
 
@@ -64,20 +69,20 @@ def test_batch_add_is_one_atomic_undoable_edit(editor_fixture) -> None:
     repository, editor, asset, video_track = editor_fixture
     clips = editor.add_clips(
         [
-            {
-                "track_id": video_track.id,
-                "asset_id": asset.id,
-                "timeline_start": 0,
-                "source_in": 0,
-                "duration": 20,
-            },
-            {
-                "track_id": video_track.id,
-                "asset_id": asset.id,
-                "timeline_start": 20,
-                "source_in": 20,
-                "duration": 20,
-            },
+            ClipAddRequest(
+                track_id=video_track.id,
+                asset_id=asset.id,
+                timeline_start=0,
+                source_in=0,
+                duration=20,
+            ),
+            ClipAddRequest(
+                track_id=video_track.id,
+                asset_id=asset.id,
+                timeline_start=20,
+                source_in=20,
+                duration=20,
+            ),
         ]
     )
 
@@ -89,20 +94,20 @@ def test_batch_add_is_one_atomic_undoable_edit(editor_fixture) -> None:
     with pytest.raises(KeyError):
         editor.add_clips(
             [
-                {
-                    "track_id": video_track.id,
-                    "asset_id": asset.id,
-                    "timeline_start": 0,
-                    "source_in": 0,
-                    "duration": 20,
-                },
-                {
-                    "track_id": "missing-track",
-                    "asset_id": asset.id,
-                    "timeline_start": 20,
-                    "source_in": 20,
-                    "duration": 20,
-                },
+                ClipAddRequest(
+                    track_id=video_track.id,
+                    asset_id=asset.id,
+                    timeline_start=0,
+                    source_in=0,
+                    duration=20,
+                ),
+                ClipAddRequest(
+                    track_id="missing-track",
+                    asset_id=asset.id,
+                    timeline_start=20,
+                    source_in=20,
+                    duration=20,
+                ),
             ]
         )
     assert repository.timeline.load_timeline(editor.sequence_id).clips == []

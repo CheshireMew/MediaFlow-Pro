@@ -20,6 +20,7 @@ from PySide6.QtCore import QCoreApplication, QUrl
 from PySide6.QtGui import QGuiApplication
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.desktop.app import configure_application_identity
 from mediaflow.desktop.controllers.controller_hub import EditorControllers
 from mediaflow.domain.enums import (
     AssetKind,
@@ -509,6 +510,7 @@ def wait_preview_graph(
 
 
 def verify(project_parent: Path) -> None:
+    configure_application_identity()
     app = QGuiApplication.instance() or QGuiApplication([])
     errors: list[str] = []
     controller = EditorControllers()

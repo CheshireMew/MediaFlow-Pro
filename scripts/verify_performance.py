@@ -22,7 +22,11 @@ from PySide6.QtQuick import QQuickWindow
 from shiboken6 import getCppPointer, wrapInstance
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.desktop.app import configure_application_font, create_engine
+from mediaflow.desktop.app import (
+    configure_application_font,
+    configure_application_identity,
+    create_engine,
+)
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind
 from mediaflow.domain.project import MediaMetadata
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
@@ -138,6 +142,7 @@ def create_fixture(root: Path) -> Path:
 
 def verify(root: Path) -> dict:
     project_dir = create_fixture(root)
+    configure_application_identity()
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)

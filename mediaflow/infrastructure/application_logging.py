@@ -8,6 +8,7 @@ LOG_FILE_NAME = "mediaflow.log"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
 _HANDLER_MARKER = "_mediaflow_application_log"
+_LOGGER_LEVEL_MARKER = "_mediaflow_previous_level"
 
 
 def configure_application_logging(runtime_dir: str | Path) -> Path:
@@ -17,6 +18,8 @@ def configure_application_logging(runtime_dir: str | Path) -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / LOG_FILE_NAME
     mediaflow_logger = logging.getLogger("mediaflow")
+    if not hasattr(mediaflow_logger, _LOGGER_LEVEL_MARKER):
+        setattr(mediaflow_logger, _LOGGER_LEVEL_MARKER, mediaflow_logger.level)
     mediaflow_logger.setLevel(logging.INFO)
     for handler in list(mediaflow_logger.handlers):
         if not isinstance(handler, RotatingFileHandler) or not getattr(
@@ -43,3 +46,18 @@ def configure_application_logging(runtime_dir: str | Path) -> Path:
     )
     mediaflow_logger.addHandler(handler)
     return log_path
+
+
+def shutdown_application_logging() -> None:
+    """Close only the process-owned MediaFlow application file handlers."""
+
+    mediaflow_logger = logging.getLogger("mediaflow")
+    for handler in list(mediaflow_logger.handlers):
+        if not getattr(handler, _HANDLER_MARKER, False):
+            continue
+        mediaflow_logger.removeHandler(handler)
+        handler.close()
+    previous_level = getattr(mediaflow_logger, _LOGGER_LEVEL_MARKER, None)
+    if isinstance(previous_level, int):
+        mediaflow_logger.setLevel(previous_level)
+        delattr(mediaflow_logger, _LOGGER_LEVEL_MARKER)

@@ -544,7 +544,7 @@ class TimelineController(ControllerFacet):
                 snap_targets=targets,
                 snap_tolerance_frames=tolerance,
             )
-        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.refresh_timeline(defer_clip_updates=True)
         self._session.events.historyChanged.emit()
 
     @Slot(str, float, int)

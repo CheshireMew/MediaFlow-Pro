@@ -17,6 +17,11 @@ PACKAGES = {
     "starter": FIXTURES / "editable-media-v5",
     "warm": FIXTURES / "editable-media-v5-cases" / "warm-paper-project-list",
     "social": FIXTURES / "editable-media-v5-cases" / "social-evidence-variants",
+    "technology_cover": (
+        FIXTURES
+        / "editable-media-v5-cases"
+        / "editorial-technology-diagram-cover"
+    ),
     "text_card_glossary": (
         FIXTURES
         / "editable-media-v5-cases"
@@ -27,6 +32,10 @@ PRODUCERS = {
     "starter": "visual-multimedia/assets/web-media-starter",
     "warm": "visual-multimedia/assets/web-card-cases/warm-paper-project-list",
     "social": "visual-multimedia/assets/web-card-cases/social-evidence-variants",
+    "technology_cover": (
+        "visual-multimedia/assets/web-card-cases/"
+        "editorial-technology-diagram-cover"
+    ),
     "text_card_glossary": (
         "visual-multimedia/assets/web-card-cases/text-card-glossary"
     ),
@@ -101,6 +110,24 @@ def test_rich_v5_features_are_first_class_contract_fields() -> None:
     merged = social.layer_values_for("square-1x1", "short-title")
     assert merged["rotation"] == 0
     assert merged["visible"] is True
+
+    technology_cover = parse_editable_media_manifest(
+        _read_manifest("technology_cover")
+    )
+    assert technology_cover.production is not None
+    assert (
+        technology_cover.production.profile_id
+        == "editorial-technology-diagram-cover"
+    )
+    assert technology_cover.variants[0].canvas.width == 1500
+    assert technology_cover.variants[0].canvas.height == 600
+    assert {field.id for field in technology_cover.data_fields} >= {
+        "title",
+        "diagram_title",
+        "input_label",
+        "model_label",
+        "result_label",
+    }
 
     text_card = parse_editable_media_manifest(
         _read_manifest("text_card_glossary")

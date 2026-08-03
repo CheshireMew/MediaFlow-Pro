@@ -21,6 +21,7 @@ from mediaflow.domain.reference_comparison import (
     ReferenceComparisonResult,
     ReferenceComparisonSummary,
 )
+from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegOutputPipe, FfmpegRunner
 from mediaflow.infrastructure.ffprobe_runner import FfprobeRunner
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -657,7 +658,7 @@ class ReferenceVideoComparisonService:
     ) -> ComparedMediaIdentity:
         return ComparedMediaIdentity(
             path=str(video.path),
-            sha256=self._sha256(video.path),
+            sha256=sha256_file(video.path),
             codec=video.codec,
             pixel_format=video.pixel_format,
             width=video.width,
@@ -764,17 +765,9 @@ class ReferenceVideoComparisonService:
             raise RuntimeError(f"OpenCV could not encode comparison image: {path}")
         path.write_bytes(encoded.tobytes())
 
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
     def _artifact(self, path: Path) -> ReferenceComparisonArtifact:
         return ReferenceComparisonArtifact(
             path=str(path),
-            sha256=self._sha256(path),
+            sha256=sha256_file(path),
             bytes=path.stat().st_size,
         )

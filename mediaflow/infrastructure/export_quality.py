@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 from typing import Literal
@@ -12,6 +11,7 @@ from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project_records import ExportQualityCheck, ExportQualityReport
 from mediaflow.domain.storage_names import export_quality_directory
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.mlt.export_service import ExportResult
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -118,9 +118,20 @@ class ExportQualityService:
             passed=not any(check.status == "failed" for check in checks),
             checks=checks,
             proof_frames=[str(path) for path in proof_frames],
-            sha256=self._sha256(
+            sha256=sha256_file(
                 output,
-                progress=progress,
+                progress=(
+                    lambda completed, total: progress(
+                        OperationProgress.determinate(
+                            "export_quality_hashing",
+                            completed=completed,
+                            total=max(1, total),
+                            unit="bytes",
+                        )
+                    )
+                    if progress
+                    else None
+                ),
                 check_cancelled=check_cancelled,
             ),
         )
@@ -351,25 +362,3 @@ class ExportQualityService:
             summary=("已生成开头、中段和结尾证明帧" if complete else f"只生成 {len(frames)}/3 张证明帧"),
             details={"frames": [str(path) for path in frames]},
         )
-
-    @staticmethod
-    def _sha256(path: Path, *, progress=None, check_cancelled=None) -> str:
-        digest = hashlib.sha256()
-        total = max(1, path.stat().st_size)
-        completed = 0
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                if check_cancelled:
-                    check_cancelled()
-                digest.update(chunk)
-                completed += len(chunk)
-                if progress:
-                    progress(
-                        OperationProgress.determinate(
-                            "export_quality_hashing",
-                            completed=min(completed, total),
-                            total=total,
-                            unit="bytes",
-                        )
-                    )
-        return digest.hexdigest()

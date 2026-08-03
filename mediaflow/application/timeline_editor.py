@@ -28,6 +28,7 @@ from mediaflow.domain.project import ProjectProfile, SequenceInOut
 from mediaflow.domain.timebase import source_frames_for_timeline_frames
 from mediaflow.domain.timeline import (
     Clip,
+    ClipAddRequest,
     ClipAudio,
     ClipTransform,
     ClipTransformKeyframe,
@@ -300,27 +301,27 @@ class TimelineEditor:
     ) -> Clip:
         return self.add_clips(
             [
-                {
-                    "track_id": track_id,
-                    "asset_id": asset_id,
-                    "timeline_start": timeline_start,
-                    "source_in": source_in,
-                    "duration": duration,
-                    "speed_numerator": speed_numerator,
-                    "speed_denominator": speed_denominator,
-                    "pitch_compensation": pitch_compensation,
-                }
+                ClipAddRequest(
+                    track_id=track_id,
+                    asset_id=asset_id,
+                    timeline_start=timeline_start,
+                    source_in=source_in,
+                    duration=duration,
+                    speed_numerator=speed_numerator,
+                    speed_denominator=speed_denominator,
+                    pitch_compensation=pitch_compensation,
+                )
             ]
         )[0]
 
-    def add_clips(self, specifications: Iterable[dict[str, object]]) -> list[Clip]:
+    def add_clips(self, specifications: Iterable[ClipAddRequest]) -> list[Clip]:
         requested = list(specifications)
         if not requested:
             raise ValueError("At least one clip is required")
         prepared: list[tuple[Clip, AssetKind, str | None]] = []
         for specification in requested:
-            track_id = str(specification["track_id"])
-            asset_id = str(specification["asset_id"])
+            track_id = specification.track_id
+            asset_id = specification.asset_id
             track = self._track(track_id)
             asset = self.repository.catalog.get_asset(asset_id)
             media_kind = default_clip_media_kind(
@@ -336,15 +337,13 @@ class TimelineEditor:
             clip = Clip(
                 track_id=track_id,
                 asset_id=asset_id,
-                timeline_start=int(specification["timeline_start"]),
-                source_in=int(specification["source_in"]),
-                duration=int(specification["duration"]),
+                timeline_start=specification.timeline_start,
+                source_in=specification.source_in,
+                duration=specification.duration,
                 media_kind=media_kind,
-                speed_numerator=int(specification.get("speed_numerator", 1)),
-                speed_denominator=int(specification.get("speed_denominator", 1)),
-                pitch_compensation=bool(
-                    specification.get("pitch_compensation", True)
-                ),
+                speed_numerator=specification.speed_numerator,
+                speed_denominator=specification.speed_denominator,
+                pitch_compensation=specification.pitch_compensation,
             )
             web_source_hash = (
                 self.repository.web.get_web_asset_spec(asset.id).source_hash

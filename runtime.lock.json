@@ -11,7 +11,20 @@
     },
     "qt": {
       "version": "6.11.1",
-      "architecture": "win64_msvc2022_64"
+      "architecture": "win64_msvc2022_64",
+      "install_directory": "6.11.1/msvc2022_64",
+      "archives": [
+        {
+          "name": "qtbase",
+          "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6111/qt6_6111_msvc2022_64/qt.qt6.6111.win64_msvc2022_64/6.11.1-0-202605090529qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+          "sha256": "7f97edc3937fec7383eb865e010ed5128155bf9c80a563abca450860f3e9bef5"
+        },
+        {
+          "name": "qtdeclarative",
+          "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6111/qt6_6111_msvc2022_64/qt.qt6.6111.win64_msvc2022_64/6.11.1-0-202605090529qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+          "sha256": "fc716b905581922ee8254740ae0017fcdc90b58138109ce0d9a927c099412f44"
+        }
+      ]
     }
   }
 }

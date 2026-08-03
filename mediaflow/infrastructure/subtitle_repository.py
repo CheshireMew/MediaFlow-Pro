@@ -15,7 +15,7 @@ from mediaflow.domain.subtitles import (
     SubtitleSegment,
     SubtitleWord,
 )
-from mediaflow.domain.timebase import reframe_rate_interval
+from mediaflow.domain.timebase import reframe_rate_interval, round_fraction
 
 from .project_repository_component import ProjectRepositoryComponent
 
@@ -563,11 +563,6 @@ class SubtitleRepository(ProjectRepositoryComponent):
             raise RuntimeError("Subtitle segment disappeared during update")
         return self._subtitle_segment_from_row(segment_row)
 
-    @staticmethod
-    def _round_fraction(value: Fraction) -> int:
-        quotient, remainder = divmod(value.numerator, value.denominator)
-        return quotient + (1 if remainder * 2 >= value.denominator else 0)
-
     def _sync_subtitle_placements(
         self,
         connection: sqlite3.Connection,
@@ -774,15 +769,15 @@ class SubtitleRepository(ProjectRepositoryComponent):
             end = min(Fraction(segment_end), source_in + consumed)
             if end <= start:
                 return None
-            timeline_start = clip["timeline_start"] + self._round_fraction((start - source_in) / speed)
-            timeline_end = clip["timeline_start"] + self._round_fraction((end - source_in) / speed)
+            timeline_start = clip["timeline_start"] + round_fraction((start - source_in) / speed)
+            timeline_end = clip["timeline_start"] + round_fraction((end - source_in) / speed)
         else:
             start = max(Fraction(segment_start), source_in - consumed)
             end = min(Fraction(segment_end), source_in)
             if end <= start:
                 return None
-            timeline_start = clip["timeline_start"] + self._round_fraction((source_in - end) / speed)
-            timeline_end = clip["timeline_start"] + self._round_fraction((source_in - start) / speed)
+            timeline_start = clip["timeline_start"] + round_fraction((source_in - end) / speed)
+            timeline_end = clip["timeline_start"] + round_fraction((source_in - start) / speed)
         timeline_start = max(
             clip["timeline_start"],
             min(clip["timeline_start"] + clip["duration"] - 1, timeline_start),

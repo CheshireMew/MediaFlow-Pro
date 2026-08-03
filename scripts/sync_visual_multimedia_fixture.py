@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import tempfile
 import time
 import uuid
 from pathlib import Path
+
+from mediaflow.file_digest import sha256_file
 
 PACKAGE_SOURCES = (
     ("assets/web-media-starter", "editable-media-v5"),
@@ -18,6 +19,10 @@ PACKAGE_SOURCES = (
     (
         "assets/web-card-cases/social-evidence-variants",
         "editable-media-v5-cases/social-evidence-variants",
+    ),
+    (
+        "assets/web-card-cases/editorial-technology-diagram-cover",
+        "editable-media-v5-cases/editorial-technology-diagram-cover",
     ),
     (
         "assets/web-card-cases/text-card-glossary",
@@ -32,14 +37,6 @@ MEDIA_BUILD_CASE_SOURCES = (
 )
 SCHEMA_SOURCE = "schemas/editable-media.v5.schema.json"
 RUNTIME_SOURCE = "assets/web-media-starter/editable-media-runtime.js"
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def package_files(source: Path) -> tuple[Path, ...]:
@@ -103,7 +100,7 @@ def sync_editable_package(
             destination_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_file, destination_file)
         hashes = {
-            path.relative_to(source).as_posix(): sha256(
+            path.relative_to(source).as_posix(): sha256_file(
                 staging / path.relative_to(source)
             )
             for path in files
@@ -161,7 +158,7 @@ def sync_media_build_case(
             destination_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_file, destination_file)
         hashes = {
-            path.relative_to(source).as_posix(): sha256(
+            path.relative_to(source).as_posix(): sha256_file(
                 staging / path.relative_to(source)
             )
             for path in files
@@ -195,7 +192,7 @@ def sync_schema(source: Path, destination: Path) -> Path:
     destination = destination.expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     current = destination / source.name
-    if current.is_file() and sha256(source) == sha256(current):
+    if current.is_file() and sha256_file(source) == sha256_file(current):
         return current
     staging = Path(
         tempfile.mkdtemp(
@@ -224,7 +221,7 @@ def sync_runtime_contract(source: Path, destination_name: str) -> Path:
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     source = source.resolve(strict=True)
-    if destination.is_file() and sha256(source) == sha256(destination):
+    if destination.is_file() and sha256_file(source) == sha256_file(destination):
         return destination
     temporary = destination.with_name(f".{destination.name}.sync")
     shutil.copyfile(source, temporary)
@@ -247,9 +244,9 @@ def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
         "editable-media-runtime.v5.js",
     )
     return {
-        "schema_sha256": sha256(schema_destination),
-        "runtime_contract_sha256": sha256(runtime_contract),
-        "runtime_script_sha256": sha256(runtime_script),
+        "schema_sha256": sha256_file(schema_destination),
+        "runtime_contract_sha256": sha256_file(runtime_contract),
+        "runtime_script_sha256": sha256_file(runtime_script),
     }
 
 

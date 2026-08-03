@@ -14,10 +14,9 @@ from mediaflow.domain.web_media import (
 )
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .web_editor_context import WebEditorContext
+from .web_editor_context import WebEditorContext, require_mutable_web_clip
 
 if TYPE_CHECKING:
-    from mediaflow.composition import EditorProject
     from mediaflow.desktop.controllers.web_controller import WebController
 
 
@@ -91,7 +90,7 @@ class WebDeliveryController(ControllerFacet):
         bindings_json: str,
         name_template: str,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         records = json.loads(records_json)
         bindings = json.loads(bindings_json)
         if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
@@ -116,7 +115,7 @@ class WebDeliveryController(ControllerFacet):
         bindings_json: str,
         name_template: str,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         records = current.read_web_variant_records(source_url.toLocalFile())
         bindings = json.loads(bindings_json)
         if not isinstance(bindings, dict):
@@ -134,7 +133,7 @@ class WebDeliveryController(ControllerFacet):
     @Slot(QUrl)
     @report_ui_errors
     def inspectRebind(self, source_url: QUrl) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         if not self._context.asset_id:
             raise ValueError("请先选择网页素材")
         self._pending_rebind_source = source_url.toLocalFile()
@@ -160,7 +159,7 @@ class WebDeliveryController(ControllerFacet):
     @Slot()
     @report_ui_errors
     def commitRebind(self) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         if not self._context.asset_id or not self._pending_rebind_source:
             raise ValueError("请先检查新版网页包")
         report = current.commit_web_asset_rebind(
@@ -185,7 +184,7 @@ class WebDeliveryController(ControllerFacet):
         background: str,
         overwrite: bool,
     ) -> None:
-        self._require_mutable_web_clip()
+        require_mutable_web_clip(self._session, self._context.clip_id)
         export_format = next(
             (value for value in WEB_EXPORT_FORMATS if value == format_name),
             None,
@@ -208,15 +207,6 @@ class WebDeliveryController(ControllerFacet):
             overwrite=overwrite,
         )
         self._session.tasks.start(command, sequence_id=self._session.binding.active_sequence_id)
-
-    def _require_mutable_web_clip(self) -> EditorProject:
-        self._session._require_writable()
-        if not self._context.clip_id:
-            raise ValueError("请先选择网页片段")
-        current = self._session.binding.current
-        if current is None:
-            raise RuntimeError("请先打开一个项目")
-        return current
 
     def _overlay_export_suffix(self) -> str:
         animated = int(self._context.manifest.get("duration_ms") or 0) > 0 or any(

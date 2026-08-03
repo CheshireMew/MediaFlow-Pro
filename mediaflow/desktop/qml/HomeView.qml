@@ -474,6 +474,7 @@ Rectangle {
                         required property string name
                         required property string path
                         required property bool available
+                        required property string unavailableReason
                         required property int runningTaskCount
                         required property int failedTaskCount
                         required property int offlineAssetCount
@@ -484,7 +485,7 @@ Rectangle {
                             || offlineAssetCount > 0 || pendingWorkflowCount > 0
                         property string projectStateText: {
                             if (!available)
-                                return qsTr("项目已移动或不可用")
+                                return unavailableReason || qsTr("项目已移动或不可用")
                             if (failedTaskCount > 0)
                                 return qsTr("失败 %1").arg(failedTaskCount)
                             if (offlineAssetCount > 0)
@@ -631,7 +632,7 @@ Rectangle {
                                     spacing: 4
                                     Text {
                                         id: openLabel
-                                        text: available ? qsTr("打开") : qsTr("离线")
+                                        text: available ? qsTr("打开") : qsTr("不可用")
                                         color: available ? Theme.text : Theme.danger
                                         font.pixelSize: Theme.fontSizeCaption
                                         font.weight: Font.DemiBold

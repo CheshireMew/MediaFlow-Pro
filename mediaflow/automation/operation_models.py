@@ -19,7 +19,14 @@ from mediaflow.domain.runtime_capabilities import RuntimeInspection
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.domain.task_commands import SequenceBuildUnit, TaskCommand
 from mediaflow.domain.tasks import Task
-from mediaflow.domain.timeline import Clip, ClipAudio, ClipTransform, TimelineState, Track
+from mediaflow.domain.timeline import (
+    Clip,
+    ClipAddRequest,
+    ClipAudio,
+    ClipTransform,
+    TimelineState,
+    Track,
+)
 from mediaflow.domain.transcript_edits import (
     TranscriptEditPlan,
     TranscriptEditRequest,
@@ -172,22 +179,12 @@ class TimelineTrackAddArguments(SequenceArguments):
     name: str | None = None
 
 
-class TimelineClipAddItem(DomainModel):
-    track_id: str = Field(min_length=1)
-    asset_id: str = Field(min_length=1)
-    timeline_start: int = Field(ge=0)
-    source_in: int = Field(ge=0)
-    duration: int = Field(gt=0)
-    speed_numerator: int | None = None
-    speed_denominator: int | None = Field(default=None, gt=0)
-
-
-class TimelineClipAddArguments(TimelineClipAddItem):
+class TimelineClipAddArguments(ClipAddRequest):
     sequence_id: str | None = None
 
 
 class TimelineClipBatchAddArguments(SequenceArguments):
-    clips: list[TimelineClipAddItem] = Field(min_length=1, max_length=1000)
+    clips: list[ClipAddRequest] = Field(min_length=1, max_length=1000)
 
 
 class TimelineClipMoveArguments(SequenceArguments):

@@ -80,7 +80,7 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
     )
 
     from mediaflow.application.timeline_editor import TimelineEditor
-    from mediaflow.application.web_media_service import WebMediaService
+    from mediaflow.application.web_media_service import WebMediaServices
     from mediaflow.domain.enums import TrackKind
     from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
     from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -96,12 +96,12 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
     ) as repository:
         project = repository.catalog.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
-        service = WebMediaService(
+        services = WebMediaServices(
             repository,
             lambda sequence_id: editor,
             BrowserWebPackageValidator(),
         )
-        asset = service.import_package(FIXTURE)
+        asset = services.packages.import_package(FIXTURE)
         track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
             track_id=track.id,

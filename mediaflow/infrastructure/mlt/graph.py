@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mediaflow.application.ports import TimelineCompilationDocuments
 from mediaflow.domain.project import Asset
+from mediaflow.domain.timebase import round_fraction
 from mediaflow.domain.timeline import Clip, Transition
 
 
@@ -45,11 +46,6 @@ class MltGraph:
         return before, item.duration - before
 
     @staticmethod
-    def round_fraction(value: Fraction) -> int:
-        quotient, remainder = divmod(value.numerator, value.denominator)
-        return quotient + (1 if remainder * 2 >= value.denominator else 0)
-
-    @staticmethod
     def ceil_fraction(value: Fraction) -> int:
         return -(-value.numerator // value.denominator)
 
@@ -71,7 +67,7 @@ class MltGraph:
         if speed == 1 and clip.speed_numerator > 0:
             return clip.source_in, source_length
         natural_length = max(1, cls.ceil_fraction(Fraction(source_length) / speed))
-        scaled_source_in = cls.round_fraction(Fraction(clip.source_in) / speed)
+        scaled_source_in = round_fraction(Fraction(clip.source_in) / speed)
         if clip.speed_numerator > 0:
             producer_start = scaled_source_in
         else:

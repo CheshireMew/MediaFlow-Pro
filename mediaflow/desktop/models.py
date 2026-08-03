@@ -10,6 +10,7 @@ from PySide6.QtCore import (
     QObject,
     QSortFilterProxyModel,
     Qt,
+    QTimer,
     Slot,
 )
 
@@ -23,6 +24,8 @@ class DictListModel(QAbstractListModel):
         self._role_numbers = {Qt.UserRole + index + 1: role for index, role in enumerate(roles)}
         self._items: list[dict[str, Any]] = []
         self._key_rows: dict[str, int] = {}
+        self._deferred_role_changes: dict[int, set[int]] = {}
+        self._deferred_change_scheduled = False
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {number: QByteArray(name.encode("utf-8")) for number, name in self._role_numbers.items()}
@@ -37,6 +40,37 @@ class DictListModel(QAbstractListModel):
         return self._items[index.row()].get(role_name) if role_name else None
 
     def set_items(self, items: list[dict[str, Any]]) -> None:
+        self._validate_items(items)
+        self._deferred_role_changes.clear()
+        self._set_items(items)
+
+    def set_items_deferred(self, items: list[dict[str, Any]]) -> None:
+        """Publish stable-row value changes on the next Qt event turn."""
+
+        self._validate_items(items)
+        key_role = self._roles[0]
+        before_keys = [item.get(key_role) for item in self._items]
+        after_keys = [item.get(key_role) for item in items]
+        if before_keys != after_keys or any(key is None for key in after_keys):
+            self.set_items(items)
+            return
+
+        role_by_name = {name: number for number, name in self._role_numbers.items()}
+        for row, after in enumerate(items):
+            before = self._items[row]
+            changed_roles = {
+                role_by_name[name]
+                for name in self._roles
+                if before.get(name) != after.get(name)
+            }
+            if changed_roles:
+                self._items[row] = after
+                self._deferred_role_changes.setdefault(row, set()).update(changed_roles)
+        if self._deferred_role_changes and not self._deferred_change_scheduled:
+            self._deferred_change_scheduled = True
+            QTimer.singleShot(0, self._publish_deferred_changes)
+
+    def _validate_items(self, items: list[dict[str, Any]]) -> None:
         expected = set(self._roles)
         for row, item in enumerate(items):
             actual = set(item)
@@ -47,6 +81,18 @@ class DictListModel(QAbstractListModel):
                     f"Model row {row} does not match its declared roles; "
                     f"missing={missing}, unexpected={unexpected}"
                 )
+
+    def _publish_deferred_changes(self) -> None:
+        changes = self._deferred_role_changes
+        self._deferred_role_changes = {}
+        self._deferred_change_scheduled = False
+        for row, roles in sorted(changes.items()):
+            if row >= len(self._items):
+                continue
+            index = self.index(row, 0)
+            self.dataChanged.emit(index, index, sorted(roles))
+
+    def _set_items(self, items: list[dict[str, Any]]) -> None:
         key_role = self._roles[0]
         before_keys = [item.get(key_role) for item in self._items]
         after_keys = [item.get(key_role) for item in items]
@@ -328,6 +374,7 @@ class RecentProjectListModel(DictListModel):
                 "name",
                 "path",
                 "available",
+                "unavailableReason",
                 "runningTaskCount",
                 "failedTaskCount",
                 "offlineAssetCount",

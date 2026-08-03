@@ -39,7 +39,11 @@ def probe(root: Path, language: str, scale: str) -> dict:
     from PySide6.QtQuick import QQuickItem, QQuickWindow
     from shiboken6 import getCppPointer, wrapInstance
 
-    from mediaflow.desktop.app import configure_application_font, create_engine
+    from mediaflow.desktop.app import (
+        configure_application_font,
+        configure_application_identity,
+        create_engine,
+    )
     from mediaflow.domain.settings import GlobalSettings
     from mediaflow.infrastructure.settings_repository import SettingsRepository
 
@@ -47,7 +51,10 @@ def probe(root: Path, language: str, scale: str) -> dict:
     settings.ui.language = language
     settings_path = root / "settings" / "settings.json"
     SettingsRepository(settings_path).save(settings)
+    configure_application_identity()
     app = QGuiApplication([])
+    if QCoreApplication.applicationName() != "MediaFlow Pro":
+        raise RuntimeError("UI verifier did not use the production application identity")
     configure_application_font(app)
     engine, controllers = create_engine(app)
     workspace_controller = controllers.workspace

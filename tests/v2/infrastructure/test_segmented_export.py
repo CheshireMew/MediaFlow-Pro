@@ -14,7 +14,7 @@ from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.task_commands import BuildSequenceCommand, SequenceBuildUnit
 from mediaflow.domain.tasks import SequenceBuildTaskOutcome
-from mediaflow.domain.timeline import ClipAudio, ClipTransform
+from mediaflow.domain.timeline import ClipAddRequest, ClipAudio, ClipTransform
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -170,13 +170,13 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
         avatar_track = editor.add_track(TrackKind.VIDEO, "Avatar overlay")
         avatar_clips = editor.add_clips(
             [
-                {
-                    "track_id": avatar_track.id,
-                    "asset_id": asset.id,
-                    "timeline_start": index * 25,
-                    "source_in": 0,
-                    "duration": 25,
-                }
+                ClipAddRequest(
+                    track_id=avatar_track.id,
+                    asset_id=asset.id,
+                    timeline_start=index * 25,
+                    source_in=0,
+                    duration=25,
+                )
                 for index, asset in enumerate(imported_avatars)
             ]
         )

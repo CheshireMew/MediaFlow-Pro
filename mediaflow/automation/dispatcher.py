@@ -9,13 +9,13 @@ from mediaflow.automation.contracts import (
 )
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.automation.operation_registry import OPERATIONS
-from mediaflow.composition import EditorApplication
+from mediaflow.composition import EditorApplication, EditorProject
+from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.storage_names import (
     PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
     PROJECT_ROOT_PATH_UTF16_LIMIT,
     safe_child_path,
 )
-from mediaflow.domain.project import ProjectProfile
 from mediaflow.infrastructure.storage_paths import default_project_root
 
 
@@ -28,7 +28,7 @@ def _project_path(value: str | None) -> Path:
 
 
 def _execute_registered(
-    project: Any,
+    project: EditorProject,
     application: EditorApplication,
     envelope: AutomationRequest,
 ) -> dict[str, Any]:

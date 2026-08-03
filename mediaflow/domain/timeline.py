@@ -73,6 +73,17 @@ class Track(DomainModel):
     primary_dialogue: bool = False
 
 
+class ClipAddRequest(DomainModel):
+    track_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+    timeline_start: int = Field(ge=0)
+    source_in: int = Field(ge=0)
+    duration: int = Field(gt=0)
+    speed_numerator: int = 1
+    speed_denominator: int = Field(default=1, gt=0)
+    pitch_compensation: bool = True
+
+
 class ClipTransform(DomainModel):
     x: float = 0.0
     y: float = 0.0

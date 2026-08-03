@@ -30,7 +30,7 @@ from mediaflow.domain.task_commands import (
     TranslateSegmentsCommand,
     WorkflowTaskLink,
 )
-from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
+from mediaflow.domain.timebase import frames_to_seconds, round_fraction, seconds_to_frames
 from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
 
 
@@ -38,6 +38,13 @@ def test_frame_timebase_preserves_ntsc_rate() -> None:
     frames = seconds_to_frames(Fraction(1001, 1000), 30_000, 1001)
     assert frames == 30
     assert frames_to_seconds(frames, 30_000, 1001) == Fraction(1001, 1000)
+
+
+def test_fraction_rounding_has_one_symmetric_half_rule() -> None:
+    assert round_fraction(Fraction(1, 2)) == 1
+    assert round_fraction(Fraction(-1, 2)) == -1
+    assert round_fraction(Fraction(3, 2)) == 2
+    assert round_fraction(Fraction(-3, 2)) == -2
 
 
 def test_storage_names_are_windows_safe_normalized_and_length_bounded() -> None:

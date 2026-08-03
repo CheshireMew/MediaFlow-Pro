@@ -47,6 +47,7 @@ def _request(
 def verify(package: Path, run_dir: Path) -> dict[str, object]:
     from mediaflow.automation.contracts import describe_contract
     from mediaflow.automation.dispatcher import execute_request
+    from mediaflow.domain.project import ProjectProfile
 
     source = package.expanduser().resolve(strict=True)
     if not source.is_dir():
@@ -76,6 +77,10 @@ def verify(package: Path, run_dir: Path) -> dict[str, object]:
             {
                 "name": "Reference comparison real chain",
                 "directory_name": "reference-comparison-project",
+                "profile": ProjectProfile().model_dump(
+                    mode="json",
+                    exclude_computed_fields=True,
+                ),
             },
         )
     )

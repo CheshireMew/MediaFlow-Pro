@@ -10,10 +10,10 @@ from .web_editor_context import (
     WebEditorContext,
     coerce_web_descriptor_value,
     find_web_descriptor,
+    require_mutable_web_clip,
 )
 
 if TYPE_CHECKING:
-    from mediaflow.composition import EditorProject
     from mediaflow.desktop.controllers.web_controller import WebController
 
 
@@ -175,7 +175,7 @@ class WebTimelineController(ControllerFacet):
         easing: str,
         frame: int,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         descriptor = find_web_descriptor(
             self._context.edit_document,
             target,
@@ -222,7 +222,7 @@ class WebTimelineController(ControllerFacet):
         source_id: str,
         frame: int,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         scene_id, time_ms = self._scene_time_for_frame(frame)
         revision = int(self._context.persistent_state.get("revision", 0))
         if target == "layer":
@@ -258,7 +258,7 @@ class WebTimelineController(ControllerFacet):
         old_time_ms: int,
         frame: int,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         scene_id, new_time_ms = self._scene_time_for_frame(frame)
         if scene_id != self._context.active_scene_id:
             raise ValueError("关键帧不能跨场景拖动")
@@ -356,7 +356,7 @@ class WebTimelineController(ControllerFacet):
         if not self._context.selected_layer_id:
             raise ValueError("请先选择网页图层")
         value = max(0, int(end_ms) - int(start_ms)) if end_is_duration else max(0, int(end_ms))
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._context.clip_id)
         updated = current.update_web_clip(
             self._session.binding.active_sequence_id,
             self._context.clip_id,
@@ -443,15 +443,6 @@ class WebTimelineController(ControllerFacet):
         except RuntimeError:
             return
         self._editor.activate_scene(scene_id)
-
-    def _require_mutable_web_clip(self) -> EditorProject:
-        self._session._require_writable()
-        if not self._context.clip_id:
-            raise ValueError("请先选择网页片段")
-        current = self._session.binding.current
-        if current is None:
-            raise RuntimeError("请先打开一个项目")
-        return current
 
     def _selected_clip(self):
         if self._session.binding.timeline is None or not self._context.clip_id:

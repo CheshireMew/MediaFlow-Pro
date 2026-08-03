@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -17,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
+from mediaflow.file_digest import sha256_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,11 +149,11 @@ class GptSoVitsEngine:
             temporary.replace(output)
             return GptSoVitsResult(
                 output_path=output,
-                sha256=self._sha256(output),
+                sha256=sha256_file(output),
                 duration_seconds=duration,
                 sample_rate=sample_rate,
                 channels=channels,
-                reference_audio_sha256=self._sha256(reference),
+                reference_audio_sha256=sha256_file(reference),
                 device=self.device,
             )
         finally:
@@ -237,14 +237,6 @@ class GptSoVitsEngine:
         if sample_rate <= 0 or channels <= 0 or frames <= 0:
             raise RuntimeError("GPT-SoVITS 生成的 WAV 没有音频帧")
         return sample_rate, channels, frames / sample_rate
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            while chunk := source.read(4 * 1024 * 1024):
-                digest.update(chunk)
-        return digest.hexdigest()
 
     @staticmethod
     def _available_port() -> int:

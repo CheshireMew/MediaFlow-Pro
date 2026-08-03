@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import zipfile
@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import GlobalSettings
+from mediaflow.file_digest import sha256_file
 
 from .runtime_paths import RuntimePaths
 from .subprocess_runner import run_cancellable
@@ -93,6 +94,10 @@ def load_runtime_component_catalog(
         )
         if not all(required_values) or not component.required_paths:
             raise ValueError("Runtime component record is incomplete")
+        if re.fullmatch(r"[0-9a-f]{64}", component.archive_sha256) is None:
+            raise ValueError(
+                f"Runtime component {component.id!r} requires a lowercase SHA-256"
+            )
         if component.id in catalog:
             raise ValueError(f"Duplicate runtime component id: {component.id}")
         catalog[component.id] = component
@@ -332,13 +337,7 @@ class RuntimeComponentService:
         actual_size = path.stat().st_size
         if definition.archive_size and actual_size != definition.archive_size:
             raise RuntimeError(f"运行组件压缩包大小错误：{actual_size}")
-        if not definition.archive_sha256:
-            return
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            while chunk := source.read(4 * 1024 * 1024):
-                digest.update(chunk)
-        actual = digest.hexdigest()
+        actual = sha256_file(path)
         if actual != definition.archive_sha256:
             raise RuntimeError(
                 f"运行组件压缩包 SHA-256 不匹配：{actual}"

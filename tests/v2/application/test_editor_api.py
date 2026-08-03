@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 import struct
 import subprocess
 import sys
@@ -25,6 +26,8 @@ from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, Subtit
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.storage_paths import default_project_root
 
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+
 
 def _write_wave(path: Path) -> None:
     sample_rate = 48_000
@@ -37,6 +40,29 @@ def _write_wave(path: Path) -> None:
         destination.setsampwidth(2)
         destination.setframerate(sample_rate)
         destination.writeframes(frames)
+
+
+def test_recent_projects_disable_corrupt_databases_but_keep_upgradable_projects(
+    tmp_path: Path,
+) -> None:
+    corrupt = tmp_path / "Corrupt project"
+    corrupt.mkdir()
+    (corrupt / "project.mfp").write_bytes(b"not a sqlite database")
+    missing = tmp_path / "Missing project"
+    upgradable = tmp_path / "Upgradable project"
+    shutil.copytree(FIXTURES / "editable-media-v4-project", upgradable)
+
+    snapshot = EditorApplication().recent_projects(
+        [str(corrupt), str(missing), str(upgradable)]
+    )
+    rows = {Path(item["path"]).name: item for item in snapshot.items}
+
+    assert rows[corrupt.name]["available"] is False
+    assert rows[corrupt.name]["unavailableReason"] == "项目文件损坏或格式不受支持"
+    assert rows[missing.name]["available"] is False
+    assert rows[missing.name]["unavailableReason"] == "项目文件不存在"
+    assert rows[upgradable.name]["available"] is True
+    assert rows[upgradable.name]["unavailableReason"] == ""
 
 
 def _run_cli_request(

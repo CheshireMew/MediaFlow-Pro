@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mediaflow.domain.enums import AssetKind, ColorMode
 from mediaflow.domain.project import Asset
+from mediaflow.domain.timebase import round_fraction
 from mediaflow.domain.timeline import Clip, ClipTransform
 from mediaflow.domain.visual_effects import visual_effect_mlt
 from mediaflow.infrastructure.mlt.graph import MltGraph
@@ -229,7 +230,7 @@ class MltClipGraph:
                     )
                     if source_delta < 0:
                         continue
-                    local_frame = MltGraph.round_fraction(Fraction(source_delta) / speed)
+                    local_frame = round_fraction(Fraction(source_delta) / speed)
                     if 0 <= local_frame < clip.duration:
                         points[producer_start + local_frame] = keyframe.transform
                 final_value = points[max(points)]

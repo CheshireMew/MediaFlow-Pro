@@ -1,8 +1,22 @@
 # MediaFlow Pro
 
-MediaFlow Pro 是面向 Windows 10/11 x64 的项目制视频创作工作站。V2 使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出；所有内部控制通信都在桌面进程内完成，不启动常驻 API 服务。解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
+MediaFlow Pro 是面向 Windows 10/11 x64 的本地视频创作工作站。把视频、音频、图片、字幕或 `editable-media` 网页包交给它，可以在同一个可移动工程中完成素材管理、转写、剪辑、多轨时间线、实时预览、混音、质量检查和最终导出；`project.mfp` 是工程的唯一数据来源。
+
+项目使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出。所有内部控制通信都在桌面进程内完成，不启动常驻 API 服务。解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
 
 项目采用 GPLv3，下载能力以随运行环境提供的 yt-dlp 为准。
+
+当前仓库提供源码、固定依赖清单和可重复构建入口，不提供便携包或安装器。希望从源码运行、研究或扩展本地媒体工作流，可以从[开发运行环境](#开发运行环境)开始；希望先确认产品覆盖范围，可以先看下面的能力与制作路径。
+
+## 选择制作路径
+
+| 你的目标 | 建议使用 | 原因 |
+| --- | --- | --- |
+| 原片、网页动画、图片、音频和字幕需要进入同一个可继续编辑的工程 | MediaFlow Pro | 提供素材库、多轨时间线、字幕、混音、预览、质量检查和导出闭环 |
+| 已经有完整 HTML 动画，只需要确定性渲染成 MP4 | [HyperFrames](https://github.com/heygen-com/hyperframes) | 直接从 HTML 逐帧渲染，不需要先建立非线性编辑工程 |
+| 先把确认过的内容制作成社交卡、网页动画、字幕或视频方案 | Visual Multimedia + MediaFlow Pro | Visual Multimedia 负责媒体真源与制作方案，MediaFlow Pro 负责导入、剪辑、审阅和交付 |
+
+MediaFlow Pro 不依赖 HyperFrames，也不会把它引入 `editable-media` 的公共时钟或项目合同。两者可以按任务选择：纯网页动画用 HyperFrames 更直接；需要原片、多轨编辑、字幕、声音和反复修改时使用 MediaFlow Pro。
 
 ## 已实现的产品能力
 
@@ -58,7 +72,7 @@ E:\Work\Video\
     exports/
 ```
 
-`E:\Work\Video` 是新工程的默认根目录，也是自动化创建工程的唯一位置。公开 `project.create` 只接收目录名和显示名称，由 MediaFlow Pro 在该根目录中创建工程并返回绝对路径；调用端不能提交其它工程路径。桌面端同样默认在这里新建，只有用户主动选择其它目录时才偏离默认值。下载的视频与原始字幕继续进入应用级 `WorkSpace`，不会与工程互相嵌套。合集按标题在 `WorkSpace` 中建立子目录，条目使用稳定序号、标题和媒体 ID 命名；工程通过绝对路径引用这些媒体。工程生成的字幕、代理、波形、分析结果和导出仍由各自工程目录管理。素材失踪时会保持为离线记录，重新定位需要指纹验证或用户明确确认。
+`E:\Work\Video` 是新工程的默认根目录，也是自动化创建工程的唯一位置。公开 `project.create` 只接收安全目录名、显示名称和完整项目 profile，由 MediaFlow Pro 在该根目录中创建工程并返回绝对路径；调用端不能提交其它工程路径，也不能依赖隐式分辨率或帧率默认值。桌面端同样默认在这里新建，只有用户主动选择其它目录时才偏离默认值。下载的视频与原始字幕继续进入应用级 `WorkSpace`，不会与工程互相嵌套。合集按标题在 `WorkSpace` 中建立子目录，条目使用稳定序号、标题和媒体 ID 命名；工程通过绝对路径引用这些媒体。工程生成的字幕、代理、波形、分析结果和导出仍由各自工程目录管理。素材失踪时会保持为离线记录，重新定位需要指纹验证或用户明确确认。
 
 ## 开发运行环境
 
@@ -97,7 +111,7 @@ D:\Tools\MediaFlow\.venv\Scripts\python.exe -m piptools compile pyproject.toml -
 .\scripts\build_native.ps1
 ```
 
-CI 使用 `scripts/prepare_ci_runtime.ps1` 校验 SHA-256 后展开固定的 Shotcut 运行时，安装与 PySide6 同版的 Qt SDK 和 Playwright Chromium，再现场编译原生插件。`scripts/verify_development_runtime.py` 会实际启动 FFmpeg、MLT 与 Chromium 并核对原生 QML 包；不能用跳过测试代替运行时准备。
+CI 使用 `scripts/prepare_ci_runtime.ps1` 校验 SHA-256 后展开固定的 Shotcut 运行时，并由 `scripts/prepare_ci_qt.py` 直接校验、展开 `runtime.lock.json` 登记的 QtBase 与 QtDeclarative 官方归档，不再依赖在线仓库元数据解析。随后安装 Playwright 固定的 Chromium revision 并现场编译原生插件。`scripts/verify_development_runtime.py --profile core` 会实际启动 FFmpeg、MLT 与 Chromium 并核对原生 QML 包；`--profile full` 另外要求本机已安装 ASR 与语音合成组件。不能用跳过测试代替运行时准备。
 
 启动应用：
 
@@ -167,18 +181,27 @@ MediaFlow Pro 可导入 `editable-media` v5 本地网页包。网页包用 `wind
 
 ```powershell
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m pytest tests\v2
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_development_runtime --profile core
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_ui_matrix
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_performance
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_preview_performance
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_web_render_performance
+D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_reference_comparison_chain --package tests\fixtures\editable-media-v5
 D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_display_capabilities
-D:\Tools\MediaFlow\.venv\Scripts\python.exe -m scripts.verify_real_user_chain
 ```
 
-测试覆盖领域计算、SQLite 事务、QML 页面、原生预览、代理、下载、转录、翻译、高光、MLT 导出、HDR 元数据及预览/导出抽帧比对。需要网络、模型或 API 凭据的验收脚本会使用真实服务，不以消费端伪造数据代替生产链路。
+测试覆盖领域计算、SQLite 事务、QML 页面、原生预览、代理、下载、转录、翻译、高光、MLT 导出、HDR 元数据及预览/导出抽帧比对。上述默认验收均可离线运行。`scripts.verify_real_user_chain` 需要真实 `OPENAI_API_KEY` 和在线模型，只在明确配置 `MEDIAFLOW_RUN_ONLINE_E2E=true` 的凭据环境执行；它不会在没有凭据时伪造生产结果或冒充完整链路通过。
 
 ## 许可与分发
 
 MediaFlow Pro 源码以 [GNU GPL v3](LICENSE) 发布。随运行目录提供的 Qt、MLT、FFmpeg、yt-dlp、Python 包及其他组件仍适用各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 本仓库只维护可重复构建脚本和依赖清单；除非项目所有者明确要求，不生成便携包或安装器。
+
+## Star History
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/CheshireMew/MediaFlow-Pro/star-history/star-history-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/CheshireMew/MediaFlow-Pro/star-history/star-history.svg">
+  <img alt="MediaFlow Pro GitHub Star History" src="https://raw.githubusercontent.com/CheshireMew/MediaFlow-Pro/star-history/star-history.svg">
+</picture>

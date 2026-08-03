@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import zipfile
@@ -31,6 +32,10 @@ from mediaflow.infrastructure.audio_chunking import (
 from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_components import (
+    DEFAULT_COMPONENT_LOCK,
+    load_runtime_component_catalog,
+)
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.runtime_tools import RuntimeToolService
 
@@ -44,6 +49,18 @@ def _runtime_paths(tmp_path: Path) -> RuntimePaths:
         melt=installed.melt,
         native_qml=installed.native_qml,
     )
+
+
+def test_runtime_component_catalog_rejects_missing_archive_digest(
+    tmp_path: Path,
+) -> None:
+    document = json.loads(DEFAULT_COMPONENT_LOCK.read_text(encoding="utf-8"))
+    document["components"][0]["archive"]["sha256"] = ""
+    invalid_catalog = tmp_path / "runtime-components.lock.json"
+    invalid_catalog.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requires a lowercase SHA-256"):
+        load_runtime_component_catalog(invalid_catalog)
 
 
 def _generate_audio(path: Path, paths: RuntimePaths, *, duration_seconds: int = 1) -> None:
@@ -309,7 +326,9 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
                             "file_name": cli_archive.name,
                             "url": cli_archive.as_uri(),
                             "size_bytes": cli_archive.stat().st_size,
-                            "sha256": "",
+                            "sha256": hashlib.sha256(
+                                cli_archive.read_bytes()
+                            ).hexdigest(),
                         },
                         "install": {
                             "root": "Faster-Whisper-XXL",

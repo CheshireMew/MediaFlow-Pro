@@ -148,3 +148,11 @@ RUNTIME_CAPABILITY_IDS = frozenset(
     for item in CAPABILITY_CATALOG
     if item.availability == "runtime-inspected"
 )
+
+CORE_RUNTIME_CAPABILITY_IDS = frozenset(
+    {"ffmpeg", "ffprobe", "mlt", "chromium", "native-preview"}
+)
+RUNTIME_CAPABILITY_PROFILES = {
+    "core": CORE_RUNTIME_CAPABILITY_IDS,
+    "full": RUNTIME_CAPABILITY_IDS,
+}

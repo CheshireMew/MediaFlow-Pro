@@ -15,6 +15,16 @@ def fps_fraction(numerator: int, denominator: int) -> Fraction:
     return Fraction(numerator, denominator)
 
 
+def round_fraction(value: Fraction) -> int:
+    """Round to the nearest integer, with exact halves away from zero."""
+
+    sign = -1 if value < 0 else 1
+    magnitude = abs(value)
+    quotient, remainder = divmod(magnitude.numerator, magnitude.denominator)
+    rounded = quotient + (1 if remainder * 2 >= magnitude.denominator else 0)
+    return sign * rounded
+
+
 def seconds_to_frames(
     seconds: int | float | Fraction,
     fps_numerator: int,
@@ -23,8 +33,7 @@ def seconds_to_frames(
     """Round media time to the nearest project frame without float storage."""
     value = seconds if isinstance(seconds, Fraction) else Fraction(str(seconds))
     frames = value * fps_fraction(fps_numerator, fps_denominator)
-    quotient, remainder = divmod(frames.numerator, frames.denominator)
-    return quotient + (1 if remainder * 2 >= frames.denominator else 0)
+    return round_fraction(frames)
 
 
 def frames_to_seconds(
@@ -112,5 +121,4 @@ def source_frames_for_timeline_frames(
     if speed_denominator <= 0 or speed_numerator == 0:
         raise ValueError("Speed must be non-zero and have a positive denominator")
     source = Fraction(timeline_frames * abs(speed_numerator), speed_denominator)
-    quotient, remainder = divmod(source.numerator, source.denominator)
-    return quotient + (1 if remainder * 2 >= source.denominator else 0)
+    return round_fraction(source)

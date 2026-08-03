@@ -33,6 +33,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.desktop.app import configure_application_identity
 from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
@@ -170,7 +171,7 @@ def ensure_fixture(path: Path, paths: RuntimePaths, duration_seconds: int) -> No
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=440:sample_rate=48000",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-t",
             str(duration_seconds),
             "-c:v",
@@ -219,7 +220,7 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     if paths.melt is None or paths.native_qml is None:
         raise RuntimeError("MLT and the native QML plugin must be installed")
     media_seconds = arguments.duration_seconds + 5
-    fixture = FIXTURE_ROOT / f"preview-motion-tone-long-gop-1080p30-{media_seconds}s.mkv"
+    fixture = FIXTURE_ROOT / f"preview-motion-silent-long-gop-1080p30-{media_seconds}s.mkv"
     ensure_fixture(fixture, paths, media_seconds)
 
     with ProjectRepository.create(run_dir / "Preview Performance", "Preview Performance") as repository:
@@ -236,6 +237,7 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
         graph = repository.project_dir / "cache/mlt/preview-performance.mlt"
         TimelineCompiler(repository).write(editor.state, graph, native_preview=True)
 
+        configure_application_identity()
         _app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
         engine.addImportPath(str(paths.native_qml))
@@ -341,7 +343,7 @@ ApplicationWindow {
             "resolution": "1920x1080",
             "fps": "30/1",
             "source_video": "moving test pattern, H.264, 180-frame GOP",
-            "source_audio": "440 Hz tone, Opus, 48 kHz",
+            "source_audio": "silence, stereo Opus, 48 kHz",
             "duration_seconds": arguments.duration_seconds,
             "open_seconds": open_seconds,
             "open_limit_seconds": OPEN_LIMIT_SECONDS,

@@ -54,7 +54,7 @@ class TimelineProjector(Projector):
                 clip_positions[clip.id] = track_positions[source_track.linked_audio_track_id]
         return clip_positions
 
-    def refresh_timeline(self) -> None:
+    def refresh_timeline(self, *, defer_clip_updates: bool = False) -> None:
         self._session.projectors.audio.invalidate_audio_metrics()
         if not self._session.binding.timeline or not self._session.binding.current:
             self._session.models.tracks.set_items([])
@@ -141,7 +141,10 @@ class TimelineProjector(Projector):
             }
             for clip in state.clips
         ]
-        self._session.models.clips.set_items(clip_rows)
+        if defer_clip_updates:
+            self._session.models.clips.set_items_deferred(clip_rows)
+        else:
+            self._session.models.clips.set_items(clip_rows)
         clips_by_id = {clip.id: clip for clip in state.clips}
         compound_rows = []
         for compound in state.compounds:

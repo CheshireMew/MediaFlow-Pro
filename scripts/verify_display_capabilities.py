@@ -16,6 +16,7 @@ from PySide6.QtGui import QColorSpace, QGuiApplication, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.desktop.app import configure_application_identity
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from scripts.run_artifacts import verification_run
 
@@ -29,6 +30,7 @@ def verify(run_dir: Path) -> int:
         QColorSpace(QColorSpace.NamedColorSpace.SRgbLinear)
     )
     QSurfaceFormat.setDefaultFormat(surface_format)
+    configure_application_identity()
     _app = QGuiApplication([])
     engine = QQmlApplicationEngine()
     engine.addImportPath(str(paths.native_qml))

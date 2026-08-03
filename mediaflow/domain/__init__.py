@@ -52,6 +52,7 @@ from .subtitles import (
 from .tasks import Task
 from .timeline import (
     Clip,
+    ClipAddRequest,
     ClipAudio,
     ClipTransform,
     ClipTransformKeyframe,
@@ -132,6 +133,7 @@ __all__ = [
     "AudioBus",
     "AudioEffect",
     "Clip",
+    "ClipAddRequest",
     "ClipAudio",
     "ClipTransform",
     "ClipTransformKeyframe",

@@ -1,0 +1,17 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/web-card-cases/social-evidence-variants",
+  "editable_media_version": 5,
+  "files": {
+    "assets/creator-avatar.png": "255e6243648bbd731aa269c4ac5643e89a818c7ca79b334bec582584c73af91b",
+    "editable-media-runtime.js": "460ad7a3b16738659dccbcc6cfb325470472a43d8ef16666c92a858a8798403a",
+    "editable-media.json": "b8788f6f132b498492efe337b6550f6bd3b5d926a54be56fd006f035aba8524f",
+    "index.html": "bddf32f7d219e272567920784d7cc230e0c8798a9c7c0bedec4e54fee63c090a",
+    "media-sources.json": "28baf8cf2acaf9b65b958a736b09fcc9df1adcdb83a1ae4491d12fd46e812b6a",
+    "preview-landscape-21x9.png": "e2f8be2607f824ecad896d043d3f382115b7a589d67447b274bc02b2bb87ca2d",
+    "preview-portrait-3x4.png": "cc4c4399bd2dd8db2c0a66d23312a50b51313013e210b679cde15a7c9cef5564",
+    "preview-square-1x1.png": "2bbcfc8c90dbec131071daa9570703a485d3de738bc2a86dfb31a3029cd1b333",
+    "style-profile.json": "361bbb9816f09c3a9977d22bc13300a0193030a43035af61f77204c72e745a3a"
+  }
+}

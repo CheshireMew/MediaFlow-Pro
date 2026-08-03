@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import mediaflow.infrastructure.project_records_repository as project_records_module
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.enums import (
@@ -807,8 +808,8 @@ def test_failed_named_version_creation_never_publishes_a_catalog_record(
             raise OSError("injected digest failure")
 
         monkeypatch.setattr(
-            repository.records,
-            "_file_sha256",
+            project_records_module,
+            "sha256_file",
             fail_after_snapshot,
         )
         with pytest.raises(OSError, match="injected digest failure"):

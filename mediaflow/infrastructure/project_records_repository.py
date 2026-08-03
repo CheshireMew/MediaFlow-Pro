@@ -10,6 +10,7 @@ from mediaflow.atomic_file import unique_temporary_sibling
 from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.model_base import new_id, now_ms
 from mediaflow.domain.project_records import ExportHistoryRecord, ProjectVersionRecord
+from mediaflow.file_digest import sha256_file
 
 from .project_repository_component import ProjectRepositoryComponent
 from .project_schema_definition import PROJECT_SCHEMA_VERSION
@@ -107,7 +108,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                     id=record_id,
                     name=normalized,
                     snapshot_path=relative_path,
-                    sha256=self._file_sha256(temporary),
+                    sha256=sha256_file(temporary),
                     content_revision=content_revision,
                 )
                 self._insert_project_version(
@@ -153,7 +154,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
             snapshot_path = self._version_snapshot_path(record.snapshot_path)
             if not snapshot_path.is_file():
                 raise FileNotFoundError(snapshot_path)
-            if self._file_sha256(snapshot_path) != record.sha256:
+            if sha256_file(snapshot_path) != record.sha256:
                 raise RuntimeError("命名版本快照校验失败")
 
             project = self._owner.catalog.get_project()
@@ -410,14 +411,6 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
         if not path.is_relative_to(versions_root):
             raise ValueError("命名版本快照必须位于项目版本目录")
         return path
-
-    @staticmethod
-    def _file_sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-        return digest.hexdigest()
 
     @staticmethod
     def _insert_project_version(

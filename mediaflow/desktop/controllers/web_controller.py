@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
@@ -12,10 +11,8 @@ from .web_editor_context import (
     WebEditorContext,
     coerce_web_descriptor_value,
     find_web_descriptor,
+    require_mutable_web_clip,
 )
-
-if TYPE_CHECKING:
-    from mediaflow.composition import EditorProject
 
 
 class WebController(ControllerFacet):
@@ -256,7 +253,7 @@ class WebController(ControllerFacet):
     def setEditMode(self, enabled: bool) -> None:
         enabled = bool(enabled) and bool(self._web_clip_id)
         if enabled:
-            self._require_mutable_web_clip()
+            require_mutable_web_clip(self._session, self._web_clip_id)
         if enabled == self._web_edit_mode:
             return
         self._web_edit_mode = enabled
@@ -318,7 +315,7 @@ class WebController(ControllerFacet):
     @Slot(str, "QVariantMap")
     @report_ui_errors
     def updateLayer(self, layer_id: str, changes: dict) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         current_revision = int(self._web_state.get("revision", 0))
         updated = current.update_web_clip(
             self._session.binding.active_sequence_id,
@@ -333,7 +330,7 @@ class WebController(ControllerFacet):
     @Slot(str)
     @report_ui_errors
     def commitBrowserState(self, payload: str) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         browser_state = json.loads(payload)
         if browser_state == self._runtime_web_state:
             return
@@ -353,7 +350,7 @@ class WebController(ControllerFacet):
         source_id: str,
         value,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         descriptor = find_web_descriptor(
             self._edit_document,
             target,
@@ -408,7 +405,7 @@ class WebController(ControllerFacet):
         source_id: str,
         locked: bool,
     ) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         if target == "layer":
             layer_id, field = source_id.rsplit(".", 1)
             updated = current.set_web_field_locks(
@@ -436,7 +433,7 @@ class WebController(ControllerFacet):
     @Slot(str)
     @report_ui_errors
     def selectVariant(self, variant_id: str) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         updated = current.select_web_variant(
             self._session.binding.active_sequence_id,
             self._web_clip_id,
@@ -448,7 +445,7 @@ class WebController(ControllerFacet):
     @Slot(QUrl, str)
     @report_ui_errors
     def importDataSnapshot(self, source_url: QUrl, field_id: str) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         updated = current.update_web_data_from_file(
             self._session.binding.active_sequence_id,
             self._web_clip_id,
@@ -470,7 +467,7 @@ class WebController(ControllerFacet):
 
     @report_ui_errors
     def _set_locks(self, layer_id: str, fields: list[str], locked: bool) -> None:
-        current = self._require_mutable_web_clip()
+        current = require_mutable_web_clip(self._session, self._web_clip_id)
         updated = current.set_web_field_locks(
             self._session.binding.active_sequence_id,
             self._web_clip_id,
@@ -517,15 +514,6 @@ class WebController(ControllerFacet):
             scene_id=self._active_scene_id or None,
         )
         self._edit_document = document.model_dump(mode="json")
-
-    def _require_mutable_web_clip(self) -> EditorProject:
-        self._session._require_writable()
-        if not self._web_clip_id:
-            raise ValueError("请先选择网页片段")
-        current = self._session.binding.current
-        if current is None:
-            raise RuntimeError("请先打开一个项目")
-        return current
 
     def _set_selected_layer(self, layer_id: str) -> bool:
         known = {layer["id"] for layer in self._web_manifest.get("layers", [])}

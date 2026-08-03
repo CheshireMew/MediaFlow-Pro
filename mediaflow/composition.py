@@ -68,6 +68,7 @@ from mediaflow.infrastructure.mlt import (
     TimelineCompiler,
 )
 from mediaflow.infrastructure.project_cover_service import ProjectCoverService
+from mediaflow.infrastructure.project_migration_runner import ProjectUpgradeRequiredError
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -1333,6 +1334,7 @@ class EditorApplication:
                 "name": path.name,
                 "path": str(path),
                 "available": (path / "project.mfp").is_file(),
+                "unavailableReason": "",
                 "runningTaskCount": 0,
                 "failedTaskCount": 0,
                 "offlineAssetCount": 0,
@@ -1362,13 +1364,19 @@ class EditorApplication:
                             if value.resolve(path).is_file()
                         ]
                         item["recentArtifact"] = str(artifacts[0]) if artifacts else ""
-                except (RuntimeError, sqlite3.Error):
+                except ProjectUpgradeRequiredError:
                     # A project with an older, writable-migratable schema is
                     # still available. The home screen simply omits live metrics
                     # until the user opens it through the writable boundary.
                     pass
+                except (RuntimeError, sqlite3.Error):
+                    item["available"] = False
+                    item["unavailableReason"] = "项目文件损坏或格式不受支持"
                 except OSError:
-                    item["available"] = (path / "project.mfp").is_file()
+                    item["available"] = False
+                    item["unavailableReason"] = "项目文件当前无法读取"
+            else:
+                item["unavailableReason"] = "项目文件不存在"
             items.append(item)
             for key in (
                 "runningTaskCount",

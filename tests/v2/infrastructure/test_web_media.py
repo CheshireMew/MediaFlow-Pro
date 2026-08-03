@@ -62,6 +62,7 @@ STARTER = Path(
     )
 ).resolve()
 MEDIA_CASES = STARTER.parent / "editable-media-v5-cases"
+EDITORIAL_TECHNOLOGY_COVER = MEDIA_CASES / "editorial-technology-diagram-cover"
 
 
 def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaServices]:
@@ -94,6 +95,104 @@ def _add_web_clip(
         duration=duration,
     )
     return project, asset, clip
+
+
+def test_editorial_technology_cover_real_consumer_chain(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "Editorial technology cover"
+    repository = ProjectRepository.create(
+        project_dir,
+        "Editorial technology cover",
+    )
+    clip_id = ""
+    sequence_id = ""
+    try:
+        editor, service = _service(repository)
+        project = repository.catalog.get_project()
+        sequence_id = project.main_sequence_id
+        asset = service.packages.import_package(EDITORIAL_TECHNOLOGY_COVER)
+        assert asset.kind == AssetKind.WEB
+        assert asset.metadata.width == 1500
+        assert asset.metadata.height == 600
+
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=1,
+        )
+        clip_id = clip.id
+        updated = service.clips.update_clip(
+            sequence_id,
+            clip.id,
+            {
+                "title": {
+                    "content": "真实消费：科技图解封面",
+                    "x": 96,
+                }
+            },
+            scene_id="cover",
+            expected_revision=0,
+        )
+        assert updated.revision == 1
+        assert (
+            repository.web.get_web_clip_state(clip.id).scenes["cover"].layers["title"].content
+            == "真实消费：科技图解封面"
+        )
+
+        timeline = repository.timeline.load_timeline(sequence_id)
+        renderer = WebRenderService(repository, RuntimePaths.discover())
+        cache = renderer.render_clip(timeline, clip.id)
+        assert cache.is_file() and cache.stat().st_size > 0
+
+        frame = tmp_path / "editorial-technology-cover-frame.png"
+        subprocess.run(
+            [
+                str(RuntimePaths.discover().ffmpeg),
+                "-loglevel",
+                "error",
+                "-i",
+                str(cache),
+                "-frames:v",
+                "1",
+                str(frame),
+            ],
+            check=True,
+        )
+        assert frame.is_file() and frame.stat().st_size > 0
+
+        compiled = TimelineCompiler(repository).compile(timeline)
+        assert str(cache) in compiled.xml
+        assert "index.html" not in compiled.xml
+
+        output = tmp_path / "editorial-technology-cover.mp4"
+        result = MltExportService(
+            TimelineCompiler(repository),
+            RuntimePaths.discover(),
+        ).export(
+            timeline,
+            ExportPreset(
+                name="Editorial technology cover verification",
+                format=ExportFormat.H264,
+                container="mp4",
+                video_codec="libx264",
+                audio_codec=None,
+                pixel_format="yuv420p",
+            ),
+            output,
+        )
+        assert result.output_path.is_file()
+        assert result.output_path.stat().st_size > 0
+    finally:
+        repository.close()
+
+    with ProjectRepository.open(project_dir, writable=False) as reopened:
+        state = reopened.timeline.load_timeline(sequence_id)
+        assert state.web_states[clip_id].revision == 1
+        assert state.web_states[clip_id].scenes["cover"].layers["title"].content == ("真实消费：科技图解封面")
 
 
 def _native_source_record(

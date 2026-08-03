@@ -18,6 +18,7 @@ from mediaflow.domain.enums import (
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.project import Asset
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
+from mediaflow.domain.timebase import round_fraction
 from mediaflow.domain.timeline import (
     Clip,
     ClipTransform,
@@ -932,7 +933,7 @@ class FcpxmlExportService:
             )
             if source_delta < 0:
                 continue
-            local_frame = self._round_fraction(
+            local_frame = round_fraction(
                 Fraction(source_delta) / speed
             )
             if 0 <= local_frame < clip.duration:
@@ -1100,13 +1101,3 @@ class FcpxmlExportService:
         if value.denominator == 1:
             return f"{value.numerator}s"
         return f"{value.numerator}/{value.denominator}s"
-
-    @staticmethod
-    def _round_fraction(value: Fraction) -> int:
-        quotient, remainder = divmod(
-            value.numerator,
-            value.denominator,
-        )
-        return quotient + (
-            1 if remainder * 2 >= value.denominator else 0
-        )

@@ -603,6 +603,23 @@ def test_automation_contract_models_access_and_execution_share_one_registry() ->
         ).read_text(encoding="utf-8")
 
 
+def test_automation_context_uses_the_typed_application_boundary() -> None:
+    context = _class(
+        ROOT / "mediaflow" / "automation" / "operation_context.py",
+        "OperationContext",
+    )
+    fields = {
+        node.target.id: ast.unparse(node.annotation)
+        for node in context.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+    }
+    assert fields["_project"] == "EditorProject | None"
+    assert fields["_application"] == "EditorApplication | None"
+    assert "Any" not in fields["_project"]
+    assert "Any" not in fields["_application"]
+
+
 def test_ffmpeg_processes_have_one_execution_boundary() -> None:
     infrastructure = ROOT / "mediaflow" / "infrastructure"
     violations: list[str] = []

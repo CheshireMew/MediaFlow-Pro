@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from mediaflow.automation.operation_context import OperationContext
@@ -10,6 +9,7 @@ from mediaflow.automation.operation_models import (
     SpeechTranscriptionResult,
 )
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
+from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.asr_engine import FasterWhisperCliEngine
 from mediaflow.infrastructure.gpt_sovits_engine import GptSoVitsEngine
 from mediaflow.infrastructure.output_reservation import reserve_python_output
@@ -64,9 +64,9 @@ def transcribe(context: OperationContext) -> SpeechTranscriptionResult:
     return SpeechTranscriptionResult(
         engine_version=str(component_status["version"]),
         input_path=str(source),
-        input_sha256=_sha256(source),
+        input_sha256=sha256_file(source),
         output_path=str(output),
-        output_sha256=_sha256(output),
+        output_sha256=sha256_file(output),
         language=result.language,
         duration_seconds=result.duration_seconds,
         segments=[
@@ -123,14 +123,7 @@ def synthesize(context: OperationContext) -> SpeechSynthesisResult:
 
 
 def _runtime(context: OperationContext):
-    if context.application is not None:
-        return context.application.settings, context.application.runtime_paths
+    application = context.application_or_none
+    if application is not None:
+        return application.settings, application.runtime_paths
     return SettingsRepository().load(), RuntimePaths.discover()
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(4 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()

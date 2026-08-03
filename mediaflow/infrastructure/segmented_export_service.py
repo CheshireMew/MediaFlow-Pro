@@ -5,6 +5,7 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from mediaflow.application.ports import (
     SequenceBuildAudioResult,
@@ -20,6 +21,7 @@ from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.domain.task_commands import SequenceBuildUnit
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.mlt.compiler import TimelineCompiler
 from mediaflow.infrastructure.mlt.export_service import (
@@ -124,7 +126,7 @@ class SegmentedExportService:
         assembly_manifest = assembly_path.with_suffix(assembly_path.suffix + ".json")
         concat_path = assembly_path.with_suffix(".concat.txt")
         total_frames = sum(unit.end_frame - unit.start_frame for unit in units)
-        assembly_status = "reused"
+        assembly_status: Literal["assembled", "reused"] = "reused"
         cached = self._read_cache(
             assembly_path,
             assembly_manifest,
@@ -223,7 +225,7 @@ class SegmentedExportService:
         assembly_sha = str(cached["output_sha256"])
         if not (
             output.is_file()
-            and self._sha256_file(output) == assembly_sha
+            and sha256_file(output) == assembly_sha
         ):
             with output_set_transaction(
                 (output,),
@@ -761,7 +763,7 @@ class SegmentedExportService:
                 payload.get("protocol") != BUILD_PROTOCOL_VERSION
                 or payload.get("key") != key
                 or payload.get("frames") != frames
-                or payload.get("output_sha256") != self._sha256_file(output)
+                or payload.get("output_sha256") != sha256_file(output)
             ):
                 return None
             probe = self.exporter.probe(output)
@@ -789,7 +791,7 @@ class SegmentedExportService:
             "key": key,
             "frames": frames,
             "output": str(output),
-            "output_sha256": self._sha256_file(output),
+            "output_sha256": sha256_file(output),
             "bytes": output.stat().st_size,
             "requested_video_codec": (
                 render.requested_video_codec if render is not None else None
@@ -831,14 +833,6 @@ class SegmentedExportService:
             separators=(",", ":"),
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while block := stream.read(1024 * 1024):
-                digest.update(block)
-        return digest.hexdigest()
 
     @staticmethod
     def _concat_path(path: Path) -> str:

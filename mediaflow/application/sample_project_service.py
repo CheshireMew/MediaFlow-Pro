@@ -128,9 +128,10 @@ class SampleProjectService:
         def solid(color: tuple[int, int, int], pixels: int) -> bytes:
             return bytes(color) * pixels
 
-        card_color = tuple(
-            round(background[channel] * 0.68 + accent[channel] * 0.32)
-            for channel in range(3)
+        card_color = (
+            round(background[0] * 0.68 + accent[0] * 0.32),
+            round(background[1] * 0.68 + accent[1] * 0.32),
+            round(background[2] * 0.68 + accent[2] * 0.32),
         )
         for y in range(height):
             rows.append(0)

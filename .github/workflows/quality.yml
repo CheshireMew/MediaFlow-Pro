@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   python:
-    name: Python 3.12 full media runtime and user-chain checks
+    name: Python 3.12 pinned runtime and offline acceptance
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -40,14 +40,10 @@ jobs:
       - name: Install the exact Qt SDK declared by the runtime lock
         shell: pwsh
         run: |
-          $contract = Get-Content -LiteralPath runtime.lock.json -Raw | ConvertFrom-Json
           $qtBase = Join-Path $env:RUNNER_TEMP "Qt"
+          python scripts/prepare_ci_qt.py --qt-root $qtBase
+          if ($LASTEXITCODE -ne 0) { throw "Checksum-pinned Qt SDK installation failed" }
           $qtConfig = Get-ChildItem -Path $qtBase -Filter Qt6Config.cmake -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $qtConfig) {
-            python -m aqt install-qt windows desktop $contract.windows.qt.version $contract.windows.qt.architecture --outputdir $qtBase
-            if ($LASTEXITCODE -ne 0) { throw "Pinned Qt SDK installation failed" }
-            $qtConfig = Get-ChildItem -Path $qtBase -Filter Qt6Config.cmake -Recurse | Select-Object -First 1
-          }
           if (-not $qtConfig) { throw "Qt6Config.cmake was not installed" }
           $qtRoot = $qtConfig.Directory.Parent.Parent.Parent.FullName
           "QT_ROOT_DIR=$qtRoot" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -76,18 +72,21 @@ jobs:
           mediaflow
           tests/v2
           scripts/update_qm_translations.py
+          scripts/prepare_ci_qt.py
           scripts/verify_display_capabilities.py
           scripts/verify_development_runtime.py
           scripts/verify_license_inventory.py
           scripts/verify_performance.py
           scripts/verify_preview_performance.py
+          scripts/verify_reference_comparison_chain.py
           scripts/verify_real_user_chain.py
           scripts/verify_release_runtime.py
           scripts/verify_ui_matrix.py
+          scripts/verify_web_render_performance.py
       - name: Type-check core application and persistence boundaries
         run: python -m mypy
       - name: Verify the installed media runtime contract
-        run: python scripts/verify_development_runtime.py
+        run: python scripts/verify_development_runtime.py --profile core
       - name: Verify native QML loading on the CI display backend
         run: python scripts/verify_display_capabilities.py
       - name: Verify the complete pinned license inventory
@@ -101,7 +100,18 @@ jobs:
           python -m pytest
           tests/v2/infrastructure/test_web_capture_engine.py::test_real_draw_element_failure_requires_clean_screenshot_retry
           tests/v2/integration/test_native_preview.py
-      - name: Run the complete real user chain
+      - name: Run the offline application acceptance checks
+        run: |
+          python -m scripts.verify_performance
+          python -m scripts.verify_preview_performance --duration-seconds 20 --playback-check-seconds 5
+          python -m scripts.verify_ui_matrix
+          python -m scripts.verify_web_render_performance
+          python -m scripts.verify_reference_comparison_chain --package tests/fixtures/editable-media-v5
+      - name: Run the credentialed online user chain
+        if: ${{ vars.MEDIAFLOW_RUN_ONLINE_E2E == 'true' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MEDIAFLOW_E2E_MODEL: ${{ vars.MEDIAFLOW_E2E_MODEL }}
         run: python -m scripts.verify_real_user_chain
 
   native-policy:

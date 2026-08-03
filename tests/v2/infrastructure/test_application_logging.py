@@ -7,6 +7,7 @@ from mediaflow.infrastructure.application_logging import (
     LOG_BACKUP_COUNT,
     LOG_MAX_BYTES,
     configure_application_logging,
+    shutdown_application_logging,
 )
 
 
@@ -23,10 +24,29 @@ def test_application_log_persists_the_user_visible_error_reference(
     for handler in logging.getLogger("mediaflow").handlers:
         handler.flush()
 
-    content = log_path.read_text(encoding="utf-8")
-    assert reference in content
-    assert "test failure" in content
-    assert "pid=" in content
-    assert "thread=" in content
-    assert LOG_MAX_BYTES == 5 * 1024 * 1024
-    assert LOG_BACKUP_COUNT == 5
+    try:
+        content = log_path.read_text(encoding="utf-8")
+        assert reference in content
+        assert "test failure" in content
+        assert "pid=" in content
+        assert "thread=" in content
+        assert LOG_MAX_BYTES == 5 * 1024 * 1024
+        assert LOG_BACKUP_COUNT == 5
+    finally:
+        shutdown_application_logging()
+
+
+def test_application_logging_shutdown_closes_only_owned_handlers(
+    tmp_path: Path,
+) -> None:
+    logger = logging.getLogger("mediaflow")
+    sentinel = logging.NullHandler()
+    original_level = logger.level
+    logger.addHandler(sentinel)
+    configure_application_logging(tmp_path)
+
+    shutdown_application_logging()
+
+    assert logger.level == original_level
+    assert logger.handlers == [sentinel]
+    logger.removeHandler(sentinel)

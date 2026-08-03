@@ -8,5 +8,6 @@ from mediaflow.infrastructure.runtime_capabilities import (
 
 
 def inspect_runtime(context: OperationContext) -> RuntimeInspection:
-    settings = context.application.settings if context.application is not None else None
+    application = context.application_or_none
+    settings = application.settings if application is not None else None
     return RuntimeCapabilityInspector(settings=settings).inspect()

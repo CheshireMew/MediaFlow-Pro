@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QColor, QImage
 
 from mediaflow.application.events import TaskEvent
@@ -17,7 +19,12 @@ from mediaflow.application.workflow_coordinator import WorkflowCoordinator
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.desktop.coordinators.project_lifecycle import ProjectLifecycle
-from mediaflow.desktop.models import AssetFilterModel, AssetListModel, SequenceListModel
+from mediaflow.desktop.models import (
+    AssetFilterModel,
+    AssetListModel,
+    DictListModel,
+    SequenceListModel,
+)
 from mediaflow.desktop.session_state import ImportDropBatch, TimelinePlacement
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import (
@@ -56,6 +63,22 @@ from mediaflow.infrastructure.settings_repository import SettingsRepository
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+
+
+def test_deferred_model_update_is_readable_before_qml_notification(qapp) -> None:
+    model = DictListModel(["id", "value"])
+    model.set_items([{"id": "row", "value": 1}])
+    changes: list[tuple[int, list[int]]] = []
+    model.dataChanged.connect(
+        lambda first, _last, roles: changes.append((first.row(), list(roles)))
+    )
+
+    model.set_items_deferred([{"id": "row", "value": 2}])
+
+    assert model.get(0)["value"] == 2
+    assert changes == []
+    QCoreApplication.processEvents()
+    assert changes and changes[0][0] == 0
 
 
 def test_desktop_application_is_widget_capable_for_runtime_directory_fallback() -> None:
@@ -197,6 +220,8 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
         lambda: calls.append("application") or FakeApplication(),
     )
     monkeypatch.setattr(desktop_app, "ensure_runtime_directory", lambda: True)
+    runtime_root = tmp_path / "runtime"
+    monkeypatch.setattr(desktop_app, "runtime_directory", lambda: runtime_root)
     monkeypatch.setattr(
         desktop_app,
         "EditorApplication",
@@ -217,6 +242,11 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
     )
     assert calls.index(("surface", startup_settings)) < calls.index("webengine")
     assert calls.index("webengine") < calls.index("application")
+    assert (runtime_root / "logs" / "mediaflow.log").is_file()
+    assert not any(
+        getattr(handler, "_mediaflow_application_log", False)
+        for handler in logging.getLogger("mediaflow").handlers
+    )
 
 
 def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(

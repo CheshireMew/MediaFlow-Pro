@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -11,25 +12,28 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.domain.runtime_capabilities import RUNTIME_CAPABILITY_IDS
+from mediaflow.domain.runtime_capabilities import RUNTIME_CAPABILITY_PROFILES
 from mediaflow.infrastructure.runtime_capabilities import (
     RuntimeCapabilityInspector,
 )
 from scripts.run_artifacts import verification_run
 
 
-def verify(run_dir: Path) -> int:
+def verify(run_dir: Path, *, profile: str) -> int:
+    required_ids = RUNTIME_CAPABILITY_PROFILES[profile]
     inspection = RuntimeCapabilityInspector().inspect()
     statuses = {item.id: item for item in inspection.capabilities}
-    missing = RUNTIME_CAPABILITY_IDS - statuses.keys()
+    missing = required_ids - statuses.keys()
     failed = [
         item
         for item in inspection.capabilities
-        if item.id in RUNTIME_CAPABILITY_IDS and item.status != "ready"
+        if item.id in required_ids and item.status != "ready"
     ]
     passed = not missing and not failed
     report = {
         "schema_version": 2,
+        "profile": profile,
+        "required_capabilities": sorted(required_ids),
         **inspection.model_dump(mode="json"),
         "passed": passed,
     }
@@ -47,9 +51,16 @@ def verify(run_dir: Path) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--profile",
+        choices=tuple(RUNTIME_CAPABILITY_PROFILES),
+        default="core",
+    )
+    args = parser.parse_args(argv)
     with verification_run("development-runtime") as run_dir:
-        return verify(run_dir)
+        return verify(run_dir, profile=args.profile)
 
 
 if __name__ == "__main__":

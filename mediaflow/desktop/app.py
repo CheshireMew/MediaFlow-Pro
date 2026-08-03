@@ -21,13 +21,22 @@ from mediaflow.atomic_file import atomic_write_text
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.domain.product_identity import PRODUCT_NAME
-from mediaflow.infrastructure.application_logging import configure_application_logging
+from mediaflow.infrastructure.application_logging import (
+    configure_application_logging,
+    shutdown_application_logging,
+)
 from mediaflow.infrastructure.font_assets import register_application_fonts
 from mediaflow.infrastructure.runtime_paths import runtime_directory
 from mediaflow.infrastructure.settings_repository import SettingsLoadResult, SettingsRepository
 
 STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
 STARTUP_READY_SCHEMA_VERSION = 1
+
+
+def configure_application_identity() -> None:
+    QCoreApplication.setOrganizationName(PRODUCT_NAME)
+    QCoreApplication.setApplicationName(PRODUCT_NAME)
+    QCoreApplication.setApplicationVersion("2.0.0")
 
 
 def _monospace_font_family() -> str:
@@ -261,9 +270,7 @@ def ensure_runtime_directory() -> bool:
 
 def main() -> int:
     multiprocessing.freeze_support()
-    QCoreApplication.setOrganizationName(PRODUCT_NAME)
-    QCoreApplication.setApplicationName(PRODUCT_NAME)
-    QCoreApplication.setApplicationVersion("2.0.0")
+    configure_application_identity()
     settings_path = startup_settings_path()
     startup_settings = load_startup_settings(settings_path)
     configure_startup_surface(startup_settings)
@@ -278,20 +285,23 @@ def main() -> int:
     if not ensure_runtime_directory():
         return 2
     configure_application_logging(runtime_directory())
-    show_startup_settings_recovery(startup_settings)
-    # Runtime discovery is deliberately after the desktop fallback above. This
-    # keeps machines without D: usable instead of failing before the chooser can
-    # be shown.
-    api = EditorApplication()
-    configure_application_font(app)
-    configure_application_icon(app)
-    app.setDesktopFileName(PRODUCT_NAME)
-    engine, controllers = create_engine(app, api)
-    publish_startup_ready(engine)
-    app.aboutToQuit.connect(controllers.shutdown)
-    if len(sys.argv) > 1:
-        controllers.workspace.openProject(QUrl.fromLocalFile(sys.argv[1]).toString())
-    return app.exec()
+    try:
+        show_startup_settings_recovery(startup_settings)
+        # Runtime discovery is deliberately after the desktop fallback above. This
+        # keeps machines without D: usable instead of failing before the chooser can
+        # be shown.
+        api = EditorApplication()
+        configure_application_font(app)
+        configure_application_icon(app)
+        app.setDesktopFileName(PRODUCT_NAME)
+        engine, controllers = create_engine(app, api)
+        publish_startup_ready(engine)
+        app.aboutToQuit.connect(controllers.shutdown)
+        if len(sys.argv) > 1:
+            controllers.workspace.openProject(QUrl.fromLocalFile(sys.argv[1]).toString())
+        return app.exec()
+    finally:
+        shutdown_application_logging()
 
 
 if __name__ == "__main__":

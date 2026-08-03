@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mediaflow.composition import EditorProject
+    from mediaflow.desktop.controllers.project_controller import ProjectSession
 
 
 @dataclass(frozen=True)
@@ -16,6 +21,19 @@ class WebEditorContext:
     edit_document: dict
     active_scene_id: str
     selected_layer_id: str
+
+
+def require_mutable_web_clip(
+    session: ProjectSession,
+    clip_id: str,
+) -> EditorProject:
+    session._require_writable()
+    if not clip_id:
+        raise ValueError("请先选择网页片段")
+    current = session.binding.current
+    if current is None:
+        raise RuntimeError("请先打开一个项目")
+    return current
 
 
 def find_web_descriptor(
