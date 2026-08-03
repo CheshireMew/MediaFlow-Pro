@@ -94,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
         ).model_dump(mode="json")
         code = 1
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     sys.stdout.write(json.dumps(output, ensure_ascii=False, indent=2) + "\n")
     sys.stdout.flush()
     return code

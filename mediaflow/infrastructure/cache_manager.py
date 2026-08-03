@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.domain.storage_names import canonical_resolved_path
 from mediaflow.infrastructure.process_liveness import process_is_alive
 
 
@@ -191,11 +192,6 @@ class CacheManager:
 
 
 def _comparable_resolved_path(path: Path) -> str:
-    value = os.path.normcase(os.path.normpath(os.fspath(path.resolve())))
-    if os.name != "nt":
-        return value
-    if value.startswith("\\\\?\\UNC\\"):
-        value = "\\\\" + value[8:]
-    elif value.startswith("\\\\?\\"):
-        value = value[4:]
-    return os.path.normcase(os.path.normpath(value))
+    return os.path.normcase(
+        os.path.normpath(os.fspath(canonical_resolved_path(path)))
+    )

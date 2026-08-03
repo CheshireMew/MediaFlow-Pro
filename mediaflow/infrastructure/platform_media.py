@@ -279,9 +279,14 @@ class PlatformMediaResolver:
                     )
                 except PlaywrightError:
                     pass
-                while found_url is None and time.monotonic() < deadline:
+                while (found_url is None or not title) and time.monotonic() < deadline:
                     cls._checkpoint(check_cancelled)
                     try:
+                        candidate_title = page.evaluate(
+                            "document.querySelector('meta[property=\"og:title\"]')?.content || document.title"
+                        )
+                        if candidate_title:
+                            title = str(candidate_title)
                         page.evaluate(
                             """
                             () => {
@@ -297,12 +302,14 @@ class PlatformMediaResolver:
                     if remaining > 0:
                         page.wait_for_timeout(min(500, max(1, int(remaining * 1000))))
                 cls._checkpoint(check_cancelled)
-                try:
-                    title = page.evaluate(
-                        "document.querySelector('meta[property=\"og:title\"]')?.content || document.title"
-                    )
-                except PlaywrightError:
-                    title = None
+                if not title:
+                    try:
+                        candidate_title = page.evaluate(
+                            "document.querySelector('meta[property=\"og:title\"]')?.content || document.title"
+                        )
+                        title = str(candidate_title) if candidate_title else None
+                    except PlaywrightError:
+                        title = None
                 context.close()
                 browser.close()
         except PlaywrightError:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import unicodedata
 from pathlib import Path
 
@@ -12,6 +13,20 @@ def utf16_units(value: str) -> int:
         return len(value.encode("utf-16-le")) // 2
     except UnicodeEncodeError as error:
         raise ValueError("路径包含 Windows 无法表示的 Unicode 字符") from error
+
+
+def canonical_resolved_path(value: str | Path) -> Path:
+    """Resolve one path while hiding Windows' optional extended-length prefix."""
+
+    path = Path(value).expanduser().resolve()
+    if os.name != "nt":
+        return path
+    text = os.fspath(path)
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    return Path(text)
 
 
 WINDOWS_INTEROP_PATH_UTF16_LIMIT = 240
@@ -57,7 +72,7 @@ def export_quality_directory(project_dir: str | Path, report_id: str) -> Path:
     key = hashlib.sha256(identity.encode()).hexdigest()[
         :EXPORT_QUALITY_DIRECTORY_DIGEST_HEX_CHARS
     ]
-    return Path(project_dir).resolve() / "generated" / "export-qa" / f"qa-{key}"
+    return canonical_resolved_path(project_dir) / "generated" / "export-qa" / f"qa-{key}"
 
 
 def require_windows_interop_path(
@@ -73,7 +88,7 @@ def require_windows_interop_path(
     externally consumed paths stay below a conservative common boundary.
     """
 
-    path = Path(value).expanduser().resolve()
+    path = canonical_resolved_path(value)
     component_units = utf16_units(path.name)
     path_units = utf16_units(str(path))
     if component_units > max_component_utf16_units:
@@ -116,7 +131,7 @@ def safe_child_path(
 ) -> Path:
     """Build one safe child path while preserving system-owned affixes."""
 
-    directory = Path(parent).expanduser().resolve()
+    directory = canonical_resolved_path(parent)
     for affix in (prefix, suffix):
         if any(
             character in _WINDOWS_INVALID_CHARACTERS
@@ -181,7 +196,7 @@ def content_addressed_child_path(
     )
     digest = hashlib.sha256(encoded_identity).hexdigest()
     prefix = f"{safe_path_component(namespace, max_utf16_units=24)}-"
-    directory = Path(parent).expanduser().resolve()
+    directory = canonical_resolved_path(parent)
     fixed_units = utf16_units(prefix + suffix)
     effective_path_limit = (
         max_path_utf16_units
