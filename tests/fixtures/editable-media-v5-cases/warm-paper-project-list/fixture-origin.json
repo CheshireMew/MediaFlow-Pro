@@ -6,10 +6,10 @@
   "files": {
     "assets/creator-avatar.png": "255e6243648bbd731aa269c4ac5643e89a818c7ca79b334bec582584c73af91b",
     "editable-media-runtime.js": "460ad7a3b16738659dccbcc6cfb325470472a43d8ef16666c92a858a8798403a",
-    "editable-media.json": "bf961b4f57143c7c01eccd996e0d2eee2b7ab180c4ae5e3951e93ee698689e4a",
-    "index.html": "b346740d321626034da9df463bd00fe255c341bb5f0f8188bbf7bde24a174c60",
-    "media-sources.json": "90d7a50881fdd08ed822dfb2fe46c539ead230df99f91d9756994a857471da96",
-    "preview.png": "c1c4a9f5d33470002f8180fd3f8510926d6104ef9248fe2352ec0a452d285d49",
-    "style-profile.json": "195dac76418c3d4fdddc5bca3e5799759580d0b4543e998e7b1134664f0f8607"
+    "editable-media.json": "78d908df7e65a49803dd61c803056d529d4db36b850ad539639ce2b627562cb5",
+    "index.html": "12ec69d79e04443acd8cddca82995c970a7c0a215e09b302dd185a06fc77a8e5",
+    "media-sources.json": "262a5ac8340290c77d2fd7c906023530a73078e3ca1f63af6fd17126569e15c0",
+    "preview.png": "3206dcdd93e077e1b694a26df062ecea3d67af3b92c7b4d184f438f74cf92154",
+    "style-profile.json": "f091dc499032b73925c0fc2589a09dfb8b2ab7c2dfa0577ea60a4c2193924d2d"
   }
 }

@@ -1,0 +1,14 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/web-card-cases/text-card-glossary",
+  "editable_media_version": 5,
+  "files": {
+    "editable-media-runtime.js": "460ad7a3b16738659dccbcc6cfb325470472a43d8ef16666c92a858a8798403a",
+    "editable-media.json": "0321395f51e9ca02bd1d3f9270138761b10d9877ebfadd97e66fde09414f629a",
+    "index.html": "11d7bd9a511fc620a53db53ba7b40ca83ed264659471040c6e8b89372327a42f",
+    "media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce",
+    "preview.png": "be4d1ccd8f77978cb4d94fb27b5ca7f4857b1a3be23c9447bc181a266275ac07",
+    "style-profile.json": "73c8856f752fd054516952b335b038bad448db93e7783ee96603a9816ddecbfa"
+  }
+}

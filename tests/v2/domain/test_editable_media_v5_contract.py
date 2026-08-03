@@ -17,11 +17,19 @@ PACKAGES = {
     "starter": FIXTURES / "editable-media-v5",
     "warm": FIXTURES / "editable-media-v5-cases" / "warm-paper-project-list",
     "social": FIXTURES / "editable-media-v5-cases" / "social-evidence-variants",
+    "text_card_glossary": (
+        FIXTURES
+        / "editable-media-v5-cases"
+        / "text-card-glossary"
+    ),
 }
 PRODUCERS = {
     "starter": "visual-multimedia/assets/web-media-starter",
     "warm": "visual-multimedia/assets/web-card-cases/warm-paper-project-list",
     "social": "visual-multimedia/assets/web-card-cases/social-evidence-variants",
+    "text_card_glossary": (
+        "visual-multimedia/assets/web-card-cases/text-card-glossary"
+    ),
 }
 CORPUS_SCHEMA = (
     FIXTURES
@@ -74,9 +82,10 @@ def test_rich_v5_features_are_first_class_contract_fields() -> None:
 
     warm = parse_editable_media_manifest(_read_manifest("warm"))
     warm_fields = {field.id: field for field in warm.data_fields}
-    assert warm_fields["creator_avatar"].kind == "media-source"
+    assert warm_fields["curator_avatar"].kind == "media-source"
+    assert warm_fields["curator_label"].default == "整理"
     assert warm_fields["legend_items"].kind == "list"
-    assert warm.layout_contracts[0].asset_slots[0].id == "creator-avatar"
+    assert warm.layout_contracts[0].asset_slots[0].id == "curator-avatar"
     assert warm.scenes[0].data == {}
     assert warm.variants[0].layers == {}
 
@@ -92,6 +101,20 @@ def test_rich_v5_features_are_first_class_contract_fields() -> None:
     merged = social.layer_values_for("square-1x1", "short-title")
     assert merged["rotation"] == 0
     assert merged["visible"] is True
+
+    text_card = parse_editable_media_manifest(
+        _read_manifest("text_card_glossary")
+    )
+    text_card_fields = {field.id: field for field in text_card.data_fields}
+    assert text_card_fields["production_watermark"].default == "𝕏@0xCheshire"
+    assert "production-watermark" in {layer.id for layer in text_card.layers}
+    assert not any(field.id.startswith("creator_") for field in text_card.data_fields)
+    text_card_sources = json.loads(
+        (
+            PACKAGES["text_card_glossary"] / "media-sources.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert text_card_sources["sources"] == []
 
 
 def test_v5_media_sources_require_an_explicit_pipeline_binding() -> None:

@@ -19,6 +19,10 @@ PACKAGE_SOURCES = (
         "assets/web-card-cases/social-evidence-variants",
         "editable-media-v5-cases/social-evidence-variants",
     ),
+    (
+        "assets/web-card-cases/text-card-glossary",
+        "editable-media-v5-cases/text-card-glossary",
+    ),
 )
 MEDIA_BUILD_CASE_SOURCES = (
     (
