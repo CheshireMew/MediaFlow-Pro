@@ -27,6 +27,22 @@ def test_native_preview_separates_audio_clock_from_bounded_video_predecode() -> 
     assert "m_playbackConsumersActive.store(true" in runtime_source
     assert "waitForConsumerCallbacks();" in runtime_source
     assert "m_consumerCallbacksInFlight" in runtime_header
+    close_boundary = runtime_source.split(
+        "void MltRuntime::closePlaybackConsumers", 1
+    )[1].split("bool MltRuntime::beginConsumerCallback", 1)[0]
+    assert close_boundary.index("consumerStop") < close_boundary.index(
+        "producerSetSpeed"
+    )
+    assert close_boundary.index("producerSetSpeed") < close_boundary.index(
+        "waitForConsumerCallbacks"
+    )
+    assert close_boundary.index("waitForConsumerCallbacks") < close_boundary.index(
+        "eventsDisconnect"
+    )
+    assert close_boundary.index("eventsDisconnect") < close_boundary.index(
+        "consumerClose"
+    )
+    assert close_boundary.index("consumerPurge") < close_boundary.index("consumerStop")
     assert "m_renderQueueNotFull.wait" in runtime_source
     assert "qBound(24, qRound(m_fps), 60)" in runtime_source
     assert "m_audioClockPosition.store(position" in runtime_source

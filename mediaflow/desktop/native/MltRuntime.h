@@ -107,6 +107,7 @@ private:
             void *,
             const char *,
             EventListener);
+        using EventsDisconnect = void (*)(MltProperties, void *);
         using EventDataToFrame = MltFrame (*)(MltEventData);
 
         FactoryInit factoryInit = nullptr;
@@ -133,6 +134,7 @@ private:
         PropertiesSet propertiesSet = nullptr;
         PropertiesSetInt propertiesSetInt = nullptr;
         EventsListen eventsListen = nullptr;
+        EventsDisconnect eventsDisconnect = nullptr;
         EventDataToFrame eventDataToFrame = nullptr;
     };
 

@@ -8,9 +8,11 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSize>
+#include <QStringList>
 #include <QTimer>
 #include <QtMath>
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
@@ -163,20 +165,39 @@ bool MltRuntime::loadApi(const QString &runtimeRoot)
         return true;
 
     const QDir root(runtimeRoot);
-    const QString libraryPath = root.filePath(QStringLiteral("libmlt-7.dll"));
-    if (!QFileInfo::exists(libraryPath)) {
-        emit errorOccurred(
-            QStringLiteral("MLT runtime was not found: %1").arg(libraryPath),
-            m_requestId.load(std::memory_order_acquire));
-        return false;
+    QStringList libraryCandidates;
+#ifdef Q_OS_WIN
+    libraryCandidates << root.filePath(QStringLiteral("libmlt-7.dll"));
+#elif defined(Q_OS_MACOS)
+    libraryCandidates
+        << root.filePath(QStringLiteral("lib/libmlt-7.dylib"))
+        << root.filePath(QStringLiteral("lib/libmlt.dylib"));
+#else
+    libraryCandidates
+        << root.filePath(QStringLiteral("lib/libmlt-7.so"))
+        << root.filePath(QStringLiteral("lib64/libmlt-7.so"));
+    const QDir libraryRoot(root.filePath(QStringLiteral("lib")));
+    const QStringList architectureDirectories = libraryRoot.entryList(
+        QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &directory : architectureDirectories) {
+        libraryCandidates << libraryRoot.filePath(
+            directory + QStringLiteral("/libmlt-7.so"));
     }
-
-    m_library.setFileName(libraryPath);
+#endif
+    const auto existing = std::find_if(
+        libraryCandidates.cbegin(),
+        libraryCandidates.cend(),
+        [](const QString &candidate) { return QFileInfo(candidate).isFile(); });
+    m_library.setFileName(
+        existing != libraryCandidates.cend()
+            ? *existing
+            : QStringLiteral("mlt-7"));
     m_library.setLoadHints(
         QLibrary::ResolveAllSymbolsHint | QLibrary::PreventUnloadHint);
     if (!m_library.load()) {
         emit errorOccurred(
-            QStringLiteral("Unable to load MLT runtime: %1").arg(m_library.errorString()),
+            QStringLiteral("Unable to load MLT runtime from %1: %2")
+                .arg(runtimeRoot, m_library.errorString()),
             m_requestId.load(std::memory_order_acquire));
         return false;
     }
@@ -206,6 +227,7 @@ bool MltRuntime::loadApi(const QString &runtimeRoot)
         && resolve(m_api.propertiesSet, "mlt_properties_set")
         && resolve(m_api.propertiesSetInt, "mlt_properties_set_int")
         && resolve(m_api.eventsListen, "mlt_events_listen")
+        && resolve(m_api.eventsDisconnect, "mlt_events_disconnect")
         && resolve(m_api.eventDataToFrame, "mlt_event_data_to_frame");
     if (!resolved) {
         m_library.unload();
@@ -240,12 +262,18 @@ void MltRuntime::openGraph(
     const ScopedDllDirectory dllSearch(m_runtimeRoot);
 #endif
     const QDir runtime(m_runtimeRoot);
-    const QString repositoryPath = QFileInfo::exists(runtime.filePath(QStringLiteral("lib/mlt-preview")))
-        ? runtime.filePath(QStringLiteral("lib/mlt-preview"))
-        : runtime.filePath(QStringLiteral("lib/mlt"));
+    const QString configuredRepository = qEnvironmentVariable("MLT_REPOSITORY");
+    const QString repositoryPath = !configuredRepository.isEmpty()
+        ? configuredRepository
+        : (QFileInfo::exists(runtime.filePath(QStringLiteral("lib/mlt-preview")))
+            ? runtime.filePath(QStringLiteral("lib/mlt-preview"))
+            : runtime.filePath(QStringLiteral("lib/mlt")));
     const QByteArray encodedRepository = QDir::toNativeSeparators(repositoryPath).toUtf8();
+    const QString configuredData = qEnvironmentVariable("MLT_DATA");
     const QByteArray encodedData = QDir::toNativeSeparators(
-        runtime.filePath(QStringLiteral("share/mlt"))).toUtf8();
+        !configuredData.isEmpty()
+            ? configuredData
+            : runtime.filePath(QStringLiteral("share/mlt"))).toUtf8();
     const ScopedEnvironmentVariable mltData("MLT_DATA", encodedData);
     const ScopedEnvironmentVariable repositoryDeny(
         "MLT_REPOSITORY_DENY",
@@ -629,14 +657,9 @@ void MltRuntime::closePlaybackConsumers()
         const QMutexLocker locker(&m_renderedFramesMutex);
         m_renderQueueNotFull.wakeAll();
     }
-    waitForConsumerCallbacks();
     m_presentationTimer->stop();
     m_presentationGeneration = -1;
     m_waitingForMissingFrame = false;
-    if (m_audioProducer)
-        m_api.producerSetSpeed(m_audioProducer, 0.0);
-    if (m_videoProducer)
-        m_api.producerSetSpeed(m_videoProducer, 0.0);
     if (m_audioConsumer && m_api.consumerPurge)
         m_api.consumerPurge(m_audioConsumer);
     if (m_videoConsumer && m_api.consumerPurge)
@@ -645,6 +668,17 @@ void MltRuntime::closePlaybackConsumers()
         m_api.consumerStop(m_audioConsumer);
     if (m_videoConsumer && m_api.consumerStop)
         m_api.consumerStop(m_videoConsumer);
+    if (m_audioProducer)
+        m_api.producerSetSpeed(m_audioProducer, 0.0);
+    if (m_videoProducer)
+        m_api.producerSetSpeed(m_videoProducer, 0.0);
+    waitForConsumerCallbacks();
+    if (m_audioConsumer) {
+        m_api.eventsDisconnect(m_api.consumerProperties(m_audioConsumer), this);
+    }
+    if (m_videoConsumer) {
+        m_api.eventsDisconnect(m_api.consumerProperties(m_videoConsumer), this);
+    }
     if (m_audioConsumer && m_api.consumerClose)
         m_api.consumerClose(m_audioConsumer);
     if (m_videoConsumer && m_api.consumerClose)

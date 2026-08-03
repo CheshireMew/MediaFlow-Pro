@@ -26,7 +26,23 @@ from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
-def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(tmp_path: Path) -> None:
+@pytest.fixture
+def native_qml_instances():
+    instances: list[tuple[QQmlApplicationEngine, QObject, QObject]] = []
+    yield instances
+    for engine, window, preview in reversed(instances):
+        preview.setProperty("source", "")
+        QCoreApplication.processEvents()
+        window.close()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
+    tmp_path: Path,
+    native_qml_instances,
+) -> None:
     paths = RuntimePaths.discover()
     assert paths.melt is not None
     assert paths.native_qml is not None
@@ -80,6 +96,7 @@ ApplicationWindow {
         window = engine.rootObjects()[0]
         preview = window.findChild(QObject, "preview")
         assert preview is not None
+        native_qml_instances.append((engine, window, preview))
         preview.setProperty("runtimeRoot", str(paths.melt.parent))
         open_started = time.monotonic()
         preview.setProperty("source", str(graph))
@@ -218,7 +235,8 @@ ApplicationWindow {
         preview.setProperty("playbackRate", 1.0)
         preview.seek(12)
         preview.playRange(12, 13)
-        for _ in range(20):
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and preview.property("position") != 12:
             QCoreApplication.processEvents()
             time.sleep(0.01)
         assert preview.property("position") == 12
@@ -295,13 +313,12 @@ ApplicationWindow {
             time.sleep(0.01)
         assert preview.property("position") == 0
         assert preview.property("duration") == 0
-        window.close()
-        engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-        QCoreApplication.processEvents()
 
 
-def test_native_preview_handles_silent_video_audio_only_and_still_image(tmp_path: Path) -> None:
+def test_native_preview_handles_silent_video_audio_only_and_still_image(
+    tmp_path: Path,
+    native_qml_instances,
+) -> None:
     paths = RuntimePaths.discover()
     assert paths.ffmpeg is not None and paths.melt is not None and paths.native_qml is not None
     silent_video = tmp_path / "silent-portrait.mp4"
@@ -397,6 +414,7 @@ ApplicationWindow {
         window = engine.rootObjects()[0]
         preview = window.findChild(QObject, "preview")
         assert preview is not None
+        native_qml_instances.append((engine, window, preview))
         preview.setProperty("runtimeRoot", str(paths.melt.parent))
 
         for graph, duration, _kind in graphs:
@@ -422,13 +440,12 @@ ApplicationWindow {
             assert preview.property("droppedFrames") == 0
 
         preview.setProperty("source", "")
-        window.close()
-        engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-        QCoreApplication.processEvents()
 
 
-def test_native_preview_tone_maps_hdr_graph_on_sdr_output(tmp_path: Path) -> None:
+def test_native_preview_tone_maps_hdr_graph_on_sdr_output(
+    tmp_path: Path,
+    native_qml_instances,
+) -> None:
     paths = RuntimePaths.discover()
     assert paths.melt is not None
     assert paths.native_qml is not None
@@ -481,6 +498,7 @@ ApplicationWindow {
         window = engine.rootObjects()[0]
         preview = window.findChild(QObject, "preview")
         assert preview is not None
+        native_qml_instances.append((engine, window, preview))
         preview.setProperty("runtimeRoot", str(paths.melt.parent))
         preview.setProperty("source", str(graph))
 
@@ -510,8 +528,3 @@ ApplicationWindow {
         ]
         assert len(colors) > 5
         assert max(luminances) > 0.2
-
-        window.close()
-        engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-        QCoreApplication.processEvents()
