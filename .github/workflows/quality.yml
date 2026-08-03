@@ -16,14 +16,22 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
-      MEDIAFLOW_DEV_ROOT: ${{ runner.temp }}\mediaflow-dev
-      MEDIAFLOW_PROJECT_ROOT: ${{ runner.temp }}\mediaflow-projects
-      MEDIAFLOW_MEDIA_ROOT: ${{ runner.temp }}\mediaflow-media
-      MEDIAFLOW_TEST_ROOT: ${{ runner.temp }}\mediaflow-test-runs
-      MEDIAFLOW_TEST_FIXTURE_ROOT: ${{ runner.temp }}\mediaflow-test-fixtures
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Configure isolated repository paths
+        shell: pwsh
+        run: |
+          $paths = @{
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
+          }
+          foreach ($entry in $paths.GetEnumerator()) {
+            "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
+          }
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
