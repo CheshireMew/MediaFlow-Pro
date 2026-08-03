@@ -8,27 +8,29 @@ RUNTIME_SOURCE = ROOT / "mediaflow" / "desktop" / "native" / "MltRuntime.cpp"
 PREVIEW_SOURCE = ROOT / "mediaflow" / "desktop" / "native" / "MltPreviewItem.cpp"
 
 
-def test_native_preview_separates_audio_clock_from_bounded_video_predecode() -> None:
+def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> None:
     runtime_header = RUNTIME_HEADER.read_text(encoding="utf-8")
     runtime_source = RUNTIME_SOURCE.read_text(encoding="utf-8")
     preview_source = PREVIEW_SOURCE.read_text(encoding="utf-8")
     implementation = runtime_header + runtime_source + preview_source
 
-    assert "m_audioProducer" in runtime_header
-    assert "m_videoProducer" in runtime_header
-    assert 'factoryConsumer(m_audioProfile, "sdl2_audio"' in runtime_source
-    assert 'factoryConsumer(m_videoProfile, "null"' in runtime_source
-    assert 'propertiesSetInt(audioProperties, "video_off", 1)' in runtime_source
-    assert 'propertiesSetInt(videoProperties, "audio_off", 1)' in runtime_source
-    assert 'propertiesSetInt(videoProperties, "real_time", 0)' in runtime_source
-    assert runtime_source.count('"consumer-frame-show"') == 2
-    assert "&MltRuntime::onVideoFrameShown" in runtime_source
-    assert "&MltRuntime::onAudioFrameShown" in runtime_source
-    assert "m_playbackConsumersActive.store(true" in runtime_source
+    assert "m_previewProducer" in runtime_header
+    assert "m_videoProducer" not in runtime_header
+    assert "m_videoConsumer" not in runtime_header
+    assert "m_videoProfile" not in runtime_header
+    assert 'factoryConsumer(m_previewProfile, "sdl2_audio"' in runtime_source
+    assert 'factoryConsumer(m_previewProfile, "rtaudio"' in runtime_source
+    assert 'factoryConsumer(m_videoProfile, "null"' not in runtime_source
+    assert 'propertiesSetInt(previewProperties, "video_off", 0)' in runtime_source
+    assert 'propertiesSetInt(previewProperties, "width", m_previewWidth)' in runtime_source
+    assert 'propertiesSetInt(previewProperties, "height", m_previewHeight)' in runtime_source
+    assert runtime_source.count('"consumer-frame-show"') == 1
+    assert "&MltRuntime::onFrameShown" in runtime_source
+    assert "m_playbackConsumerActive.store(true" in runtime_source
     assert "waitForConsumerCallbacks();" in runtime_source
     assert "m_consumerCallbacksInFlight" in runtime_header
     close_boundary = runtime_source.split(
-        "void MltRuntime::closePlaybackConsumers", 1
+        "void MltRuntime::closePlaybackConsumer", 1
     )[1].split("bool MltRuntime::beginConsumerCallback", 1)[0]
     assert close_boundary.index("consumerStop") < close_boundary.index(
         "producerSetSpeed"
@@ -42,10 +44,15 @@ def test_native_preview_separates_audio_clock_from_bounded_video_predecode() -> 
     assert close_boundary.index("eventsDisconnect") < close_boundary.index(
         "consumerClose"
     )
-    assert close_boundary.index("consumerPurge") < close_boundary.index("consumerStop")
+    assert "consumerPurge" not in implementation
     assert "m_renderQueueNotFull.wait" in runtime_source
     assert "qBound(24, qRound(m_fps), 60)" in runtime_source
-    assert "m_audioClockPosition.store(position" in runtime_source
+    frame_boundary = runtime_source.split(
+        "void MltRuntime::onFrameShown", 1
+    )[1].split("void MltRuntime::beginPresentation", 1)[0]
+    assert frame_boundary.index("readFrameImage") < frame_boundary.index(
+        "m_audioClockPosition.store(position"
+    )
     assert "runtime->beginPresentation(generation)" in runtime_source
     assert "m_cadenceClock.start()" in runtime_source
     assert "m_nextCadenceDeadlineNs = qMin(" in runtime_source

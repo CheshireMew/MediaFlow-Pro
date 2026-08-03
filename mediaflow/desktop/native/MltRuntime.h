@@ -97,7 +97,6 @@ private:
         using ConsumerConnect = int (*)(MltConsumer, MltService);
         using ConsumerStart = int (*)(MltConsumer);
         using ConsumerStop = int (*)(MltConsumer);
-        using ConsumerPurge = void (*)(MltConsumer);
         using ConsumerClose = void (*)(MltConsumer);
         using PropertiesSet = int (*)(MltProperties, const char *, const char *);
         using PropertiesSetInt = int (*)(MltProperties, const char *, int);
@@ -129,7 +128,6 @@ private:
         ConsumerConnect consumerConnect = nullptr;
         ConsumerStart consumerStart = nullptr;
         ConsumerStop consumerStop = nullptr;
-        ConsumerPurge consumerPurge = nullptr;
         ConsumerClose consumerClose = nullptr;
         PropertiesSet propertiesSet = nullptr;
         PropertiesSetInt propertiesSetInt = nullptr;
@@ -156,18 +154,14 @@ private:
     void performPendingSeek();
     bool seekImmediately(int frame);
     bool startConfiguredPlayback();
-    bool startPlaybackConsumers();
-    void closePlaybackConsumers();
+    bool startPlaybackConsumer();
+    void closePlaybackConsumer();
     bool beginConsumerCallback(int &generation);
     void endConsumerCallback();
     void waitForConsumerCallbacks();
     bool decodeStillFrame(int frame);
     bool readFrameImage(MltFrame frame, int position, QImage &image);
-    static void onVideoFrameShown(
-        MltProperties owner,
-        void *listenerData,
-        MltEventData eventData);
-    static void onAudioFrameShown(
+    static void onFrameShown(
         MltProperties owner,
         void *listenerData,
         MltEventData eventData);
@@ -180,14 +174,10 @@ private:
     QString m_runtimeRoot;
     Api m_api;
     MltRepository m_repository = nullptr;
-    MltProfile m_audioProfile = nullptr;
-    MltProfile m_videoProfile = nullptr;
-    MltProducer m_audioProducer = nullptr;
-    MltProducer m_videoProducer = nullptr;
-    MltConsumer m_audioConsumer = nullptr;
-    MltConsumer m_videoConsumer = nullptr;
-    MltEvent m_videoShowEvent = nullptr;
-    MltEvent m_audioShowEvent = nullptr;
+    MltProfile m_previewProfile = nullptr;
+    MltProducer m_previewProducer = nullptr;
+    MltConsumer m_previewConsumer = nullptr;
+    MltEvent m_frameShowEvent = nullptr;
     int m_position = 0;
     int m_duration = 0;
     int m_playbackStart = 0;
@@ -209,7 +199,7 @@ private:
     std::atomic<bool> m_frameOutputHdr{false};
     std::atomic<quint64> m_requestId{0};
     std::atomic<int> m_consumerGeneration{0};
-    std::atomic<bool> m_playbackConsumersActive{false};
+    std::atomic<bool> m_playbackConsumerActive{false};
     std::atomic<int> m_consumerCallbacksInFlight{0};
     std::atomic<int> m_presentationStartGeneration{-1};
     std::atomic<int> m_audioClockPosition{0};
