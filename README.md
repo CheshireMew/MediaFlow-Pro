@@ -107,7 +107,7 @@ editable-media 的包导入、片段编辑、批量生成和素材换版由四�
 | `MEDIAFLOW_MEDIA_ROOT` | 下载、导入和转写源媒体的应用级根 |
 | `VISUAL_MULTIMEDIA_ROOT` | 需要同步 `editable-media` 合同样本时使用的生产者仓库位置 |
 
-进程中已经设置的环境变量优先于 `.env`；`MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_FFMPEG`、`MEDIAFLOW_FFPROBE`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`QT_ROOT_DIR` 和各类测试目录可以按需覆盖共同开发根下的标准布局。程序不会保留某个盘符作为隐藏后备路径。
+进程中已经设置的环境变量优先于 `.env`；`MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_FFMPEG`、`MEDIAFLOW_FFPROBE`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`MEDIAFLOW_CHROMIUM`、`QT_ROOT_DIR` 和各类测试目录可以按需覆盖共同开发根下的标准布局。未显式指定浏览器时，程序从 Playwright 缓存、Windows 的 `ProgramFiles` / `LOCALAPPDATA` 或 `PATH` 发现 Chrome、Edge 或 Chromium，不会保留某个盘符作为隐藏后备路径。
 
 创建开发环境：
 
@@ -148,7 +148,7 @@ CI 使用 `scripts/prepare_ci_runtime.ps1` 校验 SHA-256 后展开固定的 Sho
 
 ## 无头 CLI
 
-`mediaflow-cli` 是桌面界面之外的结构化自动化入口，复用同一个 Editor API，不另起服务，也不复制任务实现。它使用版本化 JSON 合同，命令始终向标准输出写 JSON，失败时返回非零退出码和稳定错误码。调用方应先读取 `describe`，再按每项操作声明的项目访问方式、执行方式、幂等策略、所需能力以及输入和结果 schema 选择操作；需要外部运行时的操作还应先调用 `runtime.inspect`，不能用静态功能名代替当前机器的真实可用性。
+`mediaflow-cli` 是桌面界面之外的结构化自动化入口，复用同一个 Editor API，不另起服务，也不复制任务实现。它使用版本化 JSON 合同，命令始终以 UTF-8 向标准输出写 JSON，失败时返回非零退出码和稳定错误码。Python 等以文本模式启动子进程的调用方必须显式指定 `encoding="utf-8"`，不应依赖 Windows 本地代码页。调用方应先读取 `describe`，再按每项操作声明的项目访问方式、执行方式、幂等策略、所需能力以及输入和结果 schema 选择操作；需要外部运行时的操作还应先调用 `runtime.inspect`，不能用静态功能名代替当前机器的真实可用性。
 
 `quality.reference.compare` 不打开或修改项目。它读取两个本地视频的真实解码帧，按调用者给出的区间、邻帧搜索范围和可选验收条件生成 `reference-comparison.json`、最差帧对照图和联系表。没有验收条件时结果为 `measured`；只有显式条件存在时才返回 `passed` 或 `failed`。逐帧数值不能替代对内容、构图、动作和风格的完整观看。
 
@@ -166,7 +166,7 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
   "protocol": "mediaflow-cli",
   "version": 2,
   "operation": "task.start",
-    "project": "<absolute-project-directory>",
+  "project": "<absolute-project-directory>",
   "arguments": {
     "task_command": {
       "command_type": "generate_waveform",

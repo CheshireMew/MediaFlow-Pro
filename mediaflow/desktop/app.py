@@ -148,20 +148,22 @@ def publish_startup_ready(
 def configure_application_font(app: QGuiApplication) -> str:
     register_application_fonts()
     if sys.platform == "win32" and not QFontDatabase.hasFamily("Microsoft YaHei UI"):
-        fonts_directory = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
-        for filename in (
-            "msyh.ttc",
-            "msyhbd.ttc",
-            "segoeui.ttf",
-            "segoeuib.ttf",
-            "seguisym.ttf",
-            "SegoeIcons.ttf",
-            "consola.ttf",
-            "consolab.ttf",
-        ):
-            font_path = fonts_directory / filename
-            if font_path.is_file():
-                QFontDatabase.addApplicationFont(str(font_path))
+        windows_directory = os.environ.get("WINDIR", "").strip()
+        if windows_directory:
+            fonts_directory = Path(windows_directory) / "Fonts"
+            for filename in (
+                "msyh.ttc",
+                "msyhbd.ttc",
+                "segoeui.ttf",
+                "segoeuib.ttf",
+                "seguisym.ttf",
+                "SegoeIcons.ttf",
+                "consola.ttf",
+                "consolab.ttf",
+            ):
+                font_path = fonts_directory / filename
+                if font_path.is_file():
+                    QFontDatabase.addApplicationFont(str(font_path))
     font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
     preferred_families = [
         family

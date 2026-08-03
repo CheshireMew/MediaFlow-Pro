@@ -15,6 +15,7 @@ jobs:
     timeout-minutes: 90
     env:
       PYTHONFAULTHANDLER: "1"
+      PYTHONUTF8: "1"
       QT_QPA_PLATFORM: offscreen
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
 
@@ -113,6 +114,12 @@ jobs:
         run: >-
           python -m pytest
           tests/v2/desktop/test_qml_smoke.py::test_qml_real_project_chain_is_visible_in_models
+      - name: Run the real media drag and scrub chain in an isolated process
+        run: >-
+          python -m pytest
+          tests/v2/desktop/test_qml_smoke.py::test_drag_import_placement_snap_tracks_and_first_video_profile
+      - name: Run the editable web desktop chain in an isolated process
+        run: python -m pytest tests/v2/desktop/test_web_editor.py
       - name: Run real Chromium and native MLT integration tests
         run: >-
           python -m pytest

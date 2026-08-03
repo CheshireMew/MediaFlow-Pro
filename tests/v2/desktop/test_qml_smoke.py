@@ -852,6 +852,7 @@ def test_export_capability_follows_real_active_sequence_content(
         QCoreApplication.processEvents()
 
 
+@pytest.mark.integration
 def test_drag_import_placement_snap_tracks_and_first_video_profile(
     tmp_path: Path,
     monkeypatch,

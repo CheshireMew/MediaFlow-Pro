@@ -91,6 +91,8 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
         "scripts/build_native.ps1",
         "scripts/verify_development_runtime.py",
         "scripts/verify_display_capabilities.py",
+        "test_drag_import_placement_snap_tracks_and_first_video_profile",
+        "tests/v2/desktop/test_web_editor.py",
         "test_real_draw_element_failure_requires_clean_screenshot_retry",
         "tests/v2/integration/test_native_preview.py",
         "scripts.verify_web_render_performance",
@@ -105,6 +107,7 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
             "MEDIAFLOW_MEDIA_ROOT",
             "MEDIAFLOW_TEST_ROOT",
             "MEDIAFLOW_TEST_FIXTURE_ROOT",
+            "PYTHONUTF8",
         )
     )
     assert "--python-only" not in workflow

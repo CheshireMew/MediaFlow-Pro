@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
 from PySide6.QtCore import (
     QCoreApplication,
     QEvent,
@@ -23,6 +24,7 @@ from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.project_repository import ProjectRepository
 
 STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v5"
+pytestmark = pytest.mark.integration
 
 
 def _process_until(predicate, timeout: float = 10.0) -> bool:

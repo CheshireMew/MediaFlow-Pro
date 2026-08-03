@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mediaflow.environment import load_project_environment, read_environment_file
+from mediaflow.infrastructure.chromium_runtime import discover_chromium_executable
 from mediaflow.infrastructure.storage_paths import default_media_root, default_project_root
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -59,6 +60,21 @@ def test_storage_roots_have_no_machine_specific_fallback(
         default_media_root()
 
 
+def test_chromium_override_is_owned_by_the_environment_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "browser" / "chrome.exe"
+    executable.parent.mkdir()
+    executable.write_bytes(b"reviewed-browser")
+    monkeypatch.setenv("MEDIAFLOW_CHROMIUM", str(executable))
+
+    assert discover_chromium_executable() == executable.resolve()
+
+    monkeypatch.setenv("MEDIAFLOW_CHROMIUM", str(tmp_path / "missing.exe"))
+    assert discover_chromium_executable() is None
+
+
 def test_machine_paths_are_owned_by_the_environment_contract() -> None:
     formal_sources = [
         ROOT / "README.md",
@@ -69,7 +85,7 @@ def test_machine_paths_are_owned_by_the_environment_contract() -> None:
         *sorted((ROOT / "scripts").glob("*.py")),
         *sorted((ROOT / "scripts").glob("*.ps1")),
     ]
-    machine_path = re.compile(r"(?i)(?<![A-Z0-9_])[DE]:[\\/]")
+    machine_path = re.compile(r"(?i)(?<![A-Z0-9_])(?!I:\\s)[A-Z]:[\\/]")
     offenders = {
         str(path.relative_to(ROOT)): sorted(set(machine_path.findall(path.read_text(encoding="utf-8"))))
         for path in formal_sources

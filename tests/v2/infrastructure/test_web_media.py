@@ -2132,6 +2132,7 @@ def test_v5_cli_chain(
         input=json.dumps(request("web.clip.get", {"clip_id": clip_id})),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
         cwd=Path(__file__).resolve().parents[3],
     )
@@ -2159,6 +2160,7 @@ def test_v5_cli_chain(
         ),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
         cwd=Path(__file__).resolve().parents[3],
     )

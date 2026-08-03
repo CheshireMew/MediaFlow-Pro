@@ -96,6 +96,7 @@ def _run_cli_request(
         cwd=Path(__file__).resolve().parents[3],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         check=False,
     )
