@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import mimetypes
 import os
 import shutil
 import sqlite3
@@ -40,7 +39,7 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.domain.tasks import ArtifactReference
-from mediaflow.domain.web_media import parse_editable_media_manifest
+from mediaflow.domain.web_media import media_mime_type, parse_editable_media_manifest
 from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
@@ -204,7 +203,7 @@ def _native_source_record(
     package_root: Path,
 ) -> dict[str, object]:
     path = package_root / relative_path
-    mime_type = mimetypes.guess_type(relative_path)[0]
+    mime_type = media_mime_type(relative_path)
     assert mime_type is not None
     return {
         "id": source_id,

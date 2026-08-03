@@ -9,6 +9,7 @@ import pytest
 from mediaflow.domain.editable_media_contract import EDITABLE_MEDIA_SCHEMA_PATH
 from mediaflow.domain.web_media import (
     WebMediaSourcesManifest,
+    media_mime_type,
     parse_editable_media_manifest,
 )
 
@@ -40,6 +41,11 @@ PRODUCERS = {
         "visual-multimedia/assets/web-card-cases/text-card-glossary"
     ),
 }
+
+
+def test_supported_media_mime_types_do_not_depend_on_the_host_registry() -> None:
+    assert media_mime_type("assets/native-underlay.mkv") == "video/x-matroska"
+    assert media_mime_type("assets/voice.wav#track=dialogue") == "audio/wav"
 CORPUS_SCHEMA = (
     FIXTURES
     / "editable-media-v5-contract"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import mimetypes
 from pathlib import Path, PurePosixPath
 
 from mediaflow.application.web_package_files import WebPackageTree
@@ -8,6 +7,7 @@ from mediaflow.domain.web_media import (
     EditableMediaManifest,
     WebClipState,
     WebMediaSourcesManifest,
+    media_mime_type,
     media_source_ids_in_web_data,
     resolved_web_scene_data,
 )
@@ -49,7 +49,7 @@ def validate_package_files(
             actual_bytes, actual_sha256 = package_tree.file_integrity[source_file]
             if actual_bytes != source.integrity.bytes or actual_sha256 != source.integrity.sha256:
                 raise ValueError(f"Editable media source integrity does not match its file: {source.id}")
-            served_mime_type = mimetypes.guess_type(source_file)[0]
+            served_mime_type = media_mime_type(source_file)
             if served_mime_type != source.integrity.mime_type:
                 raise ValueError(
                     "Editable media source MIME type does not match its "

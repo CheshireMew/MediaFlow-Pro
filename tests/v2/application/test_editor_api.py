@@ -99,7 +99,26 @@ def _run_cli_request(
         timeout=30,
         check=False,
     )
-    return completed.returncode, json.loads(completed.stdout)
+    if not completed.stdout.strip():
+        raise AssertionError(
+            {
+                "operation": operation,
+                "returncode": completed.returncode,
+                "stderr": completed.stderr,
+            }
+        )
+    try:
+        output = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise AssertionError(
+            {
+                "operation": operation,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+            }
+        ) from error
+    return completed.returncode, output
 
 
 def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> None:
