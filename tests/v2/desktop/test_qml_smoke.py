@@ -1864,6 +1864,7 @@ def test_qml_title_bar_uses_the_mediaflow_pro_product_name(
         QCoreApplication.processEvents()
 
 
+@pytest.mark.integration
 def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch) -> None:
     mlt_environment_before = {
         name: _windows_environment(name) for name in ("MLT_DATA", "MLT_REPOSITORY", "MLT_REPOSITORY_DENY")

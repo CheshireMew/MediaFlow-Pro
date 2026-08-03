@@ -156,6 +156,9 @@ private:
     bool startConfiguredPlayback();
     bool startPlaybackConsumers();
     void closePlaybackConsumers();
+    bool beginConsumerCallback(int &generation);
+    void endConsumerCallback();
+    void waitForConsumerCallbacks();
     bool decodeStillFrame(int frame);
     bool readFrameImage(MltFrame frame, int position, QImage &image);
     static void onVideoFrameShown(
@@ -205,12 +208,15 @@ private:
     std::atomic<quint64> m_requestId{0};
     std::atomic<int> m_consumerGeneration{0};
     std::atomic<bool> m_playbackConsumersActive{false};
+    std::atomic<int> m_consumerCallbacksInFlight{0};
     std::atomic<int> m_presentationStartGeneration{-1};
     std::atomic<int> m_audioClockPosition{0};
     std::atomic<int> m_renderQueueCapacity{60};
     QMutex m_renderedFramesMutex;
     QWaitCondition m_renderQueueNotFull;
     QMultiMap<int, RenderedFrame> m_renderedFrames;
+    QMutex m_consumerCallbacksMutex;
+    QWaitCondition m_consumerCallbacksDrained;
     QTimer *m_presentationTimer = nullptr;
     QElapsedTimer m_cadenceClock;
     QDeadlineTimer m_missingFrameDeadline;

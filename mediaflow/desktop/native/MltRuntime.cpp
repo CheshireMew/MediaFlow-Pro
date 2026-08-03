@@ -464,11 +464,6 @@ void MltRuntime::setPreviewSize(int width, int height)
     m_previewHeight = requested.height();
     m_frameWidth.store(m_previewWidth, std::memory_order_release);
     m_frameHeight.store(m_previewHeight, std::memory_order_release);
-    if (m_videoConsumer) {
-        MltProperties properties = m_api.consumerProperties(m_videoConsumer);
-        m_api.propertiesSetInt(properties, "width", m_previewWidth);
-        m_api.propertiesSetInt(properties, "height", m_previewHeight);
-    }
 }
 
 void MltRuntime::close(quint64 requestId)
@@ -634,6 +629,7 @@ void MltRuntime::closePlaybackConsumers()
         const QMutexLocker locker(&m_renderedFramesMutex);
         m_renderQueueNotFull.wakeAll();
     }
+    waitForConsumerCallbacks();
     m_presentationTimer->stop();
     m_presentationGeneration = -1;
     m_waitingForMissingFrame = false;
@@ -662,6 +658,34 @@ void MltRuntime::closePlaybackConsumers()
         m_renderedFrames.clear();
         m_renderQueueNotFull.wakeAll();
     }
+}
+
+bool MltRuntime::beginConsumerCallback(int &generation)
+{
+    if (!m_playbackConsumersActive.load(std::memory_order_acquire))
+        return false;
+    m_consumerCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+    if (!m_playbackConsumersActive.load(std::memory_order_acquire)) {
+        endConsumerCallback();
+        return false;
+    }
+    generation = m_consumerGeneration.load(std::memory_order_acquire);
+    return true;
+}
+
+void MltRuntime::endConsumerCallback()
+{
+    if (m_consumerCallbacksInFlight.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        const QMutexLocker locker(&m_consumerCallbacksMutex);
+        m_consumerCallbacksDrained.wakeAll();
+    }
+}
+
+void MltRuntime::waitForConsumerCallbacks()
+{
+    QMutexLocker locker(&m_consumerCallbacksMutex);
+    while (m_consumerCallbacksInFlight.load(std::memory_order_acquire) > 0)
+        m_consumerCallbacksDrained.wait(&m_consumerCallbacksMutex);
 }
 
 bool MltRuntime::decodeStillFrame(int frameNumber)
@@ -733,43 +757,50 @@ void MltRuntime::onVideoFrameShown(
     MltEventData eventData)
 {
     auto *runtime = static_cast<MltRuntime *>(listenerData);
-    if (!runtime
-        || !runtime->m_playbackConsumersActive.load(std::memory_order_acquire)) {
+    if (!runtime)
+        return;
+    int generation = -1;
+    if (!runtime->beginConsumerCallback(generation))
+        return;
+    MltFrame frame = runtime->m_api.eventDataToFrame(eventData);
+    if (!frame) {
+        runtime->endConsumerCallback();
         return;
     }
-    MltFrame frame = runtime->m_api.eventDataToFrame(eventData);
-    if (!frame)
-        return;
 
-    const int generation = runtime->m_consumerGeneration.load(std::memory_order_acquire);
     const int position = qBound(
         0,
         static_cast<int>(runtime->m_api.frameGetPosition(frame)),
         qMax(0, runtime->m_frameDuration.load(std::memory_order_acquire) - 1));
     QImage image;
-    if (!runtime->readFrameImage(frame, position, image))
+    if (!runtime->readFrameImage(frame, position, image)) {
+        runtime->endConsumerCallback();
         return;
-    if (!runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
-        || generation
-            != runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
-        return;
-    }
-    QMutexLocker locker(&runtime->m_renderedFramesMutex);
-    const int capacity = runtime->m_renderQueueCapacity.load(std::memory_order_acquire);
-    while (runtime->m_renderedFrames.size() >= capacity
-           && runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
-           && generation
-               == runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
-        runtime->m_renderQueueNotFull.wait(&runtime->m_renderedFramesMutex);
     }
     if (!runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
         || generation
             != runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+        runtime->endConsumerCallback();
         return;
     }
-    runtime->m_renderedFrames.insert(
-        position,
-        RenderedFrame{std::move(image), position});
+    {
+        QMutexLocker locker(&runtime->m_renderedFramesMutex);
+        const int capacity = runtime->m_renderQueueCapacity.load(std::memory_order_acquire);
+        while (runtime->m_renderedFrames.size() >= capacity
+               && runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
+               && generation
+                   == runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+            runtime->m_renderQueueNotFull.wait(&runtime->m_renderedFramesMutex);
+        }
+        if (runtime->m_playbackConsumersActive.load(std::memory_order_acquire)
+            && generation
+                == runtime->m_consumerGeneration.load(std::memory_order_acquire)) {
+            runtime->m_renderedFrames.insert(
+                position,
+                RenderedFrame{std::move(image), position});
+        }
+    }
+    runtime->endConsumerCallback();
 }
 
 void MltRuntime::onAudioFrameShown(
@@ -778,15 +809,17 @@ void MltRuntime::onAudioFrameShown(
     MltEventData eventData)
 {
     auto *runtime = static_cast<MltRuntime *>(listenerData);
-    if (!runtime
-        || !runtime->m_playbackConsumersActive.load(std::memory_order_acquire)) {
+    if (!runtime)
+        return;
+    int generation = -1;
+    if (!runtime->beginConsumerCallback(generation))
+        return;
+    MltFrame frame = runtime->m_api.eventDataToFrame(eventData);
+    if (!frame) {
+        runtime->endConsumerCallback();
         return;
     }
-    MltFrame frame = runtime->m_api.eventDataToFrame(eventData);
-    if (!frame)
-        return;
 
-    const int generation = runtime->m_consumerGeneration.load(std::memory_order_acquire);
     const int position = qBound(
         0,
         static_cast<int>(runtime->m_api.frameGetPosition(frame)),
@@ -795,8 +828,10 @@ void MltRuntime::onAudioFrameShown(
     const int previousGeneration = runtime->m_presentationStartGeneration.exchange(
         generation,
         std::memory_order_acq_rel);
-    if (previousGeneration == generation)
+    if (previousGeneration == generation) {
+        runtime->endConsumerCallback();
         return;
+    }
 
     QMetaObject::invokeMethod(
         runtime,
@@ -804,6 +839,7 @@ void MltRuntime::onAudioFrameShown(
             runtime->beginPresentation(generation);
         },
         Qt::QueuedConnection);
+    runtime->endConsumerCallback();
 }
 
 void MltRuntime::beginPresentation(int generation)

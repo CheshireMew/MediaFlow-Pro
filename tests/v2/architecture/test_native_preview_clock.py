@@ -25,6 +25,8 @@ def test_native_preview_separates_audio_clock_from_bounded_video_predecode() -> 
     assert "&MltRuntime::onVideoFrameShown" in runtime_source
     assert "&MltRuntime::onAudioFrameShown" in runtime_source
     assert "m_playbackConsumersActive.store(true" in runtime_source
+    assert "waitForConsumerCallbacks();" in runtime_source
+    assert "m_consumerCallbacksInFlight" in runtime_header
     assert "m_renderQueueNotFull.wait" in runtime_source
     assert "qBound(24, qRound(m_fps), 60)" in runtime_source
     assert "m_audioClockPosition.store(position" in runtime_source
@@ -37,6 +39,10 @@ def test_native_preview_separates_audio_clock_from_bounded_video_predecode() -> 
     assert "qFloor(500.0 / m_fps)" in runtime_source
     assert "m_nextCadenceDeadlineNs = nowNs" not in runtime_source
     assert '"consumer-frame-render"' not in runtime_source
+    resize_boundary = runtime_source.split(
+        "void MltRuntime::setPreviewSize", 1
+    )[1].split("void MltRuntime::close", 1)[0]
+    assert "consumerProperties" not in resize_boundary
 
     removed_shared_consumer_clock = (
         "onConsumerFrameRendered",
