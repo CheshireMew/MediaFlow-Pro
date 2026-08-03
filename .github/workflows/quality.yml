@@ -119,7 +119,9 @@ jobs:
           python -m pytest
           tests/v2/desktop/test_qml_smoke.py::test_drag_import_placement_snap_tracks_and_first_video_profile
       - name: Run the editable web desktop chain in an isolated process
-        run: python -m pytest tests/v2/desktop/test_web_editor.py
+        run: |
+          python -m pytest tests/v2/desktop/test_web_editor.py::test_unified_import_opens_the_v5_package_through_local_preview_server
+          python -m pytest tests/v2/desktop/test_web_editor.py::test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page
       - name: Run real Chromium and native MLT integration tests
         run: >-
           python -m pytest

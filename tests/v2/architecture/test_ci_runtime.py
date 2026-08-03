@@ -119,6 +119,23 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
     )
 
 
+def test_web_desktop_scenarios_run_in_separate_qtwebengine_processes() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    first_scenario = (
+        "tests/v2/desktop/test_web_editor.py::"
+        "test_unified_import_opens_the_v5_package_through_local_preview_server"
+    )
+    second_scenario = (
+        "tests/v2/desktop/test_web_editor.py::"
+        "test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page"
+    )
+
+    assert workflow.count("python -m pytest tests/v2/desktop/test_web_editor.py::") == 2
+    assert first_scenario in workflow
+    assert second_scenario in workflow
+    assert "python -m pytest tests/v2/desktop/test_web_editor.py\n" not in workflow
+
+
 def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
