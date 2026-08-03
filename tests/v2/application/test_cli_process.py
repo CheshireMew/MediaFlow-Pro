@@ -53,6 +53,16 @@ def test_cli_project_create_rejects_legacy_caller_owned_root_without_writing(
                 "arguments": {
                     "name": "Must Not Exist",
                     "directory_name": "must-not-exist",
+                    "profile": {
+                        "width": 1920,
+                        "height": 1080,
+                        "fps_numerator": 30,
+                        "fps_denominator": 1,
+                        "color_mode": "sdr_bt709",
+                        "bit_depth": 8,
+                        "audio_sample_rate": 48000,
+                        "audio_channels": 2,
+                    },
                 },
             }
         ),
@@ -86,6 +96,16 @@ def test_cli_rejects_the_removed_v1_protocol_without_creating_a_project(
                 "arguments": {
                     "name": "Must Not Exist",
                     "directory_name": "must-not-exist",
+                    "profile": {
+                        "width": 1920,
+                        "height": 1080,
+                        "fps_numerator": 30,
+                        "fps_denominator": 1,
+                        "color_mode": "sdr_bt709",
+                        "bit_depth": 8,
+                        "audio_sample_rate": 48000,
+                        "audio_channels": 2,
+                    },
                 },
             }
         ),

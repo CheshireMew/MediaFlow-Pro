@@ -13,6 +13,7 @@ from mediaflow.application.ports import (
     ExportSequenceRequest,
     ExportTaskRuntime,
     ProjectTaskDocuments,
+    SequenceBuildResult,
     TranscriptionTaskRuntime,
     WebTaskRuntime,
 )
@@ -29,6 +30,7 @@ from mediaflow.domain.storage_names import (
     export_quality_directory,
     safe_child_path,
 )
+from mediaflow.domain.task_commands import SequenceBuildUnit
 from mediaflow.domain.tasks import LoudnessTaskOutcome
 from mediaflow.domain.timeline import Clip, ClipTransformKeyframe, TimelineState
 from mediaflow.domain.web_media import (
@@ -53,6 +55,7 @@ from .mlt.export_service import (
 from .output_reservation import archive_published_outputs
 from .proxy_service import ProxyService
 from .runtime_paths import RuntimePaths
+from .segmented_export_service import SegmentedExportService
 from .visual_analysis import (
     SceneDetectionService,
     SubjectMotionService,
@@ -270,6 +273,30 @@ class InfrastructureExportTaskRuntime:
         check_cancelled()
         return exporter.export_many(
             mlt_requests,
+            overwrite=overwrite,
+            progress=progress,
+            check_cancelled=check_cancelled,
+        )
+
+    def build_sequence(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        units: list[SequenceBuildUnit],
+        output_path: str | Path,
+        *,
+        overwrite: bool,
+        progress: ProgressCallback,
+        check_cancelled: CancellationCheck,
+    ) -> SequenceBuildResult:
+        return SegmentedExportService(
+            self._documents,
+            self._paths,
+        ).build(
+            state,
+            preset,
+            units,
+            output_path,
             overwrite=overwrite,
             progress=progress,
             check_cancelled=check_cancelled,

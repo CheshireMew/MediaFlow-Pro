@@ -127,12 +127,40 @@ class ExportTaskOutcome(DomainModel):
         return any(item.hardware_fallback_used for item in self.files)
 
 
+class SequenceBuildUnitOutcome(DomainModel):
+    id: str
+    start_frame: int = Field(ge=0)
+    end_frame: int = Field(ge=1)
+    status: Literal["rendered", "reused"]
+    cache_key: str = Field(min_length=64, max_length=64)
+    output: ArtifactReference
+    sha256: str = Field(min_length=64, max_length=64)
+
+
+class SequenceBuildAudioOutcome(DomainModel):
+    status: Literal["rendered", "reused", "absent"]
+    cache_key: str | None = None
+    output: ArtifactReference | None = None
+    sha256: str | None = None
+
+
+class SequenceBuildTaskOutcome(DomainModel):
+    outcome_type: Literal["sequence_build"] = "sequence_build"
+    output: ExportFileTaskOutcome
+    units: list[SequenceBuildUnitOutcome]
+    audio: SequenceBuildAudioOutcome
+    assembly_status: Literal["assembled", "reused"]
+    assembly_key: str = Field(min_length=64, max_length=64)
+    report: ArtifactReference
+
+
 TaskOutcome = Annotated[
     ImportedAssetTaskOutcome
     | DownloadAnalysisTaskOutcome
     | SequenceBoundaryTaskOutcome
     | LoudnessTaskOutcome
-    | ExportTaskOutcome,
+    | ExportTaskOutcome
+    | SequenceBuildTaskOutcome,
     Field(discriminator="outcome_type"),
 ]
 

@@ -298,39 +298,78 @@ class TimelineEditor:
         speed_denominator: int = 1,
         pitch_compensation: bool = True,
     ) -> Clip:
-        track = self._track(track_id)
-        asset = self.repository.catalog.get_asset(asset_id)
-        media_kind = default_clip_media_kind(asset.kind, has_audio=asset.metadata.has_audio)
-        TimelineRules.validate_clip_track(
-            asset.kind,
-            media_kind,
-            track.kind,
-            asset.metadata.has_audio,
-        )
-        clip = Clip(
-            track_id=track_id,
-            asset_id=asset_id,
-            timeline_start=timeline_start,
-            source_in=source_in,
-            duration=duration,
-            media_kind=media_kind,
-            speed_numerator=speed_numerator,
-            speed_denominator=speed_denominator,
-            pitch_compensation=pitch_compensation,
-        )
+        return self.add_clips(
+            [
+                {
+                    "track_id": track_id,
+                    "asset_id": asset_id,
+                    "timeline_start": timeline_start,
+                    "source_in": source_in,
+                    "duration": duration,
+                    "speed_numerator": speed_numerator,
+                    "speed_denominator": speed_denominator,
+                    "pitch_compensation": pitch_compensation,
+                }
+            ]
+        )[0]
+
+    def add_clips(self, specifications: Iterable[dict[str, object]]) -> list[Clip]:
+        requested = list(specifications)
+        if not requested:
+            raise ValueError("At least one clip is required")
+        prepared: list[tuple[Clip, AssetKind, str | None]] = []
+        for specification in requested:
+            track_id = str(specification["track_id"])
+            asset_id = str(specification["asset_id"])
+            track = self._track(track_id)
+            asset = self.repository.catalog.get_asset(asset_id)
+            media_kind = default_clip_media_kind(
+                asset.kind,
+                has_audio=asset.metadata.has_audio,
+            )
+            TimelineRules.validate_clip_track(
+                asset.kind,
+                media_kind,
+                track.kind,
+                asset.metadata.has_audio,
+            )
+            clip = Clip(
+                track_id=track_id,
+                asset_id=asset_id,
+                timeline_start=int(specification["timeline_start"]),
+                source_in=int(specification["source_in"]),
+                duration=int(specification["duration"]),
+                media_kind=media_kind,
+                speed_numerator=int(specification.get("speed_numerator", 1)),
+                speed_denominator=int(specification.get("speed_denominator", 1)),
+                pitch_compensation=bool(
+                    specification.get("pitch_compensation", True)
+                ),
+            )
+            web_source_hash = (
+                self.repository.web.get_web_asset_spec(asset.id).source_hash
+                if asset.kind == AssetKind.WEB
+                else None
+            )
+            prepared.append((clip, asset.kind, web_source_hash))
 
         def mutate(state: TimelineState) -> None:
-            if media_kind == ClipMediaKind.LINKED_AV:
-                self._ensure_linked_audio_track(state, track_id)
-            state.clips.append(clip)
-            if asset.kind == AssetKind.WEB:
-                state.web_states[clip.id] = WebClipState(
-                    clip_id=clip.id,
-                    source_hash=self.repository.web.get_web_asset_spec(asset.id).source_hash,
-                )
+            for clip, asset_kind, web_source_hash in prepared:
+                if clip.media_kind == ClipMediaKind.LINKED_AV:
+                    self._ensure_linked_audio_track(state, clip.track_id)
+                state.clips.append(clip)
+                if asset_kind == AssetKind.WEB:
+                    assert web_source_hash is not None
+                    state.web_states[clip.id] = WebClipState(
+                        clip_id=clip.id,
+                        source_hash=web_source_hash,
+                    )
 
-        self._commit("添加片段", mutate)
-        return clip
+        self._commit(
+            "批量添加片段" if len(prepared) > 1 else "添加片段",
+            mutate,
+        )
+        return [clip for clip, _, _ in prepared]
 
     def move_clip(
         self,

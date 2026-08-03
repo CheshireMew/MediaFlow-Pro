@@ -33,6 +33,7 @@ from mediaflow.domain.project_records import (
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
 from mediaflow.domain.settings import AsrSettings, DownloadSettings, LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitlePlacement, SubtitleSegment, SubtitleWord
+from mediaflow.domain.task_commands import SequenceBuildUnit
 from mediaflow.domain.tasks import LoudnessTaskOutcome, Task, TaskStopRequest
 from mediaflow.domain.timeline import (
     Clip,
@@ -777,6 +778,37 @@ class ExportSequenceRequest:
     output_path: str | Path
 
 
+@dataclass(frozen=True, slots=True)
+class SequenceBuildUnitResult:
+    unit: SequenceBuildUnit
+    status: Literal["rendered", "reused"]
+    cache_key: str
+    output_path: Path
+    sha256: str
+    requested_video_codec: str | None
+    actual_video_codec: str | None
+    hardware_fallback_reason: str | None
+    hardware_failure_details: str | None
+    archived_failed_outputs: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceBuildAudioResult:
+    status: Literal["rendered", "reused", "absent"]
+    cache_key: str | None
+    output_path: Path | None
+    sha256: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceBuildResult:
+    export: ExportExecutionResult
+    units: tuple[SequenceBuildUnitResult, ...]
+    audio: SequenceBuildAudioResult
+    assembly_status: Literal["assembled", "reused"]
+    assembly_key: str
+
+
 class ExportTaskRuntime(Protocol):
     def preflight_sequence_exports(
         self,
@@ -804,6 +836,18 @@ class ExportTaskRuntime(Protocol):
         progress: ProgressCallback,
         check_cancelled: CancellationCheck,
     ) -> tuple[ExportExecutionResult, ...]: ...
+
+    def build_sequence(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        units: list[SequenceBuildUnit],
+        output_path: str | Path,
+        *,
+        overwrite: bool,
+        progress: ProgressCallback,
+        check_cancelled: CancellationCheck,
+    ) -> SequenceBuildResult: ...
 
     def archive_unrecorded_exports(
         self,

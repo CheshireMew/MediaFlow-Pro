@@ -60,6 +60,54 @@ def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
     assert [(item.timeline_start, item.duration) for item in persisted.clips] == [(0, 40), (40, 60)]
 
 
+def test_batch_add_is_one_atomic_undoable_edit(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clips = editor.add_clips(
+        [
+            {
+                "track_id": video_track.id,
+                "asset_id": asset.id,
+                "timeline_start": 0,
+                "source_in": 0,
+                "duration": 20,
+            },
+            {
+                "track_id": video_track.id,
+                "asset_id": asset.id,
+                "timeline_start": 20,
+                "source_in": 20,
+                "duration": 20,
+            },
+        ]
+    )
+
+    assert [clip.timeline_start for clip in clips] == [0, 20]
+    assert len(repository.timeline.load_timeline(editor.sequence_id).clips) == 2
+    editor.undo()
+    assert repository.timeline.load_timeline(editor.sequence_id).clips == []
+
+    with pytest.raises(KeyError):
+        editor.add_clips(
+            [
+                {
+                    "track_id": video_track.id,
+                    "asset_id": asset.id,
+                    "timeline_start": 0,
+                    "source_in": 0,
+                    "duration": 20,
+                },
+                {
+                    "track_id": "missing-track",
+                    "asset_id": asset.id,
+                    "timeline_start": 20,
+                    "source_in": 20,
+                    "duration": 20,
+                },
+            ]
+        )
+    assert repository.timeline.load_timeline(editor.sequence_id).clips == []
+
+
 def test_known_media_source_bounds_are_enforced_at_edit_and_storage_boundaries(
     editor_fixture,
 ) -> None:

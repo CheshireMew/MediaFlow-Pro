@@ -44,6 +44,7 @@ class OperationDefinition:
         return self.arguments_model.model_validate(values).model_dump(
             mode="python",
             exclude_unset=True,
+            exclude_computed_fields=True,
         )
 
     def validate_result(self, values: Any) -> dict[str, Any]:
@@ -205,6 +206,11 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.ClipResult,
         timeline.add_clip,
     ),
+    "timeline.clip.batch.add": _write(
+        models.TimelineClipBatchAddArguments,
+        models.ClipsResult,
+        timeline.add_clips,
+    ),
     "timeline.clip.move": _write(
         models.TimelineClipMoveArguments,
         models.ClipResult,
@@ -326,6 +332,13 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.ExportSequenceArguments,
         models.TaskCompletionResult,
         timeline.export_sequence,
+        task_backed=True,
+        capabilities=("project-editing", "mlt", "ffmpeg", "ffprobe"),
+    ),
+    "export.sequence.build": _write(
+        models.BuildSequenceArguments,
+        models.TaskCompletionResult,
+        timeline.build_sequence,
         task_backed=True,
         capabilities=("project-editing", "mlt", "ffmpeg", "ffprobe"),
     ),

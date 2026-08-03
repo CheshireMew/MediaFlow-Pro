@@ -32,6 +32,7 @@ from mediaflow.automation.dispatcher import execute_request
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import GlobalSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
@@ -1886,6 +1887,9 @@ def test_v5_cli_chain(
             "arguments": {
                 "name": "CLI V5 Web Project",
                 "directory_name": "cli-v5-web-project",
+                "profile": ProjectProfile().model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
             },
         }
     )

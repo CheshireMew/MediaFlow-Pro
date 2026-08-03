@@ -6,6 +6,7 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_validator,
 )
 
 from mediaflow.domain.asr import TranscriptionPlan
@@ -99,6 +100,56 @@ class ExportSequenceCommand(CommandModel):
             )
         if self.preset is not None:
             self.preset.validate_destination(self.output_path)
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.EXPORT
+
+
+class SequenceBuildUnit(DomainModel):
+    id: NonEmptyText
+    start_frame: int = Field(ge=0)
+    end_frame: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def positive_range(self) -> SequenceBuildUnit:
+        if self.end_frame <= self.start_frame:
+            raise ValueError("Build unit end_frame must be after start_frame")
+        return self
+
+
+class BuildSequenceCommand(CommandModel):
+    command_type: Literal["build_sequence"] = "build_sequence"
+    sequence_id: NonEmptyText
+    units: list[SequenceBuildUnit] = Field(min_length=1)
+    output_path: NonEmptyText
+    format: ExportFormat = ExportFormat.H264
+    preset: ExportPreset | None = None
+    overwrite: bool = False
+
+    @model_validator(mode="after")
+    def coherent_units(self) -> BuildSequenceCommand:
+        ids = [unit.id for unit in self.units]
+        if len(set(ids)) != len(ids):
+            raise ValueError("Build units must have unique ids")
+        if self.units[0].start_frame != 0:
+            raise ValueError("Build units must start at frame 0")
+        previous_end: int | None = None
+        for unit in self.units:
+            if previous_end is not None and unit.start_frame != previous_end:
+                raise ValueError(
+                    "Build units must be ordered and contiguous for deterministic assembly"
+                )
+            previous_end = unit.end_frame
+        if self.preset is not None and self.preset.format != self.format:
+            raise ValueError("Build preset format must match the requested format")
+        if self.preset is not None:
+            self.preset.validate_destination(self.output_path)
+        if self.format == ExportFormat.AUDIO:
+            raise ValueError(
+                "Segmented sequence build is for video; audio is rendered once as a continuous master"
+            )
+        return self
 
     @property
     def task_kind(self) -> TaskKind:
@@ -271,6 +322,7 @@ type TaskCommand = Annotated[
     | GenerateWaveformCommand
     | DownloadMediaCommand
     | ExportSequenceCommand
+    | BuildSequenceCommand
     | ExportHighlightsCommand
     | RenderWebClipCommand
     | ExportWebClipCommand

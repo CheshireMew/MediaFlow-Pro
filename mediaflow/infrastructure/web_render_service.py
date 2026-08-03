@@ -661,29 +661,49 @@ class WebRenderService:
         check_cancelled=None,
     ) -> list[Path]:
         assets = {asset.id: asset for asset in self.documents.catalog.list_assets()}
-        web_clips = [
-            clip
+        web_clip_ids = [
+            clip.id
             for clip in state.clips
             if assets.get(clip.asset_id, None) is not None and assets[clip.asset_id].kind == AssetKind.WEB
         ]
+        return self.ensure_clips(
+            state,
+            web_clip_ids,
+            progress=progress,
+            check_cancelled=check_cancelled,
+        )
+
+    def ensure_clips(
+        self,
+        state: TimelineState,
+        clip_ids: list[str] | tuple[str, ...] | set[str],
+        *,
+        progress=None,
+        check_cancelled=None,
+    ) -> list[Path]:
+        requested = set(clip_ids)
+        ordered = [clip.id for clip in state.clips if clip.id in requested]
+        missing = requested - set(ordered)
+        if missing:
+            raise KeyError(f"Unknown web clip ids: {sorted(missing)}")
         results: list[Path] = []
-        for index, clip in enumerate(web_clips):
+        for index, clip_id in enumerate(ordered):
             if check_cancelled is not None:
                 check_cancelled()
             results.append(
                 self.render_clip(
                     state,
-                    clip.id,
+                    clip_id,
                     progress=progress,
                     check_cancelled=check_cancelled,
                 )
             )
-            if progress is not None and web_clips:
+            if progress is not None and ordered:
                 progress(
                     OperationProgress.determinate(
                         "web_render_items",
                         completed=index + 1,
-                        total=len(web_clips),
+                        total=len(ordered),
                         unit="items",
                     )
                 )

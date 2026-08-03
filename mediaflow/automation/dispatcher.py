@@ -15,6 +15,7 @@ from mediaflow.domain.storage_names import (
     PROJECT_ROOT_PATH_UTF16_LIMIT,
     safe_child_path,
 )
+from mediaflow.domain.project import ProjectProfile
 from mediaflow.infrastructure.storage_paths import default_project_root
 
 
@@ -71,19 +72,31 @@ def _create_project(
         max_component_utf16_units=PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
     )
     requested_name = str(envelope.arguments["name"])
+    requested_profile = ProjectProfile.model_validate(envelope.arguments["profile"])
     if envelope.request_id and (root / "project.mfp").is_file():
         with application.open_project(
             root,
             writable=True,
             cooperative=True,
         ) as project:
-            if project.get_project().name != requested_name:
+            existing_project = project.get_project()
+            existing_profile = project.get_sequence(
+                existing_project.main_sequence_id
+            ).profile
+            if (
+                existing_project.name != requested_name
+                or existing_profile != requested_profile
+            ):
                 raise ValueError(
                     "Existing project does not match the retried "
                     "project.create request"
                 )
             return _execute_registered(project, application, envelope)
-    with application.create_project(root, requested_name) as project:
+    with application.create_project(
+        root,
+        requested_name,
+        requested_profile,
+    ) as project:
         return _execute_registered(project, application, envelope)
 
 

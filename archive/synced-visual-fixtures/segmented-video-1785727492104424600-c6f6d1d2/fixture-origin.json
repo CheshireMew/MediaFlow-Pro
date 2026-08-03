@@ -1,0 +1,13 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/media-build-cases/segmented-video",
+  "media_build_plan_version": 1,
+  "files": {
+    "inputs/scene-1.json": "18bd2323b05f993006421351de797abd6ce1b3de5d0279aea4c11c90a9c84bd9",
+    "inputs/scene-2.json": "749b3ca4ebf03092f17be9ec4d1f58b76ad3429bf2b703f4caa0c7399e1c96a7",
+    "inputs/scene-3.json": "c58efd803c688bc6909cf7782a6425cad0b1625c65133c917b1ea72de7e93282",
+    "media-build-plan.json": "11ad406d8248988f4cb94bb5eba7b0ecd683a3ce8c316db0067961ecec9739ff",
+    "source-contract.json": "d68405e5b339bf01252d858ce7f50bc5836f07ea84a2663084fe76773c8e82c3"
+  }
+}

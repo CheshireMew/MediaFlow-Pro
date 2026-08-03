@@ -70,6 +70,8 @@ class MltExportRequest:
     state: TimelineState
     preset: ExportPreset
     output_path: str | Path
+    start_frame: int | None = None
+    end_frame: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +162,7 @@ class MltExportService:
         output_path: str | Path,
         *,
         overwrite: bool = False,
+        archive_replaced_to: str | Path | None = None,
         progress=None,
         check_cancelled=None,
     ) -> ExportResult:
@@ -172,6 +175,7 @@ class MltExportService:
                 ),
             ),
             overwrite=overwrite,
+            archive_replaced_to=archive_replaced_to,
             progress=progress,
             check_cancelled=check_cancelled,
         )[0]
@@ -181,6 +185,7 @@ class MltExportService:
         requests: tuple[MltExportRequest, ...],
         *,
         overwrite: bool = False,
+        archive_replaced_to: str | Path | None = None,
         progress=None,
         check_cancelled=None,
     ) -> tuple[ExportResult, ...]:
@@ -257,7 +262,8 @@ class MltExportService:
                     )
             if check_cancelled:
                 check_cancelled()
-            output_set.commit()
+            output_set.publish()
+            output_set.finalize(archive_replaced_to=archive_replaced_to)
             return tuple(results)
 
     def preflight(
@@ -307,6 +313,8 @@ class MltExportService:
                 request.state,
                 request.preset,
                 request.output_path,
+                start_frame=request.start_frame,
+                end_frame=request.end_frame,
             )
             for request in requests
         )
@@ -326,6 +334,9 @@ class MltExportService:
         state: TimelineState,
         preset: ExportPreset,
         output_path: str | Path,
+        *,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
     ) -> _MltExportPlan:
         if self.paths.melt is None:
             raise FileNotFoundError("MLT melt runtime is not installed")
@@ -347,6 +358,8 @@ class MltExportService:
         start_frame, end_frame = self._resolve_export_range(
             state,
             preset,
+            start_frame=start_frame,
+            end_frame=end_frame,
         )
         subtitle_outputs = self._external_subtitle_outputs(
             state,
@@ -583,8 +596,8 @@ class MltExportService:
         if progress:
             progress(OperationProgress.indeterminate("export_verifying"))
         try:
-            probe = self._probe(attempt_output)
-            self._validate_probe(
+            probe = self.probe(attempt_output)
+            self.validate_probe(
                 state,
                 preset,
                 probe,
@@ -661,12 +674,25 @@ class MltExportService:
         self,
         state: TimelineState,
         preset: ExportPreset,
+        *,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
     ) -> tuple[int, int]:
         del preset
         duration = max(1, state.duration_frames)
-        bounds = state.sequence.in_out
-        start = min(duration, bounds.in_frame) if bounds else 0
-        end = min(duration, bounds.out_frame) if bounds else duration
+        if (start_frame is None) != (end_frame is None):
+            raise ValueError("Explicit export range requires both start_frame and end_frame")
+        if start_frame is not None and end_frame is not None:
+            start = int(start_frame)
+            end = int(end_frame)
+            if start < 0 or end > duration:
+                raise ValueError(
+                    f"Explicit export range {start}:{end} exceeds timeline duration {duration}"
+                )
+        else:
+            bounds = state.sequence.in_out
+            start = min(duration, bounds.in_frame) if bounds else 0
+            end = min(duration, bounds.out_frame) if bounds else duration
         if end <= start:
             raise ValueError("Sequence in and out points do not contain exportable media")
         return start, end
@@ -877,7 +903,7 @@ class MltExportService:
                 values.append("svtav1-params=enable-hdr=1")
         return values
 
-    def _probe(self, output: Path) -> dict:
+    def probe(self, output: Path) -> dict:
         result = subprocess.run(
             [
                 str(self.paths.ffprobe),
@@ -904,7 +930,7 @@ class MltExportService:
         return json.loads(result.stdout)
 
     @staticmethod
-    def _validate_probe(
+    def validate_probe(
         state: TimelineState,
         preset: ExportPreset,
         probe: dict,
@@ -978,16 +1004,6 @@ class MltExportService:
             actual_fps = Fraction(actual_fps_text)
             if abs(actual_fps - expected_fps) > Fraction(1, 1000):
                 raise RuntimeError(f"Export frame rate mismatch: expected {expected_fps}, got {actual_fps}")
-            expected_duration = Fraction(
-                expected_duration_frames,
-                1,
-            ) / Fraction(profile.fps_numerator, profile.fps_denominator)
-            actual_duration = Fraction(str(probe.get("format", {}).get("duration") or "0"))
-            if abs(actual_duration - expected_duration) > Fraction(2, 1) / expected_fps:
-                raise RuntimeError(
-                    f"Export duration mismatch: expected {float(expected_duration):.3f}s, "
-                    f"got {float(actual_duration):.3f}s"
-                )
             if profile.color_mode == ColorMode.HDR10_BT2020_PQ:
                 pixel_format = str(video.get("pix_fmt") or "")
                 if "10" not in pixel_format and "12" not in pixel_format:
@@ -1005,3 +1021,21 @@ class MltExportService:
                         raise RuntimeError(
                             "HDR10 export is missing mastering-display or content-light metadata"
                         )
+        profile = state.sequence.profile
+        expected_fps = Fraction(
+            int(preset.advanced.get("fps_numerator", profile.fps_numerator)),
+            int(preset.advanced.get("fps_denominator", profile.fps_denominator)),
+        )
+        expected_duration = Fraction(
+            expected_duration_frames,
+            1,
+        ) / Fraction(profile.fps_numerator, profile.fps_denominator)
+        actual_duration = Fraction(str(probe.get("format", {}).get("duration") or "0"))
+        duration_tolerance = Fraction(2, 1) / expected_fps
+        if preset.format == ExportFormat.AUDIO:
+            duration_tolerance = max(duration_tolerance, Fraction(1, 10))
+        if abs(actual_duration - expected_duration) > duration_tolerance:
+            raise RuntimeError(
+                f"Export duration mismatch: expected {float(expected_duration):.3f}s, "
+                f"got {float(actual_duration):.3f}s"
+            )

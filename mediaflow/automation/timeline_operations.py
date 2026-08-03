@@ -5,7 +5,11 @@ import hashlib
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
 from mediaflow.domain.exports import ExportPreset
-from mediaflow.domain.task_commands import ExportSequenceCommand
+from mediaflow.domain.task_commands import (
+    BuildSequenceCommand,
+    ExportSequenceCommand,
+    SequenceBuildUnit,
+)
 from mediaflow.domain.timeline import ClipAudio, ClipTransform
 
 
@@ -36,6 +40,14 @@ def add_clip(context: OperationContext) -> dict:
         speed_denominator=int(context.arguments.get("speed_denominator", 1)),
     )
     return {"clip": clip}
+
+
+def add_clips(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clips = editor.add_clips(
+        [dict(value) for value in context.required("clips")]
+    )
+    return {"clips": clips}
 
 
 def move_clip(context: OperationContext) -> dict:
@@ -178,6 +190,31 @@ def export_sequence(context: OperationContext) -> dict:
     sequence_id = context.sequence_id()
     command = ExportSequenceCommand(
         sequence_id=sequence_id,
+        output_path=str(context.required("output_path")),
+        format=ExportFormat(str(context.arguments.get("format", "h264"))),
+        preset=(
+            ExportPreset.model_validate(preset_value) if preset_value else None
+        ),
+        overwrite=bool(context.arguments.get("overwrite", False)),
+    )
+    return context.task_result(
+        context.project.start_task(
+            command,
+            sequence_id=sequence_id,
+            idempotency_key=context.task_idempotency(),
+        )
+    )
+
+
+def build_sequence(context: OperationContext) -> dict:
+    preset_value = context.arguments.get("preset")
+    sequence_id = context.sequence_id()
+    command = BuildSequenceCommand(
+        sequence_id=sequence_id,
+        units=[
+            SequenceBuildUnit.model_validate(value)
+            for value in context.required("units")
+        ],
         output_path=str(context.required("output_path")),
         format=ExportFormat(str(context.arguments.get("format", "h264"))),
         preset=(

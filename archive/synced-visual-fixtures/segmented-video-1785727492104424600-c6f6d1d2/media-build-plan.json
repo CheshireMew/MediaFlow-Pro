@@ -1,0 +1,90 @@
+{
+  "protocol": "visual-multimedia-media-build-plan",
+  "version": 1,
+  "project_id": "segmented-video-contract-case",
+  "media_kind": "video",
+  "profile": "generic-segmented-video",
+  "stage_target": "full-preview",
+  "created_at": "2026-08-03T00:00:00.000Z",
+  "source_contract": "assets/media-build-cases/segmented-video/source-contract.json",
+  "source_contract_sha256": "d68405e5b339bf01252d858ce7f50bc5836f07ea84a2663084fe76773c8e82c3",
+  "producer": {
+    "entry": "scripts/generate-media-build-case.mjs",
+    "sha256": "f3441b8f6a199544f41e82622e4c3c1bac89a1aad52872685e53a562ca3bc960",
+    "modules": [
+      {
+        "file": "scripts/generate-media-build-case.mjs",
+        "sha256": "f3441b8f6a199544f41e82622e4c3c1bac89a1aad52872685e53a562ca3bc960"
+      },
+      {
+        "file": "scripts/media_build_contract.mjs",
+        "sha256": "281e3b14dc80424c5e9ff98ab07bccac00b7f8e359dd453d15a66b232a53b9c5"
+      },
+      {
+        "file": "scripts/interview_explainer_common.mjs",
+        "sha256": "de54bd8ba33a129c53ac56b29a464771c2187bfb992776cedacd848515717c56"
+      }
+    ]
+  },
+  "output": {
+    "file": "assets/media-build-cases/segmented-video/output/segmented-video.mp4",
+    "width": 160,
+    "height": 90,
+    "fps": 25,
+    "audio_sample_rate": 48000,
+    "audio_channels": 2,
+    "quality_profile": "proxy"
+  },
+  "units": [
+    {
+      "id": "scene-1",
+      "order": 1,
+      "kind": "pre-rendered-media",
+      "source_unit_id": "scene-1",
+      "timeline_start_frame": 0,
+      "duration_frames": 25,
+      "dependencies": [
+        {
+          "role": "source",
+          "file": "assets/media-build-cases/segmented-video/inputs/scene-1.json",
+          "sha256": "18bd2323b05f993006421351de797abd6ce1b3de5d0279aea4c11c90a9c84bd9"
+        }
+      ]
+    },
+    {
+      "id": "scene-2",
+      "order": 2,
+      "kind": "pre-rendered-media",
+      "source_unit_id": "scene-2",
+      "timeline_start_frame": 25,
+      "duration_frames": 25,
+      "dependencies": [
+        {
+          "role": "source",
+          "file": "assets/media-build-cases/segmented-video/inputs/scene-2.json",
+          "sha256": "749b3ca4ebf03092f17be9ec4d1f58b76ad3429bf2b703f4caa0c7399e1c96a7"
+        }
+      ]
+    },
+    {
+      "id": "scene-3",
+      "order": 3,
+      "kind": "pre-rendered-media",
+      "source_unit_id": "scene-3",
+      "timeline_start_frame": 50,
+      "duration_frames": 25,
+      "dependencies": [
+        {
+          "role": "source",
+          "file": "assets/media-build-cases/segmented-video/inputs/scene-3.json",
+          "sha256": "c58efd803c688bc6909cf7782a6425cad0b1625c65133c917b1ea72de7e93282"
+        }
+      ]
+    }
+  ],
+  "assembly": {
+    "strategy": "ordered-concat",
+    "audio_strategy": "continuous-master",
+    "caption_strategy": "none"
+  }
+}

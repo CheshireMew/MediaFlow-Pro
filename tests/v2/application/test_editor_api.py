@@ -18,6 +18,7 @@ from mediaflow.cli import execute_request, main
 from mediaflow.composition import EditorApplication
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.runtime_capabilities import RUNTIME_CAPABILITY_IDS
 from mediaflow.domain.storage_names import utf16_units
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
@@ -89,6 +90,7 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
     assert set(operations["project.create"]["arguments_schema"]["required"]) == {
         "name",
         "directory_name",
+        "profile",
     }
     edit_schema = operations["transcript.edit.preview"]["arguments_schema"][
         "properties"
@@ -117,6 +119,11 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
     assert operations["speech.synthesize"]["required_capabilities"] == [
         "gpt-sovits-v2pro"
     ]
+    batch_clip_schema = operations["timeline.clip.batch.add"][
+        "arguments_schema"
+    ]
+    assert batch_clip_schema["properties"]["clips"]["minItems"] == 1
+    assert operations["timeline.clip.batch.add"]["idempotency"] == "optional"
     assert set(operations["speech.synthesize"]["arguments_schema"]["required"]) == {
         "text",
         "text_language",
@@ -143,6 +150,46 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
             "result_schema",
         }
         for operation in operations.values()
+    )
+
+
+def test_project_create_persists_the_explicit_public_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
+    requested = ProjectProfile(
+        width=1280,
+        height=720,
+        fps_numerator=12,
+        fps_denominator=1,
+        audio_sample_rate=48_000,
+        audio_channels=1,
+    )
+
+    created = execute_request(
+        {
+            "protocol": "mediaflow-cli",
+            "version": 2,
+            "operation": "project.create",
+            "arguments": {
+                "name": "Explicit Profile",
+                "directory_name": "explicit-profile",
+                "profile": requested.model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
+            },
+        },
+        application=EditorApplication(),
+    )
+
+    main_sequence = next(
+        item
+        for item in created["sequences"]
+        if item["id"] == created["project"]["main_sequence_id"]
+    )
+    assert main_sequence["profile"] == requested.model_dump(
+        mode="json", exclude_computed_fields=True
     )
 
 
@@ -178,6 +225,9 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
             "arguments": {
                 "name": "FCPXML CLI Project",
                 "directory_name": "fcpxml-cli-project",
+                "profile": ProjectProfile().model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
             },
         },
         application=application,
@@ -363,6 +413,9 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
             "arguments": {
                 "name": "Headless Project",
                 "directory_name": "headless-project",
+                "profile": ProjectProfile().model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
             },
         },
         application=application,
@@ -453,11 +506,25 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
         "arguments": {
             "name": "Idempotent CLI Project",
             "directory_name": "idempotent-cli-project",
+            "profile": ProjectProfile().model_dump(
+                mode="json", exclude_computed_fields=True
+            ),
         },
     }
     first_project = execute_request(create_request, application=application)
     repeated_project = execute_request(create_request, application=application)
     assert repeated_project == first_project
+    mismatched_create = {
+        **create_request,
+        "arguments": {
+            **create_request["arguments"],
+            "profile": ProjectProfile(fps_numerator=24).model_dump(
+                mode="json", exclude_computed_fields=True
+            ),
+        },
+    }
+    with pytest.raises(ValueError, match="does not match"):
+        execute_request(mismatched_create, application=application)
     project_path = Path(first_project["path"])
     assert project_path == (tmp_path / "idempotent-cli-project").resolve()
 
@@ -697,6 +764,55 @@ def test_timeline_navigation_preserves_one_project_history(tmp_path: Path, monke
         assert project.can_undo is True
         project.undo()
         assert project.load_timeline(main).markers == []
+
+
+def test_public_batch_clip_add_is_atomic_and_idempotent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    application = EditorApplication()
+    source = tmp_path / "batch-tone.wav"
+    _write_wave(source)
+    project_path = tmp_path / "Batch Clip Project"
+    with application.create_project(project_path, "Batch Clip Project") as project:
+        asset = project.import_external_asset(source)
+        sequence_id = project.get_project().main_sequence_id
+        track = project.timeline(sequence_id).add_track(TrackKind.AUDIO)
+
+    request = {
+        "protocol": "mediaflow-cli",
+        "version": 2,
+        "operation": "timeline.clip.batch.add",
+        "project": str(project_path),
+        "request_id": "batch-clips-once",
+        "arguments": {
+            "sequence_id": sequence_id,
+            "clips": [
+                {
+                    "track_id": track.id,
+                    "asset_id": asset.id,
+                    "timeline_start": 0,
+                    "source_in": 0,
+                    "duration": 12,
+                },
+                {
+                    "track_id": track.id,
+                    "asset_id": asset.id,
+                    "timeline_start": 12,
+                    "source_in": 12,
+                    "duration": 12,
+                },
+            ],
+        },
+    }
+    first = execute_request(request, application=application)
+    repeated = execute_request(request, application=application)
+
+    assert [clip["timeline_start"] for clip in first["clips"]] == [0, 12]
+    assert repeated == first
+    with application.open_project(project_path, writable=False) as project:
+        assert len(project.load_timeline(sequence_id).clips) == 2
 
 
 def test_preview_snapshots_are_content_addressed_and_never_overwrite_active_graph(

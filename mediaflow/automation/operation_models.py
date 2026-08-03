@@ -9,7 +9,7 @@ from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import DomainModel
-from mediaflow.domain.project import Asset, Project, Sequence
+from mediaflow.domain.project import Asset, Project, ProjectProfile, Sequence
 from mediaflow.domain.project_records import ProjectVersionRecord
 from mediaflow.domain.reference_comparison import (
     ReferenceComparisonAcceptance,
@@ -17,7 +17,7 @@ from mediaflow.domain.reference_comparison import (
 )
 from mediaflow.domain.runtime_capabilities import RuntimeInspection
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.task_commands import TaskCommand
+from mediaflow.domain.task_commands import SequenceBuildUnit, TaskCommand
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import Clip, ClipAudio, ClipTransform, TimelineState, Track
 from mediaflow.domain.transcript_edits import (
@@ -134,6 +134,7 @@ ReferenceComparisonOperationResult = ReferenceComparisonResult
 class ProjectCreateArguments(DomainModel):
     name: str = Field(min_length=1)
     directory_name: str = Field(min_length=1)
+    profile: ProjectProfile
 
 
 class ProjectVersionCreateArguments(DomainModel):
@@ -171,7 +172,7 @@ class TimelineTrackAddArguments(SequenceArguments):
     name: str | None = None
 
 
-class TimelineClipAddArguments(SequenceArguments):
+class TimelineClipAddItem(DomainModel):
     track_id: str = Field(min_length=1)
     asset_id: str = Field(min_length=1)
     timeline_start: int = Field(ge=0)
@@ -179,6 +180,14 @@ class TimelineClipAddArguments(SequenceArguments):
     duration: int = Field(gt=0)
     speed_numerator: int | None = None
     speed_denominator: int | None = Field(default=None, gt=0)
+
+
+class TimelineClipAddArguments(TimelineClipAddItem):
+    sequence_id: str | None = None
+
+
+class TimelineClipBatchAddArguments(SequenceArguments):
+    clips: list[TimelineClipAddItem] = Field(min_length=1, max_length=1000)
 
 
 class TimelineClipMoveArguments(SequenceArguments):
@@ -290,6 +299,15 @@ class PreviewRenderArguments(SequenceArguments):
 
 
 class ExportSequenceArguments(SequenceArguments):
+    output_path: str = Field(min_length=1)
+    format: ExportFormat | None = None
+    preset: ExportPreset | None = None
+    overwrite: bool | None = None
+    timeout: float | None = Field(default=None, gt=0)
+
+
+class BuildSequenceArguments(SequenceArguments):
+    units: list[SequenceBuildUnit] = Field(min_length=1)
     output_path: str = Field(min_length=1)
     format: ExportFormat | None = None
     preset: ExportPreset | None = None

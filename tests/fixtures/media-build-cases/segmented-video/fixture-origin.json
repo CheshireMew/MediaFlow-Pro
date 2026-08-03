@@ -1,0 +1,16 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/media-build-cases/segmented-video",
+  "media_build_plan_version": 1,
+  "files": {
+    "inputs/avatar-1.json": "f2fc190f3ba659c75edcf46693872187c551e7010e05057942a9b00912247f87",
+    "inputs/avatar-2.json": "d38b01fff2bce2279073f1ec1dd5f41c5eb687096b77fbe73c4bcc9c4d46007a",
+    "inputs/avatar-3.json": "791c8d7e9fc988a8d959d66e52562d64db3346fd76224fd633cfced6f83ce6ef",
+    "inputs/scene-1.json": "18bd2323b05f993006421351de797abd6ce1b3de5d0279aea4c11c90a9c84bd9",
+    "inputs/scene-2.json": "749b3ca4ebf03092f17be9ec4d1f58b76ad3429bf2b703f4caa0c7399e1c96a7",
+    "inputs/scene-3.json": "c58efd803c688bc6909cf7782a6425cad0b1625c65133c917b1ea72de7e93282",
+    "media-build-plan.json": "b3444c2f1339311d2d5d71b1d1ce4bcc609898c773a93e2aee1c5cdb05647c0e",
+    "source-contract.json": "d42c8a998c5a713d8ff19f373cf810fb2693d4c573e67593bd0fae3a566a34a6"
+  }
+}

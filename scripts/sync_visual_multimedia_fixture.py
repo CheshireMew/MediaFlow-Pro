@@ -5,6 +5,8 @@ import hashlib
 import json
 import shutil
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
 PACKAGE_SOURCES = (
@@ -16,6 +18,12 @@ PACKAGE_SOURCES = (
     (
         "assets/web-card-cases/social-evidence-variants",
         "editable-media-v5-cases/social-evidence-variants",
+    ),
+)
+MEDIA_BUILD_CASE_SOURCES = (
+    (
+        "assets/media-build-cases/segmented-video",
+        "media-build-cases/segmented-video",
     ),
 )
 SCHEMA_SOURCE = "schemas/editable-media.v5.schema.json"
@@ -42,7 +50,30 @@ def package_files(source: Path) -> tuple[Path, ...]:
     return files
 
 
-def sync_package(
+def _publish_package(staging: Path, destination: Path) -> None:
+    archived: Path | None = None
+    if destination.exists():
+        if not destination.is_dir():
+            raise ValueError(f"Fixture destination is not a directory: {destination}")
+        archive_root = (
+            Path(__file__).resolve().parents[1]
+            / "archive"
+            / "synced-visual-fixtures"
+        )
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archived = archive_root / (
+            f"{destination.name}-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
+        )
+        destination.replace(archived)
+    try:
+        staging.replace(destination)
+    except BaseException:
+        if archived is not None and not destination.exists():
+            archived.replace(destination)
+        raise
+
+
+def sync_editable_package(
     source: Path,
     destination: Path,
     *,
@@ -84,11 +115,71 @@ def sync_package(
             f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
             encoding="utf-8",
         )
-        if destination.exists():
-            if not destination.is_dir():
-                raise ValueError(f"Fixture destination is not a directory: {destination}")
-            shutil.rmtree(destination)
-        staging.replace(destination)
+        existing_origin = destination / "fixture-origin.json"
+        if existing_origin.is_file():
+            current = json.loads(existing_origin.read_text(encoding="utf-8"))
+            if current == origin:
+                shutil.rmtree(staging)
+                return origin
+        _publish_package(staging, destination)
+        return origin
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def sync_media_build_case(
+    source: Path,
+    destination: Path,
+    *,
+    producer: str,
+) -> dict[str, object]:
+    source = source.resolve(strict=True)
+    destination = destination.expanduser().resolve()
+    plan = json.loads((source / "media-build-plan.json").read_text(encoding="utf-8"))
+    if (
+        plan.get("protocol") != "visual-multimedia-media-build-plan"
+        or plan.get("version") != 1
+    ):
+        raise ValueError("The producer fixture must use media-build-plan v1")
+    files = package_files(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.sync-",
+            dir=destination.parent,
+        )
+    )
+    try:
+        for source_file in files:
+            relative = source_file.relative_to(source)
+            destination_file = staging / relative
+            destination_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_file, destination_file)
+        hashes = {
+            path.relative_to(source).as_posix(): sha256(
+                staging / path.relative_to(source)
+            )
+            for path in files
+        }
+        origin = {
+            "protocol": "mediaflow-generated-test-fixture",
+            "version": 1,
+            "producer": producer,
+            "media_build_plan_version": 1,
+            "files": hashes,
+        }
+        (staging / "fixture-origin.json").write_text(
+            f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
+            encoding="utf-8",
+        )
+        existing_origin = destination / "fixture-origin.json"
+        if existing_origin.is_file():
+            current = json.loads(existing_origin.read_text(encoding="utf-8"))
+            if current == origin:
+                shutil.rmtree(staging)
+                return origin
+        _publish_package(staging, destination)
         return origin
     finally:
         if staging.exists():
@@ -111,11 +202,8 @@ def sync_schema(source: Path, destination: Path) -> Path:
     try:
         copied = staging / source.name
         shutil.copyfile(source, copied)
-        if destination.exists():
-            if not destination.is_dir():
-                raise ValueError(f"Schema destination is not a directory: {destination}")
-            shutil.rmtree(destination)
-        staging.replace(destination)
+        destination.mkdir(parents=True, exist_ok=True)
+        copied.replace(destination / source.name)
         return destination / source.name
     finally:
         if staging.exists():
@@ -166,7 +254,14 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
     destination = destination.expanduser().resolve()
     packages = {}
     for source_relative, destination_relative in PACKAGE_SOURCES:
-        packages[source_relative] = sync_package(
+        packages[source_relative] = sync_editable_package(
+            skill_root / source_relative,
+            destination / destination_relative,
+            producer=f"visual-multimedia/{source_relative}",
+        )
+    media_build_cases = {}
+    for source_relative, destination_relative in MEDIA_BUILD_CASE_SOURCES:
+        media_build_cases[source_relative] = sync_media_build_case(
             skill_root / source_relative,
             destination / destination_relative,
             producer=f"visual-multimedia/{source_relative}",
@@ -177,6 +272,7 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
         "version": 1,
         **contracts,
         "packages": packages,
+        "media_build_cases": media_build_cases,
     }
 
 
