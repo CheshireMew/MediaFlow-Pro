@@ -103,6 +103,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.lock
+      - name: Install the hashed YAML maintenance dependency
+        run: python scripts/ci/install_maintenance_tools.py
       - name: Reject syntax and workflow errors before runtime setup
         run: |
           python -m compileall -q mediaflow scripts tests/v2

@@ -117,7 +117,7 @@ def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional()
     assert "--marker \"not integration and not slow\"" in workflow
     assert "--timings-file scripts/ci/test_timings.windows.json" in workflow
     assert "--exclude-file tests/v2/architecture/test_ci_quality_plan.py" in workflow
-    assert "python scripts/ci/install_maintenance_tools.py" in workflow
+    assert workflow.count("python scripts/ci/install_maintenance_tools.py") == 2
     assert "python -m pytest tests/v2 -m" not in workflow
     assert "cancel-in-progress:" in workflow
     assert "V2 quality gate" in workflow
