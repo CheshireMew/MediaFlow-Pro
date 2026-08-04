@@ -15,6 +15,8 @@ def inspect_project(context: OperationContext) -> dict:
 
 
 def upgrade_project(context: OperationContext) -> dict:
+    if not context.project.has_pending_project_upgrade():
+        raise ValueError("The project already uses the current schema")
     return {
         "upgraded": True,
         **project_snapshot(context.project),
@@ -49,15 +51,7 @@ def import_asset(context: OperationContext) -> dict:
         str(context.required("source")),
         idempotency_key=context.task_idempotency(),
     )
-    result = context.task_result(task)
-    completed = result["task"]
-    if completed["status"] != "completed":
-        raise RuntimeError(completed.get("error") or "Asset import failed")
-    imported_id = result["result"]["imported_asset_id"]
-    return {
-        **result,
-        "asset": context.project.get_asset(imported_id),
-    }
+    return context.task_receipt(task)
 
 
 def create_short_sequence(context: OperationContext) -> dict:

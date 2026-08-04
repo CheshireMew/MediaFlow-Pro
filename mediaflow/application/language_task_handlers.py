@@ -7,7 +7,7 @@ from mediaflow.application.subtitle_publication import SubtitlePublicationServic
 from mediaflow.application.task_handler_support import ProjectTaskHandler
 from mediaflow.application.task_service import TaskCompletion, TaskContext
 from mediaflow.application.translation_service import TranslationService
-from mediaflow.domain.settings import GlobalSettings, LlmProviderSettings
+from mediaflow.domain.settings import LlmProviderSettings, ServiceSettings
 from mediaflow.domain.task_commands import (
     AnalyzeHighlightsCommand,
     TranslateDocumentCommand,
@@ -22,7 +22,7 @@ class LanguageTaskHandlers(ProjectTaskHandler):
         subtitle_publication: SubtitlePublicationService,
         highlights: HighlightService,
         translations: TranslationService,
-        settings: Callable[[], GlobalSettings],
+        settings: Callable[[], ServiceSettings],
         active_llm_provider: Callable[[], LlmProviderSettings],
     ):
         super().__init__(project_dir)
@@ -37,7 +37,7 @@ class LanguageTaskHandlers(ProjectTaskHandler):
         settings = self.settings()
         if isinstance(command, TranslateSegmentsCommand):
             if command.target_document_id:
-                self.translations.translate_selected_to_document(
+                prepared = self.translations.prepare_selected_to_document_translation(
                     command.document_id,
                     command.target_document_id,
                     command.segment_ids,
@@ -50,7 +50,7 @@ class LanguageTaskHandlers(ProjectTaskHandler):
                 )
                 document_id = command.target_document_id
             else:
-                self.translations.translate_selected_in_document(
+                prepared = self.translations.prepare_selected_in_document_translation(
                     command.document_id,
                     command.segment_ids,
                     target_language=command.target_language,
@@ -61,8 +61,12 @@ class LanguageTaskHandlers(ProjectTaskHandler):
                     check_cancelled=context.cancellation.raise_if_requested,
                 )
                 document_id = command.document_id
+
+            def commit_translation() -> None:
+                self.translations.commit_segment_translation(prepared)
+
         elif isinstance(command, TranslateDocumentCommand):
-            document = self.translations.translate_document(
+            prepared_document = self.translations.prepare_document_translation(
                 command.document_id,
                 target_language=command.target_language,
                 provider=self.active_llm_provider(),
@@ -72,17 +76,32 @@ class LanguageTaskHandlers(ProjectTaskHandler):
                 check_cancelled=context.cancellation.raise_if_requested,
                 operation_id=context.task.id,
             )
-            document_id = document.id
+            document_id = prepared_document.document.id
+
+            def commit_translation() -> None:
+                self.translations.commit_document_translation(
+                    prepared_document
+                )
+
         else:
             raise TypeError(f"Unexpected translation command: {type(command).__name__}")
+        context.defer_project_change(commit_translation)
         output = self.subtitle_publication.document_srt_path(document_id)
         return self.completion(output)
 
     def highlight(self, context: TaskContext) -> TaskCompletion:
         command = self.command(context, AnalyzeHighlightsCommand)
-        self.highlights.analyze_document(
+        prepared = self.highlights.prepare_document_analysis(
             command.document_id,
             provider=self.active_llm_provider(),
             progress=context.report,
         )
+
+        def commit_highlights() -> None:
+            self.highlights.commit_document_analysis(
+                prepared,
+                progress=context.report,
+            )
+
+        context.defer_project_change(commit_highlights)
         return self.completion()

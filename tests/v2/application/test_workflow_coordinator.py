@@ -117,12 +117,7 @@ def test_project_workflow_skip_advances_every_optional_stage_and_stops_at_export
 
 def test_failed_task_blocks_workflow_without_consuming_success_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     application = EditorApplication()
     with application.create_project(tmp_path / "Failure", "Failure") as project:
         started = threading.Event()
@@ -170,12 +165,7 @@ def test_failed_task_blocks_workflow_without_consuming_success_output(
 
 def test_cancelled_task_blocks_workflow_for_recovery_without_consuming_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     application = EditorApplication()
     with application.create_project(
         tmp_path / "Cancellation",
@@ -226,12 +216,7 @@ def test_cancelled_task_blocks_workflow_for_recovery_without_consuming_output(
 
 def test_reopen_settles_workflow_when_owner_crashed_after_persisting_failure(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     root = tmp_path / "FailureBeforeWorkflowReceipt"
     repository = ProjectRepository.create(
         root,
@@ -294,12 +279,7 @@ def test_reopen_settles_workflow_when_owner_crashed_after_persisting_failure(
 
 def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     source = tmp_path / "high-resolution.mp4"
     source.write_bytes(b"workflow retry source")
     application = EditorApplication()

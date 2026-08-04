@@ -17,8 +17,11 @@ from mediaflow.desktop.app import configure_application_font, create_engine
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.domain.enums import AssetKind, TaskStatus
 from mediaflow.infrastructure import ytdlp_service
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.settings_repository import SettingsRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.settings_repository import (
+    DesktopSettingsRepository,
+    ServiceSettingsRepository,
+)
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from scripts.verify_real_user_chain import (
     wait_downloaded_video_selection,
@@ -28,11 +31,28 @@ from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 
 class _SlowFileHandler(SimpleHTTPRequestHandler):
+    def __init__(
+        self,
+        *args,
+        transfer_started: threading.Event,
+        release_transfer: threading.Event,
+        **kwargs,
+    ) -> None:
+        self.transfer_started = transfer_started
+        self.release_transfer = release_transfer
+        super().__init__(*args, **kwargs)
+
     def copyfile(self, source, outputfile) -> None:
+        first = source.read(4096)
+        if first:
+            outputfile.write(first)
+            outputfile.flush()
+            self.transfer_started.set()
+            self.release_transfer.wait(timeout=30)
         while chunk := source.read(4096):
             outputfile.write(chunk)
             outputfile.flush()
-            time.sleep(0.04)
+            time.sleep(0.01)
 
     def log_message(self, format, *args) -> None:
         del format, args
@@ -70,7 +90,7 @@ def test_shutdown_cancels_inflight_download_analysis_within_socket_bound(
     monkeypatch.setattr(ytdlp_service, "YTDLP_SOCKET_TIMEOUT_SECONDS", 0.25)
     monkeypatch.setattr(
         EditorApplication,
-        "discover_video_encoder_options",
+        "discover_encoder_policy_options",
         lambda _application: [],
     )
     controllers = EditorControllers()
@@ -99,7 +119,7 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
     web_root.mkdir()
     first_source = web_root / "first.mp4"
     second_source = web_root / "second.mp4"
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     generate_real_media(first_source, paths, width=320, height=180)
     generate_real_media(second_source, paths, width=320, height=180)
     handler = partial(SimpleHTTPRequestHandler, directory=str(web_root))
@@ -235,7 +255,9 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             "workflow_no_transcribable_assets"
         )
 
-        persisted_settings = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load()
+        persisted_settings = DesktopSettingsRepository(
+            os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]
+        ).load()
         assert persisted_settings.ui.recent_project_paths == [str(tmp_path / "Download UI")]
     finally:
         controllers.shutdown()
@@ -251,7 +273,7 @@ def test_default_workspace_contains_real_downloaded_video_and_subtitles(
     web_root = tmp_path / "captioned-web"
     web_root.mkdir()
     source = web_root / "captioned.mp4"
-    generate_real_media(source, RuntimePaths.discover(), width=320, height=180)
+    generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
     (web_root / "captioned.en.vtt").write_text(
         "WEBVTT\n\n00:00.000 --> 00:00.900\nHello WorkSpace\n",
         encoding="utf-8",
@@ -281,7 +303,11 @@ def test_default_workspace_contains_real_downloaded_video_and_subtitles(
             "Captioned Download",
         )
         page_url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
-        session._set_download_plan(YtDlpDownloadService().analyze(page_url))
+        session._set_download_plan(
+            YtDlpDownloadService(
+                RuntimeContext.discover().paths
+            ).analyze(page_url)
+        )
         controllers.tasks.submitDownloadPlan("best", "", True, "best", "")
 
         run = session.binding.current.list_workflow_runs(active_only=True)[0]
@@ -290,7 +316,7 @@ def test_default_workspace_contains_real_downloaded_video_and_subtitles(
 
         assets = session.binding.current.list_assets()
         paths = [session.binding.current.resolve_asset_path(asset) for asset in assets]
-        workspace = Path(session.settings.download.output_directory)
+        workspace = Path(session.service_settings.download.output_directory)
         assert {asset.kind for asset in assets} == {AssetKind.VIDEO, AssetKind.SUBTITLE}
         assert all(path.is_relative_to(workspace) and path.is_file() for path in paths)
         project_subtitles = list((tmp_path / "Captioned Download" / "generated" / "subtitles").rglob("*.srt"))
@@ -307,7 +333,6 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(tmp_path / "WorkSpace"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "Video"))
     app = QGuiApplication.instance() or QGuiApplication([])
@@ -315,14 +340,23 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
     web_root = tmp_path / "web"
     web_root.mkdir()
     source = web_root / "quick-start-source.mp4"
-    generate_real_media(source, RuntimePaths.discover(), width=640, height=360)
+    generate_real_media(source, RuntimeContext.discover().paths, width=640, height=360)
+    transfer_started = threading.Event()
+    release_transfer = threading.Event()
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
-        partial(_SlowFileHandler, directory=str(web_root)),
+        partial(
+            _SlowFileHandler,
+            directory=str(web_root),
+            transfer_started=transfer_started,
+            release_transfer=release_transfer,
+        ),
     )
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    settings_repository = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"])
+    settings_repository = ServiceSettingsRepository(
+        os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
+    )
     remembered = settings_repository.load()
     remembered.download.resolution = "360p"
     remembered.download.download_subtitles = True
@@ -465,6 +499,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert QMetaObject.invokeMethod(settings_dialog, "close")
 
         assert _process_until(lambda: controllers.tasks.downloadProgressVisible)
+        assert transfer_started.wait(timeout=5)
         banner = workspace.findChild(QQuickItem, "downloadProgressBanner")
         progress_bar = workspace.findChild(QQuickItem, "downloadProgressBar")
         assert banner is not None and progress_bar is not None
@@ -474,6 +509,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         rendered = window.grabWindow()
         screenshot = tmp_path / "quick-start-download-progress.png"
         assert not rendered.isNull() and rendered.save(str(screenshot))
+        release_transfer.set()
 
         assert _process_until(lambda: controllers.media.assetsModel.rowCount() == 1, timeout=30)
         downloaded_asset = controllers.media.assetsModel.get(0)
@@ -481,13 +517,18 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert downloaded_path.is_file()
         assert downloaded_path.parent.name == "WorkSpace"
         assert (expected_project_path / "project.mfp").is_file()
-        persisted_settings = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load()
-        assert persisted_settings.ui.default_project_directory == str((tmp_path / "Video").resolve())
+        persisted_settings = ServiceSettingsRepository(
+            os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
+        ).load()
+        assert persisted_settings.default_project_directory == str(
+            (tmp_path / "Video").resolve()
+        )
         assert persisted_settings.download.output_directory == str((tmp_path / "WorkSpace").resolve())
         assert persisted_settings.download.resolution == "best"
         assert persisted_settings.download.download_subtitles is False
         assert persisted_settings.download.codec == "best"
     finally:
+        release_transfer.set()
         controllers.shutdown()
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)

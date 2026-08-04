@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import re
-import subprocess
 import sys
 from importlib.metadata import metadata, version
 from pathlib import Path
@@ -15,7 +15,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.runtime_contract import (
+    load_runtime_contract,
+    reported_version_at_least,
+)
+from mediaflow.infrastructure.subprocess_runner import run_cancellable
 from scripts.run_artifacts import verification_run
 
 LOCK_FILE = ROOT / "requirements.lock"
@@ -24,6 +29,10 @@ PYTHON_COMPONENTS = {
     "aqtinstall": {"MIT", "MIT License"},
     "PySide6": {"LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"},
     "pydantic": {"MIT"},
+    "aiohttp": {"Apache-2.0 AND MIT"},
+    "psutil": {"BSD-3-Clause"},
+    "mcp": {"MIT"},
+    "mcp-types": {"MIT"},
     "yt-dlp": {"Unlicense"},
     "faster-whisper": {"MIT"},
     "openai": {"Apache-2.0"},
@@ -34,6 +43,8 @@ PYTHON_COMPONENTS = {
     "ctranslate2": {"MIT"},
     "huggingface-hub": {"Apache-2.0"},
 }
+if platform.system() == "Windows":
+    PYTHON_COMPONENTS["pywin32"] = {"PSF"}
 LOCKED_REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([^\\\s]+)")
 
 
@@ -68,13 +79,12 @@ def package_row(name: str, lock: dict[str, str]) -> dict[str, object]:
 
 
 def command_first_line(executable: Path, *arguments: str) -> str:
-    result = subprocess.run(
+    result = run_cancellable(
         [str(executable), *arguments],
-        check=True,
-        capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )
     return (result.stdout or result.stderr).splitlines()[0]
 
@@ -100,30 +110,56 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     if arguments.python_only:
         external = {"checked": False, "reason": "python-only"}
     else:
-        runtime_contract = json.loads(
-            RUNTIME_LOCK_FILE.read_text(encoding="utf-8")
-        )["windows"]["shotcut"]
-        paths = RuntimePaths.discover()
+        runtime_contract = load_runtime_contract(RUNTIME_LOCK_FILE)
+        paths = RuntimeContext.discover().paths
         if paths.melt is None:
             raise RuntimeError("MLT is required for the full license inventory")
         ffmpeg = paths.ffmpeg
         melt = paths.melt
-        ffmpeg_configuration = subprocess.run(
+        ffmpeg_result = run_cancellable(
             [str(ffmpeg), "-version"],
-            check=True,
-            capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-        ).stdout
+            timeout=30,
+        )
+        ffmpeg_configuration = ffmpeg_result.stdout or ffmpeg_result.stderr
+        ffmpeg_line = ffmpeg_configuration.splitlines()[0]
+        melt_line = command_first_line(melt, "-version")
+        ffmpeg_version_matches = (
+            ffmpeg_line.startswith(f"ffmpeg version {runtime_contract.ffmpeg_version} ")
+            if runtime_contract.ffmpeg_version_match == "exact"
+            else reported_version_at_least(
+                ffmpeg_line,
+                runtime_contract.ffmpeg_version,
+            )
+        )
+        melt_version_matches = (
+            runtime_contract.melt_version in melt_line
+            if runtime_contract.melt_version_match == "exact"
+            else reported_version_at_least(
+                melt_line,
+                runtime_contract.melt_version,
+            )
+        )
+        reviewed_gpl_v3_required = runtime_contract.reviewed_bundle is not None
+        ffmpeg_gpl_v3_configuration = (
+            "--enable-gpl" in ffmpeg_configuration
+            and "--enable-version3" in ffmpeg_configuration
+        )
         external = {
             "checked": True,
-            "mlt": command_first_line(melt, "-version"),
-            "ffmpeg": command_first_line(ffmpeg, "-version"),
-            "expected_mlt_version": runtime_contract["melt_version"],
-            "expected_ffmpeg_version": runtime_contract["ffmpeg_version"],
-            "ffmpeg_gpl_v3_configuration": "--enable-gpl" in ffmpeg_configuration
-            and "--enable-version3" in ffmpeg_configuration,
+            "target": runtime_contract.target.key,
+            "mlt": melt_line,
+            "ffmpeg": ffmpeg_line,
+            "expected_mlt_version": runtime_contract.melt_version,
+            "expected_mlt_version_match": runtime_contract.melt_version_match,
+            "expected_ffmpeg_version": runtime_contract.ffmpeg_version,
+            "expected_ffmpeg_version_match": runtime_contract.ffmpeg_version_match,
+            "mlt_version_matches": melt_version_matches,
+            "ffmpeg_version_matches": ffmpeg_version_matches,
+            "reviewed_gpl_v3_required": reviewed_gpl_v3_required,
+            "ffmpeg_gpl_v3_configuration": ffmpeg_gpl_v3_configuration,
         }
     report = {
         "project_license": "GPL-3.0-only",
@@ -140,12 +176,12 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
         and all(row["passed"] for row in packages)
     )
     runtime_passed = arguments.python_only or (
-        str(external["mlt"])
-        == f"melt.exe {external['expected_mlt_version']}"
-        and str(external["ffmpeg"]).startswith(
-            f"ffmpeg version {external['expected_ffmpeg_version']} "
+        bool(external["mlt_version_matches"])
+        and bool(external["ffmpeg_version_matches"])
+        and (
+            not bool(external["reviewed_gpl_v3_required"])
+            or bool(external["ffmpeg_gpl_v3_configuration"])
         )
-        and bool(external["ffmpeg_gpl_v3_configuration"])
     )
     report["passed"] = base_passed and runtime_passed
     report_path = run_dir / "license-inventory-report.json"

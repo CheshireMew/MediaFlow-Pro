@@ -31,6 +31,22 @@ Rectangle {
         }
     }
 
+    Connections {
+        target: workspaceController
+        function onRemoteSeekRequested(frame) {
+            previewViewport.seek(frame);
+        }
+        function onRemotePlayRequested(frame) {
+            previewViewport.playPreviewFrom(frame);
+        }
+        function onRemotePauseRequested() {
+            previewViewport.pause();
+        }
+        function onRemoteStopRequested() {
+            previewViewport.stopPreview();
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -136,6 +152,9 @@ Rectangle {
                     ? String(root.sourceMonitor.graphPath || "")
                     : workspaceController.previewGraphPath
                 runtimeRoot: workspaceController.mltRuntimeRoot
+                mltLibrary: workspaceController.mltLibraryPath
+                mltRepository: workspaceController.mltRepositoryPath
+                mltData: workspaceController.mltDataPath
                 hdrEnabled: workspaceController.colorMode === "hdr10_bt2020_pq"
                 profileWidth: workspaceController.profileWidth
                 profileHeight: workspaceController.profileHeight

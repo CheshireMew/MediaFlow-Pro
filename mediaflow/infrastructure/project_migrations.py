@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .project_migrations_v1_v8 import (
     migrate_v1_to_v2,
@@ -49,14 +50,34 @@ from .project_migrations_v33_v40 import (
     migrate_v35_to_v36,
     migrate_v36_to_v37,
     migrate_v37_to_v38,
+    migrate_v38_to_v39,
+    migrate_v39_to_v40,
 )
+from .project_migrations_v40_v47 import migrate_v40_to_v41, migrate_v41_to_v42
+from .project_migrations_v42_v49 import migrate_v42_to_v43
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectMigration:
     source_version: int
     target_version: int
-    apply: Callable[[object], None]
+    apply: Callable[[object], None] | None = None
+    apply_with_runtime: Callable[[object, Path | None], None] | None = None
+
+    def execute(
+        self,
+        workspace: object,
+        *,
+        chromium: Path | None,
+    ) -> None:
+        if self.apply_with_runtime is not None:
+            self.apply_with_runtime(workspace, chromium)
+            return
+        if self.apply is None:
+            raise RuntimeError(
+                f"Project migration {self.source_version} has no implementation"
+            )
+        self.apply(workspace)
 
 
 PROJECT_MIGRATIONS = (
@@ -94,9 +115,21 @@ PROJECT_MIGRATIONS = (
     ProjectMigration(32, 33, migrate_v32_to_v33),
     ProjectMigration(33, 34, migrate_v33_to_v34),
     ProjectMigration(34, 35, migrate_v34_to_v35),
-    ProjectMigration(35, 36, migrate_v35_to_v36),
+    ProjectMigration(
+        35,
+        36,
+        apply_with_runtime=lambda workspace, chromium: migrate_v35_to_v36(
+            workspace,
+            chromium=chromium,
+        ),
+    ),
     ProjectMigration(36, 37, migrate_v36_to_v37),
     ProjectMigration(37, 38, migrate_v37_to_v38),
+    ProjectMigration(38, 39, migrate_v38_to_v39),
+    ProjectMigration(39, 40, migrate_v39_to_v40),
+    ProjectMigration(40, 41, migrate_v40_to_v41),
+    ProjectMigration(41, 42, migrate_v41_to_v42),
+    ProjectMigration(42, 43, migrate_v42_to_v43),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

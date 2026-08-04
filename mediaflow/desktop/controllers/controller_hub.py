@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject
 
-from mediaflow.composition import EditorApplication
+from mediaflow.service.desktop_proxy import DesktopEditorApplication
 
 from .audio_controller import AudioController
 from .export_controller import ExportController
@@ -26,7 +26,7 @@ class EditorControllers:
         self,
         parent: QObject | None = None,
         *,
-        application: EditorApplication | None = None,
+        application: DesktopEditorApplication | None = None,
     ):
         self.session = ProjectSession(parent, application=application)
         self.workspace = WorkspaceController(self.session)

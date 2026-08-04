@@ -9,6 +9,15 @@ from .base import SessionCoordinator
 
 logger = logging.getLogger(__name__)
 
+_PROJECT_REQUEST_KINDS = frozenset(
+    {
+        "asset_thumbnails",
+        "audio_metrics",
+        "project_close",
+        "waveform",
+    }
+)
+
 
 class _BackgroundBridge(QObject):
     resultReceived = Signal(object)
@@ -17,9 +26,13 @@ class _BackgroundBridge(QObject):
 class BackgroundRequests(SessionCoordinator):
     def __init__(self, session):
         super().__init__(session)
-        self._executor = ThreadPoolExecutor(
+        self._application_executor = ThreadPoolExecutor(
             max_workers=2,
             thread_name_prefix="mediaflow-desktop-io",
+        )
+        self._project_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="mediaflow-project-io",
         )
         self.preview_executor = ThreadPoolExecutor(
             max_workers=1,
@@ -39,7 +52,11 @@ class BackgroundRequests(SessionCoordinator):
     ) -> Future | None:
         if self._session.requests.shutting_down:
             return None
-        worker = executor or self._executor
+        worker = executor or (
+            self._project_executor
+            if kind in _PROJECT_REQUEST_KINDS
+            else self._application_executor
+        )
         future = worker.submit(operation)
         if publish_result:
             future.add_done_callback(
@@ -66,13 +83,16 @@ class BackgroundRequests(SessionCoordinator):
         if not self._session.requests.shutting_down:
             self._bridge.resultReceived.emit(payload)
 
-    def shutdown(self) -> None:
-        # Workers may own independent SQLite connections while compiling a
-        # preview or preparing thumbnails. Shutdown is the lifetime boundary
-        # for those connections, so returning while a worker is still alive
-        # would leave the project database locked on Windows.
+    def shutdown_project_requests(self) -> None:
+        # Project readers must finish before the project session is released;
+        # they may own SQLite readers or fingerprint service-owned cache files.
         self.preview_executor.shutdown(wait=True, cancel_futures=True)
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        self._project_executor.shutdown(wait=True, cancel_futures=True)
+
+    def shutdown_application_requests(self) -> None:
+        # The service transport is closed before this call, which interrupts
+        # pending network operations such as download inspection.
+        self._application_executor.shutdown(wait=True, cancel_futures=True)
 
     def raise_if_shutting_down(self) -> None:
         if self._session.requests.shutting_down:
@@ -80,6 +100,8 @@ class BackgroundRequests(SessionCoordinator):
 
     @Slot(object)
     def _on_result(self, payload: object) -> None:
+        if self._session.requests.shutting_down:
+            return
         try:
             kind, request_id, result, error = payload
         except (TypeError, ValueError):
@@ -92,13 +114,13 @@ class BackgroundRequests(SessionCoordinator):
             else:
                 self._session.projectors.workspace.apply_recent_projects(result)
             return
-        if kind == "video_encoders":
+        if kind == "encoder_policies":
             if request_id != self._session.requests.encoder_id:
                 return
             if error:
                 self._session.events.errorOccurred.emit(f"检测编码器失败：{error}")
             else:
-                self._session.presentation.video_encoder_options = list(result)
+                self._session.presentation.encoder_policy_options = list(result)
                 self._session.events.settingsChanged.emit()
             return
         if kind == "download_plan":

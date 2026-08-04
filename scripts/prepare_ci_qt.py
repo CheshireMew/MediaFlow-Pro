@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 import urllib.request
 import uuid
@@ -14,6 +13,7 @@ from aqt.archives import TargetConfig
 from aqt.updater import Updater
 
 from mediaflow.file_digest import sha256_file
+from mediaflow.infrastructure.runtime_contract import PlatformTarget
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_QT_FILES = (
@@ -23,13 +23,22 @@ REQUIRED_QT_FILES = (
 )
 
 
-def _load_qt_contract(path: Path) -> dict[str, Any]:
+def _load_qt_contract(
+    path: Path,
+    target: PlatformTarget,
+) -> dict[str, Any]:
     contract = json.loads(path.read_text(encoding="utf-8"))
-    if contract.get("schema_version") != 1:
+    if contract.get("schema_version") != 2:
         raise RuntimeError(
             f"Unsupported runtime lock schema: {contract.get('schema_version')!r}"
         )
-    qt = contract["windows"]["qt"]
+    target_contract = contract["targets"].get(target.key)
+    if not isinstance(target_contract, dict):
+        raise RuntimeError(f"Runtime lock does not declare {target.key}")
+    qt = {
+        **target_contract["qt"],
+        "archives": target_contract.get("qt_archives"),
+    }
     archives = qt.get("archives")
     if not isinstance(archives, list) or not archives:
         raise RuntimeError("The Qt runtime contract must declare pinned archives")
@@ -71,13 +80,25 @@ def _download_archive(item: dict[str, str], download_root: Path) -> Path:
                 f"Downloaded Qt archive checksum mismatch: {temporary} ({actual})"
             )
         temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    except BaseException as error:
+        if temporary.exists():
+            archive = download_root.parent / "archive" / "qt-downloads"
+            archive.mkdir(parents=True, exist_ok=True)
+            failed = archive / f"download-failed-{uuid.uuid4().hex}.7z"
+            temporary.replace(failed)
+            error.add_note(f"Failed Qt download archived at {failed}")
+        raise
     return destination
 
 
-def prepare_qt(qt_root: Path, contract_path: Path) -> Path:
-    qt = _load_qt_contract(contract_path)
+def prepare_qt(
+    qt_root: Path,
+    contract_path: Path,
+    *,
+    target: PlatformTarget | None = None,
+) -> Path:
+    selected = target or PlatformTarget.current()
+    qt = _load_qt_contract(contract_path, selected)
     install_root = (qt_root / qt["install_directory"]).resolve()
     if all((install_root / relative).is_file() for relative in REQUIRED_QT_FILES):
         return install_root
@@ -103,7 +124,11 @@ def prepare_qt(qt_root: Path, contract_path: Path) -> Path:
                 version=qt["version"],
                 target="desktop",
                 arch=qt["architecture"],
-                os_name="windows",
+                os_name={
+                    "windows": "windows",
+                    "linux": "linux",
+                    "macos": "mac",
+                }[selected.operating_system],
             ),
             staging_root,
             None,
@@ -119,8 +144,17 @@ def prepare_qt(qt_root: Path, contract_path: Path) -> Path:
             )
         install_root.parent.mkdir(parents=True, exist_ok=True)
         staging_install.replace(install_root)
-    finally:
-        shutil.rmtree(staging_root, ignore_errors=True)
+        archive = qt_root / "archive" / "qt-install-metadata"
+        archive.mkdir(parents=True, exist_ok=True)
+        staging_root.replace(archive / staging_root.name)
+    except BaseException as error:
+        if staging_root.exists():
+            archive = qt_root / "archive"
+            archive.mkdir(parents=True, exist_ok=True)
+            failed = archive / f"qt-install-failed-{uuid.uuid4().hex}"
+            staging_root.replace(failed)
+            error.add_note(f"Failed Qt staging archived at {failed}")
+        raise
     return install_root
 
 

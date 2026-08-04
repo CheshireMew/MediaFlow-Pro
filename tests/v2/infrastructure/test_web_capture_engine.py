@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import queue
 import struct
+import threading
+import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
 
 import mediaflow.infrastructure.web_capture_engine as web_capture_module
-from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
+from mediaflow.application.task_service import TaskStopped
+from mediaflow.domain.enums import TaskStatus
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.web_browser import (
     WebPackagePreviewServer,
     verify_non_monotonic_seek_pixels,
@@ -180,6 +186,23 @@ def test_png_validation_rejects_wrong_dimensions_and_non_png_payloads() -> None:
         _validate_png(b"not a png", 1920, 1080)
 
 
+def test_frame_wait_observes_task_cancellation_before_first_browser_frame() -> None:
+    started = time.monotonic()
+
+    def cancelled() -> None:
+        raise TaskStopped(TaskStatus.PAUSED)
+
+    with pytest.raises(TaskStopped):
+        WebCaptureEngine._next_frame(
+            queue.Queue(),
+            [Future()],
+            threading.Event(),
+            check_cancelled=cancelled,
+        )
+
+    assert time.monotonic() - started < 0.1
+
+
 def test_fast_capture_comparison_accepts_antialiasing_but_rejects_missing_content() -> None:
     cv2 = pytest.importorskip("cv2")
     numpy = pytest.importorskip("numpy")
@@ -209,7 +232,7 @@ def test_real_draw_element_failure_requires_clean_screenshot_retry(
 ) -> None:
     _write_capture_page(tmp_path / "index.html", fail_fast_capture=True)
     monkeypatch.setenv("MEDIAFLOW_WEB_FAST_CAPTURE", "1")
-    engine = WebCaptureEngine(find_chromium_executable())
+    engine = WebCaptureEngine(RuntimeContext.discover().paths.chromium)
     try:
         with WebPackagePreviewServer(tmp_path) as preview:
             capture_arguments = {

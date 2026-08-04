@@ -29,8 +29,12 @@ from mediaflow.domain.transcript_edits import (
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt.compiler import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+
+
+def _media_probe() -> MediaProbe:
+    return MediaProbe(RuntimeContext.discover().paths)
 
 
 class _MemoryTranslationCache:
@@ -247,7 +251,7 @@ def test_srt_import_edit_place_compile_and_export_use_one_document_boundary(tmp_
         acquisition, editing, publication = _build_subtitle_components(repository)
         document = acquisition.import_subtitle_file(
             source,
-            AssetService(repository, MediaProbe()),
+            AssetService(repository, _media_probe()),
         )
         asset = repository.catalog.get_asset(document.asset_id)
         assert asset.kind == AssetKind.SUBTITLE
@@ -281,13 +285,13 @@ def test_srt_import_edit_place_compile_and_export_use_one_document_boundary(tmp_
         )
         assert len(placements) == 2
 
-        compiled = TimelineCompiler(repository).compile(
+        compiled = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(
             repository.timeline.load_timeline(project.main_sequence_id),
             subtitle_track_id=subtitle_track.id,
         )
         assert "Hello MediaFlow Pro" in compiled.xml
         assert "This is a subtitle editing test." in compiled.xml
-        preview_graph = TimelineCompiler(repository).compile(
+        preview_graph = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(
             repository.timeline.load_timeline(project.main_sequence_id)
         )
         assert 'mlt_service">dynamictext' not in preview_graph.xml
@@ -309,7 +313,10 @@ def test_timeline_and_subtitle_edits_share_one_chronological_undo_history(tmp_pa
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
         history = ProjectEditHistory()
         acquisition, editing, _publication = _build_subtitle_components(repository, history)
-        document = acquisition.import_subtitle_file(source, AssetService(repository, MediaProbe()))
+        document = acquisition.import_subtitle_file(
+            source,
+            AssetService(repository, _media_probe()),
+        )
         project = repository.catalog.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id, history)
         editor.add_marker(10, "Timeline edit")
@@ -885,7 +892,10 @@ def test_sequence_subtitle_timing_edit_persists_through_document_sync_and_undo(
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
         history = ProjectEditHistory()
         acquisition, editing, _publication = _build_subtitle_components(repository, history)
-        document = acquisition.import_subtitle_file(source, AssetService(repository, MediaProbe()))
+        document = acquisition.import_subtitle_file(
+            source,
+            AssetService(repository, _media_probe()),
+        )
         project = repository.catalog.get_project()
         subtitle_track = TimelineEditor(repository, project.main_sequence_id).add_track(
             TrackKind.SUBTITLE
@@ -955,7 +965,7 @@ def test_imported_subtitle_auto_imports_adjacent_media_and_follows_its_clip(
 ) -> None:
     video_path = tmp_path / "interview.mp4"
     subtitle_path = tmp_path / "interview_ZH-CN.srt"
-    generate_real_media(video_path, RuntimePaths.discover(), width=320, height=180)
+    generate_real_media(video_path, RuntimeContext.discover().paths, width=320, height=180)
     subtitle_path.write_text(
         "1\n00:00:00,000 --> 00:00:01,000\n同名媒体关联\n",
         encoding="utf-8",
@@ -965,7 +975,7 @@ def test_imported_subtitle_auto_imports_adjacent_media_and_follows_its_clip(
         publication = SubtitlePublicationService(repository)
         document = SubtitleAcquisitionService(repository, publication).import_subtitle_file(
             subtitle_path,
-            AssetService(repository, MediaProbe()),
+            AssetService(repository, _media_probe()),
         )
         assert repository.catalog.get_asset(document.asset_id).kind == AssetKind.SUBTITLE
         assert document.media_asset_id is not None
@@ -1000,7 +1010,7 @@ def test_smart_split_and_delete_preserve_existing_placement_identity(tmp_path: P
         acquisition, editing, _publication = _build_subtitle_components(repository)
         document = acquisition.import_subtitle_file(
             source,
-            AssetService(repository, MediaProbe()),
+            AssetService(repository, _media_probe()),
         )
         project = repository.catalog.get_project()
         track = TimelineEditor(repository, project.main_sequence_id).add_track(
@@ -1036,7 +1046,7 @@ def test_overlap_fix_and_clipboard_replacement_persist_through_srt_boundary(
         acquisition, editing, publication = _build_subtitle_components(repository)
         document = acquisition.import_subtitle_file(
             source,
-            AssetService(repository, MediaProbe()),
+            AssetService(repository, _media_probe()),
         )
         before = repository.subtitles.list_subtitle_segments(document.id)
         assert editing.fix_overlaps(document.id) == 1
@@ -1113,7 +1123,7 @@ def test_webvtt_ass_and_ssa_import_share_the_same_subtitle_document_boundary(
     )
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
         acquisition, _editing, publication = _build_subtitle_components(repository)
-        assets = AssetService(repository, MediaProbe())
+        assets = AssetService(repository, _media_probe())
         documents = [acquisition.import_subtitle_file(path, assets) for path in (vtt, ass, ssa)]
         assert [document.language for document in documents] == ["en", "zh_CN", "ja"]
         assert [
@@ -1201,7 +1211,7 @@ def test_subtitle_edit_database_commit_failure_restores_database_and_visible_srt
         acquisition, editing, publication = _build_subtitle_components(repository)
         document = acquisition.import_subtitle_file(
             source,
-            AssetService(repository, MediaProbe()),
+            AssetService(repository, _media_probe()),
         )
         segment = repository.subtitles.list_subtitle_segments(document.id)[0]
         output = publication.document_srt_path(document.id)
@@ -1250,7 +1260,7 @@ def test_new_translation_commit_failure_leaves_no_document_or_visible_srt(
         )
         source_document = acquisition.import_subtitle_file(
             source,
-            AssetService(repository, MediaProbe()),
+            AssetService(repository, _media_probe()),
         )
         operation_id = "translation-commit-failure"
         output = publication.document_srt_path(operation_id)
@@ -1294,7 +1304,7 @@ def test_subtitle_import_cancellation_after_related_media_probe_has_no_side_effe
     subtitle = tmp_path / "interview.srt"
     generate_real_media(
         video,
-        RuntimePaths.discover(),
+        RuntimeContext.discover().paths,
         width=320,
         height=180,
     )
@@ -1313,7 +1323,7 @@ def test_subtitle_import_cancellation_after_related_media_probe_has_no_side_effe
         with pytest.raises(RuntimeError, match="injected cancellation"):
             acquisition.import_subtitle_file(
                 subtitle,
-                AssetService(repository, MediaProbe()),
+                AssetService(repository, _media_probe()),
                 check_cancelled=cancel_after_preparation,
             )
 
@@ -1334,7 +1344,7 @@ def test_subtitle_import_commit_failure_with_related_media_rolls_back_everything
     subtitle = tmp_path / "interview.srt"
     generate_real_media(
         video,
-        RuntimePaths.discover(),
+        RuntimeContext.discover().paths,
         width=320,
         height=180,
     )
@@ -1352,7 +1362,7 @@ def test_subtitle_import_commit_failure_with_related_media_rolls_back_everything
         with pytest.raises(RuntimeError, match="injected database commit failure"):
             acquisition.import_subtitle_file(
                 subtitle,
-                AssetService(repository, MediaProbe()),
+                AssetService(repository, _media_probe()),
             )
 
         assert repository.content_revision() == original_revision

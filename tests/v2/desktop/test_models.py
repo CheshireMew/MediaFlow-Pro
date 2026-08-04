@@ -59,9 +59,13 @@ from mediaflow.domain.tasks import SequenceBoundaryTaskOutcome, Task
 from mediaflow.domain.workflows import WorkflowPayload
 from mediaflow.infrastructure.platform_media import PlatformMediaResolver
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.settings_repository import SettingsRepository
+from mediaflow.infrastructure.settings_repository import (
+    DesktopSettingsRepository,
+    ServiceSettingsRepository,
+)
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 
@@ -176,7 +180,7 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
     from mediaflow.desktop import app as desktop_app
 
     calls: list[object] = []
-    settings_path = tmp_path / "settings.json"
+    settings_path = tmp_path / "desktop-settings.json"
     startup_settings = SimpleNamespace(recovered=False)
 
     class FakeSignal:
@@ -224,8 +228,8 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
     monkeypatch.setattr(desktop_app, "runtime_directory", lambda: runtime_root)
     monkeypatch.setattr(
         desktop_app,
-        "EditorApplication",
-        lambda: calls.append("editor-application") or SimpleNamespace(),
+        "create_desktop_editor_application",
+        lambda: calls.append("editor-service-client") or SimpleNamespace(),
     )
     monkeypatch.setattr(desktop_app, "configure_application_font", lambda _app: "")
     monkeypatch.setattr(desktop_app, "configure_application_icon", lambda _app: None)
@@ -242,6 +246,7 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
     )
     assert calls.index(("surface", startup_settings)) < calls.index("webengine")
     assert calls.index("webengine") < calls.index("application")
+    assert calls.index("application") < calls.index("editor-service-client")
     assert (runtime_root / "logs" / "mediaflow.log").is_file()
     assert not any(
         getattr(handler, "_mediaflow_application_log", False)
@@ -256,23 +261,23 @@ def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(
     from mediaflow.desktop import app as desktop_app
 
     explicit_settings = tmp_path / "explicit-settings.json"
-    monkeypatch.setenv("MEDIAFLOW_SETTINGS_PATH", str(explicit_settings))
+    monkeypatch.setenv("MEDIAFLOW_DESKTOP_SETTINGS_PATH", str(explicit_settings))
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "ignored-runtime"))
     assert desktop_app.startup_settings_path() == explicit_settings.resolve()
 
-    monkeypatch.delenv("MEDIAFLOW_SETTINGS_PATH")
+    monkeypatch.delenv("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
     configured_runtime = tmp_path / "configured-runtime"
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(configured_runtime))
     assert (
         desktop_app.startup_settings_path()
-        == (configured_runtime / "settings.json").resolve()
+        == (configured_runtime / "desktop-settings.json").resolve()
     )
 
     monkeypatch.delenv("MEDIAFLOW_RUNTIME_DIR")
     configured_development_root = tmp_path / "configured-development"
     monkeypatch.setenv("MEDIAFLOW_DEV_ROOT", str(configured_development_root))
     assert desktop_app.startup_settings_path() == (
-        configured_development_root / "runtime" / "settings.json"
+        configured_development_root / "runtime" / "desktop-settings.json"
     ).resolve()
 
     monkeypatch.delenv("MEDIAFLOW_DEV_ROOT")
@@ -287,7 +292,7 @@ def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(
     )
     assert (
         desktop_app.startup_settings_path()
-        == (saved_runtime / "settings.json").resolve()
+        == (saved_runtime / "desktop-settings.json").resolve()
     )
 
     monkeypatch.setattr(
@@ -303,9 +308,8 @@ def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(
 def test_hdr_surface_format_is_set_from_explicit_settings_before_qapplication(
     tmp_path: Path,
 ) -> None:
-    repository = SettingsRepository(tmp_path / "settings.json")
+    repository = DesktopSettingsRepository(tmp_path / "desktop-settings.json")
     settings = repository.default_settings()
-    settings.preview.hdr_preview = True
     repository.save(settings)
     environment = os.environ.copy()
     environment["QT_QPA_PLATFORM"] = "offscreen"
@@ -342,8 +346,8 @@ def test_hdr_surface_format_is_set_from_explicit_settings_before_qapplication(
 @pytest.mark.parametrize(
     ("raw_settings", "expected_reason"),
     [
-        (b'{"schema_version": 16, "preview": ', "内容无效"),
-        (b'{"schema_version": 999, "preview": {"hdr_preview": false}}', "更新版本"),
+        (b'{"schema_version": 1, "ui": ', "内容无效"),
+        (b'{"schema_version": 999, "ui": {}}', "schema 必须为 1"),
     ],
 )
 def test_startup_archives_unreadable_settings_and_continues_with_defaults(
@@ -354,10 +358,9 @@ def test_startup_archives_unreadable_settings_and_continues_with_defaults(
 ) -> None:
     from mediaflow.desktop import app as desktop_app
 
-    settings_path = tmp_path / "settings.json"
+    settings_path = tmp_path / "desktop-settings.json"
     settings_path.write_bytes(raw_settings)
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("MEDIAFLOW_SETTINGS_PATH", str(settings_path))
+    monkeypatch.setenv("MEDIAFLOW_DESKTOP_SETTINGS_PATH", str(settings_path))
 
     loaded = desktop_app.load_startup_settings(settings_path)
 
@@ -367,7 +370,7 @@ def test_startup_archives_unreadable_settings_and_continues_with_defaults(
     assert loaded.archived_path.read_bytes() == raw_settings
     assert not settings_path.exists()
     assert expected_reason in loaded.error
-    assert desktop_app.configure_startup_surface(loaded) is loaded.settings.preview.hdr_preview
+    assert desktop_app.configure_startup_surface(loaded) is True
 
     notices: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -379,8 +382,7 @@ def test_startup_archives_unreadable_settings_and_continues_with_defaults(
     assert notices and str(loaded.archived_path) in notices[0][1]
     assert loaded.error in notices[0][1]
 
-    application = EditorApplication()
-    assert application.settings == loaded.settings
+    assert DesktopSettingsRepository(settings_path).default_settings() == loaded.settings
 
 
 def test_window_state_persists_normal_geometry_and_maximized_flag() -> None:
@@ -388,12 +390,48 @@ def test_window_state_persists_normal_geometry_and_maximized_flag() -> None:
     try:
         controllers.settings.saveWindowState(1024, 640, True)
 
-        persisted = SettingsRepository().load().ui
+        persisted = DesktopSettingsRepository().load().ui
         assert (persisted.window_width, persisted.window_height) == (1024, 640)
         assert persisted.window_maximized is True
         assert controllers.settings.settingsData["windowMaximized"] is True
     finally:
         controllers.shutdown()
+
+
+def test_shutdown_drains_project_readers_before_releasing_project() -> None:
+    controllers = EditorControllers()
+    events: list[str] = []
+    original_project_shutdown = (
+        controllers.session.background.shutdown_project_requests
+    )
+    original_application_shutdown = (
+        controllers.session.background.shutdown_application_requests
+    )
+    original_lifecycle_shutdown = controllers.session.lifecycle.shutdown
+
+    def shutdown_project_requests() -> None:
+        events.append("project-requests")
+        original_project_shutdown()
+
+    def shutdown_application_requests() -> None:
+        events.append("application-requests")
+        original_application_shutdown()
+
+    def shutdown_lifecycle() -> None:
+        events.append("project")
+        original_lifecycle_shutdown()
+
+    controllers.session.background.shutdown_project_requests = (
+        shutdown_project_requests
+    )
+    controllers.session.background.shutdown_application_requests = (
+        shutdown_application_requests
+    )
+    controllers.session.lifecycle.shutdown = shutdown_lifecycle
+
+    controllers.shutdown()
+
+    assert events == ["project-requests", "project", "application-requests"]
 
 
 def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(
@@ -500,33 +538,30 @@ def test_settings_form_save_merges_user_changes_with_async_runtime_updates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     controllers = EditorControllers()
     try:
         session = controllers.session
         baseline = SettingsForm.from_settings(
-            session.settings
+            session.service_settings,
+            session.desktop_settings,
         ).model_dump(mode="json", by_alias=True)
         submitted = dict(baseline)
         submitted["theme"] = "high_contrast"
 
         installed_path = tmp_path / "runtime" / "bin" / "xxl.exe"
-        runtime_update = session.settings.model_copy(deep=True)
+        runtime_update = session.service_settings.model_copy(deep=True)
         runtime_update.asr.cli_path = str(installed_path)
-        session._commit_settings(runtime_update)
+        session.settings_persistence.commit(runtime_update)
 
         controllers.settings.saveSettings(
             submitted,
             baseline,
         )
 
-        assert session.settings.ui.theme == "high_contrast"
-        assert session.settings.asr.cli_path == str(installed_path)
+        assert session.desktop_settings.ui.theme == "high_contrast"
+        assert session.service_settings.asr.cli_path == str(installed_path)
         assert (
-            SettingsRepository().load().asr.cli_path
+            ServiceSettingsRepository().load().asr.cli_path
             == str(installed_path)
         )
     finally:
@@ -537,7 +572,6 @@ def test_subtitle_preview_fallback_reframes_main_clock_but_placement_stays_autho
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
     project = application.create_project(
         tmp_path / "Subtitle Clock",
@@ -582,9 +616,10 @@ def test_subtitle_preview_fallback_reframes_main_clock_but_placement_stays_autho
     subtitle_track = project.timeline(short_sequence.id).add_track(
         TrackKind.SUBTITLE,
     )
-    controllers = EditorControllers(application=application)
+    desktop_application = DesktopPresentationApplication(application)
+    controllers = EditorControllers(application=desktop_application)
     try:
-        controllers.session.lifecycle.replace(project)
+        controllers.session.lifecycle.replace(desktop_application.adapt_project(project))
         controllers.workspace.selectSequence(short_sequence.id)
         controllers.subtitles.selectSubtitleDocument(document.id)
         assert controllers.subtitles.subtitlePlacementsModel.rowCount() == 0
@@ -754,7 +789,6 @@ def test_source_monitor_uses_real_graph_range_insertion_and_requested_frame(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
     source = tmp_path / "source.mp4"
     generate_real_media(source, application.runtime_paths, width=160, height=90)
@@ -774,9 +808,10 @@ def test_source_monitor_uses_real_graph_range_insertion_and_requested_frame(
             }
         )
     )
-    controllers = EditorControllers(application=application)
+    desktop_application = DesktopPresentationApplication(application)
+    controllers = EditorControllers(application=desktop_application)
     try:
-        controllers.session.lifecycle.replace(project)
+        controllers.session.lifecycle.replace(desktop_application.adapt_project(project))
         controllers.media.openSourceMonitor(asset.id)
         source_state = controllers.media.sourceMonitorData
         assert source_state["assetId"] == asset.id
@@ -811,7 +846,6 @@ def test_moment_search_consumes_persisted_spoken_and_visual_producers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
     project = application.create_project(tmp_path / "Moment Search", "Moment Search")
     source = tmp_path / "interview.mp4"
@@ -838,9 +872,10 @@ def test_moment_search_consumes_persisted_spoken_and_visual_producers(
         end_frame=10,
         title="人物转身",
     )
-    controllers = EditorControllers(application=application)
+    desktop_application = DesktopPresentationApplication(application)
+    controllers = EditorControllers(application=desktop_application)
     try:
-        controllers.session.lifecycle.replace(project)
+        controllers.session.lifecycle.replace(desktop_application.adapt_project(project))
         moments = controllers.session.models.asset_moments.snapshot()
         assert {(row["momentId"], row["momentType"]) for row in moments} == {
             (f"spoken:{segment.id}", "spoken"),
@@ -928,9 +963,9 @@ def test_download_plan_queues_selected_entries_as_typed_requests(
     assert (
         controllers.settings.settingsData["downloadDirectory"] == controllers.settings.builtInMediaDirectory
     )
-    persisted = SettingsRepository().load()
+    persisted = ServiceSettingsRepository().load()
     assert persisted.download.last_url == "https://example.com/remembered-video"
-    assert persisted.ui.default_project_directory == str(tmp_path.resolve())
+    assert persisted.default_project_directory == str(tmp_path.resolve())
     assert persisted.download.resolution == "1080p"
 
 
@@ -993,13 +1028,13 @@ def test_project_switch_rolls_back_to_live_previous_session_when_binding_fails(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
-    controllers = EditorControllers(application=application)
+    desktop_application = DesktopPresentationApplication(application)
+    controllers = EditorControllers(application=desktop_application)
     session = controllers.session
     try:
         first = application.create_project(tmp_path / "First", "First")
-        session.lifecycle.replace(first)
+        session.lifecycle.replace(desktop_application.adapt_project(first))
         first_id = session.binding.current.get_project().id
         second = application.create_project(tmp_path / "Second", "Second")
         original_refresh = session.projectors.refresh_project
@@ -1018,7 +1053,7 @@ def test_project_switch_rolls_back_to_live_previous_session_when_binding_fails(
             fail_candidate_refresh_once,
         )
         with pytest.raises(RuntimeError, match="binding failed"):
-            session.lifecycle.replace(second)
+            session.lifecycle.replace(desktop_application.adapt_project(second))
 
         assert session.binding.current.get_project().id == first_id
         assert session.binding.current.project_dir == (tmp_path / "First").resolve()
@@ -1033,11 +1068,11 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     root = tmp_path / "Workflow Read Only"
     holder = ProjectRepository.create(root, "Workflow Read Only")
     application = EditorApplication()
-    controllers = EditorControllers(application=application)
+    desktop_application = DesktopPresentationApplication(application)
+    controllers = EditorControllers(application=desktop_application)
     try:
         project = holder.catalog.get_project()
         paused_task = TaskRepository(holder).create(
@@ -1075,10 +1110,10 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
 
         observer = application.open_project(root, writable=True)
         assert observer.read_only is True
-        controllers.session.lifecycle.replace(observer)
+        controllers.session.lifecycle.replace(desktop_application.adapt_project(observer))
 
         bound = controllers.session.binding.current
-        assert bound is observer
+        assert bound.project_dir == observer.project_dir
         assert bound.read_only is True
         with pytest.raises(PermissionError, match="只读"):
             bound.reconcile_workflow()
@@ -1092,7 +1127,7 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
         holder.close()
         writable = application.open_project(root, writable=True)
         assert writable.read_only is False
-        controllers.session.lifecycle.replace(writable)
+        controllers.session.lifecycle.replace(desktop_application.adapt_project(writable))
 
         reconciled = {
             run.id: run
@@ -1116,9 +1151,10 @@ def test_default_export_uses_project_folder_and_avoids_existing_names(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
-    controllers = EditorControllers(application=application)
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(application)
+    )
     captured: list[ExportSequenceCommand] = []
 
     def capture_task(command, *, sequence_id=None):
@@ -1176,9 +1212,10 @@ def test_double_loudness_trigger_reuses_the_same_active_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
-    controllers = EditorControllers(application=application)
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(application)
+    )
     handler_started = threading.Event()
     release_handler = threading.Event()
     executions = 0
@@ -1211,35 +1248,34 @@ def test_double_loudness_trigger_reuses_the_same_active_request(
         controllers.shutdown()
 
 
-def test_open_desktop_consumes_persisted_task_events_from_external_process(
+def test_open_desktop_consumes_persisted_task_events_from_project_service(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    controllers = EditorControllers(application=EditorApplication())
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
     try:
         controllers.workspace.createProject(str(tmp_path), "External Task")
         session = controllers.session
         assert controllers.tasks.tasksModel.rowCount() == 0
         project_revision = session.binding.current.content_revision()
-        external = TaskRepository(session.binding.current).create(
-            Task(
-                project_id=session.binding.current.get_project().id,
-                sequence_id=controllers.workspace.activeSequenceId,
-                command=AnalyzeDownloadCommand(url="https://example.invalid/media"),
-                status=TaskStatus.FAILED,
-                error="external producer result",
-            )
+
+        task = session.binding.current.start_task(
+            AnalyzeDownloadCommand(url="https://example.invalid/media")
         )
+        external = session.binding.current.wait_for_task(task.id, timeout=5)
+        assert external.status == TaskStatus.FAILED
         assert session.binding.current.content_revision() == project_revision
 
-        session.lifecycle.poll_external_changes()
+        session.lifecycle.reconcile_task_events()
 
         assert controllers.tasks.tasksModel.rowCount() == 1
         row = controllers.tasks.tasksModel.get(0)
         assert row["taskId"] == external.id
         assert row["status"] == "failed"
-        assert row["error"] == "external producer result"
+        assert row["error"] == external.error
+        assert row["error"]
+        assert session.binding.current.committed_task_result(external.id) is not None
     finally:
         controllers.shutdown()
 
@@ -1277,38 +1313,36 @@ def _create_completed_sequence_boundary_task(
         duration=100,
     )
     snapshot_hash = project.sequence_boundary_snapshot_hash(sequence_id)
-    task = TaskRepository(project).create(
-        Task(
-            project_id=project.get_project().id,
+    outcome = SequenceBoundaryTaskOutcome(
+        analysis=SequenceBoundaryAnalysis(
             sequence_id=sequence_id,
-            command=AnalyzeSequenceBoundsCommand(
-                sequence_id=sequence_id,
-                snapshot_hash=snapshot_hash,
+            snapshot_hash=snapshot_hash,
+            duration_frames=100,
+            suggested=SequenceInOut(
+                in_frame=10,
+                out_frame=90,
             ),
-            status=TaskStatus.COMPLETED,
-            outcome=SequenceBoundaryTaskOutcome(
-                analysis=SequenceBoundaryAnalysis(
-                    sequence_id=sequence_id,
-                    snapshot_hash=snapshot_hash,
-                    duration_frames=100,
-                    suggested=SequenceInOut(
-                        in_frame=10,
-                        out_frame=90,
-                    ),
-                    speech_in_frame=10,
-                    speech_out_frame=90,
-                )
-            ),
+            speech_in_frame=10,
+            speech_out_frame=90,
         )
     )
-    return task, sequence_id
+    project._tasks._handlers[TaskKind.ANALYZE] = (
+        lambda _context: TaskCompletion(outcome=outcome)
+    )
+    task = project.start_task(
+        AnalyzeSequenceBoundsCommand(
+            sequence_id=sequence_id,
+            snapshot_hash=snapshot_hash,
+        ),
+        sequence_id=sequence_id,
+    )
+    return project.wait_for_task(task.id, timeout=5), sequence_id
 
 
-def test_open_desktop_consumes_unhandled_terminal_task_from_persistent_state(
+def test_open_desktop_projects_service_committed_terminal_task_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
     root = tmp_path / "Offline Completed Task"
     with application.create_project(root, "Offline Completed Task") as project:
@@ -1316,13 +1350,17 @@ def test_open_desktop_consumes_unhandled_terminal_task_from_persistent_state(
             project,
             tmp_path / "offline-boundary.mp4",
         )
-        assert project.load_timeline(sequence_id).sequence.in_out is None
+        assert project.load_timeline(sequence_id).sequence.in_out == (
+            SequenceInOut(in_frame=10, out_frame=90)
+        )
         assert project._repository._fetchone(
             "SELECT task_id FROM task_consumption WHERE task_id=?",
             (task.id,),
-        ) is None
+        )["task_id"] == task.id
 
-    controllers = EditorControllers(application=application)
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(application)
+    )
     try:
         controllers.workspace.openProject(str(root))
         current = controllers.session.binding.current
@@ -1338,12 +1376,13 @@ def test_open_desktop_consumes_unhandled_terminal_task_from_persistent_state(
         controllers.shutdown()
 
 
-def test_desktop_retries_terminal_task_consumption_after_transient_failure(
+def test_desktop_retries_terminal_task_projection_after_transient_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    controllers = EditorControllers(application=EditorApplication())
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
     errors: list[str] = []
     controllers.session.events.errorOccurred.connect(errors.append)
     try:
@@ -1356,23 +1395,22 @@ def test_desktop_retries_terminal_task_consumption_after_transient_failure(
             current,
             tmp_path / "retry-boundary.mp4",
         )
-        original_consume = current.consume_task_result
+        original_read = current.committed_task_result
         attempts = 0
 
-        def fail_twice(candidate: Task):
+        def fail_twice(task_id: str):
             nonlocal attempts
             attempts += 1
             if attempts <= 2:
-                raise RuntimeError("injected transient consumption failure")
-            return original_consume(candidate)
+                raise RuntimeError("injected transient projection failure")
+            return original_read(task_id)
 
-        monkeypatch.setattr(current, "consume_task_result", fail_twice)
-        controllers.session.lifecycle.poll_external_changes()
+        monkeypatch.setattr(current, "committed_task_result", fail_twice)
+        controllers.session.lifecycle.reconcile_task_events()
         assert attempts == 2
-        assert current.load_timeline(sequence_id).sequence.in_out is None
         assert any("将自动重试" in message for message in errors)
 
-        controllers.session.lifecycle.poll_external_changes()
+        controllers.session.lifecycle.reconcile_task_events()
 
         assert attempts == 3
         assert current.load_timeline(sequence_id).sequence.in_out == (

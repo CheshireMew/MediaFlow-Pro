@@ -6,6 +6,7 @@ ColumnLayout {
     id: root
 
     property var format
+    property var restoredEncoderPolicy: null
     property bool advancedOpen: false
     property string lastPreviewSignature: ""
     signal optionsChanged(var options)
@@ -16,13 +17,38 @@ ColumnLayout {
         if (!root.format)
             return []
         const target = root.format.value
-        return exportController.videoEncoderOptions.filter(function(item) {
+        const options = exportController.encoderPolicyOptions.filter(function(item) {
             return item.formats.indexOf(target) >= 0
         })
+        if (target === "audio" || !root.restoredEncoderPolicy)
+            return options
+        const restoredValue = root.encoderPolicyValue(root.restoredEncoderPolicy)
+        const exists = options.some(function(item) {
+            return item.value === restoredValue
+        })
+        if (!exists) {
+            options.push({
+                label: qsTr("当前项目要求：%1（本机不可用）").arg(restoredValue),
+                value: restoredValue,
+                mode: root.restoredEncoderPolicy.mode,
+                vendor: root.restoredEncoderPolicy.vendor || "auto",
+                formats: [target],
+                available: false
+            })
+        }
+        return options
+    }
+
+    function encoderPolicyValue(policy) {
+        return policy.mode === "software"
+            ? "software" : String(policy.mode) + ":" + String(policy.vendor || "auto")
     }
 
     function restore(value) {
-        const encoderIndex = encoderField.indexOfValue(value.video_codec || "")
+        const policy = value.encoder_policy || root.format.encoderPolicy || {mode: "software"}
+        root.restoredEncoderPolicy = policy
+        const policyValue = root.encoderPolicyValue(policy)
+        const encoderIndex = encoderField.indexOfValue(policyValue)
         if (encoderField.count > 0)
             encoderField.currentIndex = encoderIndex >= 0 ? encoderIndex : 0
         technical.restore(value)
@@ -30,12 +56,15 @@ ColumnLayout {
         watermark.restore(value)
     }
 
-    function selectedEncoderCodec() {
-        if (encoderField.currentIndex < 0
-                || encoderField.currentValue === undefined
-                || encoderField.currentValue === null)
-            return ""
-        return String(encoderField.currentValue)
+    function selectedEncoderPolicy() {
+        if (encoderField.currentIndex < 0 || !encoderField.currentValue)
+            return {mode: "software", vendor: "auto"}
+        const components = String(encoderField.currentValue).split(":")
+        return {
+            mode: components[0],
+            vendor: components.length > 1 && components[1].length > 0
+                ? components[1] : "auto"
+        }
     }
 
     function exportOptions() {
@@ -43,7 +72,8 @@ ColumnLayout {
         const subtitleOptions = subtitles.exportOptions()
         return {
             container: root.format.container || root.format.suffix,
-            videoCodec: root.format.value === "audio" ? "" : root.selectedEncoderCodec(),
+            encoderPolicy: root.format.value === "audio"
+                ? null : root.selectedEncoderPolicy(),
             pixelFormat: technicalOptions.pixelFormat,
             qualityValue: technicalOptions.qualityValue,
             preset: technicalOptions.preset,
@@ -107,6 +137,16 @@ ColumnLayout {
                     if (count > 0 && currentIndex < 0)
                         currentIndex = 0
                 }
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: encoderField.currentIndex >= 0
+                    && encoderField.model[encoderField.currentIndex]
+                    && encoderField.model[encoderField.currentIndex].available === false
+                text: qsTr("这个项目要求的硬件编码器在本机不可用。导出会停止并说明原因，不会悄悄改用其它编码器。")
+                color: Theme.warning
+                font.pixelSize: Theme.fontSizeCaption
+                wrapMode: Text.WordWrap
             }
             Text {
                 Layout.fillWidth: true

@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -23,10 +22,12 @@ from mediaflow.domain.timebase import frames_to_seconds
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.encoder_catalog import (
     VIDEO_ENCODERS,
-    is_hardware_video_encoder,
+    codec_backend,
+    is_hardware_codec,
     software_encoder_for_format,
-    video_encoder_backend,
 )
+from mediaflow.infrastructure.encoder_policy import VideoEncoderPolicyResolver
+from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.font_assets import apply_bundled_font_environment
 from mediaflow.infrastructure.output_reservation import (
     OutputSetTransaction,
@@ -35,7 +36,10 @@ from mediaflow.infrastructure.output_reservation import (
 )
 from mediaflow.infrastructure.process_observers import MeltProgressObserver
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
+from mediaflow.infrastructure.subprocess_runner import (
+    run_cancellable,
+    run_cancellable_streaming,
+)
 
 from .compiler import TimelineCompiler
 
@@ -74,9 +78,14 @@ class MltExportRequest:
     end_frame: int | None = None
 
 
+class _RuntimeExportPreset(ExportPreset):
+    video_codec: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class _MltExportPlan:
     output: Path
+    preset: _RuntimeExportPreset
     subtitle_outputs: tuple[ExternalSubtitleOutput, ...]
     start_frame: int
     end_frame: int
@@ -151,9 +160,15 @@ class ExportAttemptError(RuntimeError):
 
 
 class MltExportService:
-    def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths | None = None):
+    def __init__(
+        self,
+        compiler: TimelineCompiler,
+        paths: RuntimePaths,
+        encoder_resolver: VideoEncoderPolicyResolver | None = None,
+    ):
         self.compiler = compiler
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
+        self.encoder_resolver = encoder_resolver or VideoEncoderPolicyResolver(self.paths)
 
     def export(
         self,
@@ -214,7 +229,7 @@ class MltExportService:
                 graph_paths.append(
                     self._compile_graph(
                         request.state,
-                        request.preset,
+                        plan.preset,
                         plan.output,
                         progress=progress,
                     )
@@ -240,7 +255,7 @@ class MltExportService:
                 results.append(
                     self._stage_reserved(
                         request.state,
-                        request.preset,
+                        plan.preset,
                         plan.output,
                         graph_path=graph_path,
                         output_set=output_set,
@@ -311,7 +326,7 @@ class MltExportService:
         plans = tuple(
             self._export_plan(
                 request.state,
-                request.preset,
+                self._resolve_runtime_preset(request.preset),
                 request.output_path,
                 start_frame=request.start_frame,
                 end_frame=request.end_frame,
@@ -332,7 +347,7 @@ class MltExportService:
     def _export_plan(
         self,
         state: TimelineState,
-        preset: ExportPreset,
+        preset: _RuntimeExportPreset,
         output_path: str | Path,
         *,
         start_frame: int | None = None,
@@ -369,15 +384,55 @@ class MltExportService:
         )
         return _MltExportPlan(
             output=output,
+            preset=preset,
             subtitle_outputs=subtitle_outputs,
             start_frame=start_frame,
             end_frame=end_frame,
         )
 
+    def _resolve_runtime_preset(self, preset: ExportPreset) -> _RuntimeExportPreset:
+        if preset.format == ExportFormat.AUDIO:
+            codec = None
+        else:
+            policy = preset.encoder_policy
+            if policy is None:
+                raise ValueError("Video export requires a video encoder policy")
+            codec = self.encoder_resolver.resolve(preset.format, policy).codec
+        return _RuntimeExportPreset.model_validate(
+            {
+                **preset.model_dump(mode="python"),
+                "video_codec": codec,
+            }
+        )
+
+    def execution_identity(self, preset: ExportPreset) -> dict[str, object]:
+        """Describe every machine-local input that can change encoded bytes."""
+
+        runtime_preset = self._resolve_runtime_preset(preset)
+
+        def binary(path: Path | None) -> dict[str, object] | None:
+            if path is None or not path.is_file():
+                return None
+            value = fingerprint_file(path)
+            return {
+                "name": path.name,
+                "size": value.size,
+                "modified_ns": value.modified_ns,
+                "edge_sha256": value.edge_sha256,
+            }
+
+        return {
+            "target": self.paths.target.key,
+            "video_codec": runtime_preset.video_codec,
+            "melt": binary(self.paths.melt),
+            "ffmpeg": binary(self.paths.ffmpeg),
+            "ffprobe": binary(self.paths.ffprobe),
+        }
+
     def _compile_graph(
         self,
         state: TimelineState,
-        preset: ExportPreset,
+        preset: _RuntimeExportPreset,
         output: Path,
         *,
         progress=None,
@@ -406,7 +461,7 @@ class MltExportService:
     def _stage_reserved(
         self,
         state: TimelineState,
-        preset: ExportPreset,
+        preset: _RuntimeExportPreset,
         output: Path,
         *,
         graph_path: Path,
@@ -439,7 +494,9 @@ class MltExportService:
             reason = self._hardware_failure_reason(requested_codec, failure.diagnostic)
             fallback = software_encoder_for_format(preset.format)
             if (
-                not is_hardware_video_encoder(requested_codec)
+                not is_hardware_codec(requested_codec)
+                or preset.encoder_policy is None
+                or preset.encoder_policy.mode != "prefer_hardware"
                 or reason is None
                 or fallback is None
             ):
@@ -499,7 +556,7 @@ class MltExportService:
     def _render_attempt(
         self,
         state: TimelineState,
-        preset: ExportPreset,
+        preset: _RuntimeExportPreset,
         graph_path: Path,
         output: Path,
         output_set: OutputSetTransaction,
@@ -530,11 +587,8 @@ class MltExportService:
             "terminate_on_pause=1",
             "real_time=-1",
         ]
-        environment = os.environ.copy()
-        environment.pop("MLT_REPOSITORY_DENY", None)
-        mlt_root = melt.parent
-        environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
-        environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
+        mlt_root = self.paths.require_mlt_root()
+        environment = self.paths.mlt_environment()
         apply_bundled_font_environment(
             preset.subtitle_style.font_family if preset.subtitle_style else None,
             environment,
@@ -609,13 +663,8 @@ class MltExportService:
         return probe
 
     @staticmethod
-    def _resolved_video_codec(preset: ExportPreset) -> str | None:
-        if preset.format == ExportFormat.AUDIO:
-            return None
-        if preset.video_codec:
-            return preset.video_codec
-        fallback = software_encoder_for_format(preset.format)
-        return fallback.codec if fallback else None
+    def _resolved_video_codec(preset: _RuntimeExportPreset) -> str | None:
+        return preset.video_codec
 
     @staticmethod
     def _diagnostic_tail(diagnostic: str, limit: int = 4000) -> str:
@@ -624,8 +673,8 @@ class MltExportService:
 
     @staticmethod
     def _hardware_failure_reason(codec: str | None, diagnostic: str) -> str | None:
-        backend = video_encoder_backend(codec)
-        if backend not in {"nvenc", "qsv", "amf"}:
+        backend = codec_backend(codec)
+        if backend not in {"nvenc", "qsv", "amf", "videotoolbox", "vaapi"}:
             return None
         normalized = diagnostic.lower()
         backend_patterns = {
@@ -647,6 +696,15 @@ class MltExportService:
                 r"amf_(?:not_supported|no_device|fail)",
                 r"(?:amf|amfrt64).*(?:device|initializ|not available|not supported|unsupported|failed)",
             ),
+            "videotoolbox": (
+                r"videotoolbox.*(?:not available|not supported|failed|error)",
+                r"cannot create.*videotoolbox",
+            ),
+            "vaapi": (
+                r"vaapi.*(?:device|initializ|not available|not supported|failed|error)",
+                r"failed to initialise vaapi",
+                r"no va display found",
+            ),
         }
         generic_encoder_patterns = (
             r"unknown encoder",
@@ -667,6 +725,8 @@ class MltExportService:
             "nvenc": "NVIDIA NVENC 硬件编码器无法初始化",
             "qsv": "Intel Quick Sync 硬件编码器无法初始化",
             "amf": "AMD AMF 硬件编码器无法初始化",
+            "videotoolbox": "Apple VideoToolbox 硬件编码器无法初始化",
+            "vaapi": "Linux VAAPI 硬件编码器无法初始化",
         }
         return labels[backend]
 
@@ -808,12 +868,16 @@ class MltExportService:
             generated.append(subtitle.destination)
         return tuple(generated)
 
-    def _consumer_properties(self, state: TimelineState, preset: ExportPreset) -> list[str]:
+    def _consumer_properties(
+        self,
+        state: TimelineState,
+        preset: _RuntimeExportPreset,
+    ) -> list[str]:
         profile = state.sequence.profile
         values = [f"f={preset.container}"]
         codec = preset.video_codec or ""
-        encoder_backend = video_encoder_backend(codec)
-        hardware_codec = encoder_backend in {"nvenc", "qsv", "amf"}
+        encoder_backend = codec_backend(codec)
+        hardware_codec = encoder_backend not in {None, "software"}
         if preset.format == ExportFormat.H264:
             values.append(f"vcodec={codec or 'libx264'}")
         elif preset.format == ExportFormat.HEVC:
@@ -835,11 +899,21 @@ class MltExportService:
                     values.extend(["rc=vbr", f"cq={preset.quality_value:g}"])
                 elif encoder_backend == "qsv":
                     values.append(f"global_quality={preset.quality_value:g}")
-                else:
+                elif encoder_backend == "amf":
                     values.append(f"qp_i={preset.quality_value:g}")
+                elif encoder_backend == "vaapi":
+                    values.extend(
+                        [
+                            f"qp={preset.quality_value:g}",
+                            "vf=format=nv12,hwupload",
+                        ]
+                    )
+                else:
+                    values.append(f"q:v={preset.quality_value:g}")
             else:
                 values.append(f"crf={preset.quality_value:g}")
-            values.append(f"preset={preset.preset}")
+            if encoder_backend in {None, "software", "nvenc", "qsv"}:
+                values.append(f"preset={preset.preset}")
         if preset.pixel_format:
             values.append(f"pix_fmt={preset.pixel_format}")
         if preset.audio_codec:
@@ -904,7 +978,7 @@ class MltExportService:
         return values
 
     def probe(self, output: Path) -> dict:
-        result = subprocess.run(
+        result = run_cancellable(
             [
                 str(self.paths.ffprobe),
                 "-v",
@@ -918,25 +992,30 @@ class MltExportService:
                 "json",
                 str(output),
             ],
-            capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=60,
-            check=False,
+            creationflags=0,
         )
         if result.returncode != 0:
             raise RuntimeError(f"Export verification failed: {result.stderr.strip()}")
         return json.loads(result.stdout)
 
-    @staticmethod
     def validate_probe(
+        self,
         state: TimelineState,
         preset: ExportPreset,
         probe: dict,
         *,
         expected_duration_frames: int,
     ) -> None:
+        runtime_preset = (
+            preset
+            if isinstance(preset, _RuntimeExportPreset)
+            else self._resolve_runtime_preset(preset)
+        )
+        preset = runtime_preset
         streams = probe.get("streams") or []
         video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)

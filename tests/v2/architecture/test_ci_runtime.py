@@ -8,8 +8,8 @@ import py7zr
 import pytest
 
 from mediaflow.file_digest import sha256_file
-from mediaflow.infrastructure import runtime_paths
-from mediaflow.infrastructure.runtime_contract import load_runtime_contract
+from mediaflow.infrastructure.runtime_contract import PlatformTarget, load_runtime_contract
+from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from scripts import prepare_ci_qt
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -17,33 +17,76 @@ RUNTIME_LOCK = ROOT / "runtime.lock.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
 
 
-def test_windows_media_runtime_has_one_checksum_pinned_contract() -> None:
+def test_three_platform_media_runtime_has_one_versioned_contract() -> None:
     contract = json.loads(RUNTIME_LOCK.read_text(encoding="utf-8"))
-    assert set(contract) == {"schema_version", "windows"}
-    assert contract["schema_version"] == 1
-    windows = contract["windows"]
-    assert set(windows) == {"shotcut", "qt"}
-    shotcut = windows["shotcut"]
+    assert set(contract) == {"schema_version", "targets"}
+    assert contract["schema_version"] == 2
+    assert set(contract["targets"]) == {
+        "windows-x86_64",
+        "linux-x86_64",
+        "macos-arm64",
+    }
+    for key, target in contract["targets"].items():
+        assert key == f'{target["operating_system"]}-{target["architecture"]}'
+        assert set(target) >= {
+            "operating_system",
+            "architecture",
+            "minimum_release",
+            "ffmpeg",
+            "mlt",
+            "qt",
+            "reviewed_bundle",
+            "layout",
+            "playwright",
+            "qt_archives",
+        }
+        assert target["ffmpeg"]["version"] == "n8.1.2"
+        assert target["ffmpeg"]["version_match"] == "exact"
+        assert target["mlt"]["version"] == "7.40.0"
+        assert target["mlt"]["version_match"] == "exact"
+        assert target["qt"]["version"] == "6.11.1"
+        assert target["reviewed_bundle"]["provider"] == "shotcut"
+        assert target["reviewed_bundle"]["version"] == "26.6.25"
+        assert target["reviewed_bundle"]["archive_format"] in {"zip", "txz", "dmg"}
+        assert re.fullmatch(
+            r"[0-9a-f]{64}", target["reviewed_bundle"]["archive_sha256"]
+        )
+        assert target["playwright"]["version"] == "1.61.0"
+        assert target["playwright"]["chromium_revision"] == "1228"
+        assert target["playwright"]["browser_version"] == "149.0.7827.55"
+        assert re.fullmatch(r"[0-9a-f]{64}", target["playwright"]["archive_sha256"])
+        assert [archive["name"] for archive in target["qt_archives"]] == [
+            "qtbase",
+            "qtdeclarative",
+        ]
+        assert all(
+            re.fullmatch(r"[0-9a-f]{64}", archive["sha256"])
+            for archive in target["qt_archives"]
+        )
+
+    windows = contract["targets"]["windows-x86_64"]
+    shotcut = windows["reviewed_bundle"]
     assert set(shotcut) == {
+        "provider",
         "version",
         "archive_url",
         "archive_sha256",
+        "archive_format",
         "archive_root",
-        "melt_version",
-        "ffmpeg_version",
     }
+    assert shotcut["provider"] == "shotcut"
     assert shotcut["version"] in shotcut["archive_url"]
     assert shotcut["archive_url"].startswith(
         "https://github.com/mltframework/shotcut/releases/download/"
     )
     assert re.fullmatch(r"[0-9a-f]{64}", shotcut["archive_sha256"])
     qt = windows["qt"]
-    assert qt["install_directory"] == f'{qt["version"]}/msvc2022_64'
-    assert [archive["name"] for archive in qt["archives"]] == [
+    assert qt["toolchain"] == "msvc2022_64"
+    assert [archive["name"] for archive in windows["qt_archives"]] == [
         "qtbase",
         "qtdeclarative",
     ]
-    for archive in qt["archives"]:
+    for archive in windows["qt_archives"]:
         assert archive["url"].startswith(
             "https://download.qt.io/online/qtsdkrepository/"
         )
@@ -55,40 +98,89 @@ def test_windows_media_runtime_has_one_checksum_pinned_contract() -> None:
     assert "aqtinstall==3.3.0" in requirements
 
 
-def test_isolated_runtime_reuses_the_environment_owned_pinned_toolchain(
+@pytest.mark.parametrize(
+    "target",
+    (
+        PlatformTarget("windows", "x86_64"),
+        PlatformTarget("linux", "x86_64"),
+        PlatformTarget("macos", "arm64"),
+    ),
+)
+def test_each_target_resolves_only_its_pinned_layout_from_one_runtime_root(
+    tmp_path: Path,
+    target: PlatformTarget,
+) -> None:
+    runtime = tmp_path / target.key / "runtime"
+    contract = load_runtime_contract(target=target)
+
+    paths = RuntimePaths.from_contract(contract, runtime_root=runtime)
+    bundle = contract.reviewed_bundle_directory(runtime)
+
+    assert paths.target == target
+    assert paths.runtime_dir == runtime.resolve()
+    assert paths.ffmpeg == (bundle / contract.layout.ffmpeg).resolve()
+    assert paths.ffprobe == (bundle / contract.layout.ffprobe).resolve()
+    assert paths.melt == (bundle / contract.layout.melt).resolve()
+    assert paths.mlt_library == (bundle / contract.layout.mlt_library).resolve()
+    assert paths.mlt_repository == (bundle / contract.layout.mlt_repository).resolve()
+    assert paths.mlt_preview_repository == (
+        bundle / contract.layout.mlt_preview_repository
+    ).resolve()
+    assert paths.mlt_data == (bundle / contract.layout.mlt_data).resolve()
+    assert paths.chromium == (
+        contract.chromium_directory(runtime) / contract.playwright.executable
+    ).resolve()
+    assert paths.native_qml == (runtime / contract.layout.native_qml).resolve()
+    assert paths.render_identity is not None
+    assert paths.render_identity.platform == target.operating_system
+    assert paths.render_identity.architecture == target.architecture
+    assert paths.render_identity.runtime_digest == contract.digest
+
+
+def test_runtime_root_is_the_only_configurable_toolchain_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     isolated_runtime = tmp_path / "isolated" / "runtime"
-    development_root = tmp_path / "reviewed"
+    development_root = tmp_path / "unrelated-development-root"
     contract = load_runtime_contract()
-    shotcut = contract.shotcut_directory(development_root)
-    shotcut.mkdir(parents=True)
-    for name in ("ffmpeg.exe", "ffprobe.exe", "melt.exe"):
-        (shotcut / name).write_bytes(b"reviewed runtime")
 
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(isolated_runtime))
     monkeypatch.setenv("MEDIAFLOW_DEV_ROOT", str(development_root))
-    monkeypatch.delenv("MEDIAFLOW_FFMPEG", raising=False)
-    monkeypatch.delenv("MEDIAFLOW_FFPROBE", raising=False)
-    monkeypatch.delenv("MEDIAFLOW_MELT", raising=False)
-    monkeypatch.setattr(runtime_paths.shutil, "which", lambda _command: None)
 
-    discovered = runtime_paths.RuntimePathDiscovery.discover()
+    paths = RuntimePaths.from_contract(contract)
+    bundle = contract.reviewed_bundle_directory(isolated_runtime)
 
-    assert discovered.runtime_dir == isolated_runtime.resolve()
-    assert discovered.ffmpeg == (shotcut / "ffmpeg.exe").resolve()
-    assert discovered.ffprobe == (shotcut / "ffprobe.exe").resolve()
-    assert discovered.melt == (shotcut / "melt.exe").resolve()
+    assert paths.runtime_dir == isolated_runtime.resolve()
+    assert paths.ffmpeg == (bundle / contract.layout.ffmpeg).resolve()
+    source = (ROOT / "mediaflow" / "infrastructure" / "runtime_paths.py").read_text(
+        encoding="utf-8"
+    )
+    assert "shutil.which" not in source
+    assert "Program Files" not in source
+    assert "MEDIAFLOW_FFMPEG" not in source
+    assert "MEDIAFLOW_CHROMIUM" not in source
+
+
+def test_native_preview_consumes_explicit_runtime_paths_without_layout_guesses() -> None:
+    source = (ROOT / "mediaflow" / "desktop" / "native" / "MltRuntime.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert 'qEnvironmentVariable("MLT_REPOSITORY")' not in source
+    assert 'qEnvironmentVariable("MLT_DATA")' not in source
+    assert "libmlt-7.dll" not in source
+    assert "libmlt-7.so" not in source
+    assert "libmlt-7.dylib" not in source
+    assert "lib/mlt-preview" not in source
+    assert "share/mlt" not in source
 
 
 def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     required_steps = (
-        "scripts/prepare_ci_runtime.ps1",
+        "scripts/prepare_runtime.py",
         "scripts/prepare_ci_qt.py",
-        "python -m playwright install chromium",
-        "scripts/build_native.ps1",
+        "scripts/build_native.py",
         "scripts/verify_development_runtime.py",
         "scripts/verify_display_capabilities.py",
         "test_drag_import_placement_snap_tracks_and_first_video_profile",
@@ -97,12 +189,14 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
         "tests/v2/integration/test_native_preview.py",
         "scripts.verify_web_render_performance",
         "scripts.verify_reference_comparison_chain",
+        "scripts.verify_project_interchange",
     )
     assert all(step in workflow for step in required_steps)
     assert all(
         variable in workflow
         for variable in (
             "MEDIAFLOW_DEV_ROOT",
+            "MEDIAFLOW_RUNTIME_DIR",
             "MEDIAFLOW_PROJECT_ROOT",
             "MEDIAFLOW_MEDIA_ROOT",
             "MEDIAFLOW_TEST_ROOT",
@@ -111,7 +205,12 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
         )
     )
     assert "--python-only" not in workflow
-    assert "if: ${{ vars.MEDIAFLOW_RUN_ONLINE_E2E == 'true' }}" in workflow
+    assert "MEDIAFLOW_NATIVE_QML" not in workflow
+    assert "PLAYWRIGHT_BROWSERS_PATH" not in workflow
+    assert "apt-get install -y ffmpeg" not in workflow
+    assert "brew install ffmpeg" not in workflow
+    assert "playwright install chromium" not in workflow
+    assert "vars.MEDIAFLOW_RUN_ONLINE_E2E == 'true'" in workflow
     assert not re.search(
         r"^\s*uses:\s*[^#\s]+@v\d+\s*(?:#.*)?$",
         workflow,
@@ -134,6 +233,50 @@ def test_web_desktop_scenarios_run_in_separate_qtwebengine_processes() -> None:
     assert first_scenario in workflow
     assert second_scenario in workflow
     assert "python -m pytest tests/v2/desktop/test_web_editor.py\n" not in workflow
+
+
+def test_portable_ci_builds_and_executes_linux_and_apple_silicon_chains() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "portable-core:" in workflow
+    assert "ubuntu-24.04" in workflow
+    assert "macos-14" in workflow
+    assert 'runner.arch }}-${{ hashFiles' in workflow
+    assert "python scripts/prepare_runtime.py" in workflow
+    assert "python scripts/prepare_ci_qt.py" in workflow
+    assert "python scripts/build_native.py" in workflow
+    assert "python scripts/verify_development_runtime.py --profile core" in workflow
+    assert "tests/v2/infrastructure/test_web_media.py::test_v5_cli_chain" in workflow
+    assert "tests/v2/integration/test_native_preview.py" in workflow
+    assert "Type-check on the actual target platform" in workflow
+    assert "linux-x86_64" in workflow
+    assert "macos-arm64" in workflow
+    assert "xvfb-run -a env QT_QPA_PLATFORM=xcb" in workflow
+    assert "weston --backend=headless-backend.so" in workflow
+    assert "QT_QPA_PLATFORM=wayland" in workflow
+
+
+def test_ci_executes_all_six_cross_platform_project_routes() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "interchange-produce:" in workflow
+    assert "interchange-consume:" in workflow
+    routes = {
+        ("windows-x86_64", "linux-x86_64"),
+        ("windows-x86_64", "macos-arm64"),
+        ("linux-x86_64", "windows-x86_64"),
+        ("linux-x86_64", "macos-arm64"),
+        ("macos-arm64", "windows-x86_64"),
+        ("macos-arm64", "linux-x86_64"),
+    }
+    for producer, consumer in routes:
+        route = re.compile(
+            rf"producer:\s*{re.escape(producer)}\s+consumer:\s*{re.escape(consumer)}"
+        )
+        assert route.search(workflow), f"missing interchange route {producer} -> {consumer}"
+    assert "--bundle \"${{ runner.temp }}/interchange-bundle\"" in workflow
+    assert "interchange-${{ matrix.target }}" in workflow
+    assert "interchange-${{ matrix.producer }}" in workflow
 
 
 def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
@@ -171,14 +314,16 @@ def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
     contract.write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "windows": {
-                    "qt": {
+                "schema_version": 2,
+                "targets": {
+                    "windows-x86_64": {
+                        "qt": {
                         "version": "6.11.1",
                         "architecture": "win64_msvc2022_64",
                         "install_directory": "6.11.1/msvc2022_64",
-                        "archives": archives,
-                    }
+                        },
+                        "qt_archives": archives,
+                    },
                 },
             }
         ),

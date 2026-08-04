@@ -25,7 +25,7 @@ class WorkspaceProjector(Projector):
     def refresh_recent_projects(self) -> None:
         self._session.requests.recent_id += 1
         request_id = self._session.requests.recent_id
-        paths = list(self._session.settings.ui.recent_project_paths)
+        paths = list(self._session.desktop_settings.ui.recent_project_paths)
         self._session.background.submit(
             "recent_projects",
             request_id,
@@ -43,17 +43,17 @@ class WorkspaceProjector(Projector):
         self._session.models.recent_projects.set_items(items)
         self._session.events.projectStateChanged.emit()
 
-    def discover_video_encoders(self) -> None:
+    def discover_encoder_policies(self) -> None:
         self._session.requests.encoder_id += 1
         request_id = self._session.requests.encoder_id
         self._session.background.submit(
-            "video_encoders",
+            "encoder_policies",
             request_id,
-            self._session._api.discover_video_encoder_options,
+            self._session._api.discover_encoder_policy_options,
         )
 
     def refresh_settings_models(self) -> None:
-        active_id = self._session.settings.active_llm_provider_id
+        active_id = self._session.service_settings.active_llm_provider_id
         self._session.models.llm_providers.set_items(
             [
                 {
@@ -65,10 +65,12 @@ class WorkspaceProjector(Projector):
                     "enabled": provider.enabled,
                     "active": provider.id == active_id,
                 }
-                for provider in self._session.settings.llm_providers
+                for provider in self._session.service_settings.llm_providers
             ]
         )
-        provider_ids = {item.id for item in self._session.settings.llm_providers}
+        provider_ids = {
+            item.id for item in self._session.service_settings.llm_providers
+        }
         if self._session.selection.llm_provider_id not in provider_ids:
             self._session.selection.llm_provider_id = ""
         self._session.models.glossary.set_items(
@@ -80,9 +82,12 @@ class WorkspaceProjector(Projector):
                     "note": term.note,
                     "category": term.category,
                 }
-                for term in self._session.settings.translation.glossary_terms
+                for term in self._session.service_settings.translation.glossary_terms
             ]
         )
-        term_ids = {item.id for item in self._session.settings.translation.glossary_terms}
+        term_ids = {
+            item.id
+            for item in self._session.service_settings.translation.glossary_terms
+        }
         if self._session.selection.glossary_term_id not in term_ids:
             self._session.selection.glossary_term_id = ""

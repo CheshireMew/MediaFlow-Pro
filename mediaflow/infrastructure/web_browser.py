@@ -14,7 +14,6 @@ from mediaflow.domain.web_media import (
     WebMediaSourcesManifest,
     parse_editable_media_manifest,
 )
-from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 
 SEEK_WEB_FRAME_SCRIPT = """
 async seconds => {
@@ -361,12 +360,17 @@ def validate_editable_media_page(
 
 
 class BrowserWebPackageValidator(WebPackageValidatorPort):
+    def __init__(self, chromium: Path | None):
+        self.chromium = chromium
+
     def validate(self, package_root: Path, manifest: EditableMediaManifest) -> None:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as error:
             raise RuntimeError("Playwright is required to validate editable web media") from error
-        executable = find_chromium_executable()
+        executable = self.chromium
+        if executable is None or not executable.is_file():
+            raise FileNotFoundError("Pinned Playwright Chromium is unavailable")
         requested_urls: list[str] = []
         media_sources = WebMediaSourcesManifest.model_validate_json(
             (package_root / manifest.media_sources).read_text(encoding="utf-8")

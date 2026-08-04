@@ -9,6 +9,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -27,12 +28,11 @@ from mediaflow.application.web_package_files import (
     editable_media_source_hash,
     web_package_root,
 )
-from mediaflow.automation.dispatcher import execute_request
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.project import ProjectProfile
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
     utf16_units,
@@ -40,12 +40,11 @@ from mediaflow.domain.storage_names import (
 from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.domain.tasks import ArtifactReference
 from mediaflow.domain.web_media import media_mime_type, parse_editable_media_manifest
-from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
 from mediaflow.infrastructure.web_capture_engine import (
     FastCaptureFallbackRequired,
@@ -53,6 +52,7 @@ from mediaflow.infrastructure.web_capture_engine import (
     web_capture_diagnostics,
 )
 from mediaflow.infrastructure.web_render_service import WebRenderService
+from tests.v2.editor_service_api import EditorServiceApi
 
 STARTER = Path(
     os.environ.get(
@@ -64,6 +64,13 @@ MEDIA_CASES = STARTER.parent / "editable-media-v5-cases"
 EDITORIAL_TECHNOLOGY_COVER = MEDIA_CASES / "editorial-technology-diagram-cover"
 
 
+def _browser_validator() -> BrowserWebPackageValidator:
+    chromium = RuntimeContext.discover().paths.chromium
+    if chromium is None:
+        raise RuntimeError("Pinned Chromium is unavailable")
+    return BrowserWebPackageValidator(chromium)
+
+
 def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaServices]:
     project = repository.catalog.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
@@ -72,7 +79,7 @@ def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaSer
         lambda sequence_id: (
             editor if sequence_id == project.main_sequence_id else TimelineEditor(repository, sequence_id)
         ),
-        BrowserWebPackageValidator(),
+        _browser_validator(),
     )
 
 
@@ -143,14 +150,14 @@ def test_editorial_technology_cover_real_consumer_chain(
         )
 
         timeline = repository.timeline.load_timeline(sequence_id)
-        renderer = WebRenderService(repository, RuntimePaths.discover())
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
         cache = renderer.render_clip(timeline, clip.id)
         assert cache.is_file() and cache.stat().st_size > 0
 
         frame = tmp_path / "editorial-technology-cover-frame.png"
         subprocess.run(
             [
-                str(RuntimePaths.discover().ffmpeg),
+                str(RuntimeContext.discover().paths.ffmpeg),
                 "-loglevel",
                 "error",
                 "-i",
@@ -163,21 +170,21 @@ def test_editorial_technology_cover_real_consumer_chain(
         )
         assert frame.is_file() and frame.stat().st_size > 0
 
-        compiled = TimelineCompiler(repository).compile(timeline)
+        compiled = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(timeline)
         assert str(cache) in compiled.xml
         assert "index.html" not in compiled.xml
 
         output = tmp_path / "editorial-technology-cover.mp4"
         result = MltExportService(
-            TimelineCompiler(repository),
-            RuntimePaths.discover(),
+            TimelineCompiler(repository, RuntimeContext.discover().paths),
+            RuntimeContext.discover().paths,
         ).export(
             timeline,
             ExportPreset(
                 name="Editorial technology cover verification",
                 format=ExportFormat.H264,
                 container="mp4",
-                video_codec="libx264",
+                encoder_policy={"mode": "software"},
                 audio_codec=None,
                 pixel_format="yuv420p",
             ),
@@ -254,7 +261,7 @@ def _build_native_media_package(tmp_path: Path) -> Path:
     shutil.copytree(STARTER, package_root)
     assets = package_root / "assets"
     assets.mkdir()
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     video = assets / "native-underlay.mkv"
     audio = assets / "native-audio.wav"
     subprocess.run(
@@ -484,8 +491,8 @@ def test_editable_media_v5_full_chain(
         assert copied_state.revision == 1
 
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
-        renderer = WebRenderService(repository, RuntimePaths.discover())
-        competing = WebRenderService(repository, RuntimePaths.discover())
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        competing = WebRenderService(repository, RuntimeContext.discover().paths)
         with ThreadPoolExecutor(max_workers=2) as pool:
             paths = [
                 future.result()
@@ -503,7 +510,7 @@ def test_editable_media_v5_full_chain(
         assert released_lock.acquire()
         released_lock.release()
         assert not list(cache.parent.glob(f"{cache.stem}.*.partial{cache.suffix}"))
-        diagnostics = web_capture_diagnostics(find_chromium_executable())
+        diagnostics = web_capture_diagnostics(RuntimeContext.discover().paths.chromium)
         assert diagnostics.last_metrics is not None
         assert diagnostics.last_metrics.worker_count == 1
         assert diagnostics.last_metrics.frame_count == 3
@@ -518,12 +525,12 @@ def test_editable_media_v5_full_chain(
         browser_launches = diagnostics.browser_launches
         copied_cache = renderer.render_clip(timeline, copied.id)
         assert copied_cache.is_file() and copied_cache != cache
-        reused_browser = web_capture_diagnostics(find_chromium_executable())
+        reused_browser = web_capture_diagnostics(RuntimeContext.discover().paths.chromium)
         assert reused_browser.browser_launches == browser_launches
 
         probe = subprocess.run(
             [
-                str(RuntimePaths.discover().ffprobe),
+                str(RuntimeContext.discover().paths.ffprobe),
                 "-v",
                 "error",
                 "-select_streams",
@@ -580,21 +587,21 @@ def test_editable_media_v5_full_chain(
         rendered = renderer.ensure_sequence(timeline)
         assert len(rendered) == 2 and all(path.is_file() for path in rendered)
         assert len(set(rendered)) == 2
-        document = TimelineCompiler(repository).compile(timeline)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(timeline)
         assert str(cache) in document.xml
         assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
 
         output = tmp_path / "v5-web-final.mp4"
         result = MltExportService(
-            TimelineCompiler(repository),
-            RuntimePaths.discover(),
+            TimelineCompiler(repository, RuntimeContext.discover().paths),
+            RuntimeContext.discover().paths,
         ).export(
             timeline,
             ExportPreset(
                 name="V5 web verification",
                 format=ExportFormat.H264,
                 container="mp4",
-                video_codec="libx264",
+                encoder_policy={"mode": "software"},
                 audio_codec=None,
                 pixel_format="yuv420p",
             ),
@@ -642,8 +649,8 @@ def test_editable_media_v5_full_chain(
 
         application = EditorProject(
             repository,
-            settings=GlobalSettings(),
-            paths=RuntimePaths.discover(),
+            settings=ServiceSettings(),
+            paths=RuntimeContext.discover().paths,
         )
         protected_handoff = tmp_path / "protected-web-handoff.fcpxml"
         protected_bytes = b"existing web handoff"
@@ -703,7 +710,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         assert linked_track.kind == TrackKind.AUDIO
 
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
-        renderer = WebRenderService(repository, RuntimePaths.discover())
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
         target = renderer.cache.target(timeline, clip, asset)
         assert len(target.native_media_plan.video_segments) == 2
         assert len(target.native_media_plan.audio_segments) == 4
@@ -714,7 +721,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         cache = renderer.render_clip(timeline, clip.id)
         probe = subprocess.run(
             [
-                str(RuntimePaths.discover().ffprobe),
+                str(RuntimeContext.discover().paths.ffprobe),
                 "-v",
                 "error",
                 "-show_entries",
@@ -741,7 +748,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
 
         decoded = subprocess.run(
             [
-                str(RuntimePaths.discover().ffmpeg),
+                str(RuntimeContext.discover().paths.ffmpeg),
                 "-loglevel",
                 "error",
                 "-ss",
@@ -780,10 +787,10 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
             and underlay_pixel[3] == 255
         )
 
-        document = TimelineCompiler(repository).compile(timeline)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(timeline)
         assert document.xml.count(str(cache)) == 2
         assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
-        handoff = FcpxmlExportService(repository).export(
+        handoff = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             timeline,
             tmp_path / "native-web.fcpxml",
         )
@@ -805,7 +812,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         )
         direct_probe = subprocess.run(
             [
-                str(RuntimePaths.discover().ffprobe),
+                str(RuntimeContext.discover().paths.ffprobe),
                 "-v",
                 "error",
                 "-select_streams",
@@ -830,15 +837,15 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
 
         sequence_output = tmp_path / "native-web-sequence.mp4"
         MltExportService(
-            TimelineCompiler(repository),
-            RuntimePaths.discover(),
+            TimelineCompiler(repository, RuntimeContext.discover().paths),
+            RuntimeContext.discover().paths,
         ).export(
             timeline,
             ExportPreset(
                 name="Native editable media verification",
                 format=ExportFormat.H264,
                 container="mp4",
-                video_codec="libx264",
+                encoder_policy={"mode": "software"},
                 audio_codec="aac",
                 pixel_format="yuv420p",
             ),
@@ -846,7 +853,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         )
         decoded_audio = subprocess.run(
             [
-                str(RuntimePaths.discover().ffmpeg),
+                str(RuntimeContext.discover().paths.ffmpeg),
                 "-loglevel",
                 "error",
                 "-i",
@@ -940,7 +947,7 @@ def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
     editor, service = _service(repository)
     try:
         project, _asset, clip = _add_web_clip(repository, editor, service)
-        real_engine = get_web_capture_engine(find_chromium_executable())
+        real_engine = get_web_capture_engine(RuntimeContext.discover().paths.chromium)
 
         class FailsFirstFastAttempt:
             def __init__(self) -> None:
@@ -964,7 +971,7 @@ def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
             lambda _executable: retry_engine,
         )
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
-        renderer = WebRenderService(repository, RuntimePaths.discover())
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
 
         cache = renderer.render_clip(timeline, clip.id)
 
@@ -982,7 +989,7 @@ def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
         assert "injected production capture failure" in metrics.fallback_reason
         probe = subprocess.run(
             [
-                str(RuntimePaths.discover().ffprobe),
+                str(RuntimeContext.discover().paths.ffprobe),
                 "-v",
                 "error",
                 "-count_frames",
@@ -1023,17 +1030,11 @@ def test_invalid_export_suffix_is_rejected_before_render(
     try:
         project, _, clip = _add_web_clip(repository, editor, service)
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
-        discovered = RuntimePaths.discover()
+        discovered = RuntimeContext.discover().paths
         isolated_runtime = tmp_path / "isolated-runtime"
         renderer = WebRenderService(
             repository,
-            RuntimePaths(
-                runtime_dir=isolated_runtime,
-                ffmpeg=discovered.ffmpeg,
-                ffprobe=discovered.ffprobe,
-                melt=discovered.melt,
-                native_qml=discovered.native_qml,
-            ),
+            replace(discovered, runtime_dir=isolated_runtime),
         )
         cache_target = renderer.cache.target(timeline, clip)
         destination = tmp_path / "uncreated-output" / "overlay.mp4"
@@ -1070,17 +1071,11 @@ def test_web_export_rejects_an_unusable_temporary_sibling_before_render(
     try:
         project, _, clip = _add_web_clip(repository, editor, service)
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
-        discovered = RuntimePaths.discover()
+        discovered = RuntimeContext.discover().paths
         isolated_runtime = tmp_path / "isolated-path-runtime"
         renderer = WebRenderService(
             repository,
-            RuntimePaths(
-                runtime_dir=isolated_runtime,
-                ffmpeg=discovered.ffmpeg,
-                ffprobe=discovered.ffprobe,
-                melt=discovered.melt,
-                native_qml=discovered.native_qml,
-            ),
+            replace(discovered, runtime_dir=isolated_runtime),
         )
         cache_target = renderer.cache.target(timeline, clip)
         output_parent = tmp_path
@@ -1118,7 +1113,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
     try:
         project_record, _, clip = _add_web_clip(repository, editor, service)
         timeline = repository.timeline.load_timeline(project_record.main_sequence_id)
-        paths = RuntimePaths.discover()
+        paths = RuntimeContext.discover().paths
         cache_target = WebRenderService(
             repository,
             paths,
@@ -1128,7 +1123,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
         output.write_bytes(original)
         project = EditorProject(
             repository,
-            settings=GlobalSettings(),
+            settings=ServiceSettings(),
             paths=paths,
         )
 
@@ -1140,7 +1135,7 @@ def test_sequence_export_task_rejects_a_conflict_before_rendering_web_media(
                 name="Web preflight",
                 format=ExportFormat.H264,
                 container="mp4",
-                video_codec="libx264",
+                encoder_policy={"mode": "software"},
                 audio_codec="aac",
                 pixel_format="yuv420p",
             ),
@@ -1418,7 +1413,7 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
         assert imported_entry.parent.name == "pages"
         assert imported_root.name.startswith("p-")
         assert (imported_root / MANIFEST_FILE_NAME).is_file()
-        BrowserWebPackageValidator().validate(imported_root, spec.manifest)
+        _browser_validator().validate(imported_root, spec.manifest)
     finally:
         repository.close()
 
@@ -1707,7 +1702,7 @@ def test_rebind_database_failure_keeps_the_old_package_readable(
             )
             == old_root
         )
-        BrowserWebPackageValidator().validate(old_root, old_spec.manifest)
+        _browser_validator().validate(old_root, old_spec.manifest)
         assert old_root.is_dir()
         assert not list((repository.project_dir / "staging" / "web").glob("s-*"))
         assert len(list((repository.project_dir / "archive" / "web").glob("f-*"))) == 1
@@ -1840,7 +1835,7 @@ def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
         assert report.archive_path == str(old_root)
         assert rebound_root != old_root
         assert old_root.is_dir() and rebound_root.is_dir()
-        BrowserWebPackageValidator().validate(rebound_root, rebound_spec.manifest)
+        _browser_validator().validate(rebound_root, rebound_spec.manifest)
 
         repository.records.restore_project_version(version.id)
         restored_asset = repository.catalog.get_asset(asset.id)
@@ -1851,7 +1846,7 @@ def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
         )
         assert restored_root == old_root
         assert restored_spec == old_spec
-        BrowserWebPackageValidator().validate(restored_root, restored_spec.manifest)
+        _browser_validator().validate(restored_root, restored_spec.manifest)
         assert rebound_root.is_dir()
     finally:
         repository.close()
@@ -1973,163 +1968,145 @@ def test_reopening_rejects_an_empty_directory_added_to_a_published_web_package(
 def test_v5_cli_chain(
     tmp_path: Path,
     monkeypatch,
+    editor_service_api: EditorServiceApi,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
 
-    created = execute_request(
-        {
-            "protocol": "mediaflow-cli",
-            "version": 2,
-            "operation": "project.create",
-            "arguments": {
-                "name": "CLI V5 Web Project",
-                "directory_name": "cli-v5-web-project",
-                "profile": ProjectProfile().model_dump(
-                    mode="json", exclude_computed_fields=True
-                ),
-            },
-        }
+    created = editor_service_api.execute(
+        "project.create",
+        request_id="create-cli-v5-web-project",
+        arguments={
+            "name": "CLI V5 Web Project",
+            "directory_name": "cli-v5-web-project",
+            "profile": ProjectProfile().model_dump(
+                mode="json", exclude_computed_fields=True
+            ),
+        },
     )
     project_path = Path(created["path"])
 
+    def request_payload(operation: str, arguments: dict | None = None) -> dict:
+        return editor_service_api.request(
+            operation,
+            project=project_path,
+            arguments=arguments,
+        )
+
     def request(operation: str, arguments: dict | None = None) -> dict:
-        return {
-            "protocol": "mediaflow-cli",
-            "version": 2,
-            "operation": operation,
-            "project": str(project_path),
-            "arguments": arguments or {},
-        }
+        return editor_service_api.execute_request(
+            request_payload(operation, arguments)
+        )["result"]
 
     sequence_id = created["project"]["main_sequence_id"]
-    imported = execute_request(request("web.import", {"source": str(STARTER)}))
+    imported = request("web.import", {"source": str(STARTER)})
     asset_id = imported["asset"]["id"]
-    track_id = execute_request(
-        request(
-            "timeline.track.add",
-            {"sequence_id": sequence_id, "kind": "video"},
-        )
+    track_id = request(
+        "timeline.track.add",
+        {"sequence_id": sequence_id, "kind": "video"},
     )["track"]["id"]
-    clip_id = execute_request(
-        request(
-            "timeline.clip.add",
-            {
-                "sequence_id": sequence_id,
-                "track_id": track_id,
-                "asset_id": asset_id,
-                "timeline_start": 0,
-                "source_in": 0,
-                "duration": 2,
-            },
-        )
+    clip_id = request(
+        "timeline.clip.add",
+        {
+            "sequence_id": sequence_id,
+            "track_id": track_id,
+            "asset_id": asset_id,
+            "timeline_start": 0,
+            "source_in": 0,
+            "duration": 2,
+        },
     )["clip"]["id"]
 
-    updated = execute_request(
-        request(
-            "web.clip.update",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "scene_id": "opening",
-                "updates": {"title": {"content": "CLI edit"}},
-                "expected_revision": 0,
-                "actor": "automation",
-            },
-        )
+    updated = request(
+        "web.clip.update",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "scene_id": "opening",
+            "updates": {"title": {"content": "CLI edit"}},
+            "expected_revision": 0,
+            "actor": "automation",
+        },
     )
     revision = updated["web_clip_state"]["revision"]
-    selected = execute_request(
-        request(
-            "web.clip.variant.select",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "variant_id": "landscape",
-                "expected_revision": revision,
-            },
-        )
+    selected = request(
+        "web.clip.variant.select",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "variant_id": "landscape",
+            "expected_revision": revision,
+        },
     )
     revision = selected["web_clip_state"]["revision"]
-    data_updated = execute_request(
-        request(
-            "web.clip.data.update",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "scene_id": "delivery",
-                "values": {"left_value": "CLI data"},
-                "expected_revision": revision,
-            },
-        )
+    data_updated = request(
+        "web.clip.data.update",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "scene_id": "delivery",
+            "values": {"left_value": "CLI data"},
+            "expected_revision": revision,
+        },
     )
     revision = data_updated["web_clip_state"]["revision"]
 
-    described = execute_request(
-        request(
-            "web.clip.edit.describe",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "scene_id": "opening",
-            },
-        )
+    described = request(
+        "web.clip.edit.describe",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "scene_id": "opening",
+        },
     )["edit_document"]
     descriptor_paths = {item["path"]: item for item in described["descriptors"]}
     assert descriptor_paths["parameters.spring_strength"]["control"] == "slider"
     assert descriptor_paths["parameters.spring_strength"]["unit"] == "ratio"
     assert descriptor_paths["scenes.opening.parameters.stagger_interval_ms"]["kind"] == "integer"
 
-    parameter_updated = execute_request(
-        request(
-            "web.clip.parameter.update",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "parameter_id": "spring_strength",
-                "value": 0.88,
-                "expected_revision": revision,
-                "actor": "automation",
-            },
-        )
+    parameter_updated = request(
+        "web.clip.parameter.update",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "parameter_id": "spring_strength",
+            "value": 0.88,
+            "expected_revision": revision,
+            "actor": "automation",
+        },
     )
     revision = parameter_updated["web_clip_state"]["revision"]
-    parameter_animated = execute_request(
-        request(
-            "web.clip.parameter.keyframe.set",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "scene_id": "opening",
-                "parameter_id": "spring_strength",
-                "time_ms": 480,
-                "value": 0.7,
-                "easing": {"kind": "ease_out"},
-                "expected_revision": revision,
-                "actor": "automation",
-            },
-        )
+    parameter_animated = request(
+        "web.clip.parameter.keyframe.set",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "scene_id": "opening",
+            "parameter_id": "spring_strength",
+            "time_ms": 480,
+            "value": 0.7,
+            "easing": {"kind": "ease_out"},
+            "expected_revision": revision,
+            "actor": "automation",
+        },
     )
     revision = parameter_animated["web_clip_state"]["revision"]
-    parameter_locked = execute_request(
-        request(
-            "web.clip.parameter.lock.update",
-            {
-                "sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "parameter_id": "spring_strength",
-                "locked": True,
-                "expected_revision": revision,
-            },
-        )
+    parameter_locked = request(
+        "web.clip.parameter.lock.update",
+        {
+            "sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "parameter_id": "spring_strength",
+            "locked": True,
+            "expected_revision": revision,
+        },
     )
     revision = parameter_locked["web_clip_state"]["revision"]
-    version = execute_request(request("project.version.create", {"name": "Before CLI render"}))
+    version = request("project.version.create", {"name": "Before CLI render"})
     assert version["version"]["name"] == "Before CLI render"
 
     completed = subprocess.run(
         [sys.executable, "-m", "mediaflow.cli", "execute", "--request", "-"],
-        input=json.dumps(request("web.clip.get", {"clip_id": clip_id})),
+        input=json.dumps(request_payload("web.clip.get", {"clip_id": clip_id})),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -2138,7 +2115,7 @@ def test_v5_cli_chain(
     )
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
-    clip_state = payload["result"]["web_clip_state"]
+    clip_state = payload["result"]["result"]["web_clip_state"]
     assert clip_state["scenes"]["opening"]["layers"]["title"]["content"] == "CLI edit"
     assert clip_state["scenes"]["delivery"]["data_snapshot"]["values"]["left_value"] == ("CLI data")
     assert clip_state["variant"]["id"] == "landscape"
@@ -2153,7 +2130,7 @@ def test_v5_cli_chain(
     render = subprocess.run(
         [sys.executable, "-m", "mediaflow.cli", "execute", "--request", "-"],
         input=json.dumps(
-            request(
+            request_payload(
                 "web.clip.render",
                 {"sequence_id": sequence_id, "clip_id": clip_id, "timeout": 60},
             )
@@ -2166,24 +2143,30 @@ def test_v5_cli_chain(
     )
     rendered = json.loads(render.stdout)
     assert rendered["ok"] is True
-    assert rendered["result"]["task"]["status"] == "completed"
-    artifact = ArtifactReference.model_validate(rendered["result"]["task"]["artifacts"][0])
+    task_receipt = rendered["result"]["result"]["task"]
+    completed_render = editor_service_api.execute(
+        "task.wait",
+        project=project_path,
+        arguments={"task_id": task_receipt["id"], "timeout": 60},
+    )["task"]
+    assert completed_render["status"] == "completed"
+    artifact = ArtifactReference.model_validate(
+        completed_render["artifacts"][0]
+    )
     assert artifact.resolve(project_path).is_file()
 
-    variants = execute_request(
-        request(
-            "web.batch.create",
-            {
-                "source_sequence_id": sequence_id,
-                "clip_id": clip_id,
-                "records": [{"person": "Ada"}, {"person": "Lin"}],
-                "bindings": {
-                    "person": "scenes.opening.layers.title.content",
-                },
-                "name_template": "CLI {person}",
-                "actor": "automation",
+    variants = request(
+        "web.batch.create",
+        {
+            "source_sequence_id": sequence_id,
+            "clip_id": clip_id,
+            "records": [{"person": "Ada"}, {"person": "Lin"}],
+            "bindings": {
+                "person": "scenes.opening.layers.title.content",
             },
-        )
+            "name_template": "CLI {person}",
+            "actor": "automation",
+        },
     )
     assert [item["name"] for item in variants["variants"]] == ["CLI Ada", "CLI Lin"]
 

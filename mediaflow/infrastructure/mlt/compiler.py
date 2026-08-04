@@ -21,6 +21,7 @@ from mediaflow.domain.storage_names import require_windows_interop_path
 from mediaflow.domain.timeline import (
     TimelineState,
 )
+from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_render_service import WebRenderCache
 
 from .audio_graph import MltAudioGraph
@@ -40,8 +41,13 @@ class MltDocument:
 class TimelineCompiler:
     """Compile the canonical project timeline into an MLT graph."""
 
-    def __init__(self, repository: TimelineCompilationDocuments):
+    def __init__(
+        self,
+        repository: TimelineCompilationDocuments,
+        paths: RuntimePaths,
+    ):
         self.repository = repository
+        self.paths = paths
         self._clip_graph = MltClipGraph()
         self._video_graph = MltVideoGraph(repository, self._clip_graph)
         self._audio_graph = MltAudioGraph(repository, self._clip_graph)
@@ -125,7 +131,10 @@ class TimelineCompiler:
                 raise ValueError(f"Timeline references unknown asset: {clip.asset_id}")
             clip.validate_source_range(asset.kind, asset.metadata.duration_frames)
             source = (
-                WebRenderCache(self.repository).target(state, clip, asset).path
+                WebRenderCache(
+                    self.repository,
+                    self.paths,
+                ).target(state, clip, asset).path
                 if asset.kind == AssetKind.WEB
                 else MltGraph.source_path(
                     self.repository,

@@ -50,13 +50,14 @@ class TaskOperations(SessionCoordinator):
         self._terminal_replays.clear()
         self._reported_delivery_errors.clear()
 
-    def consume_unconsumed_results(self) -> None:
+    def reconcile_committed_results(self) -> None:
         current = self._session.binding.current
-        if current is None or current.read_only:
+        if current is None:
             return
         candidates = dict(self._terminal_replays)
-        for task in current.list_unconsumed_terminal_tasks():
-            candidates[task.id] = task
+        for task in current.list_tasks():
+            if task.status.is_terminal:
+                candidates[task.id] = task
         for task in candidates.values():
             self._session.task_state.items[task.id] = task
             if self._apply_task_update(task):
@@ -253,11 +254,12 @@ class TaskOperations(SessionCoordinator):
         if current is None:
             return False
         try:
-            if (
-                task.status.is_terminal
-                and not current.read_only
-            ):
-                result = current.consume_task_result(task)
+            if task.status.is_terminal:
+                result = current.committed_task_result(task.id)
+                if result is None:
+                    raise RuntimeError(
+                        "服务尚未提交任务结果"
+                    )
                 self._session._apply_workflow_update(result.workflow)
             if result is not None and result.imported_asset_id:
                 asset = current.get_asset(result.imported_asset_id)

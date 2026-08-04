@@ -19,6 +19,7 @@ from mediaflow.domain.runtime_capabilities import CAPABILITY_IDS
 
 ProjectAccess = Literal["none", "create", "read", "write"]
 ExecutionMode = Literal["atomic", "task"]
+HistoryMode = Literal["reversible", "non_undoable"]
 IdempotencyPolicy = Literal["none", "optional"]
 OperationHandler = Callable[[OperationContext], Any]
 
@@ -29,6 +30,7 @@ class OperationDefinition:
     result_model: type[DomainModel]
     project_access: ProjectAccess
     execution_mode: ExecutionMode
+    history_mode: HistoryMode
     required_capabilities: tuple[str, ...]
     handler: OperationHandler
 
@@ -53,6 +55,11 @@ class OperationDefinition:
             exclude_computed_fields=True,
         )
 
+    def write_set(self, operation: str, arguments: dict[str, Any]) -> list[str]:
+        if self.project_access not in {"create", "write"}:
+            return []
+        return _operation_write_set(operation, arguments)
+
     def __post_init__(self) -> None:
         unknown = set(self.required_capabilities) - CAPABILITY_IDS
         if unknown:
@@ -66,6 +73,7 @@ def _operation(
     handler: OperationHandler,
     *,
     task_backed: bool = False,
+    reversible: bool = False,
     capabilities: tuple[str, ...] = ("project-editing",),
 ) -> OperationDefinition:
     return OperationDefinition(
@@ -73,6 +81,7 @@ def _operation(
         result_model=result_model,
         project_access=project_access,
         execution_mode="task" if task_backed else "atomic",
+        history_mode="reversible" if reversible else "non_undoable",
         required_capabilities=capabilities,
         handler=handler,
     )
@@ -100,6 +109,7 @@ def _write(
     handler: OperationHandler,
     *,
     task_backed: bool = False,
+    reversible: bool = False,
     capabilities: tuple[str, ...] = ("project-editing",),
 ) -> OperationDefinition:
     return _operation(
@@ -108,11 +118,120 @@ def _write(
         "write",
         handler,
         task_backed=task_backed,
+        reversible=reversible,
         capabilities=capabilities,
     )
 
 
 WEB = ("project-editing", "editable-web-media")
+
+
+def _path_value(value: Any, fallback: str = "main") -> str:
+    text = str(value or fallback)
+    return text.replace("~", "~0").replace("/", "~1")
+
+
+def _field_paths(root: str, values: Any) -> list[str]:
+    if isinstance(values, DomainModel):
+        values = values.model_dump(mode="python", exclude_unset=True)
+    if not isinstance(values, dict) or not values:
+        return [root]
+    return [f"{root}/{_path_value(name)}" for name in sorted(values)]
+
+
+def _operation_write_set(operation: str, arguments: dict[str, Any]) -> list[str]:
+    sequence = _path_value(arguments.get("sequence_id"))
+    if operation == "project.create":
+        return ["/project"]
+    if operation in {"project.upgrade", "project.version.restore"}:
+        return ["/project"]
+    if operation == "project.version.create":
+        return ["/project/versions"]
+    if operation == "asset.import":
+        return ["/assets"]
+    if operation == "sequence.short.create":
+        return ["/sequences"]
+    if operation == "timeline.track.add":
+        return [f"/sequences/{sequence}/tracks"]
+    if operation in {"timeline.clip.add", "timeline.clip.batch.add", "timeline.clip.copy"}:
+        return [f"/sequences/{sequence}/clips"]
+    if operation.startswith("timeline.clip."):
+        clip_ids = arguments.get("clip_ids") or [arguments.get("clip_id")]
+        roots = [
+            f"/sequences/{sequence}/clips/{_path_value(clip_id)}"
+            for clip_id in clip_ids
+            if clip_id
+        ]
+        if operation in {"timeline.clip.delete", "timeline.clip.split"}:
+            return roots
+        field = {
+            "timeline.clip.move": "placement",
+            "timeline.clip.transform": "transform",
+            "timeline.clip.audio": "audio",
+            "timeline.clip.source.replace": "asset_id",
+        }.get(operation)
+        if field:
+            return [f"{root}/{field}" for root in roots]
+        if ".effect." in operation:
+            effect_id = arguments.get("effect_id")
+            suffix = f"/{_path_value(effect_id)}" if effect_id else ""
+            return [f"{root}/effects{suffix}" for root in roots]
+        return roots or [f"/sequences/{sequence}/clips"]
+    if operation == "subtitle.segment.update":
+        root = (
+            f"/subtitles/documents/{_path_value(arguments.get('document_id'))}"
+            f"/segments/{_path_value(arguments.get('segment_id'))}"
+        )
+        fields = {
+            name: value
+            for name, value in arguments.items()
+            if name not in {"document_id", "segment_id"}
+        }
+        return _field_paths(root, fields)
+    if operation == "transcript.edit.apply":
+        return [f"/sequences/{sequence}/transcript"]
+    if operation == "audio.bus.update":
+        root = f"/audio/buses/{_path_value(arguments.get('bus_id'))}"
+        return _field_paths(root, arguments.get("changes"))
+    if operation == "audio.effect.save":
+        effect = arguments.get("effect")
+        if isinstance(effect, DomainModel):
+            effect_id = effect.model_dump().get("id")
+        elif isinstance(effect, dict):
+            effect_id = effect.get("id")
+        else:
+            effect_id = None
+        return [f"/audio/effects/{_path_value(effect_id, 'new')}"]
+    if operation == "audio.effect.remove":
+        return [f"/audio/effects/{_path_value(arguments.get('effect_id'))}"]
+    if operation.startswith("task."):
+        return [f"/tasks/{_path_value(arguments.get('task_id'), 'new')}"]
+    if operation.startswith(("preview.", "export.")):
+        return [f"/tasks/{operation.replace('.', '-')}:{sequence}"]
+    if operation == "web.import":
+        return ["/assets/web"]
+    if operation.startswith("web.clip."):
+        root = f"/web/clips/{_path_value(arguments.get('clip_id'))}"
+        web_suffix = {
+            "web.clip.variant.select": "variant",
+            "web.clip.theme.update": "theme",
+            "web.clip.data.update": "data",
+            "web.clip.data.snapshot": "data",
+            "web.clip.lock.update": "locks",
+            "web.clip.parameter.lock.update": "parameter-locks",
+        }.get(operation)
+        if web_suffix:
+            return [f"{root}/{web_suffix}"]
+        if "keyframe" in operation:
+            return [f"{root}/keyframes/{_path_value(arguments.get('path'))}"]
+        if "parameter" in operation:
+            return [f"{root}/parameters/{_path_value(arguments.get('path'))}"]
+        return [root]
+    if operation.startswith("web.batch."):
+        return ["/web/batches"]
+    if operation == "web.asset.rebind.commit":
+        return [f"/assets/{_path_value(arguments.get('asset_id'))}/web-package"]
+    return [f"/operations/{operation.replace('.', '/')}"]
 
 OPERATIONS: dict[str, OperationDefinition] = {
     "runtime.inspect": _operation(
@@ -181,7 +300,7 @@ OPERATIONS: dict[str, OperationDefinition] = {
     ),
     "asset.import": _write(
         models.AssetImportArguments,
-        models.AssetImportResult,
+        models.TaskReceiptResult,
         project.import_asset,
         task_backed=True,
         capabilities=("project-editing", "ffprobe", "ffmpeg"),
@@ -200,81 +319,85 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.TimelineTrackAddArguments,
         models.TrackResult,
         timeline.add_track,
+        reversible=True,
     ),
     "timeline.clip.add": _write(
         models.TimelineClipAddArguments,
         models.ClipResult,
         timeline.add_clip,
+        reversible=True,
     ),
     "timeline.clip.batch.add": _write(
         models.TimelineClipBatchAddArguments,
         models.ClipsResult,
         timeline.add_clips,
+        reversible=True,
     ),
     "timeline.clip.move": _write(
         models.TimelineClipMoveArguments,
         models.ClipResult,
         timeline.move_clip,
+        reversible=True,
     ),
     "timeline.clip.copy": _write(
         models.TimelineClipMoveArguments,
         models.ClipResult,
         timeline.copy_clip,
+        reversible=True,
     ),
     "timeline.clip.split": _write(
         models.TimelineClipSplitArguments,
         models.ClipsResult,
         timeline.split_clip,
+        reversible=True,
     ),
     "timeline.clip.delete": _write(
         models.TimelineClipDeleteArguments,
         models.TimelineResult,
         timeline.delete_clips,
+        reversible=True,
     ),
     "timeline.clip.transform": _write(
         models.TimelineClipTransformArguments,
         models.ClipResult,
         timeline.transform_clip,
+        reversible=True,
     ),
     "timeline.clip.audio": _write(
         models.TimelineClipAudioArguments,
         models.ClipResult,
         timeline.update_clip_audio,
+        reversible=True,
     ),
     "timeline.clip.source.replace": _write(
         models.TimelineClipReplaceSourceArguments,
         models.ClipResult,
         timeline.replace_clip_source,
+        reversible=True,
     ),
     "timeline.clip.effect.add": _write(
         models.TimelineClipVisualEffectAddArguments,
         models.ClipResult,
         timeline.add_clip_visual_effect,
+        reversible=True,
     ),
     "timeline.clip.effect.update": _write(
         models.TimelineClipVisualEffectUpdateArguments,
         models.ClipResult,
         timeline.update_clip_visual_effect,
+        reversible=True,
     ),
     "timeline.clip.effect.move": _write(
         models.TimelineClipVisualEffectMoveArguments,
         models.ClipResult,
         timeline.move_clip_visual_effect,
+        reversible=True,
     ),
     "timeline.clip.effect.remove": _write(
         models.TimelineClipVisualEffectRemoveArguments,
         models.ClipResult,
         timeline.remove_clip_visual_effect,
-    ),
-    "timeline.undo": _write(
-        models.SequenceArguments,
-        models.TimelineResult,
-        timeline.undo,
-    ),
-    "timeline.redo": _write(
-        models.SequenceArguments,
-        models.TimelineResult,
-        timeline.redo,
+        reversible=True,
     ),
     "subtitle.list": _read(
         models.SequenceArguments,
@@ -285,6 +408,7 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.SubtitleSegmentUpdateArguments,
         models.SubtitleSegmentResult,
         language_audio.update_subtitle_segment,
+        reversible=True,
     ),
     "transcript.get": _read(
         models.TranscriptGetArguments,
@@ -301,6 +425,7 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.TranscriptEditApplyArguments,
         models.TranscriptEditResultDocument,
         language_audio.apply_transcript_edit,
+        reversible=True,
         capabilities=("project-editing", "transcript-edit-plans"),
     ),
     "audio.inspect": _read(
@@ -330,14 +455,14 @@ OPERATIONS: dict[str, OperationDefinition] = {
     ),
     "export.sequence": _write(
         models.ExportSequenceArguments,
-        models.TaskCompletionResult,
+        models.TaskReceiptResult,
         timeline.export_sequence,
         task_backed=True,
         capabilities=("project-editing", "mlt", "ffmpeg", "ffprobe"),
     ),
     "export.sequence.build": _write(
         models.BuildSequenceArguments,
-        models.TaskCompletionResult,
+        models.TaskReceiptResult,
         timeline.build_sequence,
         task_backed=True,
         capabilities=("project-editing", "mlt", "ffmpeg", "ffprobe"),
@@ -359,20 +484,30 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.TaskListResult,
         tasks.list_tasks,
     ),
-    "task.status": _read(
+    "task.get": _read(
         models.TaskStatusArguments,
         models.TaskStatusResult,
         tasks.get_task,
     ),
+    "task.cancel": _write(
+        models.TaskStatusArguments,
+        models.TaskStatusResult,
+        tasks.cancel_task,
+    ),
+    "task.wait": _read(
+        models.TaskWaitArguments,
+        models.TaskStatusResult,
+        tasks.wait_for_task,
+    ),
     "task.start": _write(
         models.TaskStartArguments,
-        models.TaskCompletionResult,
+        models.TaskReceiptResult,
         tasks.start_task,
         task_backed=True,
     ),
     "task.resume": _write(
         models.TaskResumeArguments,
-        models.TaskCompletionResult,
+        models.TaskReceiptResult,
         tasks.resume_task,
         task_backed=True,
     ),
@@ -480,14 +615,14 @@ OPERATIONS: dict[str, OperationDefinition] = {
     ),
     "web.clip.render": _write(
         models.WebClipRenderArguments,
-        models.TaskCompletionResult,
+        models.TaskReceiptResult,
         web.render_web_clip,
         task_backed=True,
         capabilities=(*WEB, "chromium", "ffmpeg", "ffprobe"),
     ),
     "web.clip.export": _write(
         models.WebClipExportArguments,
-        models.TaskCompletionResult,
+        models.TaskReceiptResult,
         web.export_web_clip,
         task_backed=True,
         capabilities=(

@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject
 
+from mediaflow.service.client import EditorServiceRpcError
+
 if TYPE_CHECKING:
     from mediaflow.desktop.controllers.project_controller import ProjectSession
 
@@ -21,6 +23,9 @@ def report_ui_errors(
             try:
                 return action(controller, *args, **kwargs)
             except Exception as error:
+                if isinstance(error, EditorServiceRpcError) and error.code == -32009:
+                    controller._session._present_collaboration_conflict(error)
+                    return None
                 controller._session.events.errorOccurred.emit(message.format(error=error))
                 return None
 

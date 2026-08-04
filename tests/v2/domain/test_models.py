@@ -243,7 +243,7 @@ def test_export_commands_reject_conflicting_or_audio_highlight_presets() -> None
         name="FLAC",
         format=ExportFormat.AUDIO,
         container="flac",
-        video_codec=None,
+        encoder_policy=None,
         audio_codec="flac",
         pixel_format=None,
     )
@@ -275,7 +275,7 @@ def test_export_commands_reject_conflicting_or_audio_highlight_presets() -> None
         name="H.264",
         format=ExportFormat.H264,
         container="MP4",
-        video_codec="libx264",
+        encoder_policy={"mode": "software"},
         audio_codec="aac",
         pixel_format="yuv420p",
     )
@@ -344,7 +344,7 @@ def test_export_preset_rejects_unusable_values(
         "name": "H.264",
         "format": ExportFormat.H264,
         "container": "mp4",
-        "video_codec": "libx264",
+        "encoder_policy": {"mode": "software"},
         "audio_codec": "aac",
         "pixel_format": "yuv420p",
     }
@@ -357,13 +357,13 @@ def test_export_preset_rejects_unusable_values(
 def test_audio_export_preset_rejects_video_configuration() -> None:
     with pytest.raises(
         ValidationError,
-        match="Audio-only export cannot use a video codec",
+        match="Audio-only export cannot use a video encoder policy",
     ):
         ExportPreset(
             name="Invalid audio",
             format=ExportFormat.AUDIO,
             container="flac",
-            video_codec="libx265",
+            encoder_policy={"mode": "software"},
             audio_codec="flac",
             pixel_format="yuv420p",
         )
@@ -374,7 +374,7 @@ def test_export_preset_normalizes_integral_qvariant_numbers() -> None:
         name="QVariant H.264",
         format=ExportFormat.H264,
         container="mp4",
-        video_codec="libx264",
+        encoder_policy={"mode": "software"},
         audio_codec="aac",
         pixel_format="yuv420p",
         advanced={

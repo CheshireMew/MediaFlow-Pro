@@ -10,16 +10,14 @@ from mediaflow.application.subtitle_publication import SubtitlePublicationServic
 from mediaflow.desktop.controllers.controller_hub import EditorControllers
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 
 def test_asset_search_uses_real_linked_transcript_and_multilingual_concepts(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "A001.mp4"
     generate_real_media(source, paths, width=320, height=180)
     subtitle = tmp_path / "A001.zh.srt"

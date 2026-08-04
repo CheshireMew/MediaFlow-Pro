@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from functools import wraps
 
-from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
+from mediaflow.application.edit_history import (
+    ProjectEditAction,
+    ProjectEditCommand,
+    ProjectEditHistory,
+)
 from mediaflow.application.ports import SubtitleEditingDocuments
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
@@ -26,12 +30,20 @@ def recorded_subtitle_edit(label: str):
                 self.history.push(
                     ProjectEditCommand(
                         label=label,
-                        undo_action=lambda: self._restore_document_state(
-                            document_id, list(before), list(before_words)
-                        ),
-                        redo_action=lambda: self._restore_document_state(
-                            document_id, list(after), list(after_words)
-                        ),
+                        undo_actions=[
+                            self._document_history_action(
+                                document_id,
+                                list(before),
+                                list(before_words),
+                            )
+                        ],
+                        redo_actions=[
+                            self._document_history_action(
+                                document_id,
+                                list(after),
+                                list(after_words),
+                            )
+                        ],
                     )
                 )
             return result
@@ -53,6 +65,15 @@ class SubtitleEditingService:
         self.repository = repository
         self.publication = publication
         self.history = history
+        if self.history is not None:
+            self.history.register_handler(
+                "subtitle.document.restore",
+                self._apply_document_history_action,
+            )
+            self.history.register_handler(
+                "subtitle.placement.restore",
+                self._apply_placement_history_action,
+            )
 
     def update_placement_range(
         self,
@@ -72,18 +93,8 @@ class SubtitleEditingService:
             self.history.push(
                 ProjectEditCommand(
                     label="调整序列字幕时间",
-                    undo_action=lambda: self._restore_placement_range(
-                        before.id,
-                        before.start_frame,
-                        before.end_frame,
-                        timing_overridden=before.timing_overridden,
-                    ),
-                    redo_action=lambda: self._restore_placement_range(
-                        after.id,
-                        after.start_frame,
-                        after.end_frame,
-                        timing_overridden=after.timing_overridden,
-                    ),
+                    undo_actions=[self._placement_history_action(before)],
+                    redo_actions=[self._placement_history_action(after)],
                 )
             )
         return after
@@ -95,18 +106,8 @@ class SubtitleEditingService:
             self.history.push(
                 ProjectEditCommand(
                     label="恢复序列字幕时间",
-                    undo_action=lambda: self._restore_placement_range(
-                        before.id,
-                        before.start_frame,
-                        before.end_frame,
-                        timing_overridden=before.timing_overridden,
-                    ),
-                    redo_action=lambda: self._restore_placement_range(
-                        after.id,
-                        after.start_frame,
-                        after.end_frame,
-                        timing_overridden=after.timing_overridden,
-                    ),
+                    undo_actions=[self._placement_history_action(before)],
+                    redo_actions=[self._placement_history_action(after)],
                 )
             )
         return after
@@ -532,6 +533,61 @@ class SubtitleEditingService:
             )
 
         self.publication.commit_document_change(document_id, restore)
+
+    @staticmethod
+    def _document_history_action(
+        document_id: str,
+        segments: list[SubtitleSegment],
+        words: list[SubtitleWord],
+    ) -> ProjectEditAction:
+        return ProjectEditAction(
+            kind="subtitle.document.restore",
+            payload={
+                "document_id": document_id,
+                "segments": [
+                    item.model_dump(mode="json", exclude_computed_fields=True)
+                    for item in segments
+                ],
+                "words": [
+                    item.model_dump(mode="json", exclude_computed_fields=True)
+                    for item in words
+                ],
+            },
+        )
+
+    @staticmethod
+    def _placement_history_action(value: SubtitlePlacement) -> ProjectEditAction:
+        return ProjectEditAction(
+            kind="subtitle.placement.restore",
+            payload={
+                "placement": value.model_dump(
+                    mode="json", exclude_computed_fields=True
+                )
+            },
+        )
+
+    def _apply_document_history_action(self, action: ProjectEditAction) -> None:
+        payload = action.payload
+        self._restore_document_state(
+            str(payload.get("document_id") or ""),
+            [
+                SubtitleSegment.model_validate(item)
+                for item in payload.get("segments") or []
+            ],
+            [
+                SubtitleWord.model_validate(item)
+                for item in payload.get("words") or []
+            ],
+        )
+
+    def _apply_placement_history_action(self, action: ProjectEditAction) -> None:
+        value = SubtitlePlacement.model_validate(action.payload.get("placement"))
+        self._restore_placement_range(
+            value.id,
+            value.start_frame,
+            value.end_frame,
+            timing_overridden=value.timing_overridden,
+        )
 
     def _words_after_split(
         self,

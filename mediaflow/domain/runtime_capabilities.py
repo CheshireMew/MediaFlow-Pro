@@ -36,7 +36,7 @@ CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
         description=f"Create, inspect, version, and edit local {PRODUCT_NAME} projects.",
     ),
     CapabilityDefinition(
-        id="cooperative-desktop-updates",
+        id="live-project-collaboration",
         availability="built-in",
         description="Coordinate command-line writes with an open desktop project.",
     ),

@@ -34,6 +34,31 @@ class WorkspaceController(ControllerFacet):
     previewRangeRequested = Signal(int, int)
     errorOccurred = Signal(str)
     errorReferenceChanged = Signal()
+    collaborationConflictChanged = Signal()
+    remoteSeekRequested = Signal(int)
+    remotePlayRequested = Signal(int)
+    remotePauseRequested = Signal()
+    remoteStopRequested = Signal()
+
+    def __init__(self, session):
+        super().__init__(session)
+        session.events.workspaceCommandReceived.connect(self._apply_workspace_command)
+
+    @Slot(object)
+    def _apply_workspace_command(self, event: object) -> None:
+        if not isinstance(event, dict):
+            return
+        command = str(event.get("command") or "")
+        arguments = event.get("arguments")
+        values = arguments if isinstance(arguments, dict) else {}
+        if command == "playhead.seek":
+            self.remoteSeekRequested.emit(int(values["frame"]))
+        elif command == "playback.play":
+            self.remotePlayRequested.emit(int(values["frame"]))
+        elif command == "playback.pause":
+            self.remotePauseRequested.emit()
+        elif command == "playback.stop":
+            self.remoteStopRequested.emit()
 
     @Property("QVariantList", constant=True)
     def workspaceModes(self) -> list[dict[str, str]]:
@@ -80,7 +105,7 @@ class WorkspaceController(ControllerFacet):
 
     @Property(QUrl, notify=settingsChanged)
     def defaultProjectDirectoryUrl(self) -> QUrl:
-        directory = self._session.settings.ui.default_project_directory
+        directory = self._session.service_settings.default_project_directory
         return QUrl.fromLocalFile(directory)
 
     @Property(str, notify=projectStateChanged)
@@ -278,6 +303,21 @@ class WorkspaceController(ControllerFacet):
     def lastErrorId(self) -> str:
         return self._session.presentation.last_error_id
 
+    @Property("QVariantMap", notify=collaborationConflictChanged)
+    def collaborationConflict(self) -> dict:
+        return self._session.presentation.collaboration_conflict
+
+    @Property(bool, notify=collaborationConflictChanged)
+    def collaborationConflictPending(self) -> bool:
+        return bool(self._session.presentation.collaboration_conflict)
+
+    @Slot(str)
+    @report_ui_errors
+    def resolveCollaborationConflict(self, resolution: str) -> None:
+        self._session.lifecycle.resolve_collaboration_conflict(resolution)
+        self._session.presentation.collaboration_conflict = {}
+        self._session.events.collaborationConflictChanged.emit()
+
     @Property(str, notify=previewGraphChanged)
     def previewGraphPath(self) -> str:
         return self._session.presentation.preview_graph_path
@@ -285,6 +325,18 @@ class WorkspaceController(ControllerFacet):
     @Property(str, constant=True)
     def mltRuntimeRoot(self) -> str:
         return self._session._api.mlt_runtime_root
+
+    @Property(str, constant=True)
+    def mltLibraryPath(self) -> str:
+        return self._session._api.mlt_library_path
+
+    @Property(str, constant=True)
+    def mltRepositoryPath(self) -> str:
+        return self._session._api.mlt_preview_repository_path
+
+    @Property(str, constant=True)
+    def mltDataPath(self) -> str:
+        return self._session._api.mlt_data_path
 
     @Property(bool, notify=profileConfirmationChanged)
     def profileConfirmationPending(self) -> bool:
@@ -296,7 +348,7 @@ class WorkspaceController(ControllerFacet):
 
     @Property(QUrl, notify=settingsChanged)
     def defaultImportDirectoryUrl(self) -> QUrl:
-        path = self._session.settings.ui.default_import_directory
+        path = self._session.desktop_settings.ui.default_import_directory
         return QUrl.fromLocalFile(path) if path and Path(path).is_dir() else QUrl()
 
     @Property(bool, notify=relinkConfirmationChanged)
@@ -339,7 +391,7 @@ class WorkspaceController(ControllerFacet):
         self._require_project_open_available()
         parent = self._session._local_path(parent_url)
         self._session.lifecycle.create_and_open(parent, name)
-        self._session._remember_default_project_directory(parent)
+        self._session.settings_persistence.remember_default_project_directory(parent)
         self._session._set_status("项目已创建")
 
     @Slot(str)
@@ -347,7 +399,7 @@ class WorkspaceController(ControllerFacet):
     def createProjectInDefaultDirectory(self, name: str) -> None:
         self._require_project_open_available()
         self._session.lifecycle.create_and_open(
-            Path(self._session.settings.ui.default_project_directory),
+            Path(self._session.service_settings.default_project_directory),
             name,
             ensure_unique=True,
         )
@@ -358,7 +410,7 @@ class WorkspaceController(ControllerFacet):
     def createSampleProject(self) -> None:
         self._require_project_open_available()
         self._session.lifecycle.create_sample_and_open(
-            Path(self._session.settings.ui.default_project_directory)
+            Path(self._session.service_settings.default_project_directory)
         )
         self._session._set_status("示例项目已创建；跟随引导认识主要区域")
         self.sampleTourRequested.emit()
@@ -522,7 +574,8 @@ class WorkspaceController(ControllerFacet):
     @Slot(int)
     def reportPreviewDroppedFrames(self, dropped_frames: int) -> None:
         if (
-            dropped_frames < self._session.settings.preview.dropped_frame_proxy_threshold
+            dropped_frames
+            < self._session.service_settings.preview.dropped_frame_proxy_threshold
             or not self._session.binding.current
             or not self._session.binding.timeline
             or self._session.binding.current.read_only
@@ -587,7 +640,12 @@ class WorkspaceController(ControllerFacet):
         self._session.runtime_state.cancel.set()
         if self._session.runtime_state.thread and self._session.runtime_state.thread.is_alive():
             self._session.runtime_state.thread.join(timeout=5)
-        self._session.lifecycle.close(close_in_background=False)
+        # Project-scoped readers can still be compiling previews, thumbnails,
+        # waveforms, or loudness identities here. Drain them before releasing
+        # the desktop project session; otherwise the service may clean a web
+        # render cache while a reader is fingerprinting that same file.
+        self._session.background.shutdown_project_requests()
+        self._session.lifecycle.shutdown()
         close_future = self._session.requests.project_close_future
         if close_future is not None:
             try:
@@ -628,4 +686,5 @@ class WorkspaceController(ControllerFacet):
                 self._session.requests.closing_project = None
                 self._session.requests.closing_project_error = ""
                 self._session.requests.project_close_id += 1
-        self._session.background.shutdown()
+        self._session._api.close_client_transport()
+        self._session.background.shutdown_application_requests()

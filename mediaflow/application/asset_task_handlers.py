@@ -20,7 +20,7 @@ from mediaflow.application.task_service import TaskCompletion, TaskContext
 from mediaflow.application.timeline_clock import asset_in_timeline_clock
 from mediaflow.domain.enums import AssetKind, AssetOrigin
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import (
     DownloadMediaCommand,
     ExportWebClipCommand,
@@ -91,21 +91,34 @@ class AssetTaskHandlers(ProjectTaskHandler):
         context.report(OperationProgress.indeterminate("import_probing"))
         document_id: str | None = None
         if command.purpose == "subtitle":
-            document = self.subtitle_acquisition.import_subtitle_file(
+            prepared_subtitle = self.subtitle_acquisition.prepare_subtitle_import(
                 command.source_path,
                 self.assets,
                 language=command.language,
                 media_asset_id=command.media_asset_id,
                 check_cancelled=context.cancellation.raise_if_requested,
             )
-            asset = self.documents.catalog.get_asset(document.asset_id)
+            document = prepared_subtitle.document
+            asset = prepared_subtitle.subtitle.asset
             document_id = document.id
+            def commit_subtitle() -> None:
+                self.subtitle_acquisition.commit_subtitle_import(
+                    prepared_subtitle,
+                    self.assets,
+                )
+
+            context.defer_project_change(commit_subtitle)
         else:
-            asset = self.assets.import_external(
+            prepared_asset = self.assets.prepare_external(
                 command.source_path,
                 expected_kind=(AssetKind.IMAGE if command.purpose == "watermark" else None),
-                check_cancelled=context.cancellation.raise_if_requested,
             )
+            context.cancellation.raise_if_requested()
+            asset = prepared_asset.asset
+            def commit_asset() -> None:
+                self.assets.commit_prepared(prepared_asset)
+
+            context.defer_project_change(commit_asset)
         return self.completion(
             asset.path,
             outcome=ImportedAssetTaskOutcome(
@@ -121,15 +134,20 @@ class AssetTaskHandlers(ProjectTaskHandler):
         sequence_id = context.task.sequence_id or self.documents.catalog.get_project().main_sequence_id
         sequence = self.documents.catalog.get_sequence(sequence_id)
         asset = asset_in_timeline_clock(self.documents.catalog, asset, sequence)
-        updated = self.runtime.generate_proxy(
+        prepared = self.runtime.prepare_proxy(
             asset,
             sequence.profile,
             progress=context.report,
             check_cancelled=context.cancellation.raise_if_requested,
         )
+
+        def commit_proxy() -> None:
+            self.runtime.commit_proxy(prepared)
+
+        context.defer_project_change(commit_proxy)
         return self.completion(
-            updated.proxy_path,
-            updated.sdr_preview_proxy_path,
+            prepared.proxy_path,
+            prepared.sdr_preview_proxy_path,
         )
 
     def waveform(self, context: TaskContext) -> TaskCompletion:
@@ -138,13 +156,22 @@ class AssetTaskHandlers(ProjectTaskHandler):
         sequence_id = context.task.sequence_id or self.documents.catalog.get_project().main_sequence_id
         sequence = self.documents.catalog.get_sequence(sequence_id)
         asset = asset_in_timeline_clock(self.documents.catalog, asset, sequence)
-        updated = self.runtime.generate_waveform(
+        waveform_path = self.runtime.generate_waveform(
             asset,
             duration_seconds=asset.metadata.duration_frames / sequence.profile.fps,
             progress=context.report,
             check_cancelled=context.cancellation.raise_if_requested,
         )
-        return self.completion(updated.waveform_path)
+
+        def commit_waveform() -> None:
+            self.documents.catalog.set_asset_waveform_path(
+                asset.id,
+                expected_fingerprint=asset.fingerprint,
+                waveform_path=waveform_path,
+            )
+
+        context.defer_project_change(commit_waveform)
+        return self.completion(waveform_path)
 
 
 class DownloadTaskHandler(ProjectTaskHandler):
@@ -154,7 +181,7 @@ class DownloadTaskHandler(ProjectTaskHandler):
         assets: AssetService,
         runtime: DownloadTaskRuntime,
         subtitle_acquisition: SubtitleAcquisitionService,
-        settings: Callable[[], GlobalSettings],
+        settings: Callable[[], ServiceSettings],
     ):
         super().__init__(documents.project_dir)
         self.documents = documents
@@ -250,10 +277,31 @@ class DownloadTaskHandler(ProjectTaskHandler):
                 committed[path] = self.assets.commit_prepared(plan)
             return [committed[path] for path in resolved_paths]
 
-        assets, _outputs = (
-            self.subtitle_acquisition.publication.commit_prepared_documents(
-                commit_assets,
-                publications,
-            )
+        def commit_downloads() -> None:
+            try:
+                self.subtitle_acquisition.publication.commit_prepared_documents(
+                    commit_assets,
+                    publications,
+                )
+            except BaseException as error:
+                try:
+                    archived = self.runtime.archive_unrecorded_downloads(
+                        resolved_paths
+                    )
+                except BaseException as archive_error:
+                    error.add_note(
+                        "下载文件登记失败后无法完整撤回已发布文件："
+                        f"{archive_error}"
+                    )
+                else:
+                    if archived:
+                        error.add_note(
+                            "未登记的下载文件已移至失败归档："
+                            + ", ".join(str(path) for path in archived)
+                        )
+                raise
+
+        context.defer_project_change(commit_downloads)
+        return self.completion(
+            *(asset.path for asset in candidate_assets)
         )
-        return self.completion(*(asset.path for asset in assets))

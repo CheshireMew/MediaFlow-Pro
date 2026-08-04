@@ -46,9 +46,9 @@ class LoudnessAnalysisService:
     RESULT_SCHEMA_VERSION = 1
     LOCK_WAIT_TIMEOUT_SECONDS = 10_800
 
-    def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths | None = None):
+    def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths):
         self.compiler = compiler
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def analyze(
@@ -141,11 +141,8 @@ class LoudnessAnalysisService:
         graph_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(graph_path, document.xml)
-        environment = os.environ.copy()
-        environment.pop("MLT_REPOSITORY_DENY", None)
-        mlt_root = melt.parent
-        environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
-        environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
+        mlt_root = self.paths.require_mlt_root()
+        environment = self.paths.mlt_environment()
         total_frames = max(1, document.duration_frames)
         melt_observer = MeltProgressObserver(
             total_frames,

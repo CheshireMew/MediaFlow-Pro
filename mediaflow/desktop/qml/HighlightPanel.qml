@@ -365,6 +365,8 @@ AppScrollView {
             }
             AppTextField {
                 id: editTitle
+                collaborationPath: "/highlights/"
+                    + highlightController.selectedHighlightId + "/title"
                 Layout.fillWidth: true
                 text: highlightController.selectedHighlightData.title || ""
             }

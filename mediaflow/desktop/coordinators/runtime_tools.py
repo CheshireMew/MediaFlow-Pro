@@ -97,14 +97,14 @@ class RuntimeToolOperations(SessionCoordinator):
         operation = str(event.get("operation") or "")
         if event_type == "completed" and operation == "install_components":
             installed = dict(event.get("result") or {})
-            candidate = self._session.settings.model_copy(deep=True)
+            candidate = self._session.service_settings.model_copy(deep=True)
             if xxl_root := str(installed.get("faster-whisper-xxl") or ""):
                 candidate.asr.cli_path = str(
                     Path(xxl_root) / "faster-whisper-xxl.exe"
                 )
             if gpt_root := str(installed.get("gpt-sovits-v2pro") or ""):
                 candidate.speech_synthesis.gpt_sovits_root = gpt_root
-            self._session._commit_settings(candidate)
+            self._session.settings_persistence.commit(candidate)
         if event_type == "completed" and operation == "inspect":
             self._session.runtime_state.status = {
                 **self._session.runtime_state.status,

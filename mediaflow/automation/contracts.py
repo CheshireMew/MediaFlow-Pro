@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.runtime_capabilities import (
@@ -11,17 +12,21 @@ from mediaflow.domain.runtime_capabilities import (
     CapabilityDefinition,
 )
 
-AUTOMATION_PROTOCOL: Literal["mediaflow-cli"] = "mediaflow-cli"
-AUTOMATION_VERSION: Literal[2] = 2
+AUTOMATION_PROTOCOL: Literal["mediaflow-editor"] = "mediaflow-editor"
+AUTOMATION_VERSION: Literal[3] = 3
 
 
 class AutomationRequest(DomainModel):
-    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
-    version: Literal[2] = AUTOMATION_VERSION
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[3] = AUTOMATION_VERSION
     operation: str
     project: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = None
+    base_revision: int | None = Field(default=None, ge=0)
+    actor: ActorIdentity
+    client_id: str = Field(min_length=1)
+    undo_group_id: str | None = None
 
 
 class AutomationError(DomainModel):
@@ -31,31 +36,33 @@ class AutomationError(DomainModel):
 
 
 class AutomationSuccessResponse(DomainModel):
-    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
-    version: Literal[2] = AUTOMATION_VERSION
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[3] = AUTOMATION_VERSION
     request_id: str | None = None
     ok: Literal[True] = True
     result: dict[str, Any]
 
 
 class AutomationFailureResponse(DomainModel):
-    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
-    version: Literal[2] = AUTOMATION_VERSION
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[3] = AUTOMATION_VERSION
     request_id: str | None = None
     ok: Literal[False] = False
     error: AutomationError
 
 
 class AutomationTransport(DomainModel):
-    lifecycle: Literal["short-process"] = "short-process"
-    input: str = "single JSON object from a file or stdin"
-    output: str = "single JSON object on stdout"
+    lifecycle: Literal["resident-editor-service"] = "resident-editor-service"
+    command: str = "JSON-RPC 2.0 over authenticated loopback HTTP"
+    events: str = "authenticated loopback WebSocket with durable cursor replay"
+    cli: str = "thin start-on-demand Editor Service client"
 
 
 class AutomationOperationContract(DomainModel):
     name: str
     project_access: Literal["none", "create", "read", "write"]
     execution_mode: Literal["atomic", "task"]
+    history_mode: Literal["reversible", "non_undoable"]
     idempotency: Literal["none", "optional"]
     required_capabilities: list[str]
     arguments_schema: dict[str, Any]
@@ -64,8 +71,8 @@ class AutomationOperationContract(DomainModel):
 
 class AutomationContract(DomainModel):
     product: str = PRODUCT_NAME
-    protocol: Literal["mediaflow-cli"] = AUTOMATION_PROTOCOL
-    version: Literal[2] = AUTOMATION_VERSION
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[3] = AUTOMATION_VERSION
     default_project_root: str
     transport: AutomationTransport = Field(default_factory=AutomationTransport)
     request_schema: dict[str, Any]
@@ -124,6 +131,7 @@ def describe_contract() -> dict[str, Any]:
                 name=name,
                 project_access=definition.project_access,
                 execution_mode=definition.execution_mode,
+                history_mode=definition.history_mode,
                 idempotency=definition.idempotency,
                 required_capabilities=list(definition.required_capabilities),
                 arguments_schema=inline_model_schema(

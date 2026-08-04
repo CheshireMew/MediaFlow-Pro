@@ -227,7 +227,7 @@ class TaskController(ControllerFacet):
             profile=profile,
             ensure_unique=True,
         )
-        self._session._remember_default_project_directory(project_parent)
+        self._session.settings_persistence.remember_default_project_directory(project_parent)
         self._remember_download_preferences(resolution, download_subtitles, codec)
         self._session._start_download_workflow(requests)
         self._clear_download_plan()
@@ -261,22 +261,22 @@ class TaskController(ControllerFacet):
             DownloadRequest(
                 entry=available_entries[index],
                 collection_title=(plan.collection_title if plan.kind == "collection" else ""),
-                resolution=resolution or self._session.settings.download.resolution,
+                resolution=resolution or self._session.service_settings.download.resolution,
                 codec=codec,
                 download_subtitles=download_subtitles,
-                subtitle_languages=self._session.settings.download.subtitle_languages,
+                subtitle_languages=self._session.service_settings.download.subtitle_languages,
                 filename_prefix=filename.strip(),
-                output_directory=self._session.settings.download.output_directory,
+                output_directory=self._session.service_settings.download.output_directory,
             )
             for index in selected_entry_indices
         ]
 
     def _remember_download_url(self, url: str) -> None:
-        if self._session.settings.download.last_url == url:
+        if self._session.service_settings.download.last_url == url:
             return
-        candidate = self._session.settings.model_copy(deep=True)
+        candidate = self._session.service_settings.model_copy(deep=True)
         candidate.download.last_url = url
-        self._session._commit_settings(candidate)
+        self._session.settings_persistence.commit(candidate)
 
     def _remember_download_preferences(
         self,
@@ -288,16 +288,17 @@ class TaskController(ControllerFacet):
         if codec not in {"best", "avc"}:
             raise ValueError("下载编码设置无效")
         if (
-            self._session.settings.download.resolution == selected_resolution
-            and self._session.settings.download.download_subtitles == download_subtitles
-            and self._session.settings.download.codec == codec
+            self._session.service_settings.download.resolution == selected_resolution
+            and self._session.service_settings.download.download_subtitles
+            == download_subtitles
+            and self._session.service_settings.download.codec == codec
         ):
             return
-        candidate = self._session.settings.model_copy(deep=True)
+        candidate = self._session.service_settings.model_copy(deep=True)
         candidate.download.resolution = selected_resolution
         candidate.download.download_subtitles = download_subtitles
         candidate.download.codec = codec
-        self._session._commit_settings(candidate)
+        self._session.settings_persistence.commit(candidate)
 
     @staticmethod
     def _download_project_profile(plan, resolution: str) -> ProjectProfile | None:

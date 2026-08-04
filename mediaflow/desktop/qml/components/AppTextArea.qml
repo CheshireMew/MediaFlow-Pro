@@ -3,6 +3,7 @@ import QtQuick.Controls
 import ".."
 
 TextArea {
+    property string collaborationPath: ""
     id: control
     property bool error: false
     hoverEnabled: true

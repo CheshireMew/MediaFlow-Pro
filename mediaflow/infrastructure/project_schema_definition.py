@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 38
+PROJECT_SCHEMA_VERSION = 43
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -280,6 +280,36 @@ CREATE TABLE IF NOT EXISTS automation_request (
     state TEXT NOT NULL DEFAULT 'completed',
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS project_event (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    base_revision INTEGER NOT NULL,
+    project_revision INTEGER NOT NULL,
+    operation TEXT NOT NULL,
+    actor_json TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    undo_group_id TEXT NOT NULL,
+    write_set_json TEXT NOT NULL,
+    changes_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    inverse_command_json TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE(project_id, project_revision)
+);
+CREATE TABLE IF NOT EXISTS undo_group (
+    id TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    source_revision INTEGER NOT NULL,
+    state_revision INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    actor_json TEXT NOT NULL,
+    write_set_json TEXT NOT NULL,
+    command_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('applied', 'undone', 'discarded')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(project_id, id)
+);
 CREATE TABLE IF NOT EXISTS task (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
@@ -342,6 +372,10 @@ CREATE INDEX IF NOT EXISTS idx_clip_track_time ON clip(track_id, timeline_start)
 CREATE INDEX IF NOT EXISTS idx_marker_sequence_time ON timeline_marker(sequence_id, frame);
 CREATE INDEX IF NOT EXISTS idx_range_sequence_time ON timeline_range(sequence_id, start_frame);
 CREATE INDEX IF NOT EXISTS idx_task_project_time ON task(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_project_event_project_cursor
+ON project_event(project_id, cursor);
+CREATE INDEX IF NOT EXISTS idx_undo_group_project_state_revision
+ON undo_group(project_id, state, state_revision);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_project_idempotency
 ON task(project_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_task_event_project_cursor

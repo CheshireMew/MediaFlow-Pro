@@ -142,8 +142,8 @@ class AudioController(ControllerFacet):
         parameters: dict = {}
         if effect_kind == AudioEffectKind.LOUDNESS_NORMALIZE:
             parameters = {
-                "target_lufs": self._session.settings.audio.loudness_target_lufs,
-                "true_peak_db": self._session.settings.audio.true_peak_db,
+                "target_lufs": self._session.service_settings.audio.loudness_target_lufs,
+                "true_peak_db": self._session.service_settings.audio.true_peak_db,
             }
         elif effect_kind == AudioEffectKind.DUCKING:
             parameters = {

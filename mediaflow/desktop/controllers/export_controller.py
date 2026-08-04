@@ -17,7 +17,11 @@ from mediaflow.domain.enums import (
     TrackKind,
     WorkflowStage,
 )
-from mediaflow.domain.exports import SubtitleStyle, WatermarkOverlay
+from mediaflow.domain.exports import (
+    SubtitleStyle,
+    VideoEncoderPolicy,
+    WatermarkOverlay,
+)
 from mediaflow.domain.storage_names import (
     OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
     export_quality_directory,
@@ -44,10 +48,14 @@ class ExportController(ControllerFacet):
         return self._session._api.subtitle_font_options()
 
     @Property("QVariantList", notify=settingsChanged)
-    def videoEncoderOptions(self) -> list[dict]:
+    def encoderPolicyOptions(self) -> list[dict]:
         return [
-            {**item, "label": encoder_label(item["labelKey"])}
-            for item in self._session.presentation.video_encoder_options
+            {
+                **item,
+                "label": encoder_label(item["labelKey"]),
+                "available": True,
+            }
+            for item in self._session.presentation.encoder_policy_options
         ]
 
     @Property("QVariantList", notify=projectStateChanged)
@@ -221,14 +229,8 @@ class ExportController(ControllerFacet):
             state.sequence.profile.fps,
         )
         updates: dict = {}
-        allowed_video_codecs = {
-            str(option["value"])
-            for option in self._session.presentation.video_encoder_options
-            if export_format.value in option["formats"]
-        }
         field_map = {
             "container": "container",
-            "videoCodec": "video_codec",
             "audioCodec": "audio_codec",
             "pixelFormat": "pixel_format",
             "qualityValue": "quality_value",
@@ -241,9 +243,13 @@ class ExportController(ControllerFacet):
             value = options.get(source_name)
             if value in {"", None}:
                 continue
-            if source_name == "videoCodec" and str(value) not in allowed_video_codecs:
-                continue
             updates[target_name] = value
+        if export_format != ExportFormat.AUDIO and isinstance(
+            options.get("encoderPolicy"),
+            dict,
+        ):
+            policy = VideoEncoderPolicy.model_validate(options["encoderPolicy"])
+            updates["encoder_policy"] = policy
         if isinstance(options.get("advanced"), dict):
             updates["advanced"] = options["advanced"]
         if isinstance(options.get("subtitleStyle"), dict):

@@ -303,7 +303,7 @@ class TimelineAssetOperations(SessionCoordinator):
                 source,
                 sequence_id=self._session.binding.active_sequence_id,
                 purpose="subtitle",
-                language=self._session.settings.asr.language,
+                language=self._session.service_settings.asr.language,
                 media_asset_id=selected_media_id,
             )
         return self._session.binding.current.import_asset(
@@ -406,7 +406,7 @@ class TimelineAssetOperations(SessionCoordinator):
         proxy_key = (TaskKind.PROXY, (asset.id,))
         decision = self._session.binding.current.proxy_decision(asset, dropped_frames=dropped_frames)
         if (
-            self._session.settings.preview.automatic_proxy
+            self._session.service_settings.preview.automatic_proxy
             and not prepare_media_managed
             and not asset.proxy_path
             and decision.required

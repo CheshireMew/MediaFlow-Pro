@@ -329,7 +329,7 @@ class SubtitleController(ControllerFacet):
         self._session._require_writable()
         selected_asr = AsrSettings.model_validate(
             {
-                **self._session.settings.asr.model_dump(mode="python"),
+                **self._session.service_settings.asr.model_dump(mode="python"),
                 "model": model.strip(),
                 "device": device,
                 "language": language.strip() or "auto",
@@ -338,9 +338,9 @@ class SubtitleController(ControllerFacet):
         )
         if not selected_asr.model:
             raise ValueError("请选择转录模型")
-        candidate = self._session.settings.model_copy(deep=True)
+        candidate = self._session.service_settings.model_copy(deep=True)
         candidate.asr = selected_asr.model_copy(deep=True)
-        self._session._commit_settings(candidate, "转录设置已更新")
+        self._session.settings_persistence.commit(candidate, "转录设置已更新")
         plan = self._current_transcription_plan(selected_asr)
         if plan.region_count <= 0:
             raise ValueError("请指定主要对白轨，并确认当前范围内有对白素材")
@@ -374,7 +374,7 @@ class SubtitleController(ControllerFacet):
         return build_dialogue_transcription_plan(
             state,
             {asset.id: asset for asset in self._session.binding.current.list_assets()},
-            asr or self._session.settings.asr,
+            asr or self._session.service_settings.asr,
             project_profile=project_profile,
             start_frame=start_frame,
             end_frame=end_frame,
@@ -386,7 +386,10 @@ class SubtitleController(ControllerFacet):
         self._session._require_writable()
         if not document_id:
             raise ValueError("请先选择源字幕文档")
-        language = target_language.strip() or self._session.settings.translation.target_language
+        language = (
+            target_language.strip()
+            or self._session.service_settings.translation.target_language
+        )
         if mode not in {"standard", "intelligent", "proofread"}:
             raise ValueError("请选择有效的翻译模式")
         self._session.tasks.start(
@@ -404,8 +407,8 @@ class SubtitleController(ControllerFacet):
         self._session._require_subtitle_document()
         if not self._session.selection.subtitle_segment_ids:
             raise ValueError("请先选择要翻译的字幕段")
-        mode = self._session.settings.translation.mode
-        language = self._session.settings.translation.target_language
+        mode = self._session.service_settings.translation.mode
+        language = self._session.service_settings.translation.target_language
         self._session.tasks.start(
             TranslateSegmentsCommand(
                 document_id=self._session.selection.document_id,
@@ -499,7 +502,7 @@ class SubtitleController(ControllerFacet):
         source_text = "\n".join(segment.text for segment in source_segments).casefold()
         glossary_hits = sum(
             1
-            for term in self._session.settings.translation.glossary_terms
+            for term in self._session.service_settings.translation.glossary_terms
             if term.source.casefold() in source_text
         )
         return {

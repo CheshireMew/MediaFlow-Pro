@@ -17,12 +17,12 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.desktop.app import configure_application_identity
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from scripts.run_artifacts import verification_run
 
 
 def verify(run_dir: Path) -> int:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     if paths.native_qml is None:
         raise RuntimeError("The native preview plugin is not built")
     surface_format = QSurfaceFormat.defaultFormat()

@@ -12,7 +12,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickItem
 
 from mediaflow.desktop.app import configure_application_font, create_engine
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from tests.v2.infrastructure.test_media_pipeline import generate_black_intro_video
 
 
@@ -36,8 +36,7 @@ def _visual_item(root: QQuickItem, name: str) -> QQuickItem | None:
     return None
 
 
-def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+def test_extension_entrypoints_drive_real_project_results(tmp_path: Path) -> None:
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
@@ -74,7 +73,7 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path, monkey
         assert QMetaObject.invokeMethod(versions_dialog, "close")
 
         source = tmp_path / "scene.mp4"
-        generate_black_intro_video(source, RuntimePaths.discover())
+        generate_black_intro_video(source, RuntimeContext.discover().paths)
         controllers.media.importFiles(
             [QUrl.fromLocalFile(str(source))]
         )

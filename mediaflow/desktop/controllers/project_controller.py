@@ -9,11 +9,11 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QUrl, Slot
 
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
-from mediaflow.composition import EditorApplication
 from mediaflow.desktop.coordinators import (
     BackgroundRequests,
     ProjectLifecycle,
     RuntimeToolOperations,
+    SettingsPersistence,
     TaskOperations,
     TimelineAssetOperations,
 )
@@ -35,8 +35,16 @@ from mediaflow.domain.enums import (
     TrackKind,
 )
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
-from mediaflow.domain.settings import (
-    GlobalSettings,
+from mediaflow.service.client import EditorServiceRpcError
+from mediaflow.service.desktop_proxy import (
+    DesktopEditorApplication,
+    create_desktop_editor_application,
+)
+
+from .session_helpers import (
+    collaboration_conflict_details,
+    snap_tolerance_frames,
+    updated_selection,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,11 +55,12 @@ class ProjectSession(QObject):
         self,
         parent: QObject | None = None,
         *,
-        application: EditorApplication | None = None,
+        application: DesktopEditorApplication | None = None,
     ):
         super().__init__(parent)
-        self._api = application or EditorApplication()
-        self.settings = self._api.settings
+        self._api = application or create_desktop_editor_application()
+        self.service_settings = self._api.service_settings
+        self.desktop_settings = self._api.desktop_settings
         self.binding = ProjectBinding()
         self.selection = SelectionState()
         self.task_state = TaskViewState()
@@ -73,6 +82,7 @@ class ProjectSession(QObject):
         self.events = SessionEvents(self)
         self.background = BackgroundRequests(self)
         self.runtime_tools = RuntimeToolOperations(self)
+        self.settings_persistence = SettingsPersistence(self)
         self.tasks = TaskOperations(self)
         self.timeline_assets = TimelineAssetOperations(self)
         self.projectors = PresentationProjectors.create(self)
@@ -81,7 +91,7 @@ class ProjectSession(QObject):
         self.events.errorOccurred.connect(self._log_ui_error)
         self.projectors.workspace.refresh_settings_models()
         self.projectors.workspace.refresh_recent_projects()
-        self.projectors.workspace.discover_video_encoders()
+        self.projectors.workspace.discover_encoder_policies()
 
     def _attach_controllers(self, controllers: dict[str, QObject]) -> None:
         if self._controller_notifiers_attached:
@@ -105,6 +115,13 @@ class ProjectSession(QObject):
             message,
             exc_info=sys.exception() is not None,
         )
+
+    def _present_collaboration_conflict(
+        self,
+        error: EditorServiceRpcError,
+    ) -> None:
+        self.presentation.collaboration_conflict = collaboration_conflict_details(error)
+        self.events.collaborationConflictChanged.emit()
 
     def _require_writable(self) -> None:
         if not self.binding.current or not self.binding.timeline:
@@ -157,26 +174,6 @@ class ProjectSession(QObject):
         self.events.projectStateChanged.emit()
         self.events.historyChanged.emit()
         self._set_status(status)
-
-    def _commit_settings(self, candidate: GlobalSettings, status: str = "") -> None:
-        self._api.replace_settings(candidate)
-        self.settings = self._api.settings
-        if self.binding.current:
-            self.binding.current.update_settings(self.settings)
-            self.events.workflowChanged.emit()
-        self.projectors.workspace.refresh_settings_models()
-        self.events.settingsChanged.emit()
-        self.events.selectionChanged.emit()
-        if status:
-            self._set_status(status)
-
-    def _remember_default_project_directory(self, directory: Path, status: str = "") -> None:
-        selected = str(directory.expanduser().resolve())
-        if self.settings.ui.default_project_directory == selected:
-            return
-        candidate = self.settings.model_copy(deep=True)
-        candidate.ui.default_project_directory = selected
-        self._commit_settings(candidate, status)
 
     def _set_download_plan(self, plan: DownloadPlan) -> None:
         self.download_state.plan = plan
@@ -233,25 +230,8 @@ class ProjectSession(QObject):
         self.projectors.timeline.refresh_sequences()
         self.events.workflowChanged.emit()
 
-    @staticmethod
-    def _snap_tolerance_frames(pixels_per_frame: float) -> int:
-        return max(1, round(8.0 / max(0.01, pixels_per_frame)))
-
-    @staticmethod
-    def _updated_selection(
-        current_ids: list[str],
-        item_id: str,
-        *,
-        toggle: bool,
-    ) -> list[str]:
-        if not item_id:
-            return []
-        if not toggle:
-            return [item_id]
-        if item_id in current_ids:
-            return [value for value in current_ids if value != item_id]
-        return [*current_ids, item_id]
-
+    _snap_tolerance_frames = staticmethod(snap_tolerance_frames)
+    _updated_selection = staticmethod(updated_selection)
     @staticmethod
     def _local_path(value: str) -> Path:
         url = QUrl(value)

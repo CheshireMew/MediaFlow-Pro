@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import cv2
@@ -13,6 +14,7 @@ import numpy as np
 from playwright.sync_api import sync_playwright
 
 from mediaflow.application.web_package_files import editable_media_source_hash
+from mediaflow.automation.operation_registry import OPERATIONS
 from mediaflow.domain.editable_media_contract import (
     validate_editable_media_document,
 )
@@ -21,15 +23,12 @@ from mediaflow.domain.web_media import (
     parse_editable_media_manifest,
     web_runtime_state,
 )
-from mediaflow.infrastructure.chromium_runtime import (
-    find_chromium_executable,
-)
 from mediaflow.infrastructure.editable_media_project_migration import (
     V5_RUNTIME_PATH,
     migrate_editable_media_v4_manifest,
 )
 from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.web_browser import WebPackagePreviewServer
 
 FIXTURE = Path("tests/fixtures/editable-media-v4-project").resolve()
@@ -56,7 +55,16 @@ def _cli(request: dict[str, object]) -> tuple[int, dict[str, object]]:
         timeout=240,
     )
     assert completed.stderr == ""
-    return completed.returncode, json.loads(completed.stdout)
+    payload = json.loads(completed.stdout)
+    if payload.get("ok") is True and isinstance(payload.get("result"), dict):
+        operation_response = payload["result"]
+        if isinstance(operation_response.get("result"), dict):
+            payload = {
+                **payload,
+                "collaboration": operation_response,
+                "result": operation_response["result"],
+            }
+    return completed.returncode, payload
 
 
 def _request(
@@ -67,13 +75,25 @@ def _request(
     request_id: str | None = None,
 ) -> dict[str, object]:
     request: dict[str, object] = {
-        "protocol": "mediaflow-cli",
-        "version": 2,
+        "protocol": "mediaflow-editor",
+        "version": 3,
         "operation": operation,
         "project": str(project),
         "arguments": arguments,
+        "actor": {"kind": "agent", "id": "project-migration-test"},
+        "client_id": "pytest-project-migration",
     }
-    if request_id is not None:
+    definition = OPERATIONS[operation]
+    if definition.project_access == "write":
+        with sqlite3.connect(project / "project.mfp") as connection:
+            row = connection.execute(
+                "SELECT content_revision FROM project LIMIT 1"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Project has no content revision")
+        request["base_revision"] = int(row[0])
+        request["request_id"] = request_id or f"{operation}-{uuid.uuid4().hex}"
+    elif request_id is not None:
         request["request_id"] = request_id
     return request
 
@@ -161,7 +181,7 @@ def _screenshots(
         sync_playwright() as playwright,
     ):
         browser = playwright.chromium.launch(
-            executable_path=str(find_chromium_executable()),
+            executable_path=str(RuntimeContext.discover().paths.chromium),
             headless=True,
             args=["--disable-gpu"],
         )
@@ -374,7 +394,17 @@ def test_real_v4_project_upgrades_once_and_reaches_visible_v5_output(
     )
     assert code == 0
     assert export["ok"] is True
-    ffprobe = RuntimePaths.discover().ffprobe
+    task_receipt = export["result"]["task"]
+    code, waited = _cli(
+        _request(
+            project,
+            "task.wait",
+            {"task_id": task_receipt["id"], "timeout": 180},
+        )
+    )
+    assert code == 0
+    assert waited["result"]["task"]["status"] == "completed"
+    ffprobe = RuntimeContext.discover().paths.ffprobe
     assert ffprobe is not None
     probe = subprocess.run(
         [

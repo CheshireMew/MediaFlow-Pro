@@ -37,7 +37,7 @@ from mediaflow.infrastructure.web_render_service import (
     WebRenderService,
 )
 
-BUILD_PROTOCOL_VERSION = 2
+BUILD_PROTOCOL_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,11 +55,11 @@ class SegmentedExportService:
     def __init__(
         self,
         documents: TimelineCompilationDocuments,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
     ) -> None:
         self.documents = documents
-        self.paths = paths or RuntimePaths.discover()
-        self.compiler = TimelineCompiler(documents)
+        self.paths = paths
+        self.compiler = TimelineCompiler(documents, paths)
         self.exporter = MltExportService(self.compiler, self.paths)
         self.web = WebRenderService(documents, self.paths)
         self.cache_root = (
@@ -267,7 +267,7 @@ class SegmentedExportService:
                 requested_video_codec=(
                     unit_results[0].requested_video_codec
                     if unit_results
-                    else preset.video_codec
+                    else None
                 ),
                 actual_video_codec=(
                     next(iter(actual_codecs))
@@ -413,7 +413,7 @@ class SegmentedExportService:
             name="Continuous cached audio master",
             format=ExportFormat.AUDIO,
             container="wav",
-            video_codec=None,
+            encoder_policy=None,
             audio_codec="pcm_s24le",
             pixel_format=None,
             quality_value=0,
@@ -817,11 +817,11 @@ class SegmentedExportService:
         )
         return payload
 
-    @staticmethod
-    def _preset_identity(preset: ExportPreset) -> dict:
+    def _preset_identity(self, preset: ExportPreset) -> dict:
         payload = preset.model_dump(mode="json")
         payload.pop("id", None)
         payload.pop("name", None)
+        payload["execution"] = self.exporter.execution_identity(preset)
         return payload
 
     @staticmethod

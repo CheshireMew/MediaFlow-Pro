@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "components": [
     {
       "id": "faster-whisper-xxl",
@@ -7,6 +7,7 @@
       "version": "r245.4",
       "homepage": "https://github.com/Purfview/whisper-standalone-win",
       "license": "MIT",
+      "targets": ["windows-x86_64"],
       "archive": {
         "file_name": "Faster-Whisper-XXL_r245.4_windows.7z",
         "url": "https://github.com/Purfview/whisper-standalone-win/releases/download/Faster-Whisper-XXL/Faster-Whisper-XXL_r245.4_windows.7z",
@@ -28,6 +29,7 @@
       "version": "20250604",
       "homepage": "https://github.com/RVC-Boss/GPT-SoVITS",
       "license": "MIT",
+      "targets": ["windows-x86_64"],
       "archive": {
         "file_name": "GPT-SoVITS-v2pro-20250604.7z",
         "url": "https://huggingface.co/lj1995/GPT-SoVITS-windows-package/resolve/8b081e1fa1b3ad121e0f310e525dc80fcf15becc/GPT-SoVITS-v2pro-20250604.7z?download=true",

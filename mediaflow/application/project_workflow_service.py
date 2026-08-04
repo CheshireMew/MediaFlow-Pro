@@ -19,7 +19,7 @@ from mediaflow.domain.enums import (
     WorkflowStatus,
 )
 from mediaflow.domain.project import Sequence
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import (
     TaskCommand,
     WorkflowTaskLink,
@@ -38,7 +38,7 @@ class ProjectWorkflowService:
         self,
         documents: ProjectWorkflowDocuments,
         tasks: TaskService,
-        settings: GlobalSettings,
+        settings: ServiceSettings,
         *,
         start_task: Callable[..., Task],
         proxy_decision: Callable[..., ProxyDecision],
@@ -56,7 +56,7 @@ class ProjectWorkflowService:
             global_auto_continue=settings.workflow.auto_continue,
         )
 
-    def update_settings(self, settings: GlobalSettings) -> None:
+    def update_settings(self, settings: ServiceSettings) -> None:
         self.settings = settings
         self.coordinator = WorkflowCoordinator(
             self.documents,
@@ -189,7 +189,13 @@ class ProjectWorkflowService:
         task_ids = run.payload.task_ids
         if task.id not in task_ids:
             return WorkflowUpdate()
-        tasks = [self.tasks.get(task_id) for task_id in task_ids]
+        # The current terminal task is still inside the project's atomic
+        # settlement transaction.  Read the other tasks from durable storage,
+        # but use the exact in-transaction snapshot for this task.
+        tasks = [
+            task if task_id == task.id else self.tasks.get(task_id)
+            for task_id in task_ids
+        ]
         if any(item.status == TaskStatus.FAILED for item in tasks):
             failed = next(item for item in tasks if item.status == TaskStatus.FAILED)
             self.coordinator.block(run.id, "workflow_task_failed")
@@ -218,6 +224,15 @@ class ProjectWorkflowService:
                     self.coordinator.block(run.id, "workflow_interrupted")
                     break
             else:
+                terminal = next(
+                    (task for task in tasks if task.status.is_terminal),
+                    None,
+                )
+                if terminal is not None and all(
+                    task.status.is_terminal for task in tasks
+                ):
+                    self.handle_task(terminal)
+                    continue
                 if any(task.status in {TaskStatus.PENDING, TaskStatus.PAUSED} for task in tasks):
                     self.coordinator.block(run.id, "workflow_interrupted")
 

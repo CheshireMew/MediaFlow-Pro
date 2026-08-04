@@ -215,7 +215,9 @@ AppDialog {
         id: xxlExecutableDialog
         title: qsTr("选择 Faster-Whisper XXL 可执行文件")
         fileMode: FileDialog.OpenFile
-        nameFilters: [qsTr("Faster-Whisper XXL (faster-whisper-xxl.exe)"), qsTr("可执行文件 (*.exe)")]
+        nameFilters: Qt.platform.os === "windows"
+            ? [qsTr("Faster-Whisper XXL (faster-whisper-xxl.exe)"), qsTr("可执行文件 (*.exe)")]
+            : [qsTr("可执行文件 (*)")]
         onAccepted: {
             asrCliPath.text = selectedFile.toLocalFile()
             root.scheduleSettingsSave()
@@ -598,6 +600,7 @@ AppDialog {
                                 id: selectXxlDownload
                                 objectName: "selectFasterWhisperDownload"
                                 Layout.fillWidth: true
+                                enabled: root.runtimeComponent("faster-whisper-xxl").supported !== false
                                 text: qsTr("Faster-Whisper XXL · %1 GiB · %2")
                                     .arg(root.runtimeComponent("faster-whisper-xxl").downloadGiB || "1.33")
                                     .arg(root.runtimeComponent("faster-whisper-xxl").ready ? qsTr("可用") : qsTr("未就绪"))
@@ -615,6 +618,7 @@ AppDialog {
                                 id: selectGptSoVitsDownload
                                 objectName: "selectGptSoVitsDownload"
                                 Layout.fillWidth: true
+                                enabled: root.runtimeComponent("gpt-sovits-v2pro").supported !== false
                                 text: qsTr("GPT-SoVITS v2Pro · %1 GiB · %2")
                                     .arg(root.runtimeComponent("gpt-sovits-v2pro").downloadGiB || "7.59")
                                     .arg(root.runtimeComponent("gpt-sovits-v2pro").ready ? qsTr("可用") : qsTr("未就绪"))

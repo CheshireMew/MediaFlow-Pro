@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 
 from .asr_engine import FasterWhisperCliEngine
 from .runtime_components import RuntimeComponentService
@@ -27,8 +27,8 @@ ToolProgress = Callable[[OperationProgress], None]
 PYPI_YTDLP_URL = "https://pypi.org/pypi/yt-dlp/json"
 
 
-def prepare_ytdlp_import(paths: RuntimePaths | None = None) -> Path | None:
-    runtime = paths or RuntimePaths.discover()
+def prepare_ytdlp_import(paths: RuntimePaths) -> Path | None:
+    runtime = paths
     pointer = runtime.runtime_dir / "tools" / "yt-dlp-active.json"
     if not pointer.is_file():
         return None
@@ -46,14 +46,14 @@ def prepare_ytdlp_import(paths: RuntimePaths | None = None) -> Path | None:
 class RuntimeToolService:
     def __init__(
         self,
-        settings: GlobalSettings,
-        paths: RuntimePaths | None = None,
+        settings: ServiceSettings,
+        paths: RuntimePaths,
         *,
         ytdlp_metadata_url: str = PYPI_YTDLP_URL,
         component_catalog_path: str | Path | None = None,
     ):
         self.settings = settings
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.ytdlp_metadata_url = ytdlp_metadata_url
         self.components = (
             RuntimeComponentService(settings, self.paths)

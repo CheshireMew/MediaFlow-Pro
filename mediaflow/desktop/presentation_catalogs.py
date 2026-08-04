@@ -316,15 +316,42 @@ def encoder_label(label_key: str) -> str:
         "h264_nvidia": "H.264 NVIDIA",
         "h264_intel_qsv": "H.264 Intel QSV",
         "h264_amd_amf": "H.264 AMD AMF",
+        "h264_apple_videotoolbox": "H.264 Apple VideoToolbox",
+        "h264_linux_vaapi": "H.264 Linux VAAPI",
         "hevc_software": QCoreApplication.translate("EncoderCatalog", "HEVC 软件"),
         "hevc_nvidia": "HEVC NVIDIA",
         "hevc_intel_qsv": "HEVC Intel QSV",
         "hevc_amd_amf": "HEVC AMD AMF",
+        "hevc_apple_videotoolbox": "HEVC Apple VideoToolbox",
+        "hevc_linux_vaapi": "HEVC Linux VAAPI",
         "av1_svt_software": QCoreApplication.translate("EncoderCatalog", "AV1 SVT 软件"),
         "av1_nvidia": "AV1 NVIDIA",
         "av1_intel_qsv": "AV1 Intel QSV",
         "av1_amd_amf": "AV1 AMD AMF",
+        "av1_apple_videotoolbox": "AV1 Apple VideoToolbox",
+        "av1_linux_vaapi": "AV1 Linux VAAPI",
         "prores_software": QCoreApplication.translate("EncoderCatalog", "ProRes 软件"),
+        "h264_hardware_auto": QCoreApplication.translate(
+            "EncoderCatalog", "H.264 硬件优先（自动）"
+        ),
+        "h264_hardware_nvidia": "H.264 NVIDIA",
+        "h264_hardware_intel": "H.264 Intel",
+        "h264_hardware_amd": "H.264 AMD",
+        "h264_hardware_apple": "H.264 Apple",
+        "hevc_hardware_auto": QCoreApplication.translate(
+            "EncoderCatalog", "HEVC 硬件优先（自动）"
+        ),
+        "hevc_hardware_nvidia": "HEVC NVIDIA",
+        "hevc_hardware_intel": "HEVC Intel",
+        "hevc_hardware_amd": "HEVC AMD",
+        "hevc_hardware_apple": "HEVC Apple",
+        "av1_hardware_auto": QCoreApplication.translate(
+            "EncoderCatalog", "AV1 硬件优先（自动）"
+        ),
+        "av1_hardware_nvidia": "AV1 NVIDIA",
+        "av1_hardware_intel": "AV1 Intel",
+        "av1_hardware_amd": "AV1 AMD",
+        "av1_hardware_apple": "AV1 Apple",
     }
     return labels[label_key]
 
@@ -564,7 +591,11 @@ def export_format_options(color_mode: ColorMode) -> list[dict]:
             "value": variant.format.value,
             "suffix": variant.suffix,
             "container": variant.container,
-            "videoCodec": variant.video_codec or "",
+            "encoderPolicy": (
+                variant.encoder_policy.model_dump(mode="json")
+                if variant.encoder_policy is not None
+                else None
+            ),
             "audioCodec": variant.audio_codec,
             "pixelFormat": variant.pixel_format(color_mode) or "",
             "qualityValue": variant.quality_value,

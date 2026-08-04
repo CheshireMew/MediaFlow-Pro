@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -14,7 +13,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.file_digest import sha256_file
 
 from .runtime_paths import RuntimePaths
@@ -33,6 +32,7 @@ class RuntimeComponentDefinition:
     version: str
     homepage: str
     license: str
+    targets: tuple[str, ...]
     archive_file: str
     archive_url: str
     archive_size: int
@@ -55,7 +55,7 @@ def load_runtime_component_catalog(
 ) -> dict[str, RuntimeComponentDefinition]:
     source = Path(path).resolve()
     document: Any = json.loads(source.read_text(encoding="utf-8"))
-    if not isinstance(document, dict) or document.get("schema_version") != 1:
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
         raise ValueError("Runtime component lock schema is not supported")
     records = document.get("components")
     if not isinstance(records, list) or not records:
@@ -74,6 +74,7 @@ def load_runtime_component_catalog(
             version=str(record.get("version") or ""),
             homepage=str(record.get("homepage") or ""),
             license=str(record.get("license") or ""),
+            targets=tuple(str(item) for item in record.get("targets") or ()),
             archive_file=str(archive.get("file_name") or ""),
             archive_url=str(archive.get("url") or ""),
             archive_size=int(archive.get("size_bytes") or 0),
@@ -92,7 +93,7 @@ def load_runtime_component_catalog(
             component.install_root,
             component.entrypoint,
         )
-        if not all(required_values) or not component.required_paths:
+        if not all(required_values) or not component.required_paths or not component.targets:
             raise ValueError("Runtime component record is incomplete")
         if re.fullmatch(r"[0-9a-f]{64}", component.archive_sha256) is None:
             raise ValueError(
@@ -107,21 +108,21 @@ def load_runtime_component_catalog(
 class RuntimeComponentService:
     def __init__(
         self,
-        settings: GlobalSettings,
-        paths: RuntimePaths | None = None,
+        settings: ServiceSettings,
+        paths: RuntimePaths,
         *,
         catalog_path: str | Path = DEFAULT_COMPONENT_LOCK,
     ) -> None:
         self.settings = settings
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.catalog = load_runtime_component_catalog(catalog_path)
 
     def resolve(self, component_id: str) -> RuntimeComponentInstallation | None:
         definition = self._definition(component_id)
+        if self.paths.target.key not in definition.targets:
+            return None
         if component_id == "faster-whisper-xxl":
-            configured = self.settings.asr.cli_path or os.environ.get(
-                "MEDIAFLOW_FASTER_WHISPER_XXL"
-            )
+            configured = self.settings.asr.cli_path
             if configured:
                 executable = Path(configured).expanduser()
                 if executable.is_file():
@@ -158,7 +159,11 @@ class RuntimeComponentService:
         if not selected:
             raise ValueError("请至少选择一个运行组件")
         for component_id in selected:
-            self._definition(component_id)
+            definition = self._definition(component_id)
+            if self.paths.target.key not in definition.targets:
+                raise RuntimeError(
+                    f"{definition.display_name} is not available for {self.paths.target.key}"
+                )
         installed: dict[str, str] = {}
         for component_id in selected:
             installation = self.resolve(component_id)
@@ -173,11 +178,13 @@ class RuntimeComponentService:
 
     def _status(self, component_id: str, *, probe: bool) -> dict[str, Any]:
         definition = self._definition(component_id)
+        supported = self.paths.target.key in definition.targets
         installation = self.resolve(component_id)
         result: dict[str, Any] = {
             "id": definition.id,
             "displayName": definition.display_name,
             "version": definition.version,
+            "supported": supported,
             "downloadBytes": definition.archive_size,
             "downloadGiB": round(definition.archive_size / 1024**3, 2),
             "homepage": definition.homepage,
@@ -186,7 +193,11 @@ class RuntimeComponentService:
             "ready": False,
             "path": str(installation.root) if installation else "",
             "entrypoint": str(installation.entrypoint) if installation else "",
-            "reason": "尚未安装或选择本地目录",
+            "reason": (
+                "该可选组件没有当前平台的受支持构建"
+                if not supported
+                else "尚未安装或选择本地目录"
+            ),
         }
         if installation is None:
             return result
@@ -350,9 +361,7 @@ class RuntimeComponentService:
     ) -> tuple[Path, ...]:
         candidates: list[Path] = []
         if component_id == "gpt-sovits-v2pro":
-            configured = self.settings.speech_synthesis.gpt_sovits_root or os.environ.get(
-                "MEDIAFLOW_GPT_SOVITS_ROOT"
-            )
+            configured = self.settings.speech_synthesis.gpt_sovits_root
             if configured:
                 candidates.append(Path(configured))
         candidates.append(self.paths.runtime_dir / "tools" / definition.install_root)

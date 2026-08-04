@@ -25,7 +25,7 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.exports import ExportPreset, SubtitleStyle, WatermarkOverlay
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY,
     OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
@@ -39,6 +39,10 @@ from mediaflow.domain.task_commands import ExportHighlightsCommand, ExportSequen
 from mediaflow.domain.tasks import ExportTaskOutcome
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
+from mediaflow.infrastructure.encoder_policy import (
+    ResolvedVideoEncoder,
+    VideoEncoderPolicyResolver,
+)
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import (
     MltExportService,
@@ -52,6 +56,7 @@ from mediaflow.infrastructure.output_reservation import (
     reserve_output,
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
@@ -59,23 +64,21 @@ from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 def test_sequence_export_refuses_to_overwrite_without_explicit_permission(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     with ProjectRepository.create(tmp_path / "No Overwrite", "No Overwrite") as repository:
         output = tmp_path / "existing.mp4"
         output.write_bytes(b"user-output")
-        state = repository.timeline.load_timeline(
-            repository.catalog.get_project().main_sequence_id
-        )
+        state = repository.timeline.load_timeline(repository.catalog.get_project().main_sequence_id)
         preset = ExportPreset(
             name="No overwrite",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
         )
 
-        service = MltExportService(TimelineCompiler(repository), paths)
+        service = MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths)
         with pytest.raises(FileExistsError, match="already exists"):
             service.export(
                 state,
@@ -87,7 +90,7 @@ def test_sequence_export_refuses_to_overwrite_without_explicit_permission(
         reserved_output = tmp_path / "reserved.mp4"
         with reserve_output(reserved_output, runtime_dir=paths.runtime_dir):
             with pytest.raises(RuntimeError, match="already writing"):
-                MltExportService(TimelineCompiler(repository), paths).export(
+                MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths).export(
                     state,
                     preset,
                     reserved_output,
@@ -95,39 +98,35 @@ def test_sequence_export_refuses_to_overwrite_without_explicit_permission(
         assert not reserved_output.exists()
 
 
-def test_sequence_export_rejects_a_known_codec_format_mismatch_before_side_effects(
+def test_sequence_export_resolves_software_policy_without_codec_mismatch(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     with ProjectRepository.create(
         tmp_path / "Codec Mismatch",
         "Codec Mismatch",
     ) as repository:
-        state = repository.timeline.load_timeline(
-            repository.catalog.get_project().main_sequence_id
-        )
+        state = repository.timeline.load_timeline(repository.catalog.get_project().main_sequence_id)
         output = tmp_path / "not-created" / "mismatch.mp4"
         graph_root = repository.project_dir / "cache" / "mlt"
 
-        with pytest.raises(
-            ValueError,
-            match="does not match its format",
-        ):
-            MltExportService(
-                TimelineCompiler(repository),
-                paths,
-            ).preflight(
-                state,
-                ExportPreset(
-                    name="Invalid codec pair",
-                    format=ExportFormat.H264,
-                    container="mp4",
-                    video_codec="libx265",
-                    audio_codec="aac",
-                    pixel_format="yuv420p",
-                ),
-                output,
-            )
+        preset = ExportPreset(
+            name="Portable software policy",
+            format=ExportFormat.H264,
+            container="mp4",
+            encoder_policy={"mode": "software"},
+            audio_codec="aac",
+            pixel_format="yuv420p",
+        )
+        resolved = VideoEncoderPolicyResolver(paths).resolve(
+            preset.format,
+            preset.encoder_policy,
+        )
+        assert resolved.codec == "libx264"
+        MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths),
+            paths,
+        ).preflight(state, preset, output)
 
         assert not output.parent.exists()
         assert not graph_root.exists()
@@ -136,14 +135,12 @@ def test_sequence_export_rejects_a_known_codec_format_mismatch_before_side_effec
 def test_sequence_export_rejects_a_mislabelled_container_before_side_effects(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     with ProjectRepository.create(
         tmp_path / "Container Mismatch",
         "Container Mismatch",
     ) as repository:
-        state = repository.timeline.load_timeline(
-            repository.catalog.get_project().main_sequence_id
-        )
+        state = repository.timeline.load_timeline(repository.catalog.get_project().main_sequence_id)
         output = tmp_path / "not-created" / "mislabelled.mkv"
         graph_root = repository.project_dir / "cache" / "mlt"
 
@@ -152,7 +149,7 @@ def test_sequence_export_rejects_a_mislabelled_container_before_side_effects(
             match="扩展名与封装格式不一致",
         ):
             MltExportService(
-                TimelineCompiler(repository),
+                TimelineCompiler(repository, RuntimeContext.discover().paths),
                 paths,
             ).preflight(
                 state,
@@ -160,7 +157,7 @@ def test_sequence_export_rejects_a_mislabelled_container_before_side_effects(
                     name="Mislabelled MP4",
                     format=ExportFormat.H264,
                     container="mp4",
-                    video_codec="libx264",
+                    encoder_policy={"mode": "software"},
                     audio_codec="aac",
                     pixel_format="yuv420p",
                 ),
@@ -174,7 +171,7 @@ def test_sequence_export_rejects_a_mislabelled_container_before_side_effects(
 def test_atomic_export_batch_archives_staged_output_when_a_later_render_fails(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "atomic-batch-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     with ProjectRepository.create(
@@ -200,24 +197,40 @@ def test_atomic_export_batch_archives_staged_output_when_a_later_render_fails(
             name="First valid export",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
             preset="ultrafast",
         )
-        invalid_preset = valid_preset.model_copy(
-            update={
+        invalid_preset = ExportPreset.model_validate(
+            {
+                **valid_preset.model_dump(mode="python"),
                 "name": "Second invalid export",
-                "video_codec": "mediaflow_missing_encoder",
-            }
+                "encoder_policy": {
+                    "mode": "prefer_hardware",
+                    "vendor": "apple",
+                },
+            },
         )
         first_output = repository.project_dir / "exports" / "first.mp4"
         second_output = repository.project_dir / "exports" / "second.mp4"
 
+        class DeterministicResolver:
+            @staticmethod
+            def resolve(export_format, policy):
+                if policy.vendor == "apple":
+                    return ResolvedVideoEncoder(
+                        "mediaflow_missing_encoder",
+                        "amf",
+                        False,
+                    )
+                return ResolvedVideoEncoder("libx264", "software", False)
+
         with pytest.raises(RuntimeError):
             MltExportService(
-                TimelineCompiler(repository),
+                TimelineCompiler(repository, RuntimeContext.discover().paths),
                 paths,
+                encoder_resolver=DeterministicResolver(),
             ).export_many(
                 (
                     MltExportRequest(
@@ -250,29 +263,21 @@ def test_atomic_export_batch_archives_staged_output_when_a_later_render_fails(
             if probe.metadata.has_video:
                 consumable.append(path)
         assert consumable
-        assert not any(
-            path.name.startswith(".")
-            for path in first_output.parent.glob("*.mp4")
-        )
+        assert not any(path.name.startswith(".") for path in first_output.parent.glob("*.mp4"))
 
 
 def test_sequence_export_rejects_an_unusable_temporary_sibling_before_compiling(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     with ProjectRepository.create(
         tmp_path / "Export Path Preflight",
         "Export Path Preflight",
     ) as repository:
-        state = repository.timeline.load_timeline(
-            repository.catalog.get_project().main_sequence_id
-        )
+        state = repository.timeline.load_timeline(repository.catalog.get_project().main_sequence_id)
         output_parent = tmp_path
         output = output_parent / "video.mp4"
-        while (
-            utf16_units(str(output_parent.resolve())) + 1 + 64
-            <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        ):
+        while utf16_units(str(output_parent.resolve())) + 1 + 64 <= WINDOWS_INTEROP_PATH_UTF16_LIMIT:
             output_parent /= "deep-video-export-directory"
             output = output_parent / "video.mp4"
         graph_root = repository.project_dir / "cache" / "mlt"
@@ -282,7 +287,7 @@ def test_sequence_export_rejects_an_unusable_temporary_sibling_before_compiling(
         assert not graph_root.exists()
         with pytest.raises(ValueError, match="目录过深"):
             MltExportService(
-                TimelineCompiler(repository),
+                TimelineCompiler(repository, RuntimeContext.discover().paths),
                 paths,
             ).export(
                 state,
@@ -290,7 +295,7 @@ def test_sequence_export_rejects_an_unusable_temporary_sibling_before_compiling(
                     name="Path preflight",
                     format=ExportFormat.H264,
                     container="mp4",
-                    video_codec="libx264",
+                    encoder_policy={"mode": "software"},
                     audio_codec="aac",
                     pixel_format="yuv420p",
                 ),
@@ -309,32 +314,24 @@ def test_export_task_rejects_long_suffix_before_any_output_or_render_side_effect
     max_project_path: Path,
     suffix_length: int,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     repository = ProjectRepository.create(
         max_project_path,
         "Output Workspace Preflight",
     )
     project = EditorProject(
         repository,
-        settings=GlobalSettings(),
+        settings=ServiceSettings(),
         paths=paths,
     )
     try:
-        output_dir = (
-            repository.project_dir
-            / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY
-        )
+        output_dir = repository.project_dir / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY
         output = output_dir / f"delivery.{('x' * suffix_length)}"
         assert (
-            utf16_units(str(output_dir.resolve()))
-            + 1
-            + OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
+            utf16_units(str(output_dir.resolve())) + 1 + OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
             == WINDOWS_INTEROP_PATH_UTF16_LIMIT
         )
-        assert (
-            utf16_units(str(output.resolve()))
-            <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        )
+        assert utf16_units(str(output.resolve())) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
         assert not output_dir.exists()
         assert not (repository.project_dir / "cache" / "mlt").exists()
         assert not (repository.project_dir / "cache" / "web").exists()
@@ -349,7 +346,7 @@ def test_export_task_rejects_long_suffix_before_any_output_or_render_side_effect
                     name="Long custom muxer path",
                     format=ExportFormat.H264,
                     container="x" * suffix_length,
-                    video_codec="libx264",
+                    encoder_policy={"mode": "software"},
                     audio_codec="aac",
                     pixel_format="yuv420p",
                 ),
@@ -413,20 +410,10 @@ def test_output_set_fault_matrix_restores_every_precommit_state(
                 nonlocal injected
                 target = Path(destination).resolve()
                 selected = {
-                    "backup_first": (
-                        source == first
-                        and target.name.startswith(".mf-previous-")
-                    ),
-                    "backup_second": (
-                        source == second
-                        and target.name.startswith(".mf-previous-")
-                    ),
-                    "publish_first": (
-                        source == first_stage and target == first
-                    ),
-                    "publish_second": (
-                        source == second_stage and target == second
-                    ),
+                    "backup_first": (source == first and target.name.startswith(".mf-previous-")),
+                    "backup_second": (source == second and target.name.startswith(".mf-previous-")),
+                    "publish_first": (source == first_stage and target == first),
+                    "publish_second": (source == second_stage and target == second),
                 }[failure_phase]
                 if selected and not injected:
                     injected = True
@@ -443,18 +430,9 @@ def test_output_set_fault_matrix_restores_every_precommit_state(
     assert injected is True
     assert first.read_bytes() == b"old-video"
     assert second.read_bytes() == b"old-subtitle"
-    archived_contents = {
-        item.read_bytes()
-        for item in (
-            tmp_path / "MediaFlow Pro Failed Exports"
-        ).iterdir()
-    }
+    archived_contents = {item.read_bytes() for item in (tmp_path / "MediaFlow Pro Failed Exports").iterdir()}
     assert archived_contents == {b"new-video", b"new-subtitle"}
-    assert not [
-        item
-        for item in tmp_path.iterdir()
-        if item.is_file() and item.name.startswith(".mf-")
-    ]
+    assert not [item for item in tmp_path.iterdir() if item.is_file() and item.name.startswith(".mf-")]
 
 
 def test_output_set_retries_transient_failures_during_rollback_and_archive(
@@ -497,32 +475,16 @@ def test_output_set_retries_transient_failures_during_rollback_and_archive(
                 nonlocal failed_restore
                 nonlocal failed_archive
                 target = Path(destination).resolve()
-                if (
-                    not failed_publish
-                    and source == second_stage
-                    and target == second
-                ):
+                if not failed_publish and source == second_stage and target == second:
                     failed_publish = True
                     raise OSError("publish interruption")
-                if (
-                    not failed_remove
-                    and source == first
-                    and target.name.startswith(".mf-rollback-")
-                ):
+                if not failed_remove and source == first and target.name.startswith(".mf-rollback-"):
                     failed_remove = True
                     raise OSError("rollback remove interruption")
-                if (
-                    not failed_restore
-                    and source.name.startswith(".mf-previous-")
-                    and target == second
-                ):
+                if not failed_restore and source.name.startswith(".mf-previous-") and target == second:
                     failed_restore = True
                     raise OSError("rollback restore interruption")
-                if (
-                    not failed_archive
-                    and target.parent.name
-                    == "MediaFlow Pro Failed Exports"
-                ):
+                if not failed_archive and target.parent.name == "MediaFlow Pro Failed Exports":
                     failed_archive = True
                     raise OSError("archive interruption")
                 return original_replace(source, destination)
@@ -544,18 +506,9 @@ def test_output_set_retries_transient_failures_during_rollback_and_archive(
     )
     assert first.read_bytes() == b"old-video"
     assert second.read_bytes() == b"old-subtitle"
-    archived_contents = {
-        item.read_bytes()
-        for item in (
-            tmp_path / "MediaFlow Pro Failed Exports"
-        ).iterdir()
-    }
+    archived_contents = {item.read_bytes() for item in (tmp_path / "MediaFlow Pro Failed Exports").iterdir()}
     assert archived_contents == {b"new-video", b"new-subtitle"}
-    assert not [
-        item
-        for item in tmp_path.iterdir()
-        if item.is_file() and item.name.startswith(".mf-")
-    ]
+    assert not [item for item in tmp_path.iterdir() if item.is_file() and item.name.startswith(".mf-")]
 
 
 def test_long_output_set_uses_short_siblings_for_commit_and_rollback(
@@ -611,11 +564,7 @@ def test_long_output_set_uses_short_siblings_for_commit_and_rollback(
                 destination: str | Path,
             ) -> Path:
                 nonlocal interrupted
-                if (
-                    not interrupted
-                    and source == second_stage
-                    and Path(destination).resolve() == second
-                ):
+                if not interrupted and source == second_stage and Path(destination).resolve() == second:
                     interrupted = True
                     raise OSError("long publish interruption")
                 return original_replace(source, destination)
@@ -626,11 +575,7 @@ def test_long_output_set_uses_short_siblings_for_commit_and_rollback(
     assert interrupted is True
     assert first.read_bytes() == b"committed-video"
     assert second.read_bytes() == b"committed-subtitle"
-    assert not [
-        item
-        for item in parent.iterdir()
-        if item.is_file() and item.name.startswith(".mf-")
-    ]
+    assert not [item for item in parent.iterdir() if item.is_file() and item.name.startswith(".mf-")]
 
 
 def test_output_set_rejects_a_native_tool_path_beyond_the_shared_budget(
@@ -701,7 +646,7 @@ def test_video_solo_is_kind_local_and_disabled_offline_tracks_are_not_compiled(
             solo=False,
         )
 
-        document = TimelineCompiler(repository).compile(editor.state)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
         root = ET.fromstring(document.xml)
         tractor = root.find("./tractor[@id='tractor0']")
         assert tractor is not None
@@ -744,7 +689,7 @@ def test_visual_effect_stack_compiles_in_persisted_order_for_preview_and_export(
             parameters={"brightness": 0.2, "contrast": 1.25, "saturation": 0.8},
         )
 
-        document = TimelineCompiler(repository).compile(editor.state)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
 
         assert document.xml.index(f"visual_effect_{adjustment.id}") < document.xml.index(
             f"visual_effect_{blur.id}"
@@ -756,7 +701,7 @@ def test_visual_effect_stack_compiles_in_persisted_order_for_preview_and_export(
 
 
 def test_visual_effect_stack_changes_real_exported_pixels(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     assert paths.melt is not None
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths, width=160, height=90)
@@ -777,14 +722,14 @@ def test_visual_effect_stack_changes_real_exported_pixels(tmp_path: Path) -> Non
             name="Visual effect pixels",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
             quality_value=18,
             preset="ultrafast",
             gop_frames=25,
         )
-        service = MltExportService(TimelineCompiler(repository), paths)
+        service = MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths)
         baseline = service.export(
             editor.state,
             preset,
@@ -838,19 +783,14 @@ def test_timeline_compiler_rejects_active_native_source_beyond_shared_budget(
             duration=30,
         )
         overlong_parent = tmp_path
-        while (
-            utf16_units(str(overlong_parent / "source.mp4"))
-            <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        ):
+        while utf16_units(str(overlong_parent / "source.mp4")) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT:
             overlong_parent /= "deep-native-source"
         repository.catalog.update_asset(
-            asset.model_copy(
-                update={"path": str(overlong_parent / "source.mp4")}
-            )
+            asset.model_copy(update={"path": str(overlong_parent / "source.mp4")})
         )
 
         with pytest.raises(ValueError, match="路径过深"):
-            TimelineCompiler(repository).compile(editor.state)
+            TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
 
 
 def test_linked_video_dialogue_drives_ducking_and_video_solo_does_not_mute_audio(
@@ -938,7 +878,7 @@ def test_linked_video_dialogue_drives_ducking_and_video_solo_does_not_mute_audio
         )
         repository.audio.save_audio_effect(effect)
 
-        document = TimelineCompiler(repository).compile(editor.state)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
 
         assert f"effect_{effect.id}" in document.xml
         assert "30=-18dB" in document.xml
@@ -957,7 +897,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
     max_project_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "qa-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(max_project_path, "QA Project")
@@ -965,7 +905,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
     asset = assets.import_external(source)
     assets.adopt_main_profile_from_video(asset.id)
     asset = repository.catalog.get_asset(asset.id)
-    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    project = EditorProject(repository, settings=ServiceSettings(), paths=paths)
     try:
         sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
@@ -977,11 +917,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
             source_in=0,
             duration=asset.metadata.duration_frames,
         )
-        output = (
-            repository.project_dir
-            / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY
-            / "qa-export.mp4"
-        )
+        output = repository.project_dir / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY / "qa-export.mp4"
         published_temporary_paths: list[Path] = []
         published_proof_temporaries: list[Path] = []
         temporary_probes = []
@@ -994,10 +930,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
             if Path(destination).resolve() == output.resolve():
                 assert source_path.is_file()
                 assert source_path.stat().st_size > 0
-                assert (
-                    utf16_units(str(source_path))
-                    <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-                )
+                assert utf16_units(str(source_path)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
                 published_temporary_paths.append(source_path)
                 temporary_probes.append(MediaProbe(paths).probe(source_path))
             if (
@@ -1006,10 +939,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
             ):
                 assert source_path.is_file()
                 assert source_path.stat().st_size > 0
-                assert (
-                    utf16_units(str(source_path))
-                    <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-                )
+                assert utf16_units(str(source_path)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
                 published_proof_temporaries.append(source_path)
             return original_replace(source_path, destination)
 
@@ -1018,7 +948,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
             name="QA export",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
         )
@@ -1037,10 +967,7 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
         assert len(published_temporary_paths) == 1
         assert temporary_probes[0].metadata.has_video is True
         assert not published_temporary_paths[0].exists()
-        assert output.parent == (
-            repository.project_dir
-            / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY
-        )
+        assert output.parent == (repository.project_dir / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY)
         assert output.is_file()
         assert utf16_units(str(output)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
         final_probe = MediaProbe(paths).probe(output)
@@ -1073,15 +1000,11 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
             MediaProbe(paths).probe(Path(path)).kind == AssetKind.IMAGE
             for path in record.quality.proof_frames
         )
-        report = (
-            export_quality_directory(repository.project_dir, record.id)
-            / "report.json"
-        )
+        report = export_quality_directory(repository.project_dir, record.id) / "report.json"
         assert utf16_units(str(report)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
         assert report.is_file() and record.id in report.read_text(encoding="utf-8")
         assert report.resolve() in {
-            artifact.resolve(repository.project_dir)
-            for artifact in completed.artifacts
+            artifact.resolve(repository.project_dir) for artifact in completed.artifacts
         }
     finally:
         project.close()
@@ -1091,7 +1014,7 @@ def test_export_history_failure_withdraws_real_published_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "history-failure-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(
@@ -1116,7 +1039,7 @@ def test_export_history_failure_withdraws_real_published_output(
         name="History failure",
         format=ExportFormat.H264,
         container="mp4",
-        video_codec="libx264",
+        encoder_policy={"mode": "software"},
         audio_codec="aac",
         pixel_format="yuv420p",
         preset="ultrafast",
@@ -1132,7 +1055,7 @@ def test_export_history_failure_withdraws_real_published_output(
     )
     project = EditorProject(
         repository,
-        settings=GlobalSettings(),
+        settings=ServiceSettings(),
         paths=paths,
     )
     try:
@@ -1149,37 +1072,22 @@ def test_export_history_failure_withdraws_real_published_output(
         completed = project.wait_for_task(task.id, timeout=90)
 
         assert completed.status == TaskStatus.FAILED
-        assert "injected export history failure" in (
-            completed.error or ""
-        )
+        assert "injected export history failure" in (completed.error or "")
         assert not completed.artifacts
         assert not output.exists()
-        assert repository.records.list_export_history(
-            sequence_id
-        ) == []
+        assert repository.records.list_export_history(sequence_id) == []
         quality_directory = export_quality_directory(
             repository.project_dir,
             completed.id,
         )
         assert not quality_directory.exists()
-        archived_quality = list(
-            (
-                quality_directory.parent
-                / "MediaFlow Pro Failed Export QA"
-            ).glob("qa-*")
-        )
+        archived_quality = list((quality_directory.parent / "MediaFlow Pro Failed Export QA").glob("qa-*"))
         assert len(archived_quality) == 1
         assert (archived_quality[0] / "report.json").is_file()
-        archived_proof_frames = list(
-            archived_quality[0].glob("proof-*")
-        )
+        archived_proof_frames = list(archived_quality[0].glob("proof-*"))
         assert len(archived_proof_frames) == 3
         assert all(path.is_file() for path in archived_proof_frames)
-        archived = list(
-            (
-                output.parent / "MediaFlow Pro Failed Exports"
-            ).glob("*.mp4")
-        )
+        archived = list((output.parent / "MediaFlow Pro Failed Exports").glob("*.mp4"))
         assert len(archived) == 1
         archived_probe = MediaProbe(paths).probe(
             archived[0],
@@ -1192,8 +1100,21 @@ def test_export_history_failure_withdraws_real_published_output(
 
 def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
+    original_resolve = VideoEncoderPolicyResolver.resolve
+
+    def resolve_for_failed_attempt(resolver, export_format, policy):
+        if policy.mode == "prefer_hardware" and policy.vendor == "amd":
+            return ResolvedVideoEncoder("h264_amf", "amf", True)
+        return original_resolve(resolver, export_format, policy)
+
+    monkeypatch.setattr(
+        VideoEncoderPolicyResolver,
+        "resolve",
+        resolve_for_failed_attempt,
+    )
     source = tmp_path / "hardware-recovery-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(
@@ -1204,7 +1125,7 @@ def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
     asset = assets.import_external(source)
     assets.adopt_main_profile_from_video(asset.id)
     asset = repository.catalog.get_asset(asset.id)
-    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    project = EditorProject(repository, settings=ServiceSettings(), paths=paths)
     try:
         sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
@@ -1221,7 +1142,7 @@ def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
             name="Forced hardware recovery",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="h264_amf",
+            encoder_policy={"mode": "prefer_hardware", "vendor": "amd"},
             audio_codec="aac",
             pixel_format="yuv444p",
         )
@@ -1248,31 +1169,20 @@ def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
         assert file_outcome.actual_video_codec == "libx264"
         assert file_outcome.hardware_fallback_reason
         assert len(file_outcome.archived_failed_outputs) == 1
-        archived_attempt = file_outcome.archived_failed_outputs[0].resolve(
-            repository.project_dir
-        )
+        archived_attempt = file_outcome.archived_failed_outputs[0].resolve(repository.project_dir)
         assert archived_attempt.is_file()
         assert archived_attempt.parent.name == "MediaFlow Pro Failed Exports"
         assert any(
-            item.step == "export_hardware_encoder_fallback"
-            and item.status == "success"
+            item.step == "export_hardware_encoder_fallback" and item.status == "success"
             for item in completed.execution_trace
         )
         record = repository.records.list_export_history(sequence_id)[0]
-        recovery = next(
-            check for check in record.quality.checks if check.key == "encoder_recovery"
-        )
+        recovery = next(check for check in record.quality.checks if check.key == "encoder_recovery")
         assert recovery.status == "warning"
         assert recovery.details["requested_video_codec"] == "h264_amf"
         assert recovery.details["actual_video_codec"] == "libx264"
-        assert recovery.details["archived_failed_outputs"] == [
-            str(archived_attempt)
-        ]
-        stream = next(
-            item
-            for item in record.quality.checks
-            if item.key == "streams"
-        )
+        assert recovery.details["archived_failed_outputs"] == [str(archived_attempt)]
+        stream = next(item for item in record.quality.checks if item.key == "streams")
         assert stream.status == "passed"
         assert stream.details["video_codec"] == "h264"
     finally:
@@ -1280,19 +1190,14 @@ def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
 
     controllers = EditorControllers()
     try:
-        controllers.workspace.openProject(
-            QUrl.fromLocalFile(str(repository.project_dir)).toString()
-        )
+        controllers.workspace.openProject(QUrl.fromLocalFile(str(repository.project_dir)).toString())
         task_row = next(
             controllers.tasks.tasksModel.get(index)
             for index in range(controllers.tasks.tasksModel.rowCount())
             if controllers.tasks.tasksModel.get(index)["taskId"] == task.id
         )
         assert task_row["encoderFallbackUsed"] is True
-        assert (
-            task_row["configurationLabel"]
-            == "硬件编码失败，已从 h264_amf 切换为 libx264"
-        )
+        assert task_row["configurationLabel"] == "硬件编码失败，已从 h264_amf 切换为 libx264"
         history_row = controllers.export.exportHistory[0]
         assert history_row["encoderFallbackUsed"] is True
         assert history_row["requestedVideoCodec"] == "h264_amf"
@@ -1304,7 +1209,7 @@ def test_hardware_encoder_failure_recovers_through_real_export_task_chain(
 def test_selected_highlight_candidates_batch_export_to_separate_real_videos(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "batch-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(tmp_path / "Batch Project", "Batch Project")
@@ -1342,14 +1247,14 @@ def test_selected_highlight_candidates_batch_export_to_separate_real_videos(
         title="😀" * 200,
         document_id=source_document.id,
     )
-    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    project = EditorProject(repository, settings=ServiceSettings(), paths=paths)
     try:
         output_dir = tmp_path / "batch-exports"
         configured_preset = ExportPreset(
             name="Configured batch preset",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
             burn_subtitle_track_id="configured-source-track",
@@ -1378,10 +1283,7 @@ def test_selected_highlight_candidates_batch_export_to_separate_real_videos(
         assert completed.status == TaskStatus.COMPLETED, completed.error
         assert len(outputs) == 2
         assert all(path.is_file() and path.stat().st_size > 0 for path in outputs)
-        assert all(
-            len(path.name.encode("utf-16-le")) // 2 <= 240
-            for path in outputs
-        )
+        assert all(len(path.name.encode("utf-16-le")) // 2 <= 240 for path in outputs)
         assert outputs[0].name.startswith("01-_CON-")
         for output in outputs:
             probe = subprocess.run(
@@ -1430,7 +1332,7 @@ def test_selected_highlight_candidates_batch_export_to_separate_real_videos(
 def test_highlight_batch_preflights_every_output_before_rendering(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "batch-conflict-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(
@@ -1457,7 +1359,7 @@ def test_highlight_batch_preflights_every_output_before_rendering(
         name="Atomic batch conflict",
         format=ExportFormat.H264,
         container="mp4",
-        video_codec="libx264",
+        encoder_policy={"mode": "software"},
         audio_codec="aac",
         pixel_format="yuv420p",
         preset="ultrafast",
@@ -1470,9 +1372,7 @@ def test_highlight_batch_preflights_every_output_before_rendering(
         prefix="01-",
         suffix=f"-{first.id[:8]}.mp4",
         fallback="clip",
-        required_sibling_component_utf16_units=(
-            OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-        ),
+        required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
     )
     second_output = safe_child_path(
         output_dir,
@@ -1480,22 +1380,18 @@ def test_highlight_batch_preflights_every_output_before_rendering(
         prefix="02-",
         suffix=f"-{second.id[:8]}.mp4",
         fallback="clip",
-        required_sibling_component_utf16_units=(
-            OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-        ),
+        required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
     )
     second_output.write_bytes(b"existing-user-output")
     project = EditorProject(
         repository,
-        settings=GlobalSettings(),
+        settings=ServiceSettings(),
         paths=paths,
     )
     try:
         task = project.start_task(
             ExportHighlightsCommand(
-                sequence_id=(
-                    repository.catalog.get_project().main_sequence_id
-                ),
+                sequence_id=(repository.catalog.get_project().main_sequence_id),
                 candidate_ids=[first.id, second.id],
                 output_dir=str(output_dir),
                 preset=preset,
@@ -1511,15 +1407,9 @@ def test_highlight_batch_preflights_every_output_before_rendering(
         assert not completed.artifacts
         assert len(repository.catalog.list_sequences()) == 1
         assert all(
-            candidate.sequence_id is None
-            for candidate in repository.highlights.list_highlights(
-                asset.id
-            )
+            candidate.sequence_id is None for candidate in repository.highlights.list_highlights(asset.id)
         )
-        assert not any(
-            path.name.startswith(".")
-            for path in output_dir.iterdir()
-        )
+        assert not any(path.name.startswith(".") for path in output_dir.iterdir())
     finally:
         project.close()
 
@@ -1527,7 +1417,7 @@ def test_highlight_batch_preflights_every_output_before_rendering(
 def test_desktop_highlight_export_ignores_saved_audio_only_preset(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "highlight-video-after-audio.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(
@@ -1550,7 +1440,7 @@ def test_desktop_highlight_export_ignores_saved_audio_only_preset(
             name="Previous audio export",
             format=ExportFormat.AUDIO,
             container="flac",
-            video_codec=None,
+            encoder_policy=None,
             audio_codec="flac",
             pixel_format=None,
         ),
@@ -1560,13 +1450,9 @@ def test_desktop_highlight_export_ignores_saved_audio_only_preset(
 
     controllers = EditorControllers()
     try:
-        controllers.workspace.openProject(
-            QUrl.fromLocalFile(str(project_root)).toString()
-        )
+        controllers.workspace.openProject(QUrl.fromLocalFile(str(project_root)).toString())
         output_dir = tmp_path / "desktop-highlight-exports"
-        controllers.highlights.exportSelectedHighlights(
-            str(output_dir)
-        )
+        controllers.highlights.exportSelectedHighlights(str(output_dir))
         current = controllers.session.binding.current
         assert current is not None
         task = current.list_tasks()[-1]
@@ -1593,7 +1479,7 @@ def test_desktop_highlight_export_ignores_saved_audio_only_preset(
 
 
 def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     assert paths.melt is not None
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths, width=320, height=180)
@@ -1637,7 +1523,7 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
         )
         state = editor.state
         assert state.compounds == [compound]
-        compiler = TimelineCompiler(repository)
+        compiler = TimelineCompiler(repository, RuntimeContext.discover().paths)
         document = compiler.compile(state)
         assert str(source.resolve()) in document.xml
         assert "tractor0" in document.xml
@@ -1648,7 +1534,7 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
             name="H.264 Test",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
             quality_value=23,
@@ -1675,15 +1561,19 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
         assert rendering[-1].completed == rendering[-1].total
 
         hardware = {item["value"] for item in EncoderDiscoveryService(paths).video_options()}
-        if "h264_nvenc" in hardware:
+        if "prefer_hardware:nvidia" in hardware:
             hardware_result = MltExportService(compiler, paths).export(
                 state,
-                preset.model_copy(
-                    update={
+                ExportPreset.model_validate(
+                    {
+                        **preset.model_dump(mode="python"),
                         "name": "H.264 NVENC Test",
-                        "video_codec": "h264_nvenc",
+                        "encoder_policy": {
+                            "mode": "prefer_hardware",
+                            "vendor": "nvidia",
+                        },
                         "preset": "p4",
-                    }
+                    },
                 ),
                 root / "exports" / "real-nvenc-export.mp4",
             )
@@ -1701,9 +1591,7 @@ def test_canonical_timeline_compiles_and_real_mlt_export_is_consumable(tmp_path:
             preset.model_copy(update={"name": "Detached audio test"}),
             root / "exports" / "detached-audio-export.mp4",
         )
-        assert {
-            stream["codec_type"] for stream in detached_result.probe["streams"]
-        } >= {"video", "audio"}
+        assert {stream["codec_type"] for stream in detached_result.probe["streams"]} >= {"video", "audio"}
         detached_probe = MediaProbe(paths).probe(
             detached_result.output_path,
             timeline_profile=detached_state.sequence.profile,
@@ -1785,7 +1673,7 @@ def _prepare_external_subtitle_export(
         name="Transactional subtitle export",
         format=ExportFormat.H264,
         container="mp4",
-        video_codec="libx264",
+        encoder_policy={"mode": "software"},
         audio_codec=None,
         pixel_format="yuv420p",
         quality_value=18,
@@ -1798,7 +1686,7 @@ def _prepare_external_subtitle_export(
 def test_external_subtitle_names_are_portable_bounded_and_collision_stable(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "sidecar-source.mp4"
     _generate_color_media(source, paths, "black")
 
@@ -1830,7 +1718,7 @@ def test_external_subtitle_names_are_portable_bounded_and_collision_stable(
         )
         state = editor.reload()
         output = tmp_path / (("超长导出🎞️" * 60) + ".mp4")
-        service = MltExportService(TimelineCompiler(repository), paths)
+        service = MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths)
 
         first = service._external_subtitle_outputs(
             state,
@@ -1846,15 +1734,10 @@ def test_external_subtitle_names_are_portable_bounded_and_collision_stable(
         )
 
         assert len(first) == 3
-        assert tuple(item.destination for item in first) == tuple(
-            item.destination for item in second
-        )
+        assert tuple(item.destination for item in first) == tuple(item.destination for item in second)
         names = [item.destination.name for item in first]
         assert len({name.casefold() for name in names}) == 3
-        assert all(
-            len(name.encode("utf-16-le")) // 2 <= 240
-            for name in names
-        )
+        assert all(len(name.encode("utf-16-le")) // 2 <= 240 for name in names)
         assert all(name.endswith(".srt") for name in names)
         assert names[0].endswith("._CON.srt")
         assert re.search(r"\._CON-[0-9a-f]{12}\.srt$", names[1])
@@ -2055,7 +1938,7 @@ def _frame_rgb_means(path: Path, paths: RuntimePaths, frames: list[int]) -> list
 
 
 def test_mlt_transition_uses_two_real_sources_and_preserves_timeline_duration(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     red_source = tmp_path / "red.mp4"
     blue_source = tmp_path / "blue.mp4"
     _generate_color_media(red_source, paths, "red")
@@ -2084,7 +1967,7 @@ def test_mlt_transition_uses_two_real_sources_and_preserves_timeline_duration(tm
         )
         editor.create_transition(left.id, right.id, TransitionKind.DISSOLVE, 10)
         state = editor.state
-        compiler = TimelineCompiler(repository)
+        compiler = TimelineCompiler(repository, RuntimeContext.discover().paths)
         document = compiler.compile(state)
         assert 'mlt_service">luma<' in document.xml
         assert 'mlt_service">mix<' in document.xml
@@ -2095,7 +1978,7 @@ def test_mlt_transition_uses_two_real_sources_and_preserves_timeline_duration(tm
             name="Transition Test",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p",
             quality_value=18,
@@ -2116,7 +1999,7 @@ def test_mlt_transition_uses_two_real_sources_and_preserves_timeline_duration(tm
 
 
 def test_real_mlt_timewarp_reads_correct_forward_and_reverse_source_frames(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "temporal.mp4"
     _generate_temporal_color_media(source, paths)
 
@@ -2147,14 +2030,16 @@ def test_real_mlt_timewarp_reads_correct_forward_and_reverse_source_frames(tmp_p
             name="Timewarp Test",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p",
             quality_value=18,
             preset="veryfast",
             gop_frames=25,
         )
-        result = MltExportService(TimelineCompiler(repository), paths).export(
+        result = MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        ).export(
             editor.state,
             preset,
             repository.project_dir / "exports" / "timewarp.mp4",
@@ -2170,7 +2055,7 @@ def test_real_mlt_timewarp_reads_correct_forward_and_reverse_source_frames(tmp_p
 
 
 def test_real_mlt_transition_accepts_speed_adjusted_adjacent_clips(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     red_source = tmp_path / "red-fast.mp4"
     blue_source = tmp_path / "blue-fast.mp4"
     _generate_color_media(red_source, paths, "red")
@@ -2204,14 +2089,16 @@ def test_real_mlt_transition_accepts_speed_adjusted_adjacent_clips(tmp_path: Pat
             name="Fast Transition Test",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p",
             quality_value=18,
             preset="veryfast",
             gop_frames=25,
         )
-        result = MltExportService(TimelineCompiler(repository), paths).export(
+        result = MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        ).export(
             editor.state,
             preset,
             repository.project_dir / "exports" / "fast-transition.mp4",
@@ -2225,7 +2112,7 @@ def test_real_mlt_transition_accepts_speed_adjusted_adjacent_clips(tmp_path: Pat
 
 
 def test_subtitle_placement_is_burned_and_exported_as_external_srt(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "black.mp4"
     _generate_color_media(source, paths, "black")
 
@@ -2262,7 +2149,7 @@ def test_subtitle_placement_is_burned_and_exported_as_external_srt(tmp_path: Pat
             name="Subtitle Test",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p",
             quality_value=18,
@@ -2270,7 +2157,9 @@ def test_subtitle_placement_is_burned_and_exported_as_external_srt(tmp_path: Pat
             gop_frames=25,
             burn_subtitle_track_id=subtitle_track.id,
         )
-        result = MltExportService(TimelineCompiler(repository), paths).export(
+        result = MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        ).export(
             state,
             preset,
             repository.project_dir / "exports" / "subtitle.mp4",
@@ -2290,7 +2179,7 @@ def test_subtitle_placement_is_burned_and_exported_as_external_srt(tmp_path: Pat
 def test_external_subtitle_conflict_prevents_render_before_video_is_published(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "conflict-source.mp4"
     _generate_color_media(source, paths, "red")
 
@@ -2311,7 +2200,7 @@ def test_external_subtitle_conflict_prevents_render_before_video_is_published(
 
         with pytest.raises(FileExistsError) as conflict:
             MltExportService(
-                TimelineCompiler(repository),
+                TimelineCompiler(repository, RuntimeContext.discover().paths),
                 paths,
             ).export(
                 state,
@@ -2324,9 +2213,7 @@ def test_external_subtitle_conflict_prevents_render_before_video_is_published(
         assert sidecar.read_bytes() == original_subtitle
         assert not output.exists()
         assert not [
-            item
-            for item in output.parent.iterdir()
-            if item.is_file() and item.name.startswith(".mf-")
+            item for item in output.parent.iterdir() if item.is_file() and item.name.startswith(".mf-")
         ]
 
 
@@ -2334,7 +2221,7 @@ def test_external_subtitle_commit_failure_restores_complete_previous_output_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "rollback-source.mp4"
     _generate_color_media(source, paths, "red")
 
@@ -2366,11 +2253,7 @@ def test_external_subtitle_commit_failure_restores_complete_previous_output_set(
         ) -> Path:
             nonlocal injected
             target = Path(destination).resolve()
-            if (
-                not injected
-                and target == sidecar.resolve()
-                and source_path.name.startswith(".mf-subtitle-")
-            ):
+            if not injected and target == sidecar.resolve() and source_path.name.startswith(".mf-subtitle-"):
                 injected = True
                 raise OSError("injected sidecar publish failure")
             return original_replace(source_path, destination)
@@ -2381,7 +2264,7 @@ def test_external_subtitle_commit_failure_restores_complete_previous_output_set(
             match="sidecar publish failure",
         ):
             MltExportService(
-                TimelineCompiler(repository),
+                TimelineCompiler(repository, RuntimeContext.discover().paths),
                 paths,
             ).export(
                 state,
@@ -2393,21 +2276,11 @@ def test_external_subtitle_commit_failure_restores_complete_previous_output_set(
         assert injected is True
         assert output.read_bytes() == previous_video
         assert sidecar.read_bytes() == previous_subtitle
-        archived = list(
-            (
-                output.parent / "MediaFlow Pro Failed Exports"
-            ).iterdir()
-        )
-        archived_video = next(
-            item for item in archived if item.suffix == ".mp4"
-        )
-        archived_subtitle = next(
-            item for item in archived if item.suffix == ".srt"
-        )
+        archived = list((output.parent / "MediaFlow Pro Failed Exports").iterdir())
+        archived_video = next(item for item in archived if item.suffix == ".mp4")
+        archived_subtitle = next(item for item in archived if item.suffix == ".srt")
         assert archived_video.stat().st_size > 0
-        assert "TRANSACTIONAL SUBTITLE" in archived_subtitle.read_text(
-            encoding="utf-8-sig"
-        )
+        assert "TRANSACTIONAL SUBTITLE" in archived_subtitle.read_text(encoding="utf-8-sig")
         archived_probe = MediaProbe(paths).probe(
             archived_video,
             timeline_profile=state.sequence.profile,
@@ -2415,16 +2288,14 @@ def test_external_subtitle_commit_failure_restores_complete_previous_output_set(
         assert archived_probe.metadata.has_video is True
         assert archived_probe.metadata.duration_frames == 25
         assert not [
-            item
-            for item in output.parent.iterdir()
-            if item.is_file() and item.name.startswith(".mf-")
+            item for item in output.parent.iterdir() if item.is_file() and item.name.startswith(".mf-")
         ]
 
 
 def test_different_video_containers_contend_for_shared_subtitle_sidecar_across_processes(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "shared-sidecar-source.mp4"
     _generate_color_media(source, paths, "green")
 
@@ -2476,7 +2347,7 @@ with reserve_outputs((video, sidecar), runtime_dir=runtime_dir):
                 match="already writing",
             ):
                 MltExportService(
-                    TimelineCompiler(repository),
+                    TimelineCompiler(repository, RuntimeContext.discover().paths),
                     paths,
                 ).export(
                     state,
@@ -2490,14 +2361,10 @@ with reserve_outputs((video, sidecar), runtime_dir=runtime_dir):
             process.stdin.write("release\n")
             process.stdin.flush()
             process.wait(timeout=10)
-        assert process.returncode == 0, (
-            process.stderr.read()
-            if process.stderr is not None
-            else ""
-        )
+        assert process.returncode == 0, process.stderr.read() if process.stderr is not None else ""
 
         result = MltExportService(
-            TimelineCompiler(repository),
+            TimelineCompiler(repository, RuntimeContext.discover().paths),
             paths,
         ).export(
             state,
@@ -2507,13 +2374,11 @@ with reserve_outputs((video, sidecar), runtime_dir=runtime_dir):
 
         assert result.output_path.is_file()
         assert result.subtitle_files == (sidecar,)
-        assert "TRANSACTIONAL SUBTITLE" in sidecar.read_text(
-            encoding="utf-8-sig"
-        )
+        assert "TRANSACTIONAL SUBTITLE" in sidecar.read_text(encoding="utf-8-sig")
 
 
 def test_export_style_watermark_and_trim_reach_the_rendered_video(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "black.mp4"
     watermark_source = tmp_path / "watermark.png"
     _generate_color_media(source, paths, "black")
@@ -2579,7 +2444,7 @@ def test_export_style_watermark_and_trim_reach_the_rendered_video(tmp_path: Path
             name="Styled Trim Test",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p",
             quality_value=18,
@@ -2590,7 +2455,7 @@ def test_export_style_watermark_and_trim_reach_the_rendered_video(tmp_path: Path
             watermark=watermark,
         )
         editor.set_sequence_in_out(20, 70)
-        compiler = TimelineCompiler(repository)
+        compiler = TimelineCompiler(repository, RuntimeContext.discover().paths)
         graph = compiler.compile(
             editor.state,
             subtitle_track_id=subtitle_track.id,
@@ -2626,7 +2491,7 @@ def test_smart_sequence_bounds_change_real_export_and_preserve_source_clips(
     tmp_path: Path,
     max_project_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "leading-black.mp4"
     _generate_edge_black_media(source, paths)
 
@@ -2663,15 +2528,17 @@ def test_smart_sequence_bounds_change_real_export_and_preserve_source_clips(
             name="Auto Trim",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p",
             quality_value=18,
             preset="veryfast",
             gop_frames=25,
         )
-        service = MltExportService(TimelineCompiler(repository), paths)
-        analyzer = SequenceBoundaryAnalysisService(TimelineCompiler(repository), paths)
+        service = MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths)
+        analyzer = SequenceBoundaryAnalysisService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        )
         snapshot_hash = analyzer.snapshot_hash(editor.state)
         analysis, artifact = analyzer.analyze(
             editor.state,
@@ -2680,14 +2547,11 @@ def test_smart_sequence_bounds_change_real_export_and_preserve_source_clips(
         assert artifact.is_file()
         assert utf16_units(str(artifact)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
         boundary_cache_files = [
-            path
-            for path in (repository.project_dir / "cache" / "b").rglob("*")
-            if path.is_file()
+            path for path in (repository.project_dir / "cache" / "b").rglob("*") if path.is_file()
         ]
         assert boundary_cache_files
         assert all(
-            utf16_units(str(path)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-            for path in boundary_cache_files
+            utf16_units(str(path)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT for path in boundary_cache_files
         )
         assert not list(repository.project_dir.rglob(".mf-*"))
         assert analysis.black_in_frame == 2
@@ -2716,7 +2580,7 @@ def test_smart_sequence_bounds_change_real_export_and_preserve_source_clips(
 
 
 def test_real_hevc_hdr10_export_is_ten_bit_and_carries_mastering_metadata(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "sdr-source.mp4"
     _generate_color_media(source, paths, "white")
     profile = ProjectProfile(
@@ -2750,14 +2614,16 @@ def test_real_hevc_hdr10_export_is_ten_bit_and_carries_mastering_metadata(tmp_pa
             name="HDR10 Test",
             format=ExportFormat.HEVC,
             container="mp4",
-            video_codec="libx265",
+            encoder_policy={"mode": "software"},
             audio_codec=None,
             pixel_format="yuv420p10le",
             quality_value=28,
             preset="ultrafast",
             gop_frames=25,
         )
-        result = MltExportService(TimelineCompiler(repository), paths).export(
+        result = MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        ).export(
             editor.state,
             preset,
             repository.project_dir / "exports" / "hdr10.mp4",
@@ -2775,7 +2641,7 @@ def test_real_hevc_hdr10_export_is_ten_bit_and_carries_mastering_metadata(tmp_pa
 
 
 def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     with ProjectRepository.create(tmp_path / "Formats Project", "Formats Project") as repository:
@@ -2791,7 +2657,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
             source_in=0,
             duration=25,
         )
-        service = MltExportService(TimelineCompiler(repository), paths)
+        service = MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths)
 
         av1 = service.export(
             editor.state,
@@ -2799,7 +2665,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
                 name="AV1 Test",
                 format=ExportFormat.AV1,
                 container="mkv",
-                video_codec="libsvtav1",
+                encoder_policy={"mode": "software"},
                 audio_codec="libopus",
                 pixel_format="yuv420p",
                 quality_value=35,
@@ -2819,7 +2685,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
                 name="ProRes Test",
                 format=ExportFormat.PRORES,
                 container="mov",
-                video_codec="prores_ks",
+                encoder_policy={"mode": "software"},
                 audio_codec="pcm_s16le",
                 pixel_format="yuv422p10le",
                 quality_value=0,
@@ -2840,7 +2706,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
                 name="FLAC Test",
                 format=ExportFormat.AUDIO,
                 container="flac",
-                video_codec=None,
+                encoder_policy=None,
                 audio_codec="flac",
                 pixel_format=None,
                 quality_value=0,
@@ -2866,7 +2732,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
                     name=name,
                     format=ExportFormat.AUDIO,
                     container=container,
-                    video_codec=None,
+                    encoder_policy=None,
                     audio_codec=codec,
                     pixel_format=None,
                     quality_value=0,
@@ -2887,7 +2753,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
                 name="5.1 PCM Test",
                 format=ExportFormat.AUDIO,
                 container="wav",
-                video_codec=None,
+                encoder_policy=None,
                 audio_codec="pcm_s24le",
                 pixel_format=None,
                 quality_value=0,
@@ -2903,7 +2769,7 @@ def test_real_av1_prores_and_audio_exports_are_consumable(tmp_path: Path) -> Non
 
 
 def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "dialogue.wav"
     _generate_sine_audio(source, paths, frequency=700, duration=2)
     with ProjectRepository.create(tmp_path / "Effect Catalog", "Effect Catalog") as repository:
@@ -2937,13 +2803,15 @@ def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
         for position, kind in enumerate(kinds):
             repository.audio.save_audio_effect(AudioEffect(bus_id=master.id, kind=kind, position=position))
 
-        result = MltExportService(TimelineCompiler(repository), paths).export(
+        result = MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        ).export(
             editor.state,
             ExportPreset(
                 name="Effect Catalog Test",
                 format=ExportFormat.AUDIO,
                 container="flac",
-                video_codec=None,
+                encoder_policy=None,
                 audio_codec="flac",
                 pixel_format=None,
                 quality_value=0,
@@ -2961,7 +2829,7 @@ def test_fixed_audio_effect_catalog_renders_real_audio(tmp_path: Path) -> None:
 
 
 def test_dialogue_bus_really_ducks_music_in_exported_audio(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     music_source = tmp_path / "music.wav"
     dialogue_source = tmp_path / "dialogue.wav"
     _generate_sine_audio(music_source, paths, frequency=440, duration=3)
@@ -3013,14 +2881,14 @@ def test_dialogue_bus_really_ducks_music_in_exported_audio(tmp_path: Path) -> No
             )
         )
         output = (
-            MltExportService(TimelineCompiler(repository), paths)
+            MltExportService(TimelineCompiler(repository, RuntimeContext.discover().paths), paths)
             .export(
                 editor.state,
                 ExportPreset(
                     name="Ducking Test",
                     format=ExportFormat.AUDIO,
                     container="flac",
-                    video_codec=None,
+                    encoder_policy=None,
                     audio_codec="flac",
                     pixel_format=None,
                     quality_value=0,

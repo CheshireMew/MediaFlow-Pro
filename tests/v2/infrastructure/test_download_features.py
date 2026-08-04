@@ -18,6 +18,7 @@ from mediaflow.infrastructure import ytdlp_service
 from mediaflow.infrastructure.cookie_store import CookieStore
 from mediaflow.infrastructure.download_errors import classify_download_error
 from mediaflow.infrastructure.platform_media import PlatformMediaResolver, ResolvedPlatformMedia
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 
 
@@ -35,7 +36,8 @@ def test_download_format_options_cover_audio_resolution_and_avc_compatibility() 
     assert YtDlpDownloadService.normalize_url("https://pro.x.com/user/status/123") == (
         "https://x.com/user/status/123"
     )
-    assert YtDlpDownloadService._base_options(None, None, None)["socket_timeout"] == 10.0
+    service = YtDlpDownloadService(RuntimeContext.discover().paths)
+    assert service._base_options(None, None, None)["socket_timeout"] == 10.0
 
 
 def test_download_output_template_bounds_and_sanitizes_every_component(
@@ -155,7 +157,9 @@ def test_download_path_preflight_runs_before_directory_creation_or_network(
     )
     try:
         with pytest.raises(ValueError, match="路径过深"):
-            YtDlpDownloadService().download(request)
+            YtDlpDownloadService(RuntimeContext.discover().paths).download(
+                request
+            )
     finally:
         server.shutdown()
         server.server_close()
@@ -350,7 +354,11 @@ def test_real_browser_sniffer_observes_page_media_request_and_title() -> None:
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}/watch"
-        result = PlatformMediaResolver._sniff_browser_media(url, timeout=3)
+        result = PlatformMediaResolver._sniff_browser_media(
+            url,
+            executable=RuntimeContext.discover().paths.chromium,
+            timeout=3,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -369,11 +377,13 @@ def test_browser_platform_analysis_forwards_configured_proxy(monkeypatch) -> Non
         _resolver_type,
         url: str,
         *,
+        executable: Path | None,
         timeout: float = 15.0,
         proxy: str | None = None,
         check_cancelled=None,
     ) -> ResolvedPlatformMedia:
         observed["url"] = url
+        observed["executable"] = str(executable)
         observed["proxy"] = proxy
         observed["timeout"] = str(timeout)
         return ResolvedPlatformMedia(url, "https://media.example/video.mp4", "Video", "Douyin")
@@ -381,12 +391,17 @@ def test_browser_platform_analysis_forwards_configured_proxy(monkeypatch) -> Non
     monkeypatch.setattr(PlatformMediaResolver, "_sniff_browser_media", classmethod(sniff))
     url = "https://www.douyin.com/video/123"
 
-    plan = PlatformMediaResolver().analyze(url, proxy="http://127.0.0.1:7890")
+    chromium = RuntimeContext.discover().paths.chromium
+    plan = PlatformMediaResolver(chromium).analyze(
+        url,
+        proxy="http://127.0.0.1:7890",
+    )
 
     assert plan is not None
     assert plan.entries[0].download_url == "https://media.example/video.mp4"
     assert observed == {
         "url": url,
+        "executable": str(chromium),
         "proxy": "http://127.0.0.1:7890",
         "timeout": "15.0",
     }
@@ -419,7 +434,9 @@ def test_ytdlp_analysis_cancels_after_a_bounded_socket_wait(monkeypatch) -> None
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                YtDlpDownloadService().analyze,
+                YtDlpDownloadService(
+                    RuntimeContext.discover().paths
+                ).analyze,
                 url,
                 check_cancelled=check_cancelled,
             )
@@ -483,7 +500,9 @@ def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) ->
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                YtDlpDownloadService().download,
+                YtDlpDownloadService(
+                    RuntimeContext.discover().paths
+                ).download,
                 request,
                 progress=lambda _progress: download_started.set(),
                 check_cancelled=check_cancelled,

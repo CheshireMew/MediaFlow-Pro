@@ -158,7 +158,7 @@
     <context>
         <name>AudioCatalog</name>
         <message>
-            <location line="+379" />
+            <location line="+389" />
             <source>参数均衡器</source>
             <translation>パラメトリックEQ</translation>
         </message>
@@ -847,22 +847,22 @@
     <context>
         <name>EncoderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-380" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-390" />
             <source>H.264 软件</source>
             <translation>H.264 ソフトウェア</translation>
         </message>
         <message>
-            <location line="+4" />
+            <location line="+6" />
             <source>HEVC 软件</source>
             <translation>HEVC ソフトウェア</translation>
         </message>
         <message>
-            <location line="+4" />
+            <location line="+6" />
             <source>AV1 SVT 软件</source>
             <translation>AV1 SVT ソフトウェア</translation>
         </message>
         <message>
-            <location line="+4" />
+            <location line="+6" />
             <source>ProRes 软件</source>
             <translation>ProRes ソフトウェア</translation>
         </message>
@@ -990,7 +990,12 @@
     <context>
         <name>ExportSettings</name>
         <message>
-            <location filename="../../desktop/qml/components/ExportSettings.qml" line="+87" />
+            <location filename="../../desktop/qml/components/ExportSettings.qml" line="+31" />
+            <source>当前项目要求：%1（本机不可用）</source>
+            <translation>このプロジェクトの要件：%1（このマシンでは利用不可）</translation>
+        </message>
+        <message>
+            <location line="+86" />
             <source>推荐设置</source>
             <translation>推奨設定</translation>
         </message>
@@ -1000,7 +1005,12 @@
             <translation>エンコーダー</translation>
         </message>
         <message>
-            <location line="+20" />
+            <location line="+22" />
+            <source>这个项目要求的硬件编码器在本机不可用。导出会停止并说明原因，不会悄悄改用其它编码器。</source>
+            <translation>このプロジェクトで必要なハードウェアエンコーダーはこのマシンでは利用できません。別のエンコーダーへ自動で切り替えず、理由を示して書き出しを停止します。</translation>
+        </message>
+        <message>
+            <location line="+8" />
             <source>编码器和封装会根据所选音频格式自动匹配。</source>
             <translation>選択した音声形式に合わせてコーデックとコンテナを自動設定します。</translation>
         </message>
@@ -1446,18 +1456,18 @@
         </message>
         <message>
             <location line="+8" />
-            <location line="+206" />
+            <location line="+208" />
             <source>开始帧</source>
             <translation>開始フレーム</translation>
         </message>
         <message>
-            <location line="-194" />
-            <location line="+207" />
+            <location line="-196" />
+            <location line="+209" />
             <source>结束帧</source>
             <translation>終了フレーム</translation>
         </message>
         <message>
-            <location line="-194" />
+            <location line="-196" />
             <source>添加候选</source>
             <translation>候補を追加</translation>
         </message>
@@ -1532,7 +1542,7 @@
             <translation>候補を編集</translation>
         </message>
         <message>
-            <location line="+39" />
+            <location line="+41" />
             <source>保存候选</source>
             <translation>候補を保存</translation>
         </message>
@@ -1911,7 +1921,7 @@
     <context>
         <name>LlmProviderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+265" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+269" />
             <source>自定义 / 本地</source>
             <translation>カスタム / ローカル</translation>
         </message>
@@ -1919,7 +1929,7 @@
     <context>
         <name>Main</name>
         <message>
-            <location filename="../../desktop/qml/Main.qml" line="+175" />
+            <location filename="../../desktop/qml/Main.qml" line="+235" />
             <source>确认下载</source>
             <translation>ダウンロードの確認</translation>
         </message>
@@ -1929,7 +1939,7 @@
             <translation>リンク解析が完了しました</translation>
         </message>
         <message>
-            <location line="-157" />
+            <location line="-217" />
             <source>最佳可用质量</source>
             <translation>利用可能な最高画質</translation>
         </message>
@@ -1939,7 +1949,37 @@
             <translation>音声のみダウンロード</translation>
         </message>
         <message>
-            <location line="+128" />
+            <location line="+125" />
+            <source>这项内容刚刚被其他协作者修改</source>
+            <translation>この項目は別の共同編集者によって変更されました</translation>
+        </message>
+        <message>
+            <location line="+13" />
+            <source>%1 在你开始输入后修改了同一项内容。你的输入仍然保留，请选择采用哪一份。</source>
+            <translation>%1 が入力開始後に同じ項目を変更しました。入力内容は保持されています。どちらを採用するか選んでください。</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目中的同一项内容在你开始输入后发生了变化。你的输入仍然保留，请选择采用哪一份。</source>
+            <translation>入力開始後にプロジェクト内の同じ項目が変更されました。入力内容は保持されています。どちらを採用するか選んでください。</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>发生冲突的位置：%1</source>
+            <translation>競合している箇所：%1</translation>
+        </message>
+        <message>
+            <location line="+13" />
+            <source>采用项目中的最新内容</source>
+            <translation>プロジェクトの最新内容を使用</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>保留我的输入</source>
+            <translation>自分の入力を保持</translation>
+        </message>
+        <message>
+            <location line="+19" />
             <source>选择媒体默认保存位置</source>
             <translation>メディアの既定の保存先を選択</translation>
         </message>
@@ -2651,7 +2691,7 @@
             <translation>Faster-Whisper XXL 実行ファイルを選択</translation>
         </message>
         <message>
-            <location line="+2" />
+            <location line="+3" />
             <source>Faster-Whisper XXL (faster-whisper-xxl.exe)</source>
             <translation>Faster-Whisper XXL (faster-whisper-xxl.exe)</translation>
         </message>
@@ -2661,7 +2701,7 @@
             <translation>実行ファイル (*.exe)</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+9" />
             <source>选择 Faster-Whisper 模型目录</source>
             <translation>Faster-Whisper モデルディレクトリを選択</translation>
         </message>
@@ -2737,13 +2777,13 @@
         </message>
         <message>
             <location line="+5" />
-            <location line="+387" />
+            <location line="+389" />
             <location line="+71" />
             <source>自动</source>
             <translation>自動</translation>
         </message>
         <message>
-            <location line="-458" />
+            <location line="-460" />
             <source>原始素材</source>
             <translation>元のメディア</translation>
         </message>
@@ -2828,25 +2868,25 @@
             <translation>消去</translation>
         </message>
         <message>
-            <location line="-341" />
+            <location line="-343" />
             <source>选择默认项目保存目录</source>
             <translation>既定のプロジェクト保存先を選択</translation>
         </message>
         <message>
-            <location line="+115" />
+            <location line="+117" />
             <source>默认项目保存目录</source>
             <translation>既定のプロジェクト保存先</translation>
         </message>
         <message>
             <location line="+3" />
-            <location line="+384" />
+            <location line="+386" />
             <location line="+13" />
             <location line="+82" />
             <source>选择</source>
             <translation>選択</translation>
         </message>
         <message>
-            <location line="-462" />
+            <location line="-464" />
             <source>预览性能</source>
             <translation>プレビュー性能</translation>
         </message>
@@ -2867,12 +2907,12 @@
         </message>
         <message>
             <location line="+27" />
-            <location line="+385" />
+            <location line="+387" />
             <source>保存</source>
             <translation>保存</translation>
         </message>
         <message>
-            <location line="-376" />
+            <location line="-378" />
             <source>视频编码</source>
             <translation>動画コーデック</translation>
         </message>
@@ -2902,7 +2942,7 @@
             <translation>未確認</translation>
         </message>
         <message>
-            <location line="+41" />
+            <location line="+43" />
             <source>尚未检测 CUDA</source>
             <translation>CUDAは未確認です</translation>
         </message>
@@ -3043,7 +3083,12 @@
             <translation>キャンセル</translation>
         </message>
         <message>
-            <location line="-311" />
+            <location line="-455" />
+            <source>可执行文件 (*)</source>
+            <translation>実行ファイル (*)</translation>
+        </message>
+        <message>
+            <location line="+142" />
             <source>响度目标（LUFS）</source>
             <translation>ラウドネス目標（LUFS）</translation>
         </message>
@@ -3128,29 +3173,29 @@
             <translation>yt-dlp：%1。音声コンポーネントは必要に応じてダウンロードされ、MediaFlow Pro のインストーラーには含まれません。</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="+11" />
             <source>Faster-Whisper XXL · %1 GiB · %2</source>
             <translation>Faster-Whisper XXL · %1 GiB · %2</translation>
         </message>
         <message>
             <location line="+2" />
-            <location line="+17" />
+            <location line="+18" />
             <source>可用</source>
             <translation>利用可能</translation>
         </message>
         <message>
-            <location line="-17" />
-            <location line="+17" />
+            <location line="-18" />
+            <location line="+18" />
             <source>未就绪</source>
             <translation>準備未完了</translation>
         </message>
         <message>
-            <location line="-11" />
+            <location line="-12" />
             <source>尚未安装或选择本地程序</source>
             <translation>未インストール、またはローカルプログラムが選択されていません</translation>
         </message>
         <message>
-            <location line="+9" />
+            <location line="+10" />
             <source>GPT-SoVITS v2Pro · %1 GiB · %2</source>
             <translation>GPT-SoVITS v2Pro · %1 GiB · %2</translation>
         </message>
@@ -3319,12 +3364,12 @@
         </message>
         <message>
             <location line="+3" />
-            <location line="+412" />
+            <location line="+417" />
             <source>序列字幕</source>
             <translation>シーケンス字幕</translation>
         </message>
         <message>
-            <location line="-395" />
+            <location line="-400" />
             <source>添加</source>
             <translation>追加</translation>
         </message>
@@ -3500,12 +3545,12 @@
         </message>
         <message>
             <location line="-47" />
-            <location line="+100" />
+            <location line="+105" />
             <source>按中点拆分</source>
             <translation>中間で分割</translation>
         </message>
         <message>
-            <location line="-34" />
+            <location line="-39" />
             <source>播放头设为开始</source>
             <translation>開始を再生ヘッドに設定</translation>
         </message>
@@ -3515,7 +3560,7 @@
             <translation>終了を再生ヘッドに設定</translation>
         </message>
         <message>
-            <location line="+31" />
+            <location line="+36" />
             <source>保存修改</source>
             <translation>変更を保存</translation>
         </message>
@@ -3540,7 +3585,7 @@
             <translation>字幕ドキュメントを選択して現在のシーケンスに配置してください。</translation>
         </message>
         <message>
-            <location line="+24" />
+            <location line="+27" />
             <source>保存为序列覆盖</source>
             <translation>シーケンス上書きとして保存</translation>
         </message>
@@ -3581,7 +3626,7 @@
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location line="-456" />
+            <location line="-466" />
             <source>主总线</source>
             <translation>マスター</translation>
         </message>
@@ -3634,7 +3679,7 @@
             <translation>%1 チャンク並列</translation>
         </message>
         <message>
-            <location line="+57" />
+            <location line="+63" />
             <source>导入素材 %1</source>
             <translation>メディア %1 を読み込む</translation>
         </message>
@@ -4853,7 +4898,7 @@
     <context>
         <name>TranslationCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+194" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+198" />
             <source>标准翻译</source>
             <translation>標準翻訳</translation>
         </message>
@@ -4926,12 +4971,12 @@
             <translation>用語集</translation>
         </message>
         <message>
-            <location line="+261" />
+            <location line="+266" />
             <source>还没有字幕文档</source>
             <translation>字幕ドキュメントはまだありません</translation>
         </message>
         <message>
-            <location line="-177" />
+            <location line="-182" />
             <source>校对整篇</source>
             <translation>全文を校正</translation>
         </message>
@@ -5011,7 +5056,7 @@
             <translation>（原文なし）</translation>
         </message>
         <message>
-            <location line="+11" />
+            <location line="+16" />
             <source>尚未生成译文</source>
             <translation>訳文はまだ生成されていません</translation>
         </message>
@@ -5308,7 +5353,7 @@
     <context>
         <name>WebPropertyEditor</name>
         <message>
-            <location filename="../../desktop/qml/WebPropertyEditor.qml" line="+44" />
+            <location filename="../../desktop/qml/WebPropertyEditor.qml" line="+56" />
             <source>允许自动化修改</source>
             <translation>自動変更を許可</translation>
         </message>
@@ -5328,7 +5373,7 @@
             <translation>再生ヘッド位置のキーフレームを削除</translation>
         </message>
         <message>
-            <location line="+23" />
+            <location line="+24" />
             <source>已启用</source>
             <translation>有効</translation>
         </message>
@@ -5675,7 +5720,7 @@
             <translation>設定</translation>
         </message>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-543" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-553" />
             <source>素材</source>
             <translation>メディア</translation>
         </message>

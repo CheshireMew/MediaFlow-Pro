@@ -70,12 +70,16 @@ def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
     tmp_path: Path,
 ) -> None:
     managed_root = tmp_path / "managed-scripts"
-    previous_settings = os.environ.get("MEDIAFLOW_SETTINGS_PATH")
+    previous_service_settings = os.environ.get("MEDIAFLOW_SERVICE_SETTINGS_PATH")
+    previous_desktop_settings = os.environ.get("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
     previous_media_root = os.environ.get("MEDIAFLOW_MEDIA_ROOT")
     previous_project_root = os.environ.get("MEDIAFLOW_PROJECT_ROOT")
 
     with verification_run("policy", managed_root=managed_root) as first_success:
-        assert Path(os.environ["MEDIAFLOW_SETTINGS_PATH"]).is_relative_to(
+        assert Path(os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]).is_relative_to(
+            first_success
+        )
+        assert Path(os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]).is_relative_to(
             first_success
         )
         assert Path(os.environ["MEDIAFLOW_MEDIA_ROOT"]).is_relative_to(
@@ -84,7 +88,14 @@ def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
         assert Path(os.environ["MEDIAFLOW_PROJECT_ROOT"]).is_relative_to(first_success)
         (first_success / "success.txt").write_text("first", encoding="utf-8")
     assert _manifest(first_success)["status"] == "passed"
-    assert os.environ.get("MEDIAFLOW_SETTINGS_PATH") == previous_settings
+    assert (
+        os.environ.get("MEDIAFLOW_SERVICE_SETTINGS_PATH")
+        == previous_service_settings
+    )
+    assert (
+        os.environ.get("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
+        == previous_desktop_settings
+    )
     assert os.environ.get("MEDIAFLOW_MEDIA_ROOT") == previous_media_root
     assert os.environ.get("MEDIAFLOW_PROJECT_ROOT") == previous_project_root
 

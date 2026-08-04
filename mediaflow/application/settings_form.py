@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import DesktopSettings, ServiceSettings
 from mediaflow.domain.translation import TranslationMode
 
 
@@ -46,101 +46,118 @@ class SettingsForm(BaseModel):
     audio_layout: Literal["mono", "stereo", "5.1"] = Field(alias="audioLayout")
 
     @classmethod
-    def from_settings(cls, settings: GlobalSettings) -> SettingsForm:
+    def from_settings(
+        cls,
+        service: ServiceSettings,
+        desktop: DesktopSettings,
+    ) -> SettingsForm:
         return cls.model_validate(
             {
-                "language": settings.ui.language,
-                "theme": settings.ui.theme,
-                "auto_continue": settings.workflow.auto_continue,
-                "default_project_directory": settings.ui.default_project_directory,
-                "default_import_directory": settings.ui.default_import_directory or "",
-                "download_resolution": settings.download.resolution,
-                "download_directory": settings.download.output_directory,
-                "download_proxy": settings.download.proxy or "",
-                "cookie_file": settings.download.cookie_file or "",
-                "browser_cookies": settings.download.browser_cookies or "",
-                "download_subtitles": settings.download.download_subtitles,
-                "subtitle_languages": ",".join(settings.download.subtitle_languages),
-                "download_codec": settings.download.codec,
-                "asr_engine": settings.asr.engine,
-                "asr_cli_path": settings.asr.cli_path or "",
-                "asr_model_directory": settings.asr.model_directory or "",
-                "asr_model": settings.asr.model,
-                "asr_device": settings.asr.device,
-                "asr_compute_type": settings.asr.compute_type,
-                "asr_language": settings.asr.language,
-                "asr_smart_split_limit": settings.asr.smart_split_limit,
-                "asr_parallel_chunks": settings.asr.parallel_chunks,
-                "gpt_sovits_root": settings.speech_synthesis.gpt_sovits_root or "",
-                "gpt_sovits_device": settings.speech_synthesis.device,
-                "translation_target_language": settings.translation.target_language,
-                "translation_mode": settings.translation.mode,
-                "automatic_proxy": settings.preview.automatic_proxy,
-                "preview_quality": settings.preview.preview_quality,
-                "hdr_preview": settings.preview.hdr_preview,
-                "loudness_target": settings.audio.loudness_target_lufs,
-                "true_peak": settings.audio.true_peak_db,
-                "audio_layout": settings.audio.default_layout,
+                "language": desktop.ui.language,
+                "theme": desktop.ui.theme,
+                "auto_continue": service.workflow.auto_continue,
+                "default_project_directory": service.default_project_directory,
+                "default_import_directory": desktop.ui.default_import_directory or "",
+                "download_resolution": service.download.resolution,
+                "download_directory": service.download.output_directory,
+                "download_proxy": service.download.proxy or "",
+                "cookie_file": service.download.cookie_file or "",
+                "browser_cookies": service.download.browser_cookies or "",
+                "download_subtitles": service.download.download_subtitles,
+                "subtitle_languages": ",".join(service.download.subtitle_languages),
+                "download_codec": service.download.codec,
+                "asr_engine": service.asr.engine,
+                "asr_cli_path": service.asr.cli_path or "",
+                "asr_model_directory": service.asr.model_directory or "",
+                "asr_model": service.asr.model,
+                "asr_device": service.asr.device,
+                "asr_compute_type": service.asr.compute_type,
+                "asr_language": service.asr.language,
+                "asr_smart_split_limit": service.asr.smart_split_limit,
+                "asr_parallel_chunks": service.asr.parallel_chunks,
+                "gpt_sovits_root": service.speech_synthesis.gpt_sovits_root or "",
+                "gpt_sovits_device": service.speech_synthesis.device,
+                "translation_target_language": service.translation.target_language,
+                "translation_mode": service.translation.mode,
+                "automatic_proxy": service.preview.automatic_proxy,
+                "preview_quality": service.preview.preview_quality,
+                "hdr_preview": service.preview.hdr_preview,
+                "loudness_target": service.audio.loudness_target_lufs,
+                "true_peak": service.audio.true_peak_db,
+                "audio_layout": service.audio.default_layout,
             }
         )
 
-    def apply_to(self, settings: GlobalSettings) -> GlobalSettings:
-        candidate = settings.model_copy(deep=True)
-        candidate.ui.language = self.language
-        candidate.ui.theme = self.theme
+    def apply_to(
+        self,
+        service: ServiceSettings,
+        desktop: DesktopSettings,
+    ) -> tuple[ServiceSettings, DesktopSettings]:
+        service_candidate = service.model_copy(deep=True)
+        desktop_candidate = desktop.model_copy(deep=True)
+        desktop_candidate.ui.language = self.language
+        desktop_candidate.ui.theme = self.theme
         project_directory = (
             self.default_project_directory.strip()
-            or settings.ui.default_project_directory
+            or service.default_project_directory
         )
-        candidate.ui.default_project_directory = str(Path(project_directory).expanduser().resolve())
-        candidate.ui.default_import_directory = self.default_import_directory.strip() or None
-        candidate.workflow.auto_continue = self.auto_continue
-        candidate.download.resolution = self.download_resolution
-        directory = self.download_directory.strip() or settings.download.output_directory
-        candidate.download.output_directory = str(Path(directory).expanduser().resolve())
-        candidate.download.proxy = self.download_proxy.strip() or None
-        candidate.download.cookie_file = self.cookie_file.strip() or None
-        candidate.download.browser_cookies = self.browser_cookies or None
-        candidate.download.download_subtitles = self.download_subtitles
+        service_candidate.default_project_directory = str(
+            Path(project_directory).expanduser().resolve()
+        )
+        desktop_candidate.ui.default_import_directory = (
+            self.default_import_directory.strip() or None
+        )
+        service_candidate.workflow.auto_continue = self.auto_continue
+        service_candidate.download.resolution = self.download_resolution
+        directory = self.download_directory.strip() or service.download.output_directory
+        service_candidate.download.output_directory = str(
+            Path(directory).expanduser().resolve()
+        )
+        service_candidate.download.proxy = self.download_proxy.strip() or None
+        service_candidate.download.cookie_file = self.cookie_file.strip() or None
+        service_candidate.download.browser_cookies = self.browser_cookies or None
+        service_candidate.download.download_subtitles = self.download_subtitles
         languages = [value.strip() for value in self.subtitle_languages.split(",") if value.strip()]
-        candidate.download.subtitle_languages = languages or ["en", "zh"]
-        candidate.download.codec = self.download_codec
-        candidate.asr.engine = self.asr_engine
-        candidate.asr.cli_path = self.asr_cli_path.strip() or None
-        candidate.asr.model_directory = self.asr_model_directory.strip() or None
-        candidate.asr.model = self.asr_model
-        candidate.asr.device = self.asr_device
-        candidate.asr.compute_type = self.asr_compute_type
-        candidate.asr.language = self.asr_language
-        candidate.asr.smart_split_limit = self.asr_smart_split_limit
-        candidate.asr.parallel_chunks = self.asr_parallel_chunks
-        candidate.speech_synthesis.gpt_sovits_root = self.gpt_sovits_root.strip() or None
-        candidate.speech_synthesis.device = self.gpt_sovits_device
-        candidate.translation.target_language = self.translation_target_language
-        candidate.translation.mode = self.translation_mode
-        candidate.preview.automatic_proxy = self.automatic_proxy
-        candidate.preview.preview_quality = self.preview_quality
-        candidate.preview.hdr_preview = self.hdr_preview
-        candidate.audio.loudness_target_lufs = self.loudness_target
-        candidate.audio.true_peak_db = self.true_peak
-        candidate.audio.default_layout = self.audio_layout
-        return candidate
+        service_candidate.download.subtitle_languages = languages or ["en", "zh"]
+        service_candidate.download.codec = self.download_codec
+        service_candidate.asr.engine = self.asr_engine
+        service_candidate.asr.cli_path = self.asr_cli_path.strip() or None
+        service_candidate.asr.model_directory = self.asr_model_directory.strip() or None
+        service_candidate.asr.model = self.asr_model
+        service_candidate.asr.device = self.asr_device
+        service_candidate.asr.compute_type = self.asr_compute_type
+        service_candidate.asr.language = self.asr_language
+        service_candidate.asr.smart_split_limit = self.asr_smart_split_limit
+        service_candidate.asr.parallel_chunks = self.asr_parallel_chunks
+        service_candidate.speech_synthesis.gpt_sovits_root = (
+            self.gpt_sovits_root.strip() or None
+        )
+        service_candidate.speech_synthesis.device = self.gpt_sovits_device
+        service_candidate.translation.target_language = self.translation_target_language
+        service_candidate.translation.mode = self.translation_mode
+        service_candidate.preview.automatic_proxy = self.automatic_proxy
+        service_candidate.preview.preview_quality = self.preview_quality
+        service_candidate.preview.hdr_preview = self.hdr_preview
+        service_candidate.audio.loudness_target_lufs = self.loudness_target
+        service_candidate.audio.true_peak_db = self.true_peak
+        service_candidate.audio.default_layout = self.audio_layout
+        return service_candidate, desktop_candidate
 
 
-def settings_data(settings: GlobalSettings) -> dict:
+def settings_data(service: ServiceSettings, desktop: DesktopSettings) -> dict:
     return {
-        **SettingsForm.from_settings(settings).model_dump(by_alias=True),
-        "windowWidth": settings.ui.window_width,
-        "windowHeight": settings.ui.window_height,
-        "windowMaximized": settings.ui.window_maximized,
-        "workspaceLayoutPreset": settings.ui.workspace_layout_preset,
-        "workspaceLayouts": settings.ui.workspace_layouts.model_dump(
+        **SettingsForm.from_settings(service, desktop).model_dump(by_alias=True),
+        "windowWidth": desktop.ui.window_width,
+        "windowHeight": desktop.ui.window_height,
+        "windowMaximized": desktop.ui.window_maximized,
+        "workspaceLayoutPreset": desktop.ui.workspace_layout_preset,
+        "workspaceLayouts": desktop.ui.workspace_layouts.model_dump(
             mode="json", by_alias=True
         ),
-        "workspaceTourCompleted": settings.ui.workspace_tour_completed,
-        "assetViewMode": settings.ui.asset_view_mode,
-        "lastDownloadUrl": settings.download.last_url,
+        "workspaceTourCompleted": desktop.ui.workspace_tour_completed,
+        "assetViewMode": desktop.ui.asset_view_mode,
+        "lastDownloadUrl": service.download.last_url,
         "subtitleStylePresets": [
-            preset.model_dump(mode="json") for preset in settings.subtitle_style_presets
+            preset.model_dump(mode="json") for preset in service.subtitle_style_presets
         ],
     }

@@ -10,6 +10,7 @@ from mediaflow.domain.reference_comparison import ReferenceComparisonAcceptance
 from mediaflow.infrastructure.reference_video_comparison import (
     ReferenceVideoComparisonService,
 )
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
 
@@ -119,7 +120,7 @@ def test_reference_comparison_is_public_and_projectless() -> None:
 def test_reference_comparison_proves_exact_delivery_and_writes_evidence(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     reference = tmp_path / "reference.mp4"
     _generate_reference(reference, paths)
 
@@ -163,7 +164,7 @@ def test_reference_comparison_proves_exact_delivery_and_writes_evidence(
 def test_reference_comparison_detects_one_frame_temporal_shift(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     reference = tmp_path / "reference.mp4"
     _generate_reference(reference, paths)
 
@@ -193,7 +194,7 @@ def test_reference_comparison_detects_one_frame_temporal_shift(
 def test_reference_comparison_measures_encoded_frame_differences(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     reference = tmp_path / "reference.mp4"
     candidate = tmp_path / "candidate.mp4"
     _generate_reference(reference, paths)
@@ -217,16 +218,18 @@ def test_reference_comparison_measures_encoded_frame_differences(
 def test_reference_comparison_runs_through_the_real_cli_process(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     reference = tmp_path / "reference.mp4"
     _generate_reference(reference, paths)
     request = tmp_path / "compare-request.json"
     request.write_text(
         json.dumps(
             {
-                "protocol": "mediaflow-cli",
-                "version": 2,
+                "protocol": "mediaflow-editor",
+                "version": 3,
                 "operation": "quality.reference.compare",
+                "actor": {"kind": "agent", "id": "reference-comparison-test"},
+                "client_id": "pytest-reference-comparison",
                 "arguments": {
                     "reference_path": str(reference),
                     "candidate_path": str(reference),
@@ -251,6 +254,7 @@ def test_reference_comparison_runs_through_the_real_cli_process(
     assert completed.stderr == ""
     response = json.loads(completed.stdout)
     assert response["ok"] is True
-    assert response["result"]["status"] == "passed"
-    assert response["result"]["summary"]["exact_frame_ratio"] == 1
-    assert Path(response["result"]["artifacts"]["report"]["path"]).is_file()
+    operation_result = response["result"]["result"]
+    assert operation_result["status"] == "passed"
+    assert operation_result["summary"]["exact_frame_ratio"] == 1
+    assert Path(operation_result["artifacts"]["report"]["path"]).is_file()

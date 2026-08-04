@@ -5,12 +5,12 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import ProxyHandler, Request, build_opener
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadPlan
-from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,9 @@ class PlatformMediaResolver:
 
     _BILIBILI_ID = re.compile(r"(BV[a-zA-Z0-9]{10}|av\d+)")
     _MEDIA_MARKERS = (".mp4", ".m3u8", "aweme/v1/play", "video_id=")
+
+    def __init__(self, chromium: Path | None):
+        self.chromium = chromium
 
     def analyze(
         self,
@@ -82,6 +85,7 @@ class PlatformMediaResolver:
             return None
         return self._sniff_browser_media(
             url,
+            executable=self.chromium,
             proxy=proxy,
             check_cancelled=check_cancelled,
         )
@@ -208,14 +212,13 @@ class PlatformMediaResolver:
         cls,
         url: str,
         *,
+        executable: Path | None,
         timeout: float = 15.0,
         proxy: str | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> ResolvedPlatformMedia | None:
         cls._checkpoint(check_cancelled)
-        try:
-            executable = find_chromium_executable()
-        except FileNotFoundError:
+        if executable is None or not executable.is_file():
             return None
         try:
             from playwright.sync_api import Error as PlaywrightError

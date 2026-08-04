@@ -24,20 +24,20 @@ class WaveformService:
     def __init__(
         self,
         repository: AssetProcessingDocuments,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
     ):
         self.repository = repository
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
-    def generate(
+    def prepare(
         self,
         asset: Asset,
         *,
         duration_seconds: float,
         progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
-    ) -> Asset:
+    ) -> Path:
         source = self.repository.catalog.resolve_asset_path(asset)
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -119,6 +119,22 @@ class WaveformService:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
+        )
+        return output
+
+    def generate(
+        self,
+        asset: Asset,
+        *,
+        duration_seconds: float,
+        progress: Callable[[OperationProgress], None] | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> Asset:
+        output = self.prepare(
+            asset,
+            duration_seconds=duration_seconds,
+            progress=progress,
+            check_cancelled=check_cancelled,
         )
         return self.repository.catalog.set_asset_waveform_path(
             asset.id,

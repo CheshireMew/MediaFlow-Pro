@@ -20,6 +20,10 @@ This source repository does not contain a generated portable runtime. When a por
 | CTranslate2 | 4.8.1 | MIT | https://github.com/OpenNMT/CTranslate2 |
 | OpenAI Python library | 2.45.0 | Apache-2.0 | https://github.com/openai/openai-python |
 | Pydantic | 2.13.4 | MIT | https://github.com/pydantic/pydantic |
+| aiohttp | 3.14.2 | Apache-2.0 AND MIT | https://github.com/aio-libs/aiohttp |
+| psutil | 7.2.2 | BSD-3-Clause | https://github.com/giampaolo/psutil |
+| MCP Python SDK / mcp-types | 2.0.0 | MIT | https://github.com/modelcontextprotocol/python-sdk |
+| pywin32 (Windows only) | 312 | Python Software Foundation License | https://github.com/mhammond/pywin32 |
 | json-repair | 0.61.4 | MIT | https://github.com/mangiucugna/json_repair |
 | PyAV | 18.0.0 | BSD-3-Clause | https://github.com/PyAV-Org/PyAV |
 | huggingface-hub | 1.23.0 | Apache-2.0 | https://github.com/huggingface/huggingface_hub |

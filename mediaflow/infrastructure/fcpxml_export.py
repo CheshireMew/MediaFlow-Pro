@@ -31,6 +31,7 @@ from mediaflow.infrastructure.output_reservation import (
     reserve_python_output,
     temporary_output_path,
 )
+from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_render_service import WebRenderCache
 
 
@@ -45,8 +46,13 @@ class _ClipPresentation:
 class FcpxmlExportService:
     """Serialize the canonical project timeline into an interoperable FCPXML document."""
 
-    def __init__(self, documents: InterchangeExportDocuments) -> None:
+    def __init__(
+        self,
+        documents: InterchangeExportDocuments,
+        paths: RuntimePaths,
+    ) -> None:
         self.documents = documents
+        self.paths = paths
 
     def export(
         self,
@@ -407,7 +413,7 @@ class FcpxmlExportService:
         resource_by_source: dict[tuple[str, str], str] = {}
         resource_ids: dict[str, str] = {}
         next_resource_index = 2
-        cache = WebRenderCache(self.documents)
+        cache = WebRenderCache(self.documents, self.paths)
         for presentation in presentations:
             clip = presentation.clip
             asset = assets[clip.asset_id]

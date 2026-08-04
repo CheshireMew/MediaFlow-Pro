@@ -10,67 +10,36 @@ from mediaflow.domain.runtime_capabilities import (
     RuntimeCapabilityStatus,
     RuntimeInspection,
 )
-from mediaflow.domain.settings import GlobalSettings
-from mediaflow.infrastructure.chromium_runtime import (
-    discover_chromium_executable,
-)
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.infrastructure.runtime_components import RuntimeComponentService
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_contract import (
-    DEFAULT_RUNTIME_CONTRACT,
-    RuntimeContract,
-    load_runtime_contract,
+    PlatformTarget,
 )
-from mediaflow.infrastructure.runtime_paths import RuntimePathDiscovery
-from mediaflow.infrastructure.settings_repository import SettingsRepository
+from mediaflow.infrastructure.settings_repository import ServiceSettingsRepository
 from mediaflow.infrastructure.subprocess_runner import run_cancellable
 
 
 class RuntimeCapabilityInspector:
     def __init__(
         self,
-        contract_path: str | Path = DEFAULT_RUNTIME_CONTRACT,
         *,
-        settings: GlobalSettings | None = None,
+        settings: ServiceSettings | None = None,
+        runtime: RuntimeContext,
     ):
-        self.contract_path = Path(contract_path).resolve()
         self.settings = settings
+        self.runtime = runtime
 
     def inspect(self) -> RuntimeInspection:
-        contract, contract_error = self._load_contract()
-        try:
-            paths = RuntimePathDiscovery.discover()
-        except Exception as error:
-            reason = f"Runtime paths could not be discovered: {error}"
-            return RuntimeInspection(
-                checked_at=now_ms(),
-                runtime_root="",
-                capabilities=[
-                    RuntimeCapabilityStatus(
-                        id=capability_id,
-                        status="unavailable",
-                        reason=reason,
-                    )
-                    for capability_id in (
-                        "ffmpeg",
-                        "ffprobe",
-                        "mlt",
-                        "chromium",
-                        "native-preview",
-                        "faster-whisper-xxl",
-                        "gpt-sovits-v2pro",
-                    )
-                ],
-            )
-
-        ffmpeg_version = contract.ffmpeg_version if contract else ""
-        melt_version = contract.melt_version if contract else ""
-        qt_version = contract.qt_version if contract else ""
+        contract = self.runtime.contract
+        paths = self.runtime.paths
+        ffmpeg_version = contract.ffmpeg_version
+        melt_version = contract.melt_version
         capabilities = [
             self._probe_command(
                 "ffmpeg",
                 paths.ffmpeg,
-                ("-version",),
-                contract_error=contract_error,
+                contract.ffmpeg_probe_arguments,
                 expected=(
                     lambda first, output: (
                         first.startswith(f"ffmpeg version {ffmpeg_version} ")
@@ -85,8 +54,7 @@ class RuntimeCapabilityInspector:
             self._probe_command(
                 "ffprobe",
                 paths.ffprobe,
-                ("-version",),
-                contract_error=contract_error,
+                contract.ffmpeg_probe_arguments,
                 expected=(
                     lambda first, _output: first.startswith(
                         f"ffprobe version {ffmpeg_version} "
@@ -97,25 +65,27 @@ class RuntimeCapabilityInspector:
             self._probe_command(
                 "mlt",
                 paths.melt,
-                ("-version",),
-                contract_error=contract_error,
+                contract.melt_probe_arguments,
                 expected=(
-                    lambda first, _output: first == f"melt.exe {melt_version}"
+                    lambda _first, output: melt_version in output
                 ),
                 expected_description=f"MLT {melt_version}",
             ),
-            self._probe_chromium(),
+            self._probe_chromium(
+                paths.chromium,
+                contract.playwright.browser_version,
+            ),
             self._probe_native_preview(
                 paths.native_qml,
-                qt_version,
-                contract_error,
+                paths.target,
+                contract.qt_version,
             ),
         ]
         try:
-            settings = self.settings or SettingsRepository().load()
+            settings = self.settings or ServiceSettingsRepository().load()
             component_status = RuntimeComponentService(
                 settings,
-                _runtime_paths(paths),
+                paths,
             ).status(probe=True)
             capabilities.extend(
                 RuntimeCapabilityStatus(
@@ -142,19 +112,12 @@ class RuntimeCapabilityInspector:
             capabilities=capabilities,
         )
 
-    def _load_contract(self) -> tuple[RuntimeContract | None, str]:
-        try:
-            return load_runtime_contract(self.contract_path), ""
-        except (OSError, ValueError) as error:
-            return None, f"Runtime contract is unavailable: {error}"
-
     @staticmethod
     def _probe_command(
         capability_id: str,
         executable: Path | None,
         arguments: tuple[str, ...],
         *,
-        contract_error: str,
         expected: Callable[[str, str], bool],
         expected_description: str,
     ) -> RuntimeCapabilityStatus:
@@ -197,14 +160,6 @@ class RuntimeCapabilityInspector:
                     or f"Probe exited with code {completed.returncode}"
                 ),
             )
-        if contract_error:
-            return RuntimeCapabilityStatus(
-                id=capability_id,
-                status="unverified",
-                version=first_line,
-                path=str(executable),
-                reason=contract_error,
-            )
         if not expected(first_line, output):
             return RuntimeCapabilityStatus(
                 id=capability_id,
@@ -221,13 +176,15 @@ class RuntimeCapabilityInspector:
         )
 
     @staticmethod
-    def _probe_chromium() -> RuntimeCapabilityStatus:
-        executable = discover_chromium_executable()
+    def _probe_chromium(
+        executable: Path | None,
+        expected_version: str,
+    ) -> RuntimeCapabilityStatus:
         if executable is None:
             return RuntimeCapabilityStatus(
                 id="chromium",
                 status="unavailable",
-                reason="Chrome or Edge was not found",
+                reason="Pinned Playwright Chromium was not found",
             )
         try:
             from playwright.sync_api import sync_playwright
@@ -254,6 +211,14 @@ class RuntimeCapabilityInspector:
                 path=str(executable),
                 reason=f"Browser smoke test failed: {error}",
             )
+        if browser_version != expected_version:
+            return RuntimeCapabilityStatus(
+                id="chromium",
+                status="unavailable",
+                version=browser_version,
+                path=str(executable),
+                reason=f"Expected Chromium {expected_version}",
+            )
         return RuntimeCapabilityStatus(
             id="chromium",
             status="ready",
@@ -264,8 +229,8 @@ class RuntimeCapabilityInspector:
     @staticmethod
     def _probe_native_preview(
         native_qml: Path | None,
+        target: PlatformTarget,
         expected_qt_version: str,
-        contract_error: str,
     ) -> RuntimeCapabilityStatus:
         if native_qml is None:
             return RuntimeCapabilityStatus(
@@ -273,12 +238,12 @@ class RuntimeCapabilityInspector:
                 status="unavailable",
                 reason="Native preview QML root was not found",
             )
-        plugin = (
-            native_qml
-            / "MediaFlow"
-            / "Native"
-            / "mediaflownativeplugin.dll"
-        )
+        plugin_name = {
+            "windows": "mediaflownativeplugin.dll",
+            "linux": "libmediaflownativeplugin.so",
+            "macos": "libmediaflownativeplugin.dylib",
+        }[target.operating_system]
+        plugin = native_qml / "MediaFlow" / "Native" / plugin_name
         qmldir = native_qml / "MediaFlow" / "Native" / "qmldir"
         if not plugin.is_file() or not qmldir.is_file():
             return RuntimeCapabilityStatus(
@@ -296,14 +261,6 @@ class RuntimeCapabilityInspector:
                 path=str(plugin),
                 reason="PySide6 is not installed",
             )
-        if contract_error:
-            return RuntimeCapabilityStatus(
-                id="native-preview",
-                status="unverified",
-                version=pyside_version,
-                path=str(plugin),
-                reason=contract_error,
-            )
         if pyside_version != expected_qt_version:
             return RuntimeCapabilityStatus(
                 id="native-preview",
@@ -318,17 +275,3 @@ class RuntimeCapabilityInspector:
             version=pyside_version,
             path=str(plugin),
         )
-
-
-def _runtime_paths(discovery: RuntimePathDiscovery):
-    from mediaflow.infrastructure.runtime_paths import RuntimePaths
-
-    if discovery.ffmpeg is None or discovery.ffprobe is None:
-        raise FileNotFoundError("FFmpeg runtime is incomplete")
-    return RuntimePaths(
-        runtime_dir=discovery.runtime_dir,
-        ffmpeg=discovery.ffmpeg,
-        ffprobe=discovery.ffprobe,
-        melt=discovery.melt,
-        native_qml=discovery.native_qml,
-    )

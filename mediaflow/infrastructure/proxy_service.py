@@ -12,6 +12,7 @@ from mediaflow.domain.enums import ColorMode
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import (
     Asset,
+    AssetFingerprint,
     ProjectProfile,
 )
 from mediaflow.domain.storage_names import (
@@ -30,14 +31,23 @@ class ProxyDecision:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedProxyGeneration:
+    asset_id: str
+    expected_fingerprint: AssetFingerprint | None
+    proxy_path: Path
+    sdr_preview_proxy_path: Path | None
+    replaced_outputs: tuple[tuple[Path, Path], ...]
+
+
 class ProxyService:
     def __init__(
         self,
         repository: AssetProcessingDocuments,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
     ):
         self.repository = repository
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     @staticmethod
@@ -61,14 +71,14 @@ class ProxyService:
             reasons.append("decoder_drops")
         return ProxyDecision(required=bool(reasons), reasons=tuple(reasons))
 
-    def generate(
+    def prepare(
         self,
         asset: Asset,
         profile: ProjectProfile,
         *,
         progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
-    ) -> Asset:
+    ) -> PreparedProxyGeneration:
         source = self.repository.catalog.resolve_asset_path(asset)
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -258,18 +268,88 @@ class ProxyService:
                 progress(OperationProgress.indeterminate("proxy_registering"))
             if check_cancelled:
                 check_cancelled()
-            with self.repository.transaction():
-                updated = self.repository.catalog.set_asset_proxy_paths(
-                    asset.id,
-                    expected_fingerprint=asset.fingerprint,
-                    proxy_path=output,
-                    sdr_preview_proxy_path=sdr_preview_output,
-                )
-                publication.publish()
+            publication.publish()
             publication.finalize(
                 archive_replaced_to=(self.repository.project_dir / "archive" / "replaced-proxies")
             )
-            return updated
+            return PreparedProxyGeneration(
+                asset_id=asset.id,
+                expected_fingerprint=asset.fingerprint,
+                proxy_path=output,
+                sdr_preview_proxy_path=sdr_preview_output,
+                replaced_outputs=tuple(
+                    publication.replaced_output_archives.items()
+                ),
+            )
+
+    def commit_prepared(self, prepared: PreparedProxyGeneration) -> Asset:
+        try:
+            return self.repository.catalog.set_asset_proxy_paths(
+                prepared.asset_id,
+                expected_fingerprint=prepared.expected_fingerprint,
+                proxy_path=prepared.proxy_path,
+                sdr_preview_proxy_path=prepared.sdr_preview_proxy_path,
+            )
+        except BaseException as error:
+            self._rollback_prepared(prepared, error)
+            raise
+
+    def generate(
+        self,
+        asset: Asset,
+        profile: ProjectProfile,
+        *,
+        progress: Callable[[OperationProgress], None] | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> Asset:
+        return self.commit_prepared(
+            self.prepare(
+                asset,
+                profile,
+                progress=progress,
+                check_cancelled=check_cancelled,
+            )
+        )
+
+    def _rollback_prepared(
+        self,
+        prepared: PreparedProxyGeneration,
+        error: BaseException,
+    ) -> None:
+        destinations = (
+            prepared.proxy_path,
+            *(
+                (prepared.sdr_preview_proxy_path,)
+                if prepared.sdr_preview_proxy_path is not None
+                else ()
+            ),
+        )
+        for destination in destinations:
+            if not destination.is_file():
+                continue
+            failed = content_addressed_child_path(
+                self.repository.project_dir / "archive" / "failed-proxies",
+                f"proxy-commit-failed:{prepared.asset_id}:{destination.name}",
+                namespace="proxy",
+                suffix=destination.suffix,
+            )
+            try:
+                failed.parent.mkdir(parents=True, exist_ok=True)
+                destination.replace(failed)
+            except OSError as archive_error:
+                error.add_note(
+                    f"未登记代理文件无法移入失败归档：{archive_error}"
+                )
+        for destination, archived in prepared.replaced_outputs:
+            if not archived.is_file():
+                continue
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                archived.replace(destination)
+            except OSError as restore_error:
+                error.add_note(
+                    f"代理登记失败后无法恢复原文件 {destination}：{restore_error}"
+                )
 
     @staticmethod
     def _cache_key(asset: Asset, source: Path, profile: ProjectProfile) -> str:

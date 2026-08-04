@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from mediaflow.environment import load_project_environment, read_environment_file
-from mediaflow.infrastructure.chromium_runtime import discover_chromium_executable
+from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.runtime_contract import load_runtime_contract
 from mediaflow.infrastructure.storage_paths import default_media_root, default_project_root
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -60,19 +61,22 @@ def test_storage_roots_have_no_machine_specific_fallback(
         default_media_root()
 
 
-def test_chromium_override_is_owned_by_the_environment_contract(
+def test_chromium_is_owned_by_the_single_runtime_root_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executable = tmp_path / "browser" / "chrome.exe"
-    executable.parent.mkdir()
-    executable.write_bytes(b"reviewed-browser")
-    monkeypatch.setenv("MEDIAFLOW_CHROMIUM", str(executable))
+    runtime_root = tmp_path / "runtime"
+    ignored_override = tmp_path / "browser" / "chrome.exe"
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(runtime_root))
+    monkeypatch.setenv("MEDIAFLOW_CHROMIUM", str(ignored_override))
+    contract = load_runtime_contract()
 
-    assert discover_chromium_executable() == executable.resolve()
+    chromium = RuntimeContext.discover().paths.chromium
 
-    monkeypatch.setenv("MEDIAFLOW_CHROMIUM", str(tmp_path / "missing.exe"))
-    assert discover_chromium_executable() is None
+    assert chromium == (
+        contract.chromium_directory(runtime_root) / contract.playwright.executable
+    ).resolve()
+    assert chromium != ignored_override.resolve()
 
 
 def test_machine_paths_are_owned_by_the_environment_contract() -> None:

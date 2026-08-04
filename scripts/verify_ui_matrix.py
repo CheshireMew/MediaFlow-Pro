@@ -31,9 +31,15 @@ SETTINGS_TABS = ("general", "download", "ai")
 def probe(root: Path, language: str, scale: str) -> dict:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["QT_SCALE_FACTOR"] = scale
-    os.environ["MEDIAFLOW_SETTINGS_PATH"] = str(root / "settings" / "settings.json")
+    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(
+        root / "settings" / "service-settings.json"
+    )
+    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(
+        root / "settings" / "desktop-settings.json"
+    )
     os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(root / "media")
     os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(root / "projects")
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(root / "editor-service")
 
     from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPointF, QUrl
     from PySide6.QtGui import QGuiApplication
@@ -45,13 +51,20 @@ def probe(root: Path, language: str, scale: str) -> dict:
         configure_application_identity,
         create_engine,
     )
-    from mediaflow.domain.settings import GlobalSettings
-    from mediaflow.infrastructure.settings_repository import SettingsRepository
+    from mediaflow.domain.settings import DesktopSettings, ServiceSettings
+    from mediaflow.infrastructure.settings_repository import (
+        DesktopSettingsRepository,
+        ServiceSettingsRepository,
+    )
+    from mediaflow.service.client import shutdown_sync_service
 
-    settings = GlobalSettings()
-    settings.ui.language = language
-    settings_path = root / "settings" / "settings.json"
-    SettingsRepository(settings_path).save(settings)
+    service_settings = ServiceSettings()
+    desktop_settings = DesktopSettings()
+    desktop_settings.ui.language = language
+    service_settings_path = root / "settings" / "service-settings.json"
+    desktop_settings_path = root / "settings" / "desktop-settings.json"
+    ServiceSettingsRepository(service_settings_path).save(service_settings)
+    DesktopSettingsRepository(desktop_settings_path).save(desktop_settings)
     configure_application_identity()
     app = QGuiApplication([])
     if QCoreApplication.applicationName() != "MediaFlow Pro":
@@ -374,7 +387,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             QCoreApplication.processEvents()
-            persisted = SettingsRepository(settings_path).load()
+            persisted = ServiceSettingsRepository(service_settings_path).load()
             if persisted.workflow.auto_continue is not previous_auto_continue:
                 break
             time.sleep(0.03)
@@ -396,7 +409,10 @@ def probe(root: Path, language: str, scale: str) -> dict:
             "settings": settings_results,
         }
     finally:
-        controllers.shutdown()
+        try:
+            controllers.shutdown()
+        finally:
+            shutdown_sync_service()
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         QCoreApplication.processEvents()

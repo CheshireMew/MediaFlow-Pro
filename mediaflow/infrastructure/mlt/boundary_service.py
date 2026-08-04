@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 
@@ -31,9 +30,9 @@ _BLACK_INTERVAL = re.compile(
 class SequenceBoundaryAnalysisService:
     """Resolve editable sequence in/out points from the compiled picture and speech timeline."""
 
-    def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths | None = None):
+    def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths):
         self.compiler = compiler
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def snapshot_hash(self, state: TimelineState) -> str:
@@ -271,14 +270,11 @@ class SequenceBoundaryAnalysisService:
         width += (-width) % 4
         height = max(2, round(width * profile.height / profile.width))
         height += (-height) % 4
-        environment = os.environ.copy()
-        environment.pop("MLT_REPOSITORY_DENY", None)
         melt = self.paths.melt
         if melt is None:
             raise FileNotFoundError("MLT melt runtime is not installed")
-        mlt_root = melt.parent
-        environment["MLT_REPOSITORY"] = str(mlt_root / "lib" / "mlt")
-        environment["MLT_DATA"] = str(mlt_root / "share" / "mlt")
+        mlt_root = self.paths.require_mlt_root()
+        environment = self.paths.mlt_environment()
         total_frames = end_frame - start_frame
         observer = MeltProgressObserver(
             total_frames,

@@ -22,8 +22,8 @@ class ProbeResult:
 
 
 class MediaProbe:
-    def __init__(self, paths: RuntimePaths | None = None):
-        self.paths = paths or RuntimePaths.discover()
+    def __init__(self, paths: RuntimePaths):
+        self.paths = paths
 
     def probe(self, path: str | Path, *, timeline_profile: ProjectProfile | None = None) -> ProbeResult:
         source = require_windows_interop_path(

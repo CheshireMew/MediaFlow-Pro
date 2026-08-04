@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import stat
+import sys
 from pathlib import Path
+
+import pytest
 
 from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
 
@@ -28,3 +32,12 @@ def test_atomic_text_write_uses_a_short_sibling_for_a_long_destination(
 
     assert destination.read_text(encoding="utf-8") == "<mlt />"
     assert not list(parent.glob(".mf-*.tmp.mlt"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows uses directory ACLs")
+def test_atomic_text_write_applies_private_mode_before_publication(tmp_path: Path) -> None:
+    destination = tmp_path / "private.json"
+
+    atomic_write_text(destination, "{}", mode=0o600)
+
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600

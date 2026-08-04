@@ -239,7 +239,7 @@ def render_web_clip(context: OperationContext) -> dict:
         sequence_id=str(context.required("sequence_id")),
         clip_id=str(context.required("clip_id")),
     )
-    return context.task_result(
+    return context.task_receipt(
         context.project.start_task(
             command,
             sequence_id=command.sequence_id,
@@ -261,7 +261,7 @@ def export_web_clip(context: OperationContext) -> dict:
         background=str(context.arguments.get("background", "#000000")),
         overwrite=bool(context.arguments.get("overwrite", False)),
     )
-    return context.task_result(
+    return context.task_receipt(
         context.project.start_task(
             command,
             sequence_id=command.sequence_id,

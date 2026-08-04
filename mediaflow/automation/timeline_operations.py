@@ -162,16 +162,6 @@ def remove_clip_visual_effect(context: OperationContext) -> dict:
     return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
 
 
-def undo(context: OperationContext) -> dict:
-    state = context.project.timeline(context.sequence_id()).undo()
-    return {"timeline": state}
-
-
-def redo(context: OperationContext) -> dict:
-    state = context.project.timeline(context.sequence_id()).redo()
-    return {"timeline": state}
-
-
 def render_preview(context: OperationContext) -> dict:
     state = context.project.timeline(context.sequence_id()).state
     context.project.prepare_web_sequence(state)
@@ -196,7 +186,7 @@ def export_sequence(context: OperationContext) -> dict:
         ),
         overwrite=bool(context.arguments.get("overwrite", False)),
     )
-    return context.task_result(
+    return context.task_receipt(
         context.project.start_task(
             command,
             sequence_id=sequence_id,
@@ -221,7 +211,7 @@ def build_sequence(context: OperationContext) -> dict:
         ),
         overwrite=bool(context.arguments.get("overwrite", False)),
     )
-    return context.task_result(
+    return context.task_receipt(
         context.project.start_task(
             command,
             sequence_id=sequence_id,

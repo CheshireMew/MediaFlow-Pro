@@ -369,6 +369,8 @@ class _BrowserWorker:
         self.index = index
         self.on_browser_launch = on_browser_launch
         self.jobs: queue.Queue[_CaptureJob | None] = queue.Queue()
+        self._state_lock = threading.Lock()
+        self._active_job: _CaptureJob | None = None
         self.thread = threading.Thread(
             target=self._run,
             name=f"mediaflow-web-capture-{index}",
@@ -380,6 +382,9 @@ class _BrowserWorker:
         self.jobs.put(job)
 
     def stop(self) -> None:
+        with self._state_lock:
+            if self._active_job is not None:
+                self._active_job.cancelled.set()
         self.jobs.put(None)
 
     def join(self, timeout: float) -> bool:
@@ -401,6 +406,8 @@ class _BrowserWorker:
                     continue
                 if job is None:
                     break
+                with self._state_lock:
+                    self._active_job = job
                 try:
                     if startup_error is not None:
                         raise startup_error
@@ -439,6 +446,10 @@ class _BrowserWorker:
                         browser = None
                 else:
                     job.future.set_result(metrics)
+                finally:
+                    with self._state_lock:
+                        if self._active_job is job:
+                            self._active_job = None
         finally:
             if browser is not None:
                 try:
@@ -842,7 +853,12 @@ class WebCaptureEngine:
                     if check_cancelled is not None:
                         check_cancelled()
                     output = outputs[expected_index % worker_count]
-                    item = self._next_frame(output, futures, cancelled)
+                    item = self._next_frame(
+                        output,
+                        futures,
+                        cancelled,
+                        check_cancelled=check_cancelled,
+                    )
                     if item.index != expected_index:
                         raise RuntimeError(
                             "Parallel editable media capture returned frames out of order"
@@ -937,8 +953,12 @@ class WebCaptureEngine:
         output: queue.Queue[_CapturedFrame],
         futures: list[Future[_WorkerMetrics]],
         cancelled: threading.Event,
+        *,
+        check_cancelled: Callable[[], None] | None = None,
     ) -> _CapturedFrame:
         while True:
+            if check_cancelled is not None:
+                check_cancelled()
             try:
                 return output.get(timeout=0.1)
             except queue.Empty:

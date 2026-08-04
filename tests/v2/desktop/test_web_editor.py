@@ -22,6 +22,7 @@ from mediaflow.composition import EditorApplication
 from mediaflow.desktop.app import configure_application_font, create_engine
 from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 
 STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v5"
 pytestmark = pytest.mark.integration
@@ -47,9 +48,7 @@ def _application() -> QGuiApplication:
 
 def test_unified_import_opens_the_v5_package_through_local_preview_server(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = _application()
     engine, controllers = create_engine(app)
     try:
@@ -148,9 +147,7 @@ def test_unified_import_opens_the_v5_package_through_local_preview_server(
 
 def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     project_path = tmp_path / "Desktop V5 Web Project"
     api = EditorApplication()
     with api.create_project(project_path, "Desktop V5 Web Project") as project:
@@ -167,7 +164,10 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
         )
 
     app = _application()
-    engine, controllers = create_engine(app, api)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(api),
+    )
     errors: list[str] = []
     controllers.web.errorOccurred.connect(errors.append)
     try:

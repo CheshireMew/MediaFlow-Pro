@@ -25,7 +25,7 @@ from mediaflow.application.transcription_task_handler import (
 )
 from mediaflow.application.translation_service import TranslationService
 from mediaflow.domain.enums import TaskKind
-from mediaflow.domain.settings import GlobalSettings, LlmProviderSettings
+from mediaflow.domain.settings import LlmProviderSettings, ServiceSettings
 
 
 class ProjectTaskHandlers:
@@ -41,7 +41,7 @@ class ProjectTaskHandlers:
         subtitle_publication: SubtitlePublicationService,
         highlights: HighlightService,
         translations: TranslationService,
-        settings: Callable[[], GlobalSettings],
+        settings: Callable[[], ServiceSettings],
         active_llm_provider: Callable[[], LlmProviderSettings],
     ):
         self._web = WebRenderTaskHandler(documents, runtimes.web)

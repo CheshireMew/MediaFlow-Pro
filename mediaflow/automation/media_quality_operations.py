@@ -8,7 +8,6 @@ from mediaflow.domain.reference_comparison import (
 from mediaflow.infrastructure.reference_video_comparison import (
     ReferenceVideoComparisonService,
 )
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
 
 def compare_reference(context: OperationContext) -> ReferenceComparisonResult:
@@ -18,7 +17,7 @@ def compare_reference(context: OperationContext) -> ReferenceComparisonResult:
         if acceptance_document is not None
         else None
     )
-    return ReferenceVideoComparisonService(RuntimePaths.discover()).compare(
+    return ReferenceVideoComparisonService(context.application.runtime_paths).compare(
         reference_path=context.required("reference_path"),
         candidate_path=context.required("candidate_path"),
         output_dir=context.required("output_dir"),

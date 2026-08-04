@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import msvcrt
 import os
 import re
 import shutil
@@ -13,7 +12,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO
 
 import pytest
 
@@ -25,6 +23,8 @@ from mediaflow.domain.storage_names import (
     utf16_units,
 )
 from mediaflow.environment import test_run_root
+from mediaflow.infrastructure.project_lock import ProcessFileLock
+from tests.v2.editor_service_api import EditorServiceApi
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
@@ -187,22 +187,8 @@ def _remove_owned_passed_run(candidate: Path) -> None:
 @contextmanager
 def _retention_lock() -> Iterator[None]:
     lock_path = MANAGED_PYTEST_ROOT / ".retention.lock"
-    with lock_path.open("a+b") as handle:
-        _lock_first_byte(handle)
-        try:
-            yield
-        finally:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-
-
-def _lock_first_byte(handle: BinaryIO) -> None:
-    handle.seek(0, os.SEEK_END)
-    if handle.tell() == 0:
-        handle.write(b"\0")
-        handle.flush()
-    handle.seek(0)
-    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+    with ProcessFileLock(lock_path):
+        yield
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -416,10 +402,25 @@ def max_project_path(tmp_path: Path) -> Path:
 def isolated_storage_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> Path:
+) -> Iterator[Path]:
     """Keep settings, media, and automatic project creation inside the test case."""
-    path = tmp_path / "_settings" / "settings.json"
-    monkeypatch.setenv("MEDIAFLOW_SETTINGS_PATH", str(path))
+    path = tmp_path / "_settings" / "service-settings.json"
+    desktop_path = path.with_name("desktop-settings.json")
+    monkeypatch.setenv("MEDIAFLOW_SERVICE_SETTINGS_PATH", str(path))
+    monkeypatch.setenv("MEDIAFLOW_DESKTOP_SETTINGS_PATH", str(desktop_path))
     monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(path.parent / "media"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "_projects"))
-    return path
+    monkeypatch.setenv("MEDIAFLOW_SERVICE_STATE_DIR", str(tmp_path / "_service"))
+    try:
+        yield path
+    finally:
+        EditorServiceApi.shutdown()
+
+
+@pytest.fixture
+def editor_service_api() -> Iterator[EditorServiceApi]:
+    api = EditorServiceApi()
+    try:
+        yield api
+    finally:
+        api.shutdown()

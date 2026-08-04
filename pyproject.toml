@@ -1,7 +1,7 @@
 [project]
 name = "mediaflow-pro"
 version = "2.0.0"
-description = "Windows-native project-based video creation workstation built with PySide6/QML and MLT."
+description = "Cross-platform project-based video creation workstation built with PySide6/QML and MLT."
 authors = [
     {name = "Weifeng"},
 ]
@@ -16,12 +16,18 @@ dependencies = [
     "json-repair==0.61.4",
     "playwright==1.61.0",
     "opencv-python-headless==5.0.0.93",
+    "aiohttp==3.14.2",
+    "psutil==7.2.2",
+    "mcp==2.0.0",
+    "pywin32==312; sys_platform == 'win32'",
 ]
 readme = "README.md"
 
 [project.scripts]
 mediaflow-pro = "mediaflow.desktop.app:main"
 mediaflow-cli = "mediaflow.cli:main"
+mediaflow-service = "mediaflow.service.__main__:main"
+mediaflow-mcp = "mediaflow.mcp_server:main"
 
 [project.optional-dependencies]
 dev = [
@@ -30,7 +36,6 @@ dev = [
     "pytest-qt==4.5.0",
     "ruff==0.14.14",
     "mypy==2.3.0",
-    "psutil==7.2.2",
 ]
 build = [
     "aqtinstall==3.3.0",
@@ -75,9 +80,11 @@ files = [
     "mediaflow/application",
     "mediaflow/infrastructure",
     "mediaflow/automation",
+    "mediaflow/service",
     "mediaflow/composition.py",
+    "mediaflow/cli.py",
+    "mediaflow/mcp_server.py",
 ]
-platform = "win32"
 ignore_missing_imports = true
 check_untyped_defs = true
 disable_error_code = ["prop-decorator"]

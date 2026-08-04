@@ -5,17 +5,19 @@ from pathlib import Path
 from typing import Any
 
 from mediaflow.application.ports import (
+    AnalysisOutputPublication,
+    AnalysisOutputTransaction,
     AnalysisTaskDocuments,
     AnalysisTaskRuntime,
 )
 from mediaflow.application.task_handler_support import ProjectTaskHandler
 from mediaflow.application.task_service import TaskCompletion, TaskContext
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import content_addressed_child_path
 from mediaflow.domain.task_commands import (
     AnalyzeDownloadCommand,
@@ -35,7 +37,7 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         self,
         documents: AnalysisTaskDocuments,
         runtime: AnalysisTaskRuntime,
-        settings: Callable[[], GlobalSettings],
+        settings: Callable[[], ServiceSettings],
     ):
         super().__init__(documents.project_dir)
         self.documents = documents
@@ -104,7 +106,6 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
 
         result_path = self._publish_visual_analysis(
             context,
-            result_type="scene-detection",
             message_code="scene_detection_saving",
             payload={
                 "type": "scene_detection",
@@ -149,7 +150,6 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
 
         result_path = self._publish_visual_analysis(
             context,
-            result_type=command.mode.replace("_", "-"),
             message_code="subject_tracking_saving",
             payload={
                 "type": command.mode,
@@ -188,53 +188,104 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         self,
         context: TaskContext,
         *,
-        result_type: str,
         message_code: str,
         payload: dict[str, Any],
         apply_result: Callable[[], None],
     ) -> Path:
         destination = self.project_dir / "generated" / "visual-analysis" / f"{context.task.id}.json"
-        staged = unique_temporary_sibling(destination, label="analysis")
+        output_scope = self.runtime.output_transaction(
+            (destination,),
+            overwrite=True,
+        )
+        publication = output_scope.__enter__()
+        staged = publication.temporary_path(destination, "analysis")
         context.report(OperationProgress.indeterminate(message_code))
         context.cancellation.raise_if_requested()
-        published = False
         try:
             written = self.runtime.write_visual_analysis(staged, payload)
             if written.resolve() != staged.resolve():
                 raise RuntimeError("Visual analysis runtime wrote outside the staged result path")
-            with self.documents.transaction():
-                apply_result()
-                staged.replace(destination)
-                published = True
-            return destination
         except BaseException as error:
-            failed = destination if published else staged
-            self._archive_failed_visual_analysis(
-                failed,
-                task_id=context.task.id,
-                result_type=result_type,
-                error=error,
+            output_scope.__exit__(type(error), error, error.__traceback__)
+            self._archive_visual_analysis_failures(
+                publication,
+                context.task.id,
+                error,
             )
             raise
 
-    def _archive_failed_visual_analysis(
+        def commit_result() -> None:
+            try:
+                apply_result()
+                publication.publish()
+            except BaseException as error:
+                output_scope.__exit__(
+                    type(error),
+                    error,
+                    error.__traceback__,
+                )
+                self._archive_visual_analysis_failures(
+                    publication,
+                    context.task.id,
+                    error,
+                )
+                raise
+
+            def rollback(error: BaseException) -> None:
+                output_scope.__exit__(
+                    type(error),
+                    error,
+                    error.__traceback__,
+                )
+                self._archive_visual_analysis_failures(
+                    publication,
+                    context.task.id,
+                    error,
+                )
+
+            self.documents.enlist_transaction_publication(
+                on_commit=lambda: self._finish_visual_analysis_publication(
+                    output_scope,
+                    publication,
+                ),
+                on_rollback=rollback,
+            )
+
+        context.defer_project_change(commit_result)
+        return destination
+
+    def _finish_visual_analysis_publication(
         self,
-        source: Path,
-        *,
+        output_scope: AnalysisOutputTransaction,
+        publication: AnalysisOutputPublication,
+    ) -> None:
+        publication.finalize(
+            archive_replaced_to=(
+                self.project_dir / "archive" / "replaced-visual-analysis"
+            )
+        )
+        output_scope.__exit__(None, None, None)
+
+    def _archive_visual_analysis_failures(
+        self,
+        publication: AnalysisOutputPublication,
         task_id: str,
-        result_type: str,
         error: BaseException,
     ) -> None:
-        if not source.is_file():
-            return
-        archive_path = content_addressed_child_path(
-            self.project_dir / "archive" / "failed-task-artifacts",
-            f"visual-analysis:{task_id}:{result_type}:{new_id()}",
-            namespace="va",
-            suffix=".json",
-        )
-        try:
-            archive_path.parent.mkdir(parents=True, exist_ok=True)
-            source.replace(archive_path)
-        except OSError as archive_error:
-            error.add_note(f"Failed visual-analysis artifact could not be archived: {archive_error}")
+        for source in publication.archived_outputs:
+            if not source.is_file():
+                continue
+            archive_path = content_addressed_child_path(
+                self.project_dir / "archive" / "failed-task-artifacts",
+                f"visual-analysis:{task_id}:{source.name}:{new_id()}",
+                namespace="va",
+                suffix=".json",
+            )
+            try:
+                archive_path.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(archive_path)
+            except OSError as archive_error:
+                error.add_note(
+                    "Failed visual-analysis artifact could not be archived: "
+                    f"{archive_error}"
+                )

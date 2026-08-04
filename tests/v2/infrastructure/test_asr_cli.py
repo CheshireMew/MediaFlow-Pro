@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from mediaflow.domain.enums import AssetKind, TaskStatus, TrackKind
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
-from mediaflow.domain.settings import AsrSettings, GlobalSettings
+from mediaflow.domain.settings import AsrSettings, ServiceSettings
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure.asr_engine import (
     AsrPipeline,
@@ -34,21 +35,18 @@ from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_components import (
     DEFAULT_COMPONENT_LOCK,
+    RuntimeComponentService,
     load_runtime_component_catalog,
 )
+from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.runtime_contract import PlatformTarget
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.runtime_tools import RuntimeToolService
 
 
 def _runtime_paths(tmp_path: Path) -> RuntimePaths:
-    installed = RuntimePaths.discover()
-    return RuntimePaths(
-        runtime_dir=tmp_path / "runtime",
-        ffmpeg=installed.ffmpeg,
-        ffprobe=installed.ffprobe,
-        melt=installed.melt,
-        native_qml=installed.native_qml,
-    )
+    installed = RuntimeContext.discover().paths
+    return replace(installed, runtime_dir=tmp_path / "runtime")
 
 
 def test_runtime_component_catalog_rejects_missing_archive_digest(
@@ -216,7 +214,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(
         repository,
-        settings=GlobalSettings(asr=settings),
+        settings=ServiceSettings(asr=settings),
         paths=paths,
     )
     try:
@@ -268,7 +266,7 @@ print('100%', flush=True)
     finally:
         project.close()
     prewarm_progress: list[OperationProgress] = []
-    warmed_cli = RuntimeToolService(GlobalSettings(asr=settings), paths).prewarm_cli(
+    warmed_cli = RuntimeToolService(ServiceSettings(asr=settings), paths).prewarm_cli(
         progress=prewarm_progress.append
     )
     assert warmed_cli == fake_cli.resolve()
@@ -314,7 +312,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     component_catalog.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "components": [
                     {
                         "id": "faster-whisper-xxl",
@@ -322,6 +320,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
                         "version": "test",
                         "homepage": "https://example.invalid/xxl",
                         "license": "MIT",
+                        "targets": ["windows-x86_64"],
                         "archive": {
                             "file_name": cli_archive.name,
                             "url": cli_archive.as_uri(),
@@ -342,7 +341,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
         ),
         encoding="utf-8",
     )
-    settings = GlobalSettings(asr=AsrSettings())
+    settings = ServiceSettings(asr=AsrSettings())
     service = RuntimeToolService(
         settings,
         paths,
@@ -373,6 +372,23 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     assert progress[-1].message_code == "runtime_component_extracting"
 
 
+def test_windows_only_runtime_component_is_explicitly_unsupported_on_linux(
+    tmp_path: Path,
+) -> None:
+    paths = _runtime_paths(tmp_path)
+    linux_paths = RuntimePaths(
+        runtime_dir=paths.runtime_dir,
+        ffmpeg=paths.ffmpeg,
+        ffprobe=paths.ffprobe,
+        target=PlatformTarget(operating_system="linux", architecture="x86_64"),
+    )
+    status = RuntimeComponentService(ServiceSettings(), linux_paths).status()
+
+    assert status["faster-whisper-xxl"]["supported"] is False
+    assert status["gpt-sovits-v2pro"]["supported"] is False
+    assert "没有当前平台" in status["faster-whisper-xxl"]["reason"]
+
+
 def test_transcription_task_consumes_engine_and_smart_split_settings(tmp_path: Path) -> None:
     paths = _runtime_paths(tmp_path)
     source = tmp_path / "speech.wav"
@@ -395,7 +411,7 @@ print('100%', flush=True)
 """,
         encoding="utf-8",
     )
-    settings = GlobalSettings(
+    settings = ServiceSettings(
         asr=AsrSettings(
             engine="faster_whisper_cli",
             cli_path=str(fake_cli),
@@ -489,7 +505,7 @@ print('100%', flush=True)
 """,
         encoding="utf-8",
     )
-    settings = GlobalSettings(
+    settings = ServiceSettings(
         asr=AsrSettings(
             engine="faster_whisper_cli",
             cli_path=str(fake_cli),
@@ -566,7 +582,7 @@ print('100%', flush=True)
 """,
         encoding="utf-8",
     )
-    settings = GlobalSettings(
+    settings = ServiceSettings(
         asr=AsrSettings(
             engine="faster_whisper_cli",
             cli_path=str(fake_cli),
@@ -683,7 +699,7 @@ print('100%', flush=True)
 """,
         encoding="utf-8",
     )
-    settings = GlobalSettings(
+    settings = ServiceSettings(
         asr=AsrSettings(
             engine="faster_whisper_cli",
             cli_path=str(fake_cli),
@@ -897,7 +913,7 @@ active.unlink()
 """,
         encoding="utf-8",
     )
-    settings = GlobalSettings(
+    settings = ServiceSettings(
         asr=AsrSettings(
             engine="faster_whisper_cli",
             cli_path=str(fake_cli),

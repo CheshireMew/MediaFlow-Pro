@@ -8,7 +8,8 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
-from dataclasses import dataclass
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
@@ -101,6 +102,50 @@ class TaskContext:
     cancellation: CancellationToken
     report: ProgressReporter
     recovered: bool = False
+    _project_changes: list[Callable[[], None]] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+    _project_change_committer: Callable[[Callable[[], None]], None] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _project_change_committed: bool = field(
+        default=False,
+        init=False,
+        repr=False,
+    )
+
+    def defer_project_change(self, change: Callable[[], None]) -> None:
+        """Register project state that must join the terminal task command."""
+
+        if self._project_change_committed:
+            raise RuntimeError(
+                "A task cannot mix prerequisite and terminal project commands"
+            )
+        self._project_changes.append(change)
+
+    def project_changes(self) -> tuple[Callable[[], None], ...]:
+        return tuple(self._project_changes)
+
+    def commit_project_change(self, change: Callable[[], None]) -> None:
+        """Submit one prerequisite project command before external task work."""
+
+        if self._project_change_committed:
+            raise RuntimeError(
+                "A task may submit only one prerequisite project command"
+            )
+        if self._project_changes:
+            raise RuntimeError(
+                "A task cannot mix prerequisite and terminal project commands"
+            )
+        self._project_change_committed = True
+        if self._project_change_committer is None:
+            change()
+        else:
+            self._project_change_committer(change)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +163,13 @@ class TaskCompletion:
 
 
 TaskHandler = Callable[[TaskContext], TaskCompletion]
+TaskPreparationScope = Callable[[Task], AbstractContextManager[None]]
+TaskSettlementPersistence = Callable[[], Task]
+TaskSettlementCommitter = Callable[
+    [Task, TaskSettlementPersistence, tuple[Callable[[], None], ...]],
+    Task,
+]
+TaskProjectChangeCommitter = Callable[[Task, Callable[[], None]], None]
 
 
 class TaskService:
@@ -130,6 +182,9 @@ class TaskService:
         lease_duration_ms: int = 15_000,
         recovery_poll_interval: float = 1.0,
         execution_owner_id: str | None = None,
+        preparation_scope: TaskPreparationScope | None = None,
+        project_change_committer: TaskProjectChangeCommitter | None = None,
+        settlement_committer: TaskSettlementCommitter | None = None,
     ):
         if lease_duration_ms <= 0:
             raise ValueError("Task lease duration must be positive")
@@ -155,6 +210,11 @@ class TaskService:
         self._recovery_poll_interval = recovery_poll_interval
         self._recover_expired = recover_expired and not repository.read_only
         self._handlers: dict[TaskKind, TaskHandler] = {}
+        self._preparation_scope = preparation_scope or (
+            lambda _task: nullcontext()
+        )
+        self._settlement_committer = settlement_committer
+        self._project_change_committer = project_change_committer
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="mediaflow-task",
@@ -309,15 +369,16 @@ class TaskService:
 
     def cancel(self, task_id: str) -> None:
         self._require_writable()
-        task = self.repository.get(task_id)
-        if not task.status.is_active:
-            raise ValueError("Only active tasks can be cancelled")
         requested = self.repository.request_stop(task_id, "cancel")
         if requested is not None:
             self._publish(
                 requested,
                 "control" if requested.status == TaskStatus.RUNNING else "status",
             )
+        else:
+            current = self.repository.get(task_id)
+            if not current.status.is_active:
+                raise ValueError("Only active tasks can be cancelled")
         with self._lock:
             token = self._tokens.get(task_id)
         if token is not None:
@@ -336,9 +397,20 @@ class TaskService:
         self._require_writable()
         count = 0
         for task in self.repository.list():
-            if task.status.is_active:
-                self.cancel(task.id)
-                count += 1
+            if not task.status.is_active:
+                continue
+            requested = self.repository.request_stop(task.id, "cancel")
+            if requested is None:
+                continue
+            self._publish(
+                requested,
+                "control" if requested.status == TaskStatus.RUNNING else "status",
+            )
+            with self._lock:
+                token = self._tokens.get(task.id)
+            if token is not None:
+                token.request_cancel()
+            count += 1
         return count
 
     def delete(self, task_id: str) -> None:
@@ -384,9 +456,6 @@ class TaskService:
 
     def list(self) -> builtins.list[Task]:
         return self.repository.list()
-
-    def list_unconsumed_terminal(self) -> builtins.list[Task]:
-        return self.repository.list_unconsumed_terminal()
 
     def snapshot(self) -> tuple[builtins.list[Task], int]:
         return self.repository.snapshot()
@@ -560,11 +629,20 @@ class TaskService:
                 report=report,
                 recovered=recovered,
             )
+            project_change_committer = self._project_change_committer
+            if project_change_committer is not None:
+                context._project_change_committer = (
+                    lambda change: project_change_committer(
+                        running,
+                        change,
+                    )
+                )
             try:
                 token.raise_if_requested()
                 running.command.validate_for_execution()
                 handler = self._handlers[running.kind]
-                completion = handler(context)
+                with self._preparation_scope(running):
+                    completion = handler(context)
             except TaskLeaseLost:
                 return
             except TaskStopped as stopped:
@@ -572,11 +650,17 @@ class TaskService:
             except Exception as error:
                 self._persist_failure_or_stop(task_id, token, error)
             else:
-                self._persist_completion(
-                    task_id,
-                    token,
-                    completion,
-                )
+                try:
+                    self._persist_completion(
+                        task_id,
+                        token,
+                        completion,
+                        project_changes=context.project_changes(),
+                    )
+                except TaskLeaseLost:
+                    return
+                except Exception as error:
+                    self._persist_failure_or_stop(task_id, token, error)
         finally:
             if heartbeat_stop is not None:
                 heartbeat_stop.set()
@@ -595,6 +679,7 @@ class TaskService:
         update: Callable[[Task], Task],
         release_owner: bool = False,
         observe_stop: bool = True,
+        publish: bool = True,
     ) -> Task:
         for _attempt in range(8):
             current = self.repository.get(task_id)
@@ -616,7 +701,8 @@ class TaskService:
                 release_owner=release_owner,
             )
             if persisted is not None:
-                self._publish(persisted, event_type)
+                if publish:
+                    self._publish(persisted, event_type)
                 return persisted
         token.request_lease_lost()
         raise TaskLeaseLost(
@@ -652,12 +738,10 @@ class TaskService:
                 }
             )
 
-        self._persist_owned(
+        self._persist_settlement(
             task_id,
             token,
             event_type="status",
-            release_owner=True,
-            observe_stop=False,
             update=stopped_task,
         )
 
@@ -666,6 +750,8 @@ class TaskService:
         task_id: str,
         token: CancellationToken,
         completion: TaskCompletion,
+        *,
+        project_changes: tuple[Callable[[], None], ...],
     ) -> None:
         """Persist success without ever relabeling published work as failed."""
 
@@ -689,43 +775,81 @@ class TaskService:
                 }
             )
 
+        self._persist_settlement(
+            task_id,
+            token,
+            event_type="completed",
+            update=completed_task,
+            project_changes=project_changes,
+        )
+
+    def _persist_settlement(
+        self,
+        task_id: str,
+        token: CancellationToken,
+        *,
+        event_type: str,
+        update: Callable[[Task], Task],
+        project_changes: tuple[Callable[[], None], ...] = (),
+    ) -> None:
+        """Commit one settled task and its project result as one boundary."""
+
+        def persist() -> Task:
+            return self._persist_owned(
+                task_id,
+                token,
+                event_type=event_type,
+                release_owner=True,
+                observe_stop=False,
+                publish=self._settlement_committer is None,
+                update=update,
+            )
+
+        if self._settlement_committer is not None:
+            current = self.repository.get(task_id)
+            persisted = self._settlement_committer(
+                current,
+                persist,
+                project_changes,
+            )
+            self._publish(persisted, event_type)
+            return
+
+        for change in project_changes:
+            change()
         for attempt in range(8):
             try:
-                self._persist_owned(
-                    task_id,
-                    token,
-                    event_type="completed",
-                    release_owner=True,
-                    observe_stop=False,
-                    update=completed_task,
-                )
+                persist()
                 return
             except TaskLeaseLost:
                 try:
                     current = self.repository.get(task_id)
                 except Exception:
                     return
-                if current.status == TaskStatus.COMPLETED:
+                if current.status.is_settled:
                     return
                 return
             except Exception:
                 try:
-                    current = self.repository.get(task_id)
+                    current_after_failure = self.repository.get(task_id)
                 except Exception:
-                    current = None
-                if current is not None and current.status == TaskStatus.COMPLETED:
+                    current_after_failure = None
+                if (
+                    current_after_failure is not None
+                    and current_after_failure.status.is_settled
+                ):
                     return
                 if attempt == 7:
                     self._log_background_error(
-                        f"completion:{task_id}",
+                        f"settlement:{task_id}",
                         (
-                            f"Task {task_id} published its result but its "
-                            "completion receipt could not be persisted; "
+                            f"Task {task_id} prepared its result but its "
+                            "settlement receipt could not be persisted; "
                             "lease recovery will retry the task"
                         ),
                         level=logging.ERROR,
                     )
-                    return
+                    raise
                 time.sleep(min(0.5, 0.05 * (2**attempt)))
 
     def _persist_failure_or_stop(
@@ -752,12 +876,10 @@ class TaskService:
                     ),
                 )
                 return
-            self._persist_owned(
+            self._persist_settlement(
                 task_id,
                 token,
                 event_type="failed",
-                release_owner=True,
-                observe_stop=False,
                 update=lambda owned: owned.model_copy(
                     update={
                         "status": TaskStatus.FAILED,
@@ -942,6 +1064,12 @@ class TaskService:
 
     def _publish(self, task: Task, event_type: str) -> None:
         event = self.repository.latest_event(task.id)
+        if event.revision > task.revision:
+            # A control request may commit between the worker's task write and
+            # its in-memory broadcast.  The newer durable event already
+            # contains the complete task snapshot, so publishing the older
+            # cursor afterwards would make live subscribers move backwards.
+            return
         if event.event_type != event_type or event.revision != task.revision:
             raise RuntimeError(f"Persisted task event does not match task {task.id} revision {task.revision}")
         self.events.publish(event)

@@ -14,8 +14,6 @@ from mediaflow.infrastructure.asr_engine import FasterWhisperCliEngine
 from mediaflow.infrastructure.gpt_sovits_engine import GptSoVitsEngine
 from mediaflow.infrastructure.output_reservation import reserve_python_output
 from mediaflow.infrastructure.runtime_components import RuntimeComponentService
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.settings_repository import SettingsRepository
 
 
 def transcribe(context: OperationContext) -> SpeechTranscriptionResult:
@@ -123,7 +121,5 @@ def synthesize(context: OperationContext) -> SpeechSynthesisResult:
 
 
 def _runtime(context: OperationContext):
-    application = context.application_or_none
-    if application is not None:
-        return application.settings, application.runtime_paths
-    return SettingsRepository().load(), RuntimePaths.discover()
+    application = context.application
+    return application.service_settings, application.runtime_paths

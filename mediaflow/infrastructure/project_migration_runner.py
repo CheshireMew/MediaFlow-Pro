@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Any, NoReturn
 
 from .project_migrations import MIGRATION_BY_SOURCE_VERSION
@@ -19,8 +20,14 @@ class ProjectUpgradeRequiredError(RuntimeError):
 
 
 class ProjectSchemaMigrator:
-    def __init__(self, workspace: Any):
+    def __init__(
+        self,
+        workspace: Any,
+        *,
+        chromium: Path | None = None,
+    ):
         self.workspace = workspace
+        self.chromium = chromium
 
     def validate(self) -> None:
         version = self._read_version()
@@ -48,7 +55,10 @@ class ProjectSchemaMigrator:
             migration = MIGRATION_BY_SOURCE_VERSION.get(version)
             if migration is None:
                 self._raise_unsupported(version)
-            migration.apply(self.workspace)
+            migration.execute(
+                self.workspace,
+                chromium=self.chromium,
+            )
             migrated_version = self._read_version()
             if migrated_version != migration.target_version:
                 raise RuntimeError(

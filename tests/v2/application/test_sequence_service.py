@@ -10,6 +10,7 @@ from mediaflow.domain.enums import AssetKind, AudioEffectKind, TrackKind
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 
 
 def _audio_graph_signature(repository: ProjectRepository, sequence_id: str) -> tuple:
@@ -61,7 +62,7 @@ def _audio_graph_signature(repository: ProjectRepository, sequence_id: str) -> t
 
 def _compiled_audio_bus_names(repository: ProjectRepository, sequence_id: str) -> set[str]:
     state = repository.timeline.load_timeline(sequence_id)
-    root = ET.fromstring(TimelineCompiler(repository).compile(state).xml)
+    root = ET.fromstring(TimelineCompiler(repository, RuntimeContext.discover().paths).compile(state).xml)
     return {
         property_node.text or ""
         for tractor in root.findall("tractor")
@@ -81,9 +82,7 @@ def test_short_sequence_clones_and_replaces_the_complete_audio_graph(
         asset = repository.catalog.update_asset(
             asset.model_copy(
                 update={
-                    "metadata": asset.metadata.model_copy(
-                        update={"duration_frames": 120, "has_audio": True}
-                    )
+                    "metadata": asset.metadata.model_copy(update={"duration_frames": 120, "has_audio": True})
                 }
             )
         )
@@ -93,9 +92,7 @@ def test_short_sequence_clones_and_replaces_the_complete_audio_graph(
         master = next(bus for bus in buses if bus.parent_bus_id is None)
         dialogue = next(bus for bus in buses if bus.name == "对白")
         music = next(bus for bus in buses if bus.name == "音乐")
-        repository.audio.save_audio_bus(
-            master.model_copy(update={"gain_db": -1.5, "channel_layout": "5.1"})
-        )
+        repository.audio.save_audio_bus(master.model_copy(update={"gain_db": -1.5, "channel_layout": "5.1"}))
         narration = repository.audio.save_audio_bus(
             AudioBus(
                 sequence_id=project.main_sequence_id,
@@ -166,19 +163,17 @@ def test_short_sequence_clones_and_replaces_the_complete_audio_graph(
             repository,
             project.main_sequence_id,
         )
-        short_xml = TimelineCompiler(repository).compile(
-            repository.timeline.load_timeline(short.id)
-        ).xml
+        short_xml = (
+            TimelineCompiler(repository, RuntimeContext.discover().paths)
+            .compile(repository.timeline.load_timeline(short.id))
+            .xml
+        )
         assert "avfilter.highpass" in short_xml
         assert "0=-12dB" in short_xml
 
-        old_destination_bus_ids = {
-            bus.id for bus in repository.audio.list_audio_buses(short.id)
-        }
+        old_destination_bus_ids = {bus.id for bus in repository.audio.list_audio_buses(short.id)}
         TimelineEditor(repository, short.id).set_sequence_in_out(2, 30)
-        repository.audio.save_audio_bus(
-            narration.model_copy(update={"gain_db": -6.0, "solo": True})
-        )
+        repository.audio.save_audio_bus(narration.model_copy(update={"gain_db": -6.0, "solo": True}))
         service.sync_short_from_bounds(
             project.main_sequence_id,
             short.id,
@@ -203,9 +198,12 @@ def test_short_sequence_clones_and_replaces_the_complete_audio_graph(
             reopened,
             reopened.catalog.get_project().main_sequence_id,
         )
-        assert "avfilter.highpass" in TimelineCompiler(reopened).compile(
-            reopened.timeline.load_timeline(short.id)
-        ).xml
+        assert (
+            "avfilter.highpass"
+            in TimelineCompiler(reopened, RuntimeContext.discover().paths)
+            .compile(reopened.timeline.load_timeline(short.id))
+            .xml
+        )
 
 
 def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
@@ -219,9 +217,7 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
         asset = repository.catalog.update_asset(
             asset.model_copy(
                 update={
-                    "metadata": asset.metadata.model_copy(
-                        update={"duration_frames": 100, "has_video": True}
-                    )
+                    "metadata": asset.metadata.model_copy(update={"duration_frames": 100, "has_video": True})
                 }
             )
         )
@@ -279,10 +275,9 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
             if track.kind == TrackKind.SUBTITLE
         )
         copied = repository.subtitles.list_subtitle_placements(short_track.id)
-        assert [
-            (item.start_frame, item.end_frame, item.timing_overridden)
-            for item in copied
-        ] == [(10, 25, True)]
+        assert [(item.start_frame, item.end_frame, item.timing_overridden) for item in copied] == [
+            (10, 25, True)
+        ]
         short_id = short.id
 
     with ProjectRepository.open(project_dir) as reopened:
@@ -291,9 +286,7 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
             for track in reopened.timeline.load_timeline(short_id).tracks
             if track.kind == TrackKind.SUBTITLE
         )
-        assert reopened.subtitles.list_subtitle_placements(
-            before_sync_track.id
-        )[0].timing_overridden is True
+        assert reopened.subtitles.list_subtitle_placements(before_sync_track.id)[0].timing_overridden is True
         SequenceService(reopened).sync_short_from_bounds(
             reopened.catalog.get_project().main_sequence_id,
             short_id,
@@ -307,7 +300,6 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
             if track.kind == TrackKind.SUBTITLE
         )
         copied = reopened.subtitles.list_subtitle_placements(after_sync_track.id)
-        assert [
-            (item.start_frame, item.end_frame, item.timing_overridden)
-            for item in copied
-        ] == [(10, 25, True)]
+        assert [(item.start_frame, item.end_frame, item.timing_overridden) for item in copied] == [
+            (10, 25, True)
+        ]

@@ -3,16 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Literal
 
-from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
+from mediaflow.application.edit_history import (
+    ProjectEditAction,
+    ProjectEditCommand,
+    ProjectEditHistory,
+)
 from mediaflow.application.ports import TranscriptEditingDocuments
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.enums import TrackKind
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timebase import reframe_interval
+from mediaflow.domain.timeline import TimelineState
 from mediaflow.domain.transcript_edits import (
     TranscriptEditImpact,
     TranscriptEditPlan,
@@ -33,10 +38,16 @@ class TranscriptEditingService:
         repository: TranscriptEditingDocuments,
         publication: SubtitlePublicationService,
         history: ProjectEditHistory,
+        timeline_provider: Callable[[str], TimelineEditor] | None = None,
     ):
         self.repository = repository
         self.publication = publication
         self.history = history
+        self._timeline_provider = timeline_provider
+        self.history.register_handler(
+            "transcript.restore",
+            self._apply_history_action,
+        )
 
     def inspect_transcript(
         self,
@@ -357,46 +368,29 @@ class TranscriptEditingService:
                     )
                 )
 
-                def restore(
-                    source_state,
-                    destination_state,
-                    segments,
-                    words,
-                ) -> None:
-                    def restore_change() -> None:
-                        self.repository.subtitles.save_subtitle_segments(
-                            plan.document_id,
-                            list(segments),
-                        )
-                        self.repository.subtitles.save_subtitle_words(
-                            plan.document_id,
-                            list(words),
-                        )
-                        timeline.restore_snapshot(
-                            source_state,
-                            destination_state,
-                        )
-
-                    self.publication.commit_document_change(
-                        plan.document_id,
-                        restore_change,
-                    )
-
                 self.history.push(
                     ProjectEditCommand(
                         label="AI 转录剪辑",
-                        undo_action=lambda: restore(
-                            after_state,
-                            before_state,
-                            before_segments,
-                            before_words,
-                        ),
-                        redo_action=lambda: restore(
-                            before_state,
-                            after_state,
-                            after_segments,
-                            after_words,
-                        ),
+                        undo_actions=[
+                            self._history_action(
+                                timeline.sequence_id,
+                                plan.document_id,
+                                after_state,
+                                before_state,
+                                before_segments,
+                                before_words,
+                            )
+                        ],
+                        redo_actions=[
+                            self._history_action(
+                                timeline.sequence_id,
+                                plan.document_id,
+                                before_state,
+                                after_state,
+                                after_segments,
+                                after_words,
+                            )
+                        ],
                     )
                 )
                 return TranscriptEditResult(
@@ -430,6 +424,69 @@ class TranscriptEditingService:
                     f"{reload_error}"
                 )
             raise
+
+    @staticmethod
+    def _history_action(
+        sequence_id: str,
+        document_id: str,
+        source_state: TimelineState,
+        destination_state: TimelineState,
+        segments: list[SubtitleSegment],
+        words: list[SubtitleWord],
+    ) -> ProjectEditAction:
+        return ProjectEditAction(
+            kind="transcript.restore",
+            payload={
+                "sequence_id": sequence_id,
+                "document_id": document_id,
+                "source_state": source_state.model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
+                "destination_state": destination_state.model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
+                "segments": [
+                    item.model_dump(mode="json", exclude_computed_fields=True)
+                    for item in segments
+                ],
+                "words": [
+                    item.model_dump(mode="json", exclude_computed_fields=True)
+                    for item in words
+                ],
+            },
+        )
+
+    def _apply_history_action(self, action: ProjectEditAction) -> None:
+        payload = action.payload
+        sequence_id = str(payload.get("sequence_id") or "")
+        document_id = str(payload.get("document_id") or "")
+        timeline = (
+            self._timeline_provider(sequence_id)
+            if self._timeline_provider is not None
+            else TimelineEditor(self.repository, sequence_id)
+        )
+
+        def restore_change() -> None:
+            self.repository.subtitles.save_subtitle_segments(
+                document_id,
+                [
+                    SubtitleSegment.model_validate(item)
+                    for item in payload.get("segments") or []
+                ],
+            )
+            self.repository.subtitles.save_subtitle_words(
+                document_id,
+                [
+                    SubtitleWord.model_validate(item)
+                    for item in payload.get("words") or []
+                ],
+            )
+            timeline.restore_snapshot(
+                TimelineState.model_validate(payload.get("source_state")),
+                TimelineState.model_validate(payload.get("destination_state")),
+            )
+
+        self.publication.commit_document_change(document_id, restore_change)
 
     def _source_transcript(
         self,

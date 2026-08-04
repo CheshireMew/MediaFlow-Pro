@@ -21,6 +21,7 @@ from mediaflow.automation.contracts import AutomationRequest
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.composition import EditorApplication
 from mediaflow.domain.asr import TranscriptionPlan
+from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.enums import (
     AssetKind,
     ExportFormat,
@@ -224,7 +225,7 @@ def test_task_start_uses_one_sequence_identity_and_rejects_mismatch(
                 name="Audio only",
                 format=ExportFormat.AUDIO,
                 container="flac",
-                video_codec=None,
+                encoder_policy=None,
                 audio_codec="flac",
                 pixel_format=None,
             ),
@@ -1139,60 +1140,21 @@ def test_heartbeat_logs_transient_storage_failure_and_renews_next_time(
     assert heartbeat_logs[0].exc_info is not None
 
 
-def test_live_heartbeat_prevents_takeover_by_another_python_process(
+def test_project_lock_prevents_a_second_python_process_writer(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "ProcessLease"
     project_repository = ProjectRepository.create(root, "ProcessLease")
-    project = project_repository.catalog.get_project()
-    task = TaskRepository(project_repository).create(
-        Task(
-            project_id=project.id,
-            command=AnalyzeDownloadCommand(url="test://process-lease"),
-        )
-    )
-    started_path = tmp_path / "child-claimed.txt"
-    release_path = tmp_path / "release-child.txt"
     child_code = """
 import json
 import sys
-import time
-from pathlib import Path
-from mediaflow.application.task_service import (
-    TaskCompletion,
-    TaskService,
-)
-from mediaflow.domain.enums import TaskKind
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.task_repository import TaskRepository
 
-started_path = Path(sys.argv[3])
-release_path = Path(sys.argv[4])
-with ProjectRepository.open(
-    sys.argv[1],
-    writable=True,
-    cooperative=True,
-) as project:
-    service = TaskService(
-        TaskRepository(project),
-        max_workers=1,
-        execution_owner_id="child-process-owner",
-        lease_duration_ms=120,
-        recovery_poll_interval=0.02,
-    )
-
-    def execute(context):
-        started_path.write_text("claimed", encoding="utf-8")
-        while not release_path.exists():
-            context.cancellation.raise_if_requested()
-            time.sleep(0.01)
-        return TaskCompletion()
-
-    service.register(TaskKind.ANALYZE, execute)
-    service.recover_claimable()
-    task = service.wait(sys.argv[2], timeout=15)
-    service.shutdown()
-print(json.dumps({"status": task.status.value}))
+with ProjectRepository.open(sys.argv[1], writable=True) as project:
+    print(json.dumps({
+        "read_only": project.read_only,
+        "owns_project_lock": project.owns_project_lock,
+    }))
 """
     child = subprocess.Popen(
         [
@@ -1200,66 +1162,24 @@ print(json.dumps({"status": task.status.value}))
             "-c",
             child_code,
             str(root),
-            task.id,
-            str(started_path),
-            str(release_path),
         ],
         cwd=Path(__file__).resolve().parents[3],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    contender: TaskService | None = None
     try:
-        deadline = time.monotonic() + 10
-        while (
-            not started_path.is_file()
-            and child.poll() is None
-            and time.monotonic() < deadline
-        ):
-            time.sleep(0.01)
-        if not started_path.is_file():
-            stdout, stderr = child.communicate(timeout=5)
-            pytest.fail(
-                "Child task owner did not claim the task: "
-                f"stdout={stdout!r}, stderr={stderr!r}"
-            )
-
-        contender_ran = threading.Event()
-
-        def duplicate(_context: TaskContext) -> TaskCompletion:
-            contender_ran.set()
-            return TaskCompletion()
-
-        contender = TaskService(
-            TaskRepository(project_repository),
-            max_workers=1,
-            execution_owner_id="parent-process-owner",
-            lease_duration_ms=120,
-            recovery_poll_interval=0.02,
-        )
-        contender.register(TaskKind.ANALYZE, duplicate)
-        time.sleep(0.4)
-
-        running = contender.get(task.id)
-        assert running.status == TaskStatus.RUNNING
-        assert running.execution_owner_id == "child-process-owner"
-        assert contender.recover_claimable() == 0
-        assert not contender_ran.is_set()
-
-        release_path.write_text("release", encoding="utf-8")
-        stdout, stderr = child.communicate(timeout=15)
+        stdout, stderr = child.communicate(timeout=5)
         assert child.returncode == 0, stderr
-        assert json.loads(stdout)["status"] == TaskStatus.COMPLETED.value
-        assert contender.wait(task.id, timeout=5).status == TaskStatus.COMPLETED
-        assert not contender_ran.is_set()
+        observed = json.loads(stdout)
+        assert observed == {
+            "read_only": True,
+            "owns_project_lock": False,
+        }
     finally:
-        release_path.write_text("release", encoding="utf-8")
         if child.poll() is None:
             child.kill()
             child.communicate()
-        if contender is not None:
-            contender.shutdown()
         project_repository.close()
 
 
@@ -1411,18 +1331,14 @@ def test_remote_pause_is_persisted_and_resume_gets_a_fresh_lease(
     project_repository.close()
 
 
-def test_task_resume_request_replays_after_action_completed_before_receipt_write(
+def test_task_resume_scheduling_replays_after_receipt_write_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     application = EditorApplication()
     root = tmp_path / "ReceiptCrash"
     with application.create_project(root, "ReceiptCrash") as project:
-        task = TaskRepository(project).create(
+        task = project._tasks.repository.create(
             Task(
                 project_id=project.get_project().id,
                 command=AnalyzeDownloadCommand(url="test://receipt-crash"),
@@ -1438,6 +1354,9 @@ def test_task_resume_request_replays_after_action_completed_before_receipt_write
             project=str(root),
             arguments={"task_id": task.id, "timeout": 5},
             request_id="resume-after-receipt-crash",
+            base_revision=project.content_revision(),
+            actor={"kind": "agent", "id": "task-receipt-test"},
+            client_id="pytest-task-receipt",
         )
         retry_flags: list[bool] = []
 
@@ -1452,12 +1371,8 @@ def test_task_resume_request_replays_after_action_completed_before_receipt_write
                 )
             )
 
-        with pytest.raises(ValueError, match="terminal"):
-            OperationContext(
-                project,
-                application,
-                envelope,
-            ).task_result(task)
+        initial_receipt = OperationContext.task_receipt(task)
+        assert initial_receipt["task"]["status"] == TaskStatus.PAUSED.value
 
         original_save = ProjectRepository.save_automation_result
 
@@ -1482,6 +1397,7 @@ def test_task_resume_request_replays_after_action_completed_before_receipt_write
                 envelope.arguments,
                 action,
                 atomic=False,
+                actor=ActorIdentity(kind="system", id="task-service-test"),
             )
 
         completed = project.wait_for_task(task.id, timeout=5)
@@ -1494,26 +1410,28 @@ def test_task_resume_request_replays_after_action_completed_before_receipt_write
         assert project._repository._fetchone(
             "SELECT task_id FROM task_consumption WHERE task_id=?",
             (task.id,),
-        )["task_id"] == task.id
+        ) is not None
 
         monkeypatch.setattr(
             ProjectRepository,
             "save_automation_result",
             original_save,
         )
-        recovered = project.execute_automation_request(
+        recovered, _recovered_event = project.execute_automation_request(
             envelope.request_id,
             envelope.operation,
             envelope.arguments,
             action,
             atomic=False,
+            actor=ActorIdentity(kind="system", id="task-service-test"),
         )
-        cached = project.execute_automation_request(
+        cached, _cached_event = project.execute_automation_request(
             envelope.request_id,
             envelope.operation,
             envelope.arguments,
             action,
             atomic=False,
+            actor=ActorIdentity(kind="system", id="task-service-test"),
         )
 
         assert recovered["task"]["id"] == task.id
@@ -1526,10 +1444,6 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     application = EditorApplication()
     root = tmp_path / "BoundaryReceiptCrash"
     source = tmp_path / "boundary-source.mp4"
@@ -1585,7 +1499,7 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
                 speech_out_frame=90,
             )
         )
-        task = TaskRepository(project).create(
+        task = project._tasks.repository.create(
             Task(
                 project_id=project.get_project().id,
                 sequence_id=sequence_id,
@@ -1606,6 +1520,9 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             project=str(root),
             arguments={"task_id": task.id, "timeout": 5},
             request_id="boundary-resume-receipt-crash",
+            base_revision=project.content_revision(),
+            actor={"kind": "agent", "id": "boundary-receipt-test"},
+            client_id="pytest-boundary-receipt",
         )
 
         def action(retrying: bool) -> dict:
@@ -1641,7 +1558,19 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
                 envelope.arguments,
                 action,
                 atomic=False,
+                actor=ActorIdentity(kind="system", id="task-service-test"),
             )
+
+        completed = project.wait_for_task(task.id, timeout=5)
+        assert completed.status == TaskStatus.COMPLETED
+        assert project.load_timeline(sequence_id).sequence.in_out == SequenceInOut(
+            in_frame=10,
+            out_frame=90,
+        )
+        assert project._repository._fetchone(
+            "SELECT task_id FROM task_consumption WHERE task_id=?",
+            (task.id,),
+        ) is not None
 
         applied = project.load_timeline(sequence_id)
         assert applied.sequence.in_out == SequenceInOut(
@@ -1649,10 +1578,6 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             out_frame=90,
         )
         assert len(project._history._undo) == 1
-        assert project._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (task.id,),
-        )["task_id"] == task.id
         committed_content_revision = project.content_revision()
         committed_timeline_revision = project.get_sequence(
             sequence_id
@@ -1677,15 +1602,18 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
                 )
             )
 
-        recovered = reopened.execute_automation_request(
+        recovered, _recovered_event = reopened.execute_automation_request(
             envelope.request_id,
             envelope.operation,
             envelope.arguments,
             retry_action,
             atomic=False,
+            actor=ActorIdentity(kind="system", id="task-service-test"),
         )
         assert recovered["task"]["id"] == task_id
-        assert recovered["result"]["sequence_bounds_status"] == "applied"
+        committed = reopened.committed_task_result(task_id)
+        assert committed is not None
+        assert committed.sequence_bounds_status == "applied"
         assert retry_flags == [True]
         assert reopened.content_revision() == committed_content_revision
         assert (
@@ -1703,14 +1631,10 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
         assert reopened._history.can_undo is False
 
 
-def test_task_consumption_insert_failure_rolls_back_real_timeline_side_effect(
+def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     application = EditorApplication()
     root = tmp_path / "ConsumptionRollback"
     source = tmp_path / "consumption-source.mp4"
@@ -1764,21 +1688,15 @@ def test_task_consumption_insert_failure_rolls_back_real_timeline_side_effect(
                 speech_out_frame=90,
             )
         )
-        project._tasks._handlers[TaskKind.ANALYZE] = (
-            lambda _context: TaskCompletion(outcome=outcome)
-        )
-        started = project.start_task(
-            AnalyzeSequenceBoundsCommand(
-                sequence_id=sequence_id,
-                snapshot_hash=snapshot_hash,
-            ),
-            sequence_id=sequence_id,
-        )
-        completed = project.wait_for_task(
-            started.id,
-            timeout=5,
-        )
-        assert completed.status == TaskStatus.COMPLETED
+        handler_entered = threading.Event()
+        release_handler = threading.Event()
+
+        def complete_after_release(_context: TaskContext) -> TaskCompletion:
+            handler_entered.set()
+            assert release_handler.wait(timeout=5)
+            return TaskCompletion(outcome=outcome)
+
+        project._tasks._handlers[TaskKind.ANALYZE] = complete_after_release
         revision_before = project.content_revision()
         timeline_revision_before = project.get_sequence(
             sequence_id
@@ -1794,12 +1712,23 @@ def test_task_consumption_insert_failure_rolls_back_real_timeline_side_effect(
                        );
                    END"""
             )
-
+        started = project.start_task(
+            AnalyzeSequenceBoundsCommand(
+                sequence_id=sequence_id,
+                snapshot_hash=snapshot_hash,
+            ),
+            sequence_id=sequence_id,
+        )
+        assert handler_entered.wait(timeout=5)
+        worker = project._tasks._futures[started.id]
+        release_handler.set()
         with pytest.raises(
             sqlite3.IntegrityError,
-            match="task consumption failure",
+            match="injected task consumption failure",
         ):
-            project.consume_task_result(completed)
+            worker.result(timeout=5)
+        unsettled = project.get_task(started.id)
+        assert unsettled.status == TaskStatus.RUNNING
 
         assert project.load_timeline(
             sequence_id
@@ -1812,19 +1741,25 @@ def test_task_consumption_insert_failure_rolls_back_real_timeline_side_effect(
         assert project._history.can_undo is False
         assert project._repository._fetchone(
             "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (completed.id,),
+            (started.id,),
         ) is None
         with project._repository.transaction() as connection:
             connection.execute(
                 "DROP TRIGGER fail_task_consumption_insert"
             )
+            connection.execute(
+                "UPDATE task SET heartbeat_at=0, lease_expires_at=1 "
+                "WHERE id=?",
+                (started.id,),
+            )
 
-        applied = project.consume_task_result(completed)
-        committed_revision = project.content_revision()
-        committed_timeline_revision = project.get_sequence(
-            sequence_id
-        ).timeline_revision
-        replayed = project.consume_task_result(completed)
+        recovered = project._tasks.recover_claimable()
+        assert recovered == 1
+        completed = project.wait_for_task(started.id, timeout=5)
+        assert completed.status == TaskStatus.COMPLETED
+        applied = project.committed_task_result(completed.id)
+        assert applied is not None
+        replayed = project.committed_task_result(completed.id)
 
         assert applied.sequence_bounds_status == "applied"
         assert replayed == applied
@@ -1834,22 +1769,42 @@ def test_task_consumption_insert_failure_rolls_back_real_timeline_side_effect(
             in_frame=10,
             out_frame=90,
         )
-        assert project.content_revision() == committed_revision
-        assert (
-            project.get_sequence(sequence_id).timeline_revision
-            == committed_timeline_revision
+
+
+def test_task_preparation_cannot_write_project_outside_command_queue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = EditorApplication()
+    with application.create_project(
+        tmp_path / "TaskWriteGuard",
+        "TaskWriteGuard",
+    ) as project:
+        revision = project.content_revision()
+
+        def illegal_write(_context: TaskContext) -> TaskCompletion:
+            project._repository.catalog.create_short_sequence("illegal")
+            return TaskCompletion()
+
+        project._tasks._handlers[TaskKind.ANALYZE] = illegal_write
+        started = project.start_task(
+            AnalyzeDownloadCommand(url="test://illegal-project-write")
         )
-        assert len(project._history._undo) == 1
+        failed = project.wait_for_task(started.id, timeout=5)
+
+        assert failed.status == TaskStatus.FAILED
+        assert "后台任务准备阶段不能直接修改项目" in str(failed.error)
+        assert project.content_revision() == revision
+        assert len(project.list_sequences(include_archived=True)) == 1
+        result = project.committed_task_result(failed.id)
+        assert result is not None
+        assert result.sequence_id == project.get_project().main_sequence_id
 
 
 def test_project_close_keeps_lock_until_slow_task_worker_has_joined(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     application = EditorApplication()
     root = tmp_path / "SlowClose"
     project = application.create_project(root, "SlowClose")
@@ -1909,10 +1864,6 @@ def test_second_project_instance_is_read_only_across_every_task_write_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
     owner_application = EditorApplication()
     observer_application = EditorApplication()
     root = tmp_path / "DualInstance"
@@ -1950,47 +1901,38 @@ def test_second_project_instance_is_read_only_across_every_task_write_boundary(
                 )
 
 
-def test_cooperative_writer_recovers_expired_task_without_owning_project_lock(
+def test_expired_task_recovery_stays_inside_the_project_writer(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "MEDIAFLOW_RUNTIME_DIR",
-        str(tmp_path / "runtime"),
-    )
-    root = tmp_path / "CooperativeRecovery"
-    owner = ProjectRepository.create(root, "CooperativeRecovery")
     application = EditorApplication()
-    cooperative = application.open_project(
-        root,
-        writable=True,
-        cooperative=True,
+    project = application.create_project(
+        tmp_path / "OwnedRecovery",
+        "OwnedRecovery",
     )
     recovered: list[bool] = []
     try:
-        assert cooperative.read_only is False
-        assert cooperative._repository.owns_project_lock is False
+        assert project.read_only is False
+        assert project._repository.owns_project_lock is True
 
         def execute(context: TaskContext) -> TaskCompletion:
             recovered.append(context.recovered)
             return TaskCompletion()
 
-        cooperative._tasks._handlers[TaskKind.ANALYZE] = execute
-        repository = TaskRepository(owner)
+        project._tasks._handlers[TaskKind.ANALYZE] = execute
+        repository = project._tasks.repository
         pending = repository.create(
             Task(
-                project_id=owner.catalog.get_project().id,
+                project_id=project.get_project().id,
                 command=AnalyzeDownloadCommand(
-                    url="test://cooperative-recovery"
+                    url="test://owned-recovery"
                 ),
             )
         )
         assert repository.claim(pending.id, "crashed-process", 1) is not None
         time.sleep(0.01)
 
-        completed = cooperative.wait_for_task(pending.id, timeout=5)
+        completed = project.wait_for_task(pending.id, timeout=5)
         assert completed.status == TaskStatus.COMPLETED
         assert recovered == [True]
     finally:
-        cooperative.close()
-        owner.close()
+        project.close()

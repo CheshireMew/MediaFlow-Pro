@@ -265,7 +265,7 @@ class TimelineProjector(Projector):
         request_id = self._session.requests.preview_id
         generation = self._session.binding.generation
         project_dir = self._session.binding.current.project_dir
-        use_proxies = self._session.settings.preview.preview_quality != "source"
+        use_proxies = self._session.service_settings.preview.preview_quality != "source"
         prefer_sdr_preview_proxy = (
             state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
             and not self._session.presentation.hdr_preview_active

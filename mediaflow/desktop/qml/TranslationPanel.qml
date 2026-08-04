@@ -345,6 +345,7 @@ ColumnLayout {
             ListView {
                 id: comparisonList
                 objectName: "translationComparisonList"
+                property var panel: root
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: root.hasDocuments
@@ -402,6 +403,11 @@ ColumnLayout {
                         AppTextArea {
                             id: targetEditor
                             objectName: "translationTargetEditor"
+                            collaborationPath: "/subtitles/documents/"
+                                + root.comparisonData.targetDocumentId
+                                + "/segments/"
+                                + comparisonRow.modelData.targetSegmentId
+                                + "/text"
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(48, implicitHeight)
                             text: root.translationDraftText(comparisonRow.modelData)
@@ -427,15 +433,15 @@ ColumnLayout {
                                     && targetEditor.text !== comparisonRow.modelData.targetText
                                 onClicked: {
                                     const targetDocumentId = String(
-                                        root.comparisonData.targetDocumentId || "");
+                                        comparisonList.panel.comparisonData.targetDocumentId || "");
                                     const targetSegmentId = String(
                                         comparisonRow.modelData.targetSegmentId || "");
                                     if (subtitleController.updateTranslationSegment(
                                             targetDocumentId, targetSegmentId,
                                             targetEditor.text)) {
-                                        root.clearTranslationDraft(
+                                        comparisonList.panel.clearTranslationDraft(
                                             targetDocumentId, targetSegmentId);
-                                        root.refreshComparison();
+                                        comparisonList.panel.refreshComparison();
                                     }
                                 }
                             }

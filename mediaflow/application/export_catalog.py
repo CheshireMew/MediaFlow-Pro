@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mediaflow.domain.enums import ColorMode, ExportFormat
-from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.exports import ExportPreset, VideoEncoderPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +12,7 @@ class ExportVariant:
     format: ExportFormat
     suffix: str
     container: str
-    video_codec: str | None
+    encoder_policy: VideoEncoderPolicy | None
     audio_codec: str
     quality_value: float
     preset: str = "medium"
@@ -35,7 +35,7 @@ class ExportVariant:
             name=f"{self.format.value.upper()} 高质量",
             format=self.format,
             container=self.container,
-            video_codec=self.video_codec,
+            encoder_policy=self.encoder_policy,
             audio_codec=self.audio_codec,
             pixel_format=self.pixel_format(color_mode),
             quality_value=self.quality_value,
@@ -46,26 +46,50 @@ class ExportVariant:
 
 
 EXPORT_VARIANTS: tuple[ExportVariant, ...] = (
-    ExportVariant("h264", ExportFormat.H264, "mp4", "mp4", "libx264", "aac", 18.0),
-    ExportVariant("hevc", ExportFormat.HEVC, "mp4", "mp4", "libx265", "aac", 20.0),
-    ExportVariant("av1", ExportFormat.AV1, "mkv", "mkv", "libsvtav1", "aac", 24.0, "8"),
     ExportVariant(
-        "prores_proxy", ExportFormat.PRORES, "mov", "mov", "prores_ks", "aac", 0.0, prores_profile=0
+        "h264", ExportFormat.H264, "mp4", "mp4", VideoEncoderPolicy(), "aac", 18.0
     ),
-    ExportVariant("prores_lt", ExportFormat.PRORES, "mov", "mov", "prores_ks", "aac", 0.0, prores_profile=1),
+    ExportVariant(
+        "hevc", ExportFormat.HEVC, "mp4", "mp4", VideoEncoderPolicy(), "aac", 20.0
+    ),
+    ExportVariant(
+        "av1", ExportFormat.AV1, "mkv", "mkv", VideoEncoderPolicy(), "aac", 24.0, "8"
+    ),
+    ExportVariant(
+        "prores_proxy", ExportFormat.PRORES, "mov", "mov", VideoEncoderPolicy(), "aac", 0.0, prores_profile=0
+    ),
+    ExportVariant(
+        "prores_lt",
+        ExportFormat.PRORES,
+        "mov",
+        "mov",
+        VideoEncoderPolicy(),
+        "aac",
+        0.0,
+        prores_profile=1,
+    ),
     ExportVariant(
         "prores_standard",
         ExportFormat.PRORES,
         "mov",
         "mov",
-        "prores_ks",
+        VideoEncoderPolicy(),
         "aac",
         0.0,
         prores_profile=2,
     ),
-    ExportVariant("prores_hq", ExportFormat.PRORES, "mov", "mov", "prores_ks", "aac", 0.0, prores_profile=3),
     ExportVariant(
-        "prores_4444", ExportFormat.PRORES, "mov", "mov", "prores_ks", "aac", 0.0, prores_profile=4
+        "prores_hq",
+        ExportFormat.PRORES,
+        "mov",
+        "mov",
+        VideoEncoderPolicy(),
+        "aac",
+        0.0,
+        prores_profile=3,
+    ),
+    ExportVariant(
+        "prores_4444", ExportFormat.PRORES, "mov", "mov", VideoEncoderPolicy(), "aac", 0.0, prores_profile=4
     ),
     ExportVariant("audio_aac", ExportFormat.AUDIO, "m4a", "ipod", None, "aac", 0.0),
     ExportVariant("audio_opus", ExportFormat.AUDIO, "ogg", "ogg", None, "libopus", 0.0),

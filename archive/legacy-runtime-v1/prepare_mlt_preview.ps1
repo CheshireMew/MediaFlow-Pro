@@ -1,3 +1,4 @@
+# Archived v1 helper. The active implementation is scripts/prepare_runtime.py.
 param(
     [string]$MltRoot = ""
 )

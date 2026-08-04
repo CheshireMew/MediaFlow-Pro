@@ -12,6 +12,7 @@ from mediaflow.application.ports import (
     ExportExecutionResult,
     ExportSequenceRequest,
     ExportTaskRuntime,
+    PreparedProxyTaskResult,
     ProjectTaskDocuments,
     SequenceBuildResult,
     TranscriptionTaskRuntime,
@@ -52,8 +53,11 @@ from .mlt.export_service import (
     ExportResult,
     MltExportRequest,
 )
-from .output_reservation import archive_published_outputs
-from .proxy_service import ProxyService
+from .output_reservation import (
+    archive_published_outputs,
+    output_set_transaction,
+)
+from .proxy_service import PreparedProxyGeneration, ProxyService
 from .runtime_paths import RuntimePaths
 from .segmented_export_service import SegmentedExportService
 from .visual_analysis import (
@@ -130,19 +134,29 @@ class InfrastructureAssetTaskRuntime:
         self._documents = documents
         self._paths = paths
 
-    def generate_proxy(
+    def prepare_proxy(
         self,
         asset: Asset,
         profile: ProjectProfile,
         *,
         progress: ProgressCallback,
         check_cancelled: CancellationCheck,
-    ) -> Asset:
-        return ProxyService(self._documents, self._paths).generate(
+    ) -> PreparedProxyGeneration:
+        return ProxyService(self._documents, self._paths).prepare(
             asset,
             profile,
             progress=progress,
             check_cancelled=check_cancelled,
+        )
+
+    def commit_proxy(
+        self,
+        prepared: PreparedProxyTaskResult,
+    ) -> Asset:
+        if not isinstance(prepared, PreparedProxyGeneration):
+            raise TypeError("Proxy preparation does not belong to this runtime")
+        return ProxyService(self._documents, self._paths).commit_prepared(
+            prepared
         )
 
     def generate_waveform(
@@ -152,8 +166,8 @@ class InfrastructureAssetTaskRuntime:
         duration_seconds: float,
         progress: ProgressCallback,
         check_cancelled: CancellationCheck,
-    ) -> Asset:
-        return WaveformService(self._documents, self._paths).generate(
+    ) -> Path:
+        return WaveformService(self._documents, self._paths).prepare(
             asset,
             duration_seconds=duration_seconds,
             progress=progress,
@@ -162,8 +176,9 @@ class InfrastructureAssetTaskRuntime:
 
 
 class InfrastructureDownloadTaskRuntime:
-    def __init__(self, cookies: CookieStore):
+    def __init__(self, cookies: CookieStore, paths: RuntimePaths):
         self._cookies = cookies
+        self._paths = paths
 
     def download_media(
         self,
@@ -175,7 +190,7 @@ class InfrastructureDownloadTaskRuntime:
     ) -> list[Path]:
         managed_cookie = self._cookies.resolve_for_url(request.entry.page_url)
         cookie_file = settings.cookie_file or (str(managed_cookie) if managed_cookie is not None else None)
-        return YtDlpDownloadService().download(
+        return YtDlpDownloadService(self._paths).download(
             request,
             cookie_file=cookie_file,
             browser_cookies=(None if cookie_file else settings.browser_cookies),
@@ -213,7 +228,7 @@ class InfrastructureExportTaskRuntime:
         overwrite: bool,
     ) -> None:
         MltExportService(
-            TimelineCompiler(self._documents),
+            TimelineCompiler(self._documents, self._paths),
             self._paths,
         ).preflight_many(
             self._mlt_requests(requests),
@@ -255,7 +270,7 @@ class InfrastructureExportTaskRuntime:
         check_cancelled: CancellationCheck,
     ) -> tuple[ExportExecutionResult, ...]:
         exporter = MltExportService(
-            TimelineCompiler(self._documents),
+            TimelineCompiler(self._documents, self._paths),
             self._paths,
         )
         mlt_requests = self._mlt_requests(requests)
@@ -426,6 +441,17 @@ class InfrastructureAnalysisTaskRuntime:
         self._paths = paths
         self._cookies = cookies
 
+    @staticmethod
+    def output_transaction(
+        destinations,
+        *,
+        overwrite: bool,
+    ):
+        return output_set_transaction(
+            destinations,
+            overwrite=overwrite,
+        )
+
     def analyze_sequence_bounds(
         self,
         state: TimelineState,
@@ -435,7 +461,7 @@ class InfrastructureAnalysisTaskRuntime:
         progress: ProgressCallback,
     ) -> tuple[SequenceBoundaryAnalysis, Path]:
         return SequenceBoundaryAnalysisService(
-            TimelineCompiler(self._documents),
+            TimelineCompiler(self._documents, self._paths),
             self._paths,
         ).analyze(
             state,
@@ -452,7 +478,7 @@ class InfrastructureAnalysisTaskRuntime:
         progress: ProgressCallback,
     ) -> tuple[LoudnessTaskOutcome, Path]:
         metrics, path = LoudnessAnalysisService(
-            TimelineCompiler(self._documents),
+            TimelineCompiler(self._documents, self._paths),
             self._paths,
         ).analyze(
             state,
@@ -525,6 +551,7 @@ class InfrastructureAnalysisTaskRuntime:
             url,
             settings=settings,
             cookies=self._cookies,
+            paths=self._paths,
             check_cancelled=check_cancelled,
         )
 
@@ -548,7 +575,7 @@ class InfrastructureTaskRuntimes:
         return cls(
             web=InfrastructureWebTaskRuntime(documents, paths),
             assets=InfrastructureAssetTaskRuntime(documents, paths),
-            downloads=InfrastructureDownloadTaskRuntime(cookies),
+            downloads=InfrastructureDownloadTaskRuntime(cookies, paths),
             exports=InfrastructureExportTaskRuntime(documents, paths),
             transcription=InfrastructureTranscriptionTaskRuntime(paths),
             analysis=InfrastructureAnalysisTaskRuntime(

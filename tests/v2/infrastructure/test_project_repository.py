@@ -36,11 +36,13 @@ from mediaflow.domain.task_commands import (
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import (
     Clip,
+    ClipAddRequest,
     TimelineMarker,
     TimelineRange,
     TimelineRevisionConflict,
     Track,
 )
+from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.audio_repository import AudioRepository
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
 from mediaflow.infrastructure.project_migration_runner import (
@@ -49,6 +51,14 @@ from mediaflow.infrastructure.project_migration_runner import (
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
 from mediaflow.infrastructure.task_repository import TaskRepository
+
+
+def _open_writable(root: Path, **options) -> ProjectRepository:
+    return ProjectRepository.open(
+        root,
+        writable=True,
+        **options,
+    )
 
 
 def test_project_repository_owns_the_project_root_path_boundary(
@@ -196,7 +206,7 @@ def test_base_exception_during_open_closes_connection_and_releases_lock(
         abort_validate,
     )
     with pytest.raises(AbortOpen):
-        ProjectRepository.open(root, writable=True)
+        _open_writable(root)
 
     monkeypatch.setattr(
         ProjectSchemaMigrator,
@@ -306,7 +316,7 @@ def test_schema_upgrade_rolls_back_every_version_when_a_late_step_fails(
         connection.execute("UPDATE schema_info SET version=26")
 
     with pytest.raises(json.JSONDecodeError):
-        ProjectRepository.open(root, writable=True)
+        _open_writable(root)
 
     with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
         version = connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone()[
@@ -316,7 +326,7 @@ def test_schema_upgrade_rolls_back_every_version_when_a_late_step_fails(
     assert version == 26
 
     # A failed open releases the project lock instead of poisoning future opens.
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         assert repository.read_only is False
 
     assert (root / "project.mfp").is_file()
@@ -324,6 +334,201 @@ def test_schema_upgrade_rolls_back_every_version_when_a_late_step_fails(
         assert (root / directory).is_dir()
     assert not (root / "WorkSpace").exists()
     assert not (root / "downloads").exists()
+
+
+def test_version_forty_project_gains_durable_inverse_commands_and_undo_groups(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV40History"
+    with ProjectRepository.create(root, "MigratedV40History"):
+        pass
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute("DROP TABLE undo_group")
+        connection.execute("ALTER TABLE project_event RENAME TO project_event_v41")
+        connection.execute(
+            """CREATE TABLE project_event (
+                   cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                   project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+                   base_revision INTEGER NOT NULL,
+                   project_revision INTEGER NOT NULL,
+                   operation TEXT NOT NULL,
+                   actor_json TEXT NOT NULL,
+                   request_id TEXT NOT NULL,
+                   undo_group_id TEXT NOT NULL,
+                   write_set_json TEXT NOT NULL,
+                   changes_json TEXT NOT NULL,
+                   result_json TEXT NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   UNIQUE(project_id, project_revision),
+                   UNIQUE(project_id, request_id)
+               )"""
+        )
+        connection.execute("DROP TABLE project_event_v41")
+        connection.execute(
+            "UPDATE schema_info SET version=40 WHERE component='project'"
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+        event_columns = {
+            str(row["name"])
+            for row in repository._fetchall("PRAGMA table_info(project_event)")
+        }
+        assert "inverse_command_json" in event_columns
+        assert repository._fetchone(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='undo_group'"
+        )["name"] == "undo_group"
+
+
+def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MigratedV42TimelineHistory"
+    source_path = tmp_path / "history-source.mp4"
+    source_path.write_bytes(b"history-source")
+    with ProjectRepository.create(root, "MigratedV42TimelineHistory") as repository:
+        asset = repository.catalog.import_external_asset(source_path, AssetKind.VIDEO)
+        project = repository.catalog.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clips = editor.add_clips(
+            [
+                ClipAddRequest(
+                    track_id=track.id,
+                    asset_id=asset.id,
+                    timeline_start=index * 20,
+                    source_in=index * 20,
+                    duration=20,
+                )
+                for index in range(50)
+            ]
+        )
+        before = editor.state
+        after = before.model_copy(
+            update={
+                "clips": [
+                    item.model_copy(update={"timeline_start": 1_000})
+                    if item.id == clips[-1].id
+                    else item
+                    for item in before.clips
+                ]
+            }
+        )
+        action_kind = f"timeline.restore:{editor.sequence_id}"
+        before_document = before.model_dump(
+            mode="json",
+            exclude_computed_fields=True,
+        )
+        after_document = after.model_dump(
+            mode="json",
+            exclude_computed_fields=True,
+        )
+        command = {
+            "label": "Legacy full timeline move",
+            "undo_actions": [
+                {
+                    "kind": action_kind,
+                    "payload": {
+                        "mode": "state",
+                        "source": after_document,
+                        "destination": before_document,
+                    },
+                }
+            ],
+            "redo_actions": [
+                {
+                    "kind": action_kind,
+                    "payload": {
+                        "mode": "state",
+                        "source": before_document,
+                        "destination": after_document,
+                    },
+                }
+            ],
+        }
+        command_json = json.dumps(
+            command,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        revision = repository.content_revision()
+        with repository.transaction() as connection:
+            connection.execute(
+                """INSERT INTO undo_group(
+                       id, project_id, source_revision, state_revision, label,
+                       actor_json, write_set_json, command_json, state,
+                       created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'applied', 1, 1)""",
+                (
+                    "legacy-full-state",
+                    project.id,
+                    revision,
+                    revision,
+                    "Legacy full timeline move",
+                    '{"kind":"human","id":"migration-test","name":""}',
+                    '["/timeline"]',
+                    command_json,
+                ),
+            )
+            changed = connection.execute(
+                """UPDATE project_event SET inverse_command_json=?
+                   WHERE cursor=(SELECT MAX(cursor) FROM project_event)""",
+                (command_json,),
+            ).rowcount
+            assert changed == 1
+        version = repository.records.create_project_version("Legacy history snapshot")
+
+    snapshot_path = root / version.snapshot_path
+    with closing(sqlite3.connect(snapshot_path)) as snapshot, snapshot:
+        snapshot.execute(
+            "UPDATE schema_info SET version=42 WHERE component='project'"
+        )
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE schema_info SET version=42 WHERE component='project'"
+        )
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as migrated:
+        assert migrated._fetchone("SELECT version FROM schema_info")["version"] == 43
+        current_command = json.loads(
+            migrated._fetchone(
+                "SELECT command_json FROM undo_group WHERE id='legacy-full-state'"
+            )["command_json"]
+        )
+        current_event_command = json.loads(
+            migrated._fetchone(
+                """SELECT inverse_command_json FROM project_event
+                   WHERE inverse_command_json IS NOT NULL
+                   ORDER BY cursor DESC LIMIT 1"""
+            )["inverse_command_json"]
+        )
+
+    for document in (current_command, current_event_command):
+        for action in (*document["undo_actions"], *document["redo_actions"]):
+            assert action["payload"]["mode"] == "patch"
+            assert len(action["payload"]["source"]["clips"]) == 1
+            assert len(action["payload"]["destination"]["clips"]) == 1
+            assert action["payload"]["source"]["tracks"] == []
+            assert action["payload"]["destination"]["tracks"] == []
+
+    with closing(sqlite3.connect(snapshot_path)) as snapshot:
+        snapshot.row_factory = sqlite3.Row
+        assert snapshot.execute(
+            "SELECT version FROM schema_info WHERE component='project'"
+        ).fetchone()["version"] == 43
+        snapshot_command = json.loads(
+            snapshot.execute(
+                "SELECT command_json FROM undo_group WHERE id='legacy-full-state'"
+            ).fetchone()["command_json"]
+        )
+    assert snapshot_command["undo_actions"][0]["payload"]["mode"] == "patch"
+    assert len(snapshot_command["undo_actions"][0]["payload"]["source"]["clips"]) == 1
 
 
 def test_encoded_project_path_opens_through_every_read_only_database_boundary(
@@ -353,7 +558,7 @@ def test_version_thirty_one_project_gains_automation_request_journal(
         connection.execute("DROP TABLE automation_request")
         connection.execute("UPDATE schema_info SET version=31")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         stored = repository.save_automation_result(
             "request-31",
             "timeline.track.add",
@@ -429,7 +634,7 @@ def test_version_thirty_three_project_migrates_task_leases_and_request_state(
             "UPDATE schema_info SET version=33 WHERE component='project'"
         )
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         migrated = TaskRepository(repository).get(task.id)
         assert migrated.status == TaskStatus.RUNNING
         assert migrated.execution_owner_id == f"expired:migration:v34:{task.id}"
@@ -521,7 +726,7 @@ def test_version_eighteen_project_gains_compound_clip_storage(tmp_path: Path) ->
         connection.execute("DROP TABLE compound_clip")
         connection.execute("UPDATE schema_info SET version=18")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         tables = {
             row["name"] for row in repository._fetchall("SELECT name FROM sqlite_master WHERE type='table'")
         }
@@ -537,7 +742,7 @@ def test_version_twenty_project_gains_canonical_subtitle_word_storage(tmp_path: 
         connection.execute("DROP TABLE subtitle_word")
         connection.execute("UPDATE schema_info SET version=20")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(subtitle_word)")}
         assert {
             "id",
@@ -564,7 +769,7 @@ def test_version_twenty_one_project_gains_export_history_and_named_versions(
         connection.execute("DROP TABLE project_version")
         connection.execute("UPDATE schema_info SET version=21")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         tables = {
             row["name"] for row in repository._fetchall("SELECT name FROM sqlite_master WHERE type='table'")
         }
@@ -649,7 +854,7 @@ def test_version_twenty_four_tasks_migrate_to_structured_progress(
         connection.execute("CREATE INDEX idx_task_project_time ON task(project_id, created_at)")
         connection.execute("UPDATE schema_info SET version=24")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(task)")}
         tasks = {
             task.id: task
@@ -712,7 +917,7 @@ def test_version_twenty_five_transcription_tasks_migrate_to_plan_boundary(
             )
         connection.execute("UPDATE schema_info SET version=25")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         tasks = {
             task.id: task
             for task in TaskRepository(repository).list()
@@ -755,10 +960,13 @@ def test_named_version_restores_complete_project_and_preserves_version_catalog(
             )
         ]
         repository.timeline.save_timeline(state)
+        revision_before_version = repository.content_revision()
         version = repository.records.create_project_version("客户审阅版")
         snapshot = repository.project_dir / version.snapshot_path
         assert snapshot.is_file() and snapshot.stat().st_size > 0
         assert len(version.sha256) == 64
+        assert version.content_revision == revision_before_version
+        assert repository.content_revision() == revision_before_version + 1
 
         changed = repository.timeline.load_timeline(project.main_sequence_id)
         changed.markers = [
@@ -903,7 +1111,7 @@ def test_version_nineteen_video_audio_is_migrated_to_linked_dynamic_tracks(
     with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
         connection.execute("UPDATE schema_info SET version=19")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         state = repository.timeline.load_timeline(repository.catalog.get_project().main_sequence_id)
         migrated_video = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
         migrated_audio = next(track for track in state.tracks if track.kind == TrackKind.AUDIO)
@@ -922,7 +1130,7 @@ def test_version_thirteen_project_migration_preserves_existing_profile(
         connection.execute("ALTER TABLE sequence DROP COLUMN profile_confirmed")
         connection.execute("UPDATE schema_info SET version=13")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         project = repository.catalog.get_project()
         assert repository.catalog.get_sequence(project.main_sequence_id).profile_confirmed is True
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == (PROJECT_SCHEMA_VERSION)
@@ -938,7 +1146,7 @@ def test_version_fourteen_project_gains_persistent_subtitle_timing_overrides(
         connection.execute("ALTER TABLE subtitle_placement DROP COLUMN timing_overridden")
         connection.execute("UPDATE schema_info SET version=14")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(subtitle_placement)")}
         assert "timing_overridden" in columns
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == (PROJECT_SCHEMA_VERSION)
@@ -994,7 +1202,7 @@ def test_version_fifteen_project_migrates_transcription_to_sequence_boundary(
         )
         connection.execute("UPDATE schema_info SET version=15")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(subtitle_document)")}
         task = TaskRepository(repository).get(task_id)
 
@@ -1008,7 +1216,7 @@ def test_second_writer_falls_back_to_read_only(tmp_path: Path) -> None:
     root = tmp_path / "Locked"
     first = ProjectRepository.create(root, "Locked")
     try:
-        second = ProjectRepository.open(root, writable=True)
+        second = _open_writable(root)
         try:
             assert second.read_only is True
             with pytest.raises(PermissionError, match="read-only"):
@@ -1029,7 +1237,7 @@ def test_version_sixteen_project_gains_web_tables_and_content_revision(tmp_path:
         connection.execute("ALTER TABLE project DROP COLUMN content_revision")
         connection.execute("UPDATE schema_info SET version=16")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         project_columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(project)")}
         tables = {
             row["name"] for row in repository._fetchall("SELECT name FROM sqlite_master WHERE type='table'")
@@ -1039,19 +1247,19 @@ def test_version_sixteen_project_gains_web_tables_and_content_revision(tmp_path:
         assert repository.content_revision() == 0
 
 
-def test_cooperative_writer_rejects_stale_owner_edits_until_reload(tmp_path: Path) -> None:
-    root = tmp_path / "Cooperative"
-    owner = ProjectRepository.create(root, "Cooperative")
-    cooperative = ProjectRepository.open(root, writable=True, cooperative=True)
+def test_project_lock_prevents_a_second_writable_repository(tmp_path: Path) -> None:
+    root = tmp_path / "Single Writer"
+    owner = ProjectRepository.create(root, "Single Writer")
+    second = _open_writable(root)
     try:
-        cooperative.catalog.create_short_sequence("From CLI")
-        assert owner.content_revision() != owner.known_content_revision
-        with pytest.raises(RuntimeError, match="changed in another process"):
-            owner.catalog.create_short_sequence("Stale desktop edit")
-        owner.acknowledge_content_revision()
-        owner.catalog.create_short_sequence("After reload")
+        assert second.read_only is True
+        assert second.owns_project_lock is False
+        with pytest.raises(PermissionError, match="read-only"):
+            second.catalog.create_short_sequence("Forbidden second writer")
+        owner.catalog.create_short_sequence("Owned write")
+        assert owner.content_revision() == 1
     finally:
-        cooperative.close()
+        second.close()
         owner.close()
 
 
@@ -1063,7 +1271,7 @@ def test_version_ten_project_gains_recoverable_sequence_archiving(tmp_path: Path
         connection.execute("ALTER TABLE sequence DROP COLUMN archived")
         connection.execute("UPDATE schema_info SET version=10")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(sequence)")}
         assert "archived" in columns
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
@@ -1112,7 +1320,7 @@ def test_version_twenty_three_project_gains_primary_dialogue_and_source_transcri
         connection.execute("ALTER TABLE subtitle_document DROP COLUMN purpose")
         connection.execute("UPDATE schema_info SET version=23")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         migrated_track = next(
             track
             for track in repository.timeline.load_timeline(
@@ -1141,7 +1349,7 @@ def test_version_one_project_is_migrated_to_persisted_workflows(tmp_path: Path) 
         connection.execute("UPDATE schema_info SET version=1")
         connection.execute("UPDATE project SET workflow_auto_continue=0")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         assert repository.catalog.get_project().workflow_auto_continue is None
         assert repository.catalog.list_workflow_runs() == []
         version = repository._fetchone("SELECT version FROM schema_info")
@@ -1159,7 +1367,7 @@ def test_version_three_project_gains_timeline_annotations_and_export_settings(tm
         connection.execute("DROP TABLE timeline_marker")
         connection.execute("UPDATE schema_info SET version=3")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         project = repository.catalog.get_project()
         assert repository.timeline.list_timeline_markers(project.main_sequence_id) == []
         assert repository.timeline.list_timeline_ranges(project.main_sequence_id) == []
@@ -1189,7 +1397,7 @@ def test_version_five_project_gains_persisted_highlight_workspace_fields(
         )
         connection.execute("UPDATE schema_info SET version=5")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(highlight_candidate)")}
         assert {"document_id", "sequence_id", "selected"} <= columns
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
@@ -1252,7 +1460,7 @@ def test_version_six_project_recovers_subtitle_media_relationship_and_clip_follo
         connection.execute("ALTER TABLE subtitle_document DROP COLUMN media_asset_id")
         connection.execute("UPDATE schema_info SET version=6")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         migrated = repository.subtitles.get_subtitle_document(document.id)
         assert migrated.asset_id == subtitle.id
         assert migrated.media_asset_id == video.id
@@ -1350,7 +1558,7 @@ def test_version_eight_project_migrates_download_tasks_and_workflows_to_requests
         )
         connection.execute("UPDATE schema_info SET version=8")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
         tasks = TaskRepository(repository).list()
         assert all(isinstance(task.command, DownloadMediaCommand) for task in tasks)
@@ -1378,7 +1586,7 @@ def test_timeline_annotations_and_sequence_export_preset_round_trip(tmp_path: Pa
             name="社交平台",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
         )
@@ -1390,6 +1598,167 @@ def test_timeline_annotations_and_sequence_export_preset_round_trip(tmp_path: Pa
         assert [(item.frame, item.name) for item in state.markers] == [(42, "重点")]
         assert [(item.start_frame, item.end_frame) for item in state.ranges] == [(30, 90)]
         assert sequence.export_preset == preset
+
+
+def test_v39_encoder_policy_migration_updates_named_version_snapshots(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "Portable encoder snapshot migration"
+    preset = ExportPreset(
+        name="Legacy NVENC",
+        format=ExportFormat.H264,
+        container="mp4",
+        encoder_policy={"mode": "software"},
+        audio_codec="aac",
+        pixel_format="yuv420p",
+    )
+    with ProjectRepository.create(root, "Portable encoder snapshot migration") as repository:
+        sequence_id = repository.catalog.get_project().main_sequence_id
+        repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        version = repository.records.create_project_version("Before portable policy")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_database(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            stored = json.loads(
+                connection.execute(
+                    "SELECT preset_json FROM sequence_export_setting WHERE sequence_id=?",
+                    (sequence_id,),
+                ).fetchone()[0]
+            )
+            stored.pop("encoder_policy")
+            stored["video_codec"] = "h264_nvenc"
+            connection.execute(
+                "UPDATE sequence_export_setting SET preset_json=? WHERE sequence_id=?",
+                (json.dumps(stored), sequence_id),
+            )
+            connection.execute(
+                "UPDATE schema_info SET version=39 WHERE component='project'"
+            )
+
+    downgrade_database(snapshot_path)
+    downgrade_database(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        migrated = repository.catalog.get_sequence(sequence_id).export_preset
+        assert migrated is not None
+        assert migrated.encoder_policy is not None
+        assert migrated.encoder_policy.mode == "prefer_hardware"
+        assert migrated.encoder_policy.vendor == "nvidia"
+        migrated_version = repository.records.list_project_versions()[0]
+        assert migrated_version.sha256 == sha256_file(snapshot_path)
+        repository.records.restore_project_version(version.id)
+        restored = repository.catalog.get_sequence(sequence_id).export_preset
+        assert restored is not None
+        assert restored.encoder_policy is not None
+        assert restored.encoder_policy.mode == "prefer_hardware"
+        assert restored.encoder_policy.vendor == "nvidia"
+
+    archived = list(
+        (root / "generated" / "versions" / "archive").glob(
+            f"pre-v40-{version.id}-*.mfp"
+        )
+    )
+    assert len(archived) == 1
+    with closing(sqlite3.connect(archived[0])) as connection:
+        assert connection.execute(
+            "SELECT version FROM schema_info WHERE component='project'"
+        ).fetchone()[0] == 39
+
+
+def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "Interim encoder policy migration"
+    preset = ExportPreset(
+        name="Portable policy",
+        format=ExportFormat.H264,
+        container="mp4",
+        encoder_policy={"mode": "software"},
+        audio_codec="aac",
+        pixel_format="yuv420p",
+    )
+    with ProjectRepository.create(root, "Interim encoder policy migration") as repository:
+        sequence_id = repository.catalog.get_project().main_sequence_id
+        repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        version = repository.records.create_project_version("Interim policy")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_database(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            stored = json.loads(
+                connection.execute(
+                    "SELECT preset_json FROM sequence_export_setting WHERE sequence_id=?",
+                    (sequence_id,),
+                ).fetchone()[0]
+            )
+            stored.pop("encoder_policy")
+            stored["video_encoder"] = {
+                "mode": "hardware_preferred",
+                "backend": "nvenc",
+            }
+            encoded = json.dumps(stored)
+            connection.execute(
+                "UPDATE sequence_export_setting SET preset_json=? WHERE sequence_id=?",
+                (encoded, sequence_id),
+            )
+            connection.execute(
+                "INSERT INTO automation_request("
+                "request_id, operation, input_hash, result_json, state, created_at"
+                ") "
+                "VALUES(?, ?, ?, ?, ?, ?)",
+                ("interim-policy", "test", "hash", encoded, "completed", 1),
+            )
+            connection.execute(
+                "UPDATE schema_info SET version=41 WHERE component='project'"
+            )
+
+    downgrade_database(snapshot_path)
+    downgrade_database(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        migrated = repository.catalog.get_sequence(sequence_id).export_preset
+        assert migrated is not None and migrated.encoder_policy is not None
+        assert migrated.encoder_policy.mode == "prefer_hardware"
+        assert migrated.encoder_policy.vendor == "nvidia"
+        stored_result = repository.automation_result(
+            "interim-policy",
+            "test",
+            "hash",
+        )
+        assert stored_result is not None
+        assert stored_result["encoder_policy"] == {
+            "mode": "prefer_hardware",
+            "vendor": "nvidia",
+        }
+        assert "video_encoder" not in stored_result
+        repository.records.restore_project_version(version.id)
+        restored = repository.catalog.get_sequence(sequence_id).export_preset
+        assert restored is not None and restored.encoder_policy is not None
+        assert restored.encoder_policy.vendor == "nvidia"
+
+    archived = list(
+        (root / "generated" / "versions" / "archive").glob(
+            f"pre-v42-{version.id}-*.mfp"
+        )
+    )
+    assert len(archived) == 1
+    with closing(sqlite3.connect(archived[0])) as connection:
+        assert connection.execute(
+            "SELECT version FROM schema_info WHERE component='project'"
+        ).fetchone()[0] == 41
 
 
 def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -> None:
@@ -1422,7 +1791,7 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
             name="Legacy range",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
         )
@@ -1447,7 +1816,7 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
         )
         connection.execute("UPDATE schema_info SET version=9")
 
-    with ProjectRepository.open(root, writable=True) as repository:
+    with _open_writable(root) as repository:
         migrated = repository.catalog.get_sequence(sequence_id)
         assert migrated.in_out == SequenceInOut(in_frame=5, out_frame=90)
         assert migrated.export_preset == preset
@@ -1499,7 +1868,7 @@ def test_asset_bins_persist_hierarchy_casefold_uniqueness_and_membership(
         with pytest.raises(KeyError):
             repository.catalog.move_assets_to_bin([asset.id], "missing-bin")
 
-    with ProjectRepository.open(root, writable=True) as reopened:
+    with _open_writable(root) as reopened:
         bins = reopened.catalog.list_asset_bins()
         assert [(item.name, item.parent_id) for item in bins] == [
             ("Scenes", None),

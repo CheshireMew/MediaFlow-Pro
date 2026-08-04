@@ -76,6 +76,10 @@ class WebController(ControllerFacet):
     def isWebClip(self) -> bool:
         return bool(self._web_clip_id)
 
+    @Property(str, notify=webStateChanged)
+    def webClipId(self) -> str:
+        return self._web_clip_id
+
     @Property(bool, notify=webStateChanged)
     def editMode(self) -> bool:
         return self._web_edit_mode
@@ -528,6 +532,7 @@ class WebController(ControllerFacet):
     def _refresh(self) -> None:
         previous_clip_id = self._web_clip_id
         previous_entry_url = self._web_entry_url
+        had_web_preview = bool(previous_clip_id or previous_entry_url)
         self._web_clip_id = ""
         self._web_asset_id = ""
         self._web_entry_url = ""
@@ -568,7 +573,7 @@ class WebController(ControllerFacet):
         if self._selected_web_layer_id not in known:
             self._selected_web_layer_id = known[0] if known else ""
         if not self._web_clip_id:
-            if self._session.binding.current:
+            if had_web_preview and self._session.binding.current:
                 self._session.binding.current.close_web_preview()
             self._web_edit_mode = False
             self._browser_revision = 0

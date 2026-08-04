@@ -27,6 +27,9 @@ public slots:
     void openGraph(
         const QString &graphPath,
         const QString &runtimeRoot,
+        const QString &mltLibrary,
+        const QString &mltRepository,
+        const QString &mltData,
         bool sourceHdr,
         bool outputHdr,
         int initialFrame,
@@ -149,7 +152,7 @@ private:
         return true;
     }
 
-    bool loadApi(const QString &runtimeRoot);
+    bool loadApi(const QString &mltLibrary);
     void closeGraph();
     void performPendingSeek();
     bool seekImmediately(int frame);

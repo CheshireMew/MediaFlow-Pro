@@ -18,36 +18,36 @@ from mediaflow.infrastructure.sqlite_uri import read_only_database_uri
 
 
 class TaskRepository:
-    """Thread-safe task persistence using one short SQLite connection per operation."""
+    """Task persistence on the project's sole writable SQLite connection."""
 
     def __init__(
         self,
         project: TaskProjectAccess,
     ):
+        self._project = project
         self.project_dir = Path(project.project_dir).resolve(strict=True)
         self.database_path = self.project_dir / PROJECT_FILE_NAME
         self.read_only = project.read_only
         if not self.database_path.is_file():
             raise FileNotFoundError(self.database_path)
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = (
+    @contextmanager
+    def _read_connection(self) -> Iterator[sqlite3.Connection]:
+        with closing(
             sqlite3.connect(
                 read_only_database_uri(self.database_path),
                 uri=True,
                 timeout=5.0,
             )
-            if self.read_only
-            else sqlite3.connect(self.database_path, timeout=5.0)
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
+        ) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA busy_timeout=5000")
+            yield connection
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect()) as connection, connection:
+    def _write_connection(self) -> Iterator[sqlite3.Connection]:
+        with self._project.transaction() as connection:
             yield connection
 
     def create(self, task: Task, *, event_type: str = "created") -> Task:
@@ -58,7 +58,7 @@ class TaskRepository:
         except sqlite3.IntegrityError:
             if not task.idempotency_key:
                 raise
-            with self._connection() as connection:
+            with self._read_connection() as connection:
                 row = connection.execute(
                     """SELECT * FROM task
                        WHERE project_id=? AND idempotency_key=?""",
@@ -69,8 +69,7 @@ class TaskRepository:
             return self._from_row(row)
 
     def _insert(self, task: Task, *, event_type: str) -> Task:
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             connection.execute(
                 """INSERT INTO task(
                     id, project_id, sequence_id, idempotency_key,
@@ -96,8 +95,7 @@ class TaskRepository:
         if lease_duration_ms <= 0:
             raise ValueError("Task lease duration must be positive")
         claimed_at = now_ms()
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             row = connection.execute(
                 "SELECT * FROM task WHERE id=?",
                 (task_id,),
@@ -176,8 +174,7 @@ class TaskRepository:
         if lease_duration_ms <= 0:
             raise ValueError("Task lease duration must be positive")
         heartbeat_at = now_ms()
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 """UPDATE task
                    SET heartbeat_at=?, lease_expires_at=?
@@ -280,8 +277,7 @@ class TaskRepository:
                 owner_id,
             )
         )
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 f"""UPDATE task SET
                     project_id=?, sequence_id=?, idempotency_key=?,
@@ -308,8 +304,7 @@ class TaskRepository:
 
     def queue_paused(self, task_id: str) -> Task | None:
         self._require_writable()
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             row = connection.execute(
                 "SELECT * FROM task WHERE id=?",
                 (task_id,),
@@ -362,8 +357,7 @@ class TaskRepository:
         request: TaskStopRequest,
     ) -> Task | None:
         self._require_writable()
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             row = connection.execute(
                 "SELECT * FROM task WHERE id=?",
                 (task_id,),
@@ -447,32 +441,19 @@ class TaskRepository:
             return requested
 
     def get(self, task_id: str) -> Task:
-        with self._connection() as connection:
+        with self._read_connection() as connection:
             row = connection.execute("SELECT * FROM task WHERE id=?", (task_id,)).fetchone()
         if row is None:
             raise KeyError(task_id)
         return self._from_row(row)
 
     def list(self) -> builtins.list[Task]:
-        with self._connection() as connection:
+        with self._read_connection() as connection:
             rows = connection.execute("SELECT * FROM task ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
 
-    def list_unconsumed_terminal(self) -> builtins.list[Task]:
-        with self._connection() as connection:
-            rows = connection.execute(
-                """SELECT task.*
-                   FROM task
-                   LEFT JOIN task_consumption
-                     ON task_consumption.task_id=task.id
-                   WHERE task.status IN ('completed', 'failed', 'cancelled')
-                     AND task_consumption.task_id IS NULL
-                   ORDER BY task.created_at, task.id"""
-            ).fetchall()
-        return [self._from_row(row) for row in rows]
-
     def list_claimable(self, at_ms: int) -> builtins.list[Task]:
-        with self._connection() as connection:
+        with self._read_connection() as connection:
             rows = connection.execute(
                 """SELECT * FROM task
                    WHERE (status='pending' AND execution_owner_id IS NULL)
@@ -485,8 +466,7 @@ class TaskRepository:
     def delete(self, task_id: str, *, event_type: str = "deleted") -> None:
         self._require_writable()
         task = self.get(task_id)
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             cursor = connection.execute("DELETE FROM task WHERE id=?", (task_id,))
             if cursor.rowcount != 1:
                 raise KeyError(task_id)
@@ -497,8 +477,7 @@ class TaskRepository:
         tasks = [task for task in self.list() if task.status.is_terminal]
         if not tasks:
             return []
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._write_connection() as connection:
             for task in tasks:
                 cursor = connection.execute("DELETE FROM task WHERE id=?", (task.id,))
                 if cursor.rowcount == 1:
@@ -506,7 +485,7 @@ class TaskRepository:
         return tasks
 
     def snapshot(self) -> tuple[builtins.list[Task], int]:
-        with self._connection() as connection:
+        with self._read_connection() as connection:
             connection.execute("BEGIN")
             cursor_row = connection.execute(
                 "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM task_event"
@@ -515,7 +494,7 @@ class TaskRepository:
         return [self._from_row(row) for row in rows], int(cursor_row["cursor"])
 
     def latest_event(self, task_id: str) -> TaskEvent:
-        with self._connection() as connection:
+        with self._read_connection() as connection:
             row = connection.execute(
                 """SELECT * FROM task_event
                    WHERE task_id=?
@@ -532,7 +511,7 @@ class TaskRepository:
             raise ValueError("Task event cursor cannot be negative")
         if limit <= 0:
             raise ValueError("Task event limit must be positive")
-        with self._connection() as connection:
+        with self._read_connection() as connection:
             rows = connection.execute(
                 """SELECT * FROM task_event
                    WHERE cursor>?

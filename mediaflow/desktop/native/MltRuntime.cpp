@@ -8,13 +8,12 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSize>
-#include <QStringList>
 #include <QTimer>
 #include <QtMath>
 
-#include <algorithm>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -42,9 +41,29 @@ public:
         , m_hadPreviousValue(qEnvironmentVariableIsSet(name))
         , m_previousValue(qgetenv(name))
     {
-        qputenv(m_name.constData(), value);
 #ifdef Q_OS_WIN
         const QString wideName = QString::fromLatin1(name);
+        const DWORD required = GetEnvironmentVariableW(
+            reinterpret_cast<LPCWSTR>(wideName.utf16()),
+            nullptr,
+            0);
+        if (required > 0) {
+            std::vector<wchar_t> buffer(required);
+            const DWORD length = GetEnvironmentVariableW(
+                reinterpret_cast<LPCWSTR>(wideName.utf16()),
+                buffer.data(),
+                required);
+            m_hadPreviousValue = length > 0;
+            m_previousValue = m_hadPreviousValue
+                ? QString::fromWCharArray(buffer.data(), static_cast<qsizetype>(length)).toUtf8()
+                : QByteArray();
+        } else {
+            m_hadPreviousValue = false;
+            m_previousValue.clear();
+        }
+#endif
+        qputenv(m_name.constData(), value);
+#ifdef Q_OS_WIN
         const QString wideValue = QString::fromUtf8(value);
         SetEnvironmentVariableW(
             reinterpret_cast<LPCWSTR>(wideName.utf16()),
@@ -159,45 +178,23 @@ MltRuntime::~MltRuntime()
     shutdown();
 }
 
-bool MltRuntime::loadApi(const QString &runtimeRoot)
+bool MltRuntime::loadApi(const QString &mltLibrary)
 {
     if (m_library.isLoaded())
         return true;
-
-    const QDir root(runtimeRoot);
-    QStringList libraryCandidates;
-#ifdef Q_OS_WIN
-    libraryCandidates << root.filePath(QStringLiteral("libmlt-7.dll"));
-#elif defined(Q_OS_MACOS)
-    libraryCandidates
-        << root.filePath(QStringLiteral("lib/libmlt-7.dylib"))
-        << root.filePath(QStringLiteral("lib/libmlt.dylib"));
-#else
-    libraryCandidates
-        << root.filePath(QStringLiteral("lib/libmlt-7.so"))
-        << root.filePath(QStringLiteral("lib64/libmlt-7.so"));
-    const QDir libraryRoot(root.filePath(QStringLiteral("lib")));
-    const QStringList architectureDirectories = libraryRoot.entryList(
-        QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString &directory : architectureDirectories) {
-        libraryCandidates << libraryRoot.filePath(
-            directory + QStringLiteral("/libmlt-7.so"));
+    if (!QFileInfo(mltLibrary).isFile()) {
+        emit errorOccurred(
+            QStringLiteral("MLT runtime library was not found: %1").arg(mltLibrary),
+            m_requestId.load(std::memory_order_acquire));
+        return false;
     }
-#endif
-    const auto existing = std::find_if(
-        libraryCandidates.cbegin(),
-        libraryCandidates.cend(),
-        [](const QString &candidate) { return QFileInfo(candidate).isFile(); });
-    m_library.setFileName(
-        existing != libraryCandidates.cend()
-            ? *existing
-            : QStringLiteral("mlt-7"));
+    m_library.setFileName(mltLibrary);
     m_library.setLoadHints(
         QLibrary::ResolveAllSymbolsHint | QLibrary::PreventUnloadHint);
     if (!m_library.load()) {
         emit errorOccurred(
             QStringLiteral("Unable to load MLT runtime from %1: %2")
-                .arg(runtimeRoot, m_library.errorString()),
+                .arg(mltLibrary, m_library.errorString()),
             m_requestId.load(std::memory_order_acquire));
         return false;
     }
@@ -238,6 +235,9 @@ bool MltRuntime::loadApi(const QString &runtimeRoot)
 void MltRuntime::openGraph(
     const QString &graphPath,
     const QString &runtimeRoot,
+    const QString &mltLibrary,
+    const QString &mltRepository,
+    const QString &mltData,
     bool sourceHdr,
     bool outputHdr,
     int initialFrame,
@@ -260,24 +260,28 @@ void MltRuntime::openGraph(
 #ifdef Q_OS_WIN
     const ScopedDllDirectory dllSearch(m_runtimeRoot);
 #endif
-    const QDir runtime(m_runtimeRoot);
-    const QString configuredRepository = qEnvironmentVariable("MLT_REPOSITORY");
-    const QString repositoryPath = !configuredRepository.isEmpty()
-        ? configuredRepository
-        : (QFileInfo::exists(runtime.filePath(QStringLiteral("lib/mlt-preview")))
-            ? runtime.filePath(QStringLiteral("lib/mlt-preview"))
-            : runtime.filePath(QStringLiteral("lib/mlt")));
-    const QByteArray encodedRepository = QDir::toNativeSeparators(repositoryPath).toUtf8();
-    const QString configuredData = qEnvironmentVariable("MLT_DATA");
-    const QByteArray encodedData = QDir::toNativeSeparators(
-        !configuredData.isEmpty()
-            ? configuredData
-            : runtime.filePath(QStringLiteral("share/mlt"))).toUtf8();
-    const ScopedEnvironmentVariable mltData("MLT_DATA", encodedData);
+    if (!QFileInfo(mltRepository).isDir()) {
+        emit errorOccurred(
+            QStringLiteral("MLT repository was not found: %1").arg(mltRepository),
+            requestId);
+        return;
+    }
+    if (!QFileInfo(mltData).isDir()) {
+        emit errorOccurred(
+            QStringLiteral("MLT data directory was not found: %1").arg(mltData),
+            requestId);
+        return;
+    }
+    const QByteArray encodedRepository = QDir::toNativeSeparators(mltRepository).toUtf8();
+    const QByteArray encodedData = QDir::toNativeSeparators(mltData).toUtf8();
+    const ScopedEnvironmentVariable repositoryEnvironment(
+        "MLT_REPOSITORY",
+        encodedRepository);
+    const ScopedEnvironmentVariable dataEnvironment("MLT_DATA", encodedData);
     const ScopedEnvironmentVariable repositoryDeny(
         "MLT_REPOSITORY_DENY",
         QByteArrayLiteral("libmltqt6:libmltglaxnimate-qt6"));
-    if (!loadApi(m_runtimeRoot))
+    if (!loadApi(mltLibrary))
         return;
 
     m_sourceHdr = sourceHdr;

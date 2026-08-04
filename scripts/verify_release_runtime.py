@@ -20,9 +20,37 @@ from mediaflow.desktop.app import (
     STARTUP_READY_PATH_ENV,
     STARTUP_READY_SCHEMA_VERSION,
 )
+from mediaflow.service.discovery import ServiceDiscovery, ServicePaths
 from scripts.run_artifacts import verification_run
 
 FORBIDDEN_PROCESS_TERMS = ("node", "electron", "uvicorn", "fastapi")
+
+
+def _stop_owned_service(paths: ServicePaths) -> None:
+    try:
+        discovery = ServiceDiscovery.read(paths.discovery)
+        service = psutil.Process(discovery.pid)
+        if abs(service.create_time() - discovery.process_started_at) >= 0.01:
+            return
+    except (FileNotFoundError, OSError, ValueError, psutil.Error):
+        return
+    try:
+        service.wait(timeout=5)
+        return
+    except psutil.TimeoutExpired:
+        pass
+    try:
+        service.terminate()
+    except psutil.NoSuchProcess:
+        return
+    try:
+        service.wait(timeout=5)
+    except psutil.TimeoutExpired:
+        try:
+            service.kill()
+            service.wait(timeout=5)
+        except psutil.NoSuchProcess:
+            return
 
 
 def _wait_for_startup_ready(
@@ -107,6 +135,14 @@ def verify(
     environment = os.environ.copy()
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
     environment.setdefault("QT_QUICK_BACKEND", "software")
+    service_root = run_dir / "editor-service"
+    environment["MEDIAFLOW_SERVICE_STATE_DIR"] = str(service_root)
+    service_paths = ServicePaths(
+        root=service_root,
+        lock=service_root / "service.lock",
+        discovery=service_root / "discovery.json",
+        log=service_root / "service.log",
+    )
     ready_path = run_dir / "startup-ready.json"
     if ready_path.exists():
         raise RuntimeError(
@@ -134,8 +170,14 @@ def verify(
         application_process = psutil.Process(
             int(startup_ready["pid"])
         )
+        service_discovery = ServiceDiscovery.read(service_paths.discovery)
 
-        inspected = [root_process, *root_process.children(recursive=True)]
+        application_tree = [root_process, *root_process.children(recursive=True)]
+        if not service_discovery.belongs_to_live_process():
+            raise RuntimeError("Editor Service discovery does not belong to a live process")
+        service_process = psutil.Process(service_discovery.pid)
+        inspected = list({item.pid: item for item in [*application_tree, service_process]}.values())
+        application_tree_pids = {item.pid for item in application_tree}
         process_rows: list[dict[str, object]] = []
         listening: list[dict[str, object]] = []
         forbidden: list[str] = []
@@ -145,7 +187,7 @@ def verify(
                 command = " ".join(item.cmdline())
                 process_rows.append({"pid": item.pid, "name": name, "command": command})
                 normalized = f"{name} {command}".lower()
-                if item.pid != root_process.pid and any(
+                if item.pid in application_tree_pids - {root_process.pid} and any(
                     term in normalized for term in FORBIDDEN_PROCESS_TERMS
                 ):
                     forbidden.append(normalized)
@@ -160,6 +202,14 @@ def verify(
             except (psutil.AccessDenied, psutil.NoSuchProcess):
                 continue
 
+        expected_listener = {
+            "pid": service_discovery.pid,
+            "address": ["127.0.0.1", service_discovery.port],
+        }
+        unexpected_listeners = [
+            row for row in listening if row != expected_listener
+        ]
+        service_listener_verified = expected_listener in listening
         report = {
             "launcher_pid": process.pid,
             "application_pid": application_process.pid,
@@ -173,9 +223,13 @@ def verify(
             "startup_ready": startup_ready,
             "processes": process_rows,
             "listening_ports": listening,
+            "editor_service_listener": expected_listener,
+            "editor_service_listener_verified": service_listener_verified,
+            "unexpected_listening_ports": unexpected_listeners,
             "forbidden_runtime_processes": forbidden,
             "passed": (
-                not listening
+                service_listener_verified
+                and not unexpected_listeners
                 and not forbidden
                 and process.poll() is None
                 and application_process.is_running()
@@ -190,6 +244,21 @@ def verify(
             raise RuntimeError(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     finally:
+        if service_paths.discovery.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "mediaflow.cli", "service", "shutdown"],
+                    cwd=ROOT,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+            except subprocess.TimeoutExpired:
+                pass
+            _stop_owned_service(service_paths)
         if process.poll() is None:
             process.terminate()
             try:

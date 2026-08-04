@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
+from mediaflow.application.edit_history import (
+    ProjectEditAction,
+    ProjectEditCommand,
+    ProjectEditHistory,
+)
 from mediaflow.application.ports import TimelineEditorDocuments
 from mediaflow.application.timeline_clock import (
     asset_in_timeline_clock,
@@ -13,6 +17,7 @@ from mediaflow.application.timeline_diff import TimelineDiff
 from mediaflow.application.timeline_merge import TimelineMergePolicy
 from mediaflow.application.timeline_ripple import RippleDeletePolicy
 from mediaflow.application.timeline_rules import TimelineRules
+from mediaflow.application.timeline_snapping import snap_frame
 from mediaflow.application.timeline_validator import TimelineValidator
 from mediaflow.domain.effect_registry import transition_is_available
 from mediaflow.domain.enums import (
@@ -41,6 +46,10 @@ from mediaflow.domain.timeline import (
     Transition,
     default_clip_media_kind,
 )
+from mediaflow.domain.timeline_history import (
+    TIMELINE_HISTORY_MODE,
+    compact_timeline_change,
+)
 from mediaflow.domain.visual_effects import ClipVisualEffect, new_visual_effect
 from mediaflow.domain.web_media import WebClipState
 
@@ -59,6 +68,11 @@ class TimelineEditor:
         self._state = repository.timeline.load_timeline(sequence_id)
         self._validator = TimelineValidator(repository)
         self.history = history or ProjectEditHistory()
+        self._history_action_kind = f"timeline.restore:{self.sequence_id}"
+        self.history.register_handler(
+            self._history_action_kind,
+            self._apply_history_action,
+        )
 
     @property
     def state(self) -> TimelineState:
@@ -227,29 +241,37 @@ class TimelineEditor:
             )
             self._state = self.repository.timeline.load_timeline(self.sequence_id)
 
-            def restore_frame_clock(
-                source: MainFrameClockSnapshot,
-                destination: MainFrameClockSnapshot,
-            ) -> None:
-                self.repository.timeline.restore_main_frame_clock(
-                    source,
-                    destination,
-                )
-                self._state = self.repository.timeline.load_timeline(
-                    self.sequence_id
-                )
-
             self.history.push(
                 ProjectEditCommand(
                     label="修改序列配置",
-                    undo_action=lambda: restore_frame_clock(
-                        destination_snapshot,
-                        source_snapshot,
-                    ),
-                    redo_action=lambda: restore_frame_clock(
-                        source_snapshot,
-                        destination_snapshot,
-                    ),
+                    undo_actions=[
+                        ProjectEditAction(
+                            kind=self._history_action_kind,
+                            payload={
+                                "mode": "frame_clock",
+                                "source": destination_snapshot.model_dump(
+                                    mode="json", exclude_computed_fields=True
+                                ),
+                                "destination": source_snapshot.model_dump(
+                                    mode="json", exclude_computed_fields=True
+                                ),
+                            },
+                        )
+                    ],
+                    redo_actions=[
+                        ProjectEditAction(
+                            kind=self._history_action_kind,
+                            payload={
+                                "mode": "frame_clock",
+                                "source": source_snapshot.model_dump(
+                                    mode="json", exclude_computed_fields=True
+                                ),
+                                "destination": destination_snapshot.model_dump(
+                                    mode="json", exclude_computed_fields=True
+                                ),
+                            },
+                        )
+                    ],
                 )
             )
             return self.state
@@ -1310,16 +1332,7 @@ class TimelineEditor:
         self.history.redo()
         return self.state
 
-    @staticmethod
-    def snap_frame(frame: int, targets: Iterable[int], tolerance_frames: int) -> int:
-        if frame < 0:
-            raise ValueError("Timeline frame cannot be negative")
-        if tolerance_frames < 0:
-            raise ValueError("Snap tolerance cannot be negative")
-        candidates = [target for target in targets if abs(target - frame) <= tolerance_frames]
-        if not candidates:
-            return frame
-        return min(candidates, key=lambda target: (abs(target - frame), target))
+    snap_frame = staticmethod(snap_frame)
 
     def _commit(
         self,
@@ -1343,32 +1356,79 @@ class TimelineEditor:
             return
         persisted = self._apply_change(before, after)
         self._state = persisted
-        before_snapshot = self._snapshot(before)
-        after_snapshot = self._snapshot(after)
-
-        def restore(source: TimelineState, destination: TimelineState) -> None:
-            self._state = self._apply_change(source, destination)
+        before_patch, after_patch = compact_timeline_change(before, after)
 
         self.history.push(
             ProjectEditCommand(
                 label=label,
-                undo_action=lambda: restore(after_snapshot, before_snapshot),
-                redo_action=lambda: restore(before_snapshot, after_snapshot),
+                undo_actions=[
+                    ProjectEditAction(
+                        kind=self._history_action_kind,
+                        payload={
+                            "mode": TIMELINE_HISTORY_MODE,
+                            "source": after_patch.model_dump(
+                                mode="json", exclude_computed_fields=True
+                            ),
+                            "destination": before_patch.model_dump(
+                                mode="json", exclude_computed_fields=True
+                            ),
+                        },
+                    )
+                ],
+                redo_actions=[
+                    ProjectEditAction(
+                        kind=self._history_action_kind,
+                        payload={
+                            "mode": TIMELINE_HISTORY_MODE,
+                            "source": before_patch.model_dump(
+                                mode="json", exclude_computed_fields=True
+                            ),
+                            "destination": after_patch.model_dump(
+                                mode="json", exclude_computed_fields=True
+                            ),
+                        },
+                    )
+                ],
             )
         )
+
+    def _apply_history_action(self, action: ProjectEditAction) -> None:
+        payload = action.payload
+        mode = str(payload.get("mode") or "")
+        if mode == TIMELINE_HISTORY_MODE:
+            self.restore_snapshot(
+                TimelineState.model_validate(payload.get("source")),
+                TimelineState.model_validate(payload.get("destination")),
+            )
+            return
+        if mode == "frame_clock":
+            self.repository.timeline.restore_main_frame_clock(
+                MainFrameClockSnapshot.model_validate(payload.get("source")),
+                MainFrameClockSnapshot.model_validate(payload.get("destination")),
+            )
+            self.reload()
+            return
+        raise ValueError(f"Unknown timeline history action mode: {mode}")
 
     def _apply_change(
         self,
         source: TimelineState,
         destination: TimelineState,
     ) -> TimelineState:
-        current = self.repository.timeline.load_timeline(self.sequence_id)
-        merged = TimelineMergePolicy.merge(source, destination, current)
+        stored_sequence = self.repository.catalog.get_sequence(self.sequence_id)
+        current = (
+            self._state
+            if stored_sequence.timeline_revision
+            == self._state.sequence.timeline_revision
+            else self.repository.timeline.load_timeline(self.sequence_id)
+        )
+        merged = self._canonical_state(
+            TimelineMergePolicy.merge(source, destination, current)
+        )
         if merged == current:
             return current
         self._validator.validate(merged, baseline=self._state)
-        self._persist_change(current, merged)
-        return self.repository.timeline.load_timeline(self.sequence_id)
+        return self._persist_change(current, merged)
 
     @staticmethod
     def _snapshot(state: TimelineState) -> TimelineState:
@@ -1387,7 +1447,45 @@ class TimelineEditor:
             }
         )
 
-    def _persist_change(self, before: TimelineState, after: TimelineState) -> None:
+    @staticmethod
+    def _canonical_state(state: TimelineState) -> TimelineState:
+        """Match the durable timeline ordering without performing another read."""
+
+        return state.model_copy(
+            update={
+                "tracks": sorted(
+                    state.tracks,
+                    key=lambda item: (item.position, item.id),
+                ),
+                "clips": sorted(
+                    state.clips,
+                    key=lambda item: (item.timeline_start, item.id),
+                ),
+                "compounds": sorted(
+                    state.compounds,
+                    key=lambda item: item.id,
+                ),
+                "transitions": sorted(
+                    state.transitions,
+                    key=lambda item: item.id,
+                ),
+                "markers": sorted(
+                    state.markers,
+                    key=lambda item: (item.frame, item.id),
+                ),
+                "ranges": sorted(
+                    state.ranges,
+                    key=lambda item: (item.start_frame, item.id),
+                ),
+                "web_states": dict(sorted(state.web_states.items())),
+            }
+        )
+
+    def _persist_change(
+        self,
+        before: TimelineState,
+        after: TimelineState,
+    ) -> TimelineState:
         before_clips = {clip.id: clip for clip in before.clips}
         after_clips = {clip.id: clip for clip in after.clips}
         graph_is_unchanged = (
@@ -1409,11 +1507,21 @@ class TimelineEditor:
                 if web_state != before.web_states.get(clip_id)
             ]
             if changed_web_states:
-                self.repository.timeline.save_timeline(after)
-                return
-            self.repository.timeline.save_clip_changes(after, changed_clip_ids)
-            return
-        self.repository.timeline.save_timeline(after)
+                revision = self.repository.timeline.save_timeline(after)
+            else:
+                revision = self.repository.timeline.save_clip_changes(
+                    after,
+                    changed_clip_ids,
+                )
+        else:
+            revision = self.repository.timeline.save_timeline(after)
+        return self._canonical_state(after).model_copy(
+            update={
+                "sequence": after.sequence.model_copy(
+                    update={"timeline_revision": revision}
+                )
+            }
+        )
 
     def _track(self, track_id: str) -> Track:
         try:

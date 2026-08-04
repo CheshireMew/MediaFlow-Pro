@@ -6,7 +6,6 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from ctypes import WinDLL, create_unicode_buffer
 from pathlib import Path
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
@@ -18,7 +17,6 @@ from PySide6.QtWebEngineQuick import QtWebEngineQuick
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.infrastructure.application_logging import (
@@ -30,7 +28,14 @@ from mediaflow.infrastructure.runtime_paths import (
     configured_runtime_directory,
     runtime_directory,
 )
-from mediaflow.infrastructure.settings_repository import SettingsLoadResult, SettingsRepository
+from mediaflow.infrastructure.settings_repository import (
+    DesktopSettingsRepository,
+    SettingsLoadResult,
+)
+from mediaflow.service.desktop_proxy import (
+    DesktopEditorApplication,
+    create_desktop_editor_application,
+)
 
 STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
 STARTUP_READY_SCHEMA_VERSION = 1
@@ -60,6 +65,8 @@ def _qml_dll_search_path():
     if sys.platform != "win32":
         yield
         return
+    from ctypes import WinDLL, create_unicode_buffer
+
     kernel32 = WinDLL("kernel32", use_last_error=True)
     previous = create_unicode_buffer(32768)
     previous_length = kernel32.GetDllDirectoryW(len(previous), previous)
@@ -76,12 +83,12 @@ def _qml_dll_search_path():
 
 def create_engine(
     app: QGuiApplication,
-    application: EditorApplication | None = None,
+    application: DesktopEditorApplication | None = None,
 ) -> tuple[QQmlApplicationEngine, EditorControllers]:
     engine = QQmlApplicationEngine(app)
     qml_errors: list[str] = []
     engine.warnings.connect(lambda warnings: qml_errors.extend(item.toString() for item in warnings))
-    api = application or EditorApplication()
+    api = application or create_desktop_editor_application()
     if api.native_qml_root is None:
         raise RuntimeError(
             f"{PRODUCT_NAME} native preview is not built. "
@@ -93,7 +100,7 @@ def create_engine(
         "applicationMonospaceFontFamily",
         _monospace_font_family(),
     )
-    language = controllers.session.settings.ui.language
+    language = controllers.session.desktop_settings.ui.language
     if language != "zh_CN":
         translation = QTranslator(app)
         translation_path = (
@@ -200,12 +207,12 @@ def _saved_runtime_directory() -> Path | None:
 
 
 def startup_settings_path() -> Path | None:
-    configured_settings = os.environ.get("MEDIAFLOW_SETTINGS_PATH")
+    configured_settings = os.environ.get("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
     if configured_settings:
         return Path(configured_settings).expanduser().resolve()
     selected_runtime = configured_runtime_directory() or _saved_runtime_directory()
     return (
-        (selected_runtime / "settings.json").resolve()
+        (selected_runtime / "desktop-settings.json").resolve()
         if selected_runtime is not None
         else None
     )
@@ -213,20 +220,19 @@ def startup_settings_path() -> Path | None:
 
 def load_startup_settings(settings_path: Path | None) -> SettingsLoadResult:
     if settings_path is None:
-        return SettingsLoadResult(SettingsRepository.default_settings())
-    return SettingsRepository(settings_path).load_recovering_invalid()
+        return SettingsLoadResult(DesktopSettingsRepository().default_settings())
+    return DesktopSettingsRepository(settings_path).load_recovering_invalid()
 
 
 def configure_startup_surface(
     settings: SettingsLoadResult | Path | None,
 ) -> bool:
-    loaded = settings if isinstance(settings, SettingsLoadResult) else load_startup_settings(settings)
-    preview = loaded.settings.preview
-    if preview.hdr_preview:
-        surface_format = QSurfaceFormat.defaultFormat()
-        surface_format.setColorSpace(QColorSpace(QColorSpace.SRgbLinear))
-        QSurfaceFormat.setDefaultFormat(surface_format)
-    return preview.hdr_preview
+    if not isinstance(settings, SettingsLoadResult):
+        load_startup_settings(settings)
+    surface_format = QSurfaceFormat.defaultFormat()
+    surface_format.setColorSpace(QColorSpace(QColorSpace.SRgbLinear))
+    QSurfaceFormat.setDefaultFormat(surface_format)
+    return True
 
 
 def show_startup_settings_recovery(settings: SettingsLoadResult) -> bool:
@@ -295,7 +301,7 @@ def main() -> int:
         # Runtime discovery is deliberately after the desktop fallback above. This
         # keeps machines without D: usable instead of failing before the chooser can
         # be shown.
-        api = EditorApplication()
+        api = create_desktop_editor_application()
         configure_application_font(app)
         configure_application_icon(app)
         app.setDesktopFileName(PRODUCT_NAME)

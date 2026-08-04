@@ -4,13 +4,13 @@
 
 # MediaFlow Pro
 
-MediaFlow Pro 是面向 Windows 10/11 x64 的本地视频创作工作站。把视频、音频、图片、字幕或 `editable-media` 网页包交给它，可以在同一个可移动工程中完成素材管理、转写、剪辑、多轨时间线、实时预览、混音、质量检查和最终导出；`project.mfp` 是工程的唯一数据来源。
+MediaFlow Pro 是面向 Windows 10/11 x64、Ubuntu 24.04 x64 和 macOS 14+ Apple Silicon 的本地视频创作工作站。把视频、音频、图片、字幕或 `editable-media` 网页包交给它，可以在同一个可移动工程中完成素材管理、转写、剪辑、多轨时间线、实时预览、混音、质量检查和最终导出；`project.mfp` 是工程的唯一数据来源。当前仓库提供三平台源码构建和 CI 验证，不提供预打包安装器。
 
 ![MediaFlow Pro 中文桌面工作区](docs/images/mediaflow-workspace-zh-cn.png)
 
 <p align="center"><sub>真实 Qt/QML 界面验收截图：素材、预览、检查器和多轨时间线位于同一个桌面工作区。</sub></p>
 
-项目使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出。所有内部控制通信都在桌面进程内完成，不启动常驻 API 服务。解析抖音、快手直链时，下载任务会按需使用本机 Chrome 或 Edge 的无界面 Playwright 会话。
+项目使用 PySide6/QML 构建桌面界面，Python 承载领域模型与工作流，MLT 统一生成实时预览和最终导出。每个登录用户只有一个按需启动的本机 Editor Service，它持有项目写锁、任务执行器和事件日志；桌面端、CLI 与 MCP 转接器都是客户端。解析抖音、快手直链时，下载任务会按需使用本机 Chrome、Edge 或 Chromium 的无界面 Playwright 会话。
 
 项目采用 GPLv3，下载能力以随运行环境提供的 yt-dlp 为准。
 
@@ -66,7 +66,7 @@ tests/v2/             V2 单元、QML 与真实媒体集成测试
 scripts/              原生构建和验收脚本
 ```
 
-QML 不直接访问数据库或启动外部程序。桌面控制器和无头 CLI 都通过同一个 `EditorApplication` / `EditorProject` 应用接口执行真实编辑与任务流程；Python 类型是唯一合同来源，MLT 图是从 `project.mfp` 编译出的派生结果。
+QML 不直接访问数据库或启动外部程序。桌面端、无头 CLI 和 stdio MCP 转接器都通过同一个常驻 Editor Service 调用 `EditorApplication` / `EditorProject`；只有服务进程能取得项目写锁。Python 类型是唯一合同来源，MLT 图是从 `project.mfp` 编译出的派生结果。
 
 editable-media 的包导入、片段编辑、批量生成和素材换版由四个独立应用服务负责；桌面端的浏览器字段编辑、网页时间线、批量换版与导出也分别由三个 QML 控制器负责。组合对象只装配这些边界，不保留旧总服务或旧控制器转发接口。
 
@@ -75,8 +75,8 @@ editable-media 的包导入、片段编辑、批量生成和素材换版由四�
 ## 项目目录
 
 ```text
-<MEDIAFLOW_PROJECT_ROOT>\
-  <ProjectName>\
+<MEDIAFLOW_PROJECT_ROOT>/
+  <ProjectName>/
     project.mfp
     generated/
     proxies/
@@ -88,17 +88,17 @@ editable-media 的包导入、片段编辑、批量生成和素材换版由四�
 
 ## 开发运行环境
 
-版本固定为：
+三平台共用 Python 3.12、PySide6 / Qt 6.11.1、yt-dlp 2026.3.17、Playwright 1.61.0 和 OpenCV 5.0.0。媒体运行时按目标平台锁定：
 
-- Python 3.12 x64
-- PySide6 / Qt 6.11.1
-- MLT 7.40.0
-- yt-dlp 2026.3.17
-- Playwright 1.61.0（本机可复用 Chrome/Edge，CI 安装该版本固定的 Chromium revision）
-- OpenCV 5.0.0（场景与主体运动分析）
-- FFmpeg n8.1.2（GPLv3 构建）
+| 目标 | FFmpeg | MLT | 原生工具链 |
+| --- | --- | --- | --- |
+| Windows 10/11 x64 | 审核过的 n8.1.2 GPLv3 构建 | 审核过的 7.40.0 | MSVC 2022 x64 |
+| Ubuntu 24.04 x64 | 审核过的 n8.1.2 GPLv3 构建 | 审核过的 7.40.0 | GCC x64 |
+| macOS 14+ Apple Silicon | 审核过的 n8.1.2 GPLv3 构建 | 审核过的 7.40.0 | Apple Clang arm64 |
 
-`runtime.lock.json` 是 Windows Qt、MLT 与 FFmpeg 版本、官方归档地址和校验和的唯一清单；`requirements.lock` 固定 Python、测试和构建工具的完整依赖图；[`.env.example`](.env.example) 则是机器路径变量的唯一公开合同。复制为被 Git 忽略的 `.env` 后，至少配置开发工具根、工程根和媒体根：
+网页捕获只使用 `runtime.lock.json` 锁定的 Playwright Chromium，不从 `PATH`、浏览器缓存或系统应用目录猜测其它浏览器。OpenCV 负责场景与主体运动分析。
+
+`runtime.lock.json` 是 Windows x64、Linux x64 与 macOS arm64 的 Qt、MLT、FFmpeg、Shotcut 运行时和 Chromium 唯一合同；三个目标都固定审核过的版本、归档布局和 SHA-256，不读取系统安装的媒体工具作为后备。`requirements.lock` 固定三平台共用的 Python、测试和构建依赖图；[`.env.example`](.env.example) 是机器路径变量的唯一公开合同。复制为被 Git 忽略的 `.env` 后，至少配置开发工具根、工程根和媒体根：
 
 | 变量 | 用途 |
 | --- | --- |
@@ -107,7 +107,7 @@ editable-media 的包导入、片段编辑、批量生成和素材换版由四�
 | `MEDIAFLOW_MEDIA_ROOT` | 下载、导入和转写源媒体的应用级根 |
 | `VISUAL_MULTIMEDIA_ROOT` | 需要同步 `editable-media` 合同样本时使用的生产者仓库位置 |
 
-进程中已经设置的环境变量优先于 `.env`；`MEDIAFLOW_RUNTIME_DIR`、`MEDIAFLOW_FFMPEG`、`MEDIAFLOW_FFPROBE`、`MEDIAFLOW_MELT`、`MEDIAFLOW_NATIVE_QML`、`MEDIAFLOW_CHROMIUM`、`QT_ROOT_DIR` 和各类测试目录可以按需覆盖共同开发根下的标准布局。未显式指定浏览器时，程序从 Playwright 缓存、Windows 的 `ProgramFiles` / `LOCALAPPDATA` 或 `PATH` 发现 Chrome、Edge 或 Chromium，不会保留某个盘符作为隐藏后备路径。
+进程中已经设置的环境变量优先于 `.env`。运行时只允许通过 `MEDIAFLOW_RUNTIME_DIR` 选择整套根目录，FFmpeg、FFprobe、MLT、Chromium、Qt 和原生 QML 的具体路径全部由当前平台合同推导，不能分别覆盖。`MEDIAFLOW_SERVICE_STATE_DIR`、`MEDIAFLOW_TEST_ROOT` 和 `MEDIAFLOW_TEST_FIXTURE_ROOT` 只用于隔离服务状态与测试产物，不参与运行时发现。
 
 创建开发环境：
 
@@ -121,20 +121,44 @@ py -3.12 -m venv $venvRoot
 & $env:MEDIAFLOW_PYTHON -m pip install --no-deps --no-build-isolation -e .
 ```
 
+Linux 与 macOS 使用同一个 `.env` 合同和 Python 包入口；先把示例中的路径改成当前机器的绝对路径，再执行：
+
+```bash
+cp .env.example .env
+# 编辑 .env 后把路径变量加载到当前 shell
+set -a
+. ./.env
+set +a
+python3.12 -m venv "$MEDIAFLOW_DEV_ROOT/.venv"
+"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" -m pip install --require-hashes -r requirements.lock
+"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" -m pip install --no-deps --no-build-isolation -e .
+```
+
 `pyproject.toml` 只声明直接依赖，`requirements.lock` 是开发、测试和构建环境实际安装版本的唯一清单。修改依赖后，使用锁文件中固定的 `pip-tools` 重新生成并审查完整依赖图：
 
 ```powershell
 & $env:MEDIAFLOW_PYTHON -m piptools compile pyproject.toml --extra dev --extra build --generate-hashes --resolver backtracking --allow-unsafe --strip-extras --output-file requirements.lock
 ```
 
-原生预览插件要求 MSVC 2022、完整 Qt 6.11.1 SDK 以及 CMake/Ninja。脚本会先加载同一份 `.env`，并允许用参数或对应环境变量覆盖：
+Linux/macOS 对应命令是 `"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" -m piptools compile pyproject.toml --extra dev --extra build --generate-hashes --resolver backtracking --allow-unsafe --strip-extras --output-file requirements.lock`。
+
+原生预览插件要求完整 Qt 6.11.1 SDK、CMake/Ninja，以及当前平台的 C++20 工具链：Windows 使用 MSVC 2022，Linux 使用 GCC，macOS 使用 Apple Clang。先用跨平台脚本按合同准备整套运行时和 Qt SDK，再构建插件：
 
 ```powershell
-.\scripts\prepare_mlt_preview.ps1
-.\scripts\build_native.ps1
+& $env:MEDIAFLOW_PYTHON scripts\prepare_runtime.py --runtime-root $env:MEDIAFLOW_RUNTIME_DIR
+& $env:MEDIAFLOW_PYTHON scripts\prepare_ci_qt.py --qt-root (Join-Path $env:MEDIAFLOW_RUNTIME_DIR "qt")
+& $env:MEDIAFLOW_PYTHON scripts\build_native.py --runtime-root $env:MEDIAFLOW_RUNTIME_DIR
 ```
 
-CI 使用 `scripts/prepare_ci_runtime.ps1` 校验 SHA-256 后展开固定的 Shotcut 运行时，并由 `scripts/prepare_ci_qt.py` 直接校验、展开 `runtime.lock.json` 登记的 QtBase 与 QtDeclarative 官方归档，不再依赖在线仓库元数据解析。随后安装 Playwright 固定的 Chromium revision 并现场编译原生插件。`scripts/verify_development_runtime.py --profile core` 会实际启动 FFmpeg、MLT 与 Chromium 并核对原生 QML 包；`--profile full` 另外要求本机已安装 ASR 与语音合成组件。不能用跳过测试代替运行时准备。
+Linux/macOS 使用相同入口：
+
+```bash
+"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" scripts/prepare_runtime.py --runtime-root "$MEDIAFLOW_RUNTIME_DIR"
+"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" scripts/prepare_ci_qt.py --qt-root "$MEDIAFLOW_RUNTIME_DIR/qt"
+"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" scripts/build_native.py --runtime-root "$MEDIAFLOW_RUNTIME_DIR"
+```
+
+CI 使用 `scripts/prepare_runtime.py` 校验 SHA-256 后展开当前目标的 Shotcut 运行时和 Playwright Chromium，并由 `scripts/prepare_ci_qt.py` 直接校验、展开 `runtime.lock.json` 登记的 QtBase 与 QtDeclarative 官方归档，不依赖在线仓库元数据解析。随后现场编译原生插件。`scripts/verify_development_runtime.py --profile core` 会实际启动 FFmpeg、MLT 与 Chromium并核对原生 QML 包；`--profile full` 另外要求本机已安装 ASR 与语音合成组件。不能用跳过测试代替运行时准备。
 
 启动应用：
 
@@ -142,13 +166,21 @@ CI 使用 `scripts/prepare_ci_runtime.ps1` 校验 SHA-256 后展开固定的 Sho
 .\scripts\launch.ps1
 ```
 
-也可以把项目目录作为首个参数直接打开。
+Linux/macOS 直接运行同一个应用模块：
+
+```bash
+"$MEDIAFLOW_DEV_ROOT/.venv/bin/python" -m mediaflow.desktop.app
+```
+
+三平台都可以把项目目录作为首个参数直接打开。
 
 桌面日志保存在运行目录的 `logs\\mediaflow.log`，文件达到 5 MiB 后轮转并保留 5 个备份。操作失败弹窗末尾的短编号会原样写入日志；反馈问题时同时提供该编号即可定位对应异常。
 
 ## 无头 CLI
 
-`mediaflow-cli` 是桌面界面之外的结构化自动化入口，复用同一个 Editor API，不另起服务，也不复制任务实现。它使用版本化 JSON 合同，命令始终以 UTF-8 向标准输出写 JSON，失败时返回非零退出码和稳定错误码。Python 等以文本模式启动子进程的调用方必须显式指定 `encoding="utf-8"`，不应依赖 Windows 本地代码页。调用方应先读取 `describe`，再按每项操作声明的项目访问方式、执行方式、幂等策略、所需能力以及输入和结果 schema 选择操作；需要外部运行时的操作还应先调用 `runtime.inspect`，不能用静态功能名代替当前机器的真实可用性。
+`mediaflow-cli` 是常驻 Editor Service 的结构化薄客户端。第一次调用会按需启动服务，之后的短进程只发送请求；它不打开 `project.mfp`、不取得项目锁，也不复制任务实现。CLI 使用 `mediaflow-editor` v3 JSON 合同，始终以 UTF-8 向标准输出写 JSON，失败时返回非零退出码和稳定错误码。调用方应先读取 `describe`，再按每项操作声明的项目访问方式、执行方式、幂等策略、所需能力以及输入和结果 schema 选择操作；需要外部运行时的操作还应先调用 `runtime.inspect`。
+
+每个项目写请求必须提供稳定 `request_id`、最近一次读取得到的 `base_revision`、`actor` 和 `client_id`。服务先检查持久化回执，再检查修订：完全相同的重试直接返回第一次结果；过期但写入路径不相交时自动重放；同一路径已经被人或另一代理修改时返回结构化冲突，不静默覆盖。服务提交数据库与事件后才返回，桌面端通过带游标的 WebSocket 立即投影外部改动。WebSocket 的 `project.subscribe` 会按游标补发 `project.changed` 和 `task.changed`，并继续发送同项目的 `project.conflict` 与工作区事件；无需项目的观察者可用 `service.subscribe` 接收 `runtime.changed` 和 `service.stopping`。`operation.execute_batch` 把一组原子 AI 写入归入同一个 `undo_group_id`，用户一次撤销即可恢复整批操作。
 
 `quality.reference.compare` 不打开或修改项目。它读取两个本地视频的真实解码帧，按调用者给出的区间、邻帧搜索范围和可选验收条件生成 `reference-comparison.json`、最差帧对照图和联系表。没有验收条件时结果为 `measured`；只有显式条件存在时才返回 `passed` 或 `failed`。逐帧数值不能替代对内容、构图、动作和风格的完整观看。
 
@@ -159,14 +191,20 @@ mediaflow-cli describe
 Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
+Linux/macOS 使用 `cat request.json | mediaflow-cli execute --request -`，其余 CLI 合同完全相同。
+
 自动化程序也可以通过文件或标准输入发送统一请求：
 
 ```json
 {
-  "protocol": "mediaflow-cli",
-  "version": 2,
+  "protocol": "mediaflow-editor",
+  "version": 3,
   "operation": "task.start",
   "project": "<absolute-project-directory>",
+  "request_id": "stable-request-id",
+  "base_revision": 12,
+  "actor": {"kind": "agent", "id": "my-agent", "name": "My Agent"},
+  "client_id": "my-client",
   "arguments": {
     "task_command": {
       "command_type": "generate_waveform",
@@ -186,7 +224,7 @@ AI 文字剪辑使用 `transcript.get`、`transcript.edit.preview`、`transcript
 
 普通片段换源和视觉效果链也走公开合同：`timeline.clip.source.replace` 负责在同类素材间换源并重新校验源区间，`timeline.clip.effect.add/update/move/remove` 负责按稳定效果 ID 建立、调整、重排和移除效果。具体参数、读写方式和返回结构仍以当前机器的 `mediaflow-cli describe` 为准。
 
-当前自动化边界到 CLI 为止，不需要常驻 MCP 服务。如果以后确实需要让支持 MCP 的外部客户端调用，只应增加转接层，Editor API 仍是唯一实现入口。
+支持 MCP 的宿主可以把 `mediaflow-mcp` 配置为 stdio server。它使用官方 MCP Python SDK，只公开 `mediaflow_describe`、`mediaflow_execute`、`mediaflow_execute_batch`、`mediaflow_follow_events` 和 `mediaflow_workspace_command` 五个薄工具，并复用同一个 Editor Service 连接池。服务启动时会从实时 `system.describe` 为 `mediaflow_execute` 生成各操作的联合输入 schema，事件跟随直接消费项目 WebSocket，工作区命令只作用于桌面明确连接的会话；转接器不监听公网端口，也不包含第二套编辑实现。
 
 ### 可编辑网页素材
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from mediaflow.application.ports import HighlightServiceDocuments, JsonClientFactory
 from mediaflow.application.sequence_service import SequenceService
@@ -12,6 +13,12 @@ from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.timebase import reframe_frames
 
 HighlightProgress = Callable[[OperationProgress], None]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedHighlightAnalysis:
+    media_asset_id: str
+    candidates: tuple[HighlightCandidate, ...]
 
 
 class HighlightService:
@@ -33,6 +40,22 @@ class HighlightService:
         maximum_candidates: int = 12,
         progress: HighlightProgress | None = None,
     ) -> list[HighlightCandidate]:
+        prepared = self.prepare_document_analysis(
+            document_id,
+            provider=provider,
+            maximum_candidates=maximum_candidates,
+            progress=progress,
+        )
+        return self.commit_document_analysis(prepared, progress=progress)
+
+    def prepare_document_analysis(
+        self,
+        document_id: str,
+        *,
+        provider: LlmProviderSettings,
+        maximum_candidates: int = 12,
+        progress: HighlightProgress | None = None,
+    ) -> PreparedHighlightAnalysis:
         document = self.repository.subtitles.get_subtitle_document(document_id)
         if document.sequence_id:
             state = self.repository.timeline.load_timeline(document.sequence_id)
@@ -110,10 +133,23 @@ class HighlightService:
             )
         if not candidates:
             raise RuntimeError("Highlight analysis returned no valid candidates")
-        existing = self.repository.highlights.list_highlights(media_asset_id)
+        return PreparedHighlightAnalysis(
+            media_asset_id=media_asset_id,
+            candidates=tuple(candidates),
+        )
+
+    def commit_document_analysis(
+        self,
+        prepared: PreparedHighlightAnalysis,
+        *,
+        progress: HighlightProgress | None = None,
+    ) -> list[HighlightCandidate]:
+        existing = self.repository.highlights.list_highlights(
+            prepared.media_asset_id
+        )
         additions = [
             candidate
-            for candidate in candidates
+            for candidate in prepared.candidates
             if not any(
                 self._overlap_ratio(candidate, current) >= self.DUPLICATE_OVERLAP_RATIO
                 for current in existing

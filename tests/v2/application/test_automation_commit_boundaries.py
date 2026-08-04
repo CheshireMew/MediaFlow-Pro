@@ -6,6 +6,7 @@ import pytest
 
 import mediaflow.application.subtitle_publication as subtitle_publication_module
 from mediaflow.composition import EditorApplication
+from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 
@@ -101,8 +102,11 @@ def test_atomic_automation_receipt_failure_rolls_back_database_srt_and_history(
                     "end_frame": 25,
                     "text": "Must roll back",
                 },
-                update,
-                atomic=True,
+                    update,
+                    atomic=True,
+                    base_revision=original_revision,
+                    actor=ActorIdentity(kind="system", id="commit-boundary-test"),
+                    write_set=[f"/subtitles/segments/{segment.id}"],
             )
 
         persisted = project.list_subtitle_segments(document.id)[0]
@@ -214,8 +218,11 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
                 "restore-version-with-srts",
                 "project.version.restore",
                 {"version_id": version.id},
-                restore,
-                atomic=True,
+                    restore,
+                    atomic=True,
+                    base_revision=current_revision,
+                    actor=ActorIdentity(kind="system", id="commit-boundary-test"),
+                    write_set=[f"/project/versions/{version.id}/restore"],
             )
 
         assert project.content_revision() == current_revision
@@ -253,6 +260,9 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
             {"version_id": version.id},
             restore,
             atomic=True,
+            base_revision=current_revision,
+            actor=ActorIdentity(kind="system", id="commit-boundary-test"),
+            write_set=[f"/project/versions/{version.id}/restore"],
         )
         replayed = project.execute_automation_request(
             "restore-version-with-srts",
@@ -260,6 +270,9 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
             {"version_id": version.id},
             restore,
             atomic=True,
+            base_revision=current_revision,
+            actor=ActorIdentity(kind="system", id="commit-boundary-test"),
+            write_set=[f"/project/versions/{version.id}/restore"],
         )
 
         assert replayed == restored

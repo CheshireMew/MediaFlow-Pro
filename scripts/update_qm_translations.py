@@ -9,6 +9,35 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "这项内容刚刚被其他协作者修改": (
+        "This item was just changed by another collaborator",
+        "この項目は別の共同編集者によって変更されました",
+    ),
+    "%1 在你开始输入后修改了同一项内容。你的输入仍然保留，请选择采用哪一份。": (
+        "%1 changed the same item after you started typing. Your input is still preserved; choose which version to keep.",
+        "%1 が入力開始後に同じ項目を変更しました。入力内容は保持されています。どちらを採用するか選んでください。",
+    ),
+    "项目中的同一项内容在你开始输入后发生了变化。你的输入仍然保留，请选择采用哪一份。": (
+        "The same item in the project changed after you started typing. Your input is still preserved; choose which version to keep.",
+        "入力開始後にプロジェクト内の同じ項目が変更されました。入力内容は保持されています。どちらを採用するか選んでください。",
+    ),
+    "发生冲突的位置：%1": (
+        "Conflicting locations: %1",
+        "競合している箇所：%1",
+    ),
+    "采用项目中的最新内容": (
+        "Use the latest project value",
+        "プロジェクトの最新内容を使用",
+    ),
+    "保留我的输入": ("Keep my input", "自分の入力を保持"),
+    "当前项目要求：%1（本机不可用）": (
+        "Required by this project: %1 (unavailable on this machine)",
+        "このプロジェクトの要件：%1（このマシンでは利用不可）",
+    ),
+    "这个项目要求的硬件编码器在本机不可用。导出会停止并说明原因，不会悄悄改用其它编码器。": (
+        "The hardware encoder required by this project is unavailable on this machine. Export will stop with an explanation instead of silently switching encoders.",
+        "このプロジェクトで必要なハードウェアエンコーダーはこのマシンでは利用できません。別のエンコーダーへ自動で切り替えず、理由を示して書き出しを停止します。",
+    ),
     "保留人工调整": ("Keep manual changes", "手動調整を保持"),
     "允许自动化修改": ("Allow automation changes", "自動変更を許可"),
     "关键帧": ("Keyframe", "キーフレーム"),
@@ -974,6 +1003,7 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     ),
     "下载所选组件": ("Download Selected Components", "選択したコンポーネントをダウンロード"),
     "可执行文件 (*.exe)": ("Executable Files (*.exe)", "実行ファイル (*.exe)"),
+    "可执行文件 (*)": ("Executable Files (*)", "実行ファイル (*)"),
     "可选运行组件": ("Optional Runtime Components", "オプションのランタイムコンポーネント"),
     "声音克隆": ("Voice Cloning", "音声クローン"),
     "尚未安装或选择本地目录": (

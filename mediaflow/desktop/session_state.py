@@ -6,8 +6,6 @@ from dataclasses import dataclass, field
 
 from PySide6.QtCore import QObject
 
-from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.composition import EditorProject
 from mediaflow.desktop.models import (
     AssetBinListModel,
     AssetFilterModel,
@@ -37,6 +35,10 @@ from mediaflow.desktop.models import (
 )
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.tasks import Task
+from mediaflow.service.desktop_proxy import RemoteEditorProject, RemoteTimelineEditor
+
+DesktopProject = RemoteEditorProject
+DesktopTimeline = RemoteTimelineEditor
 
 
 @dataclass(frozen=True)
@@ -67,12 +69,14 @@ class ImportDropBatch:
 
 @dataclass(slots=True)
 class ProjectBinding:
-    current: EditorProject | None = None
-    timeline: TimelineEditor | None = None
+    current: DesktopProject | None = None
+    timeline: DesktopTimeline | None = None
     project_id: str = ""
     active_sequence_id: str = ""
     generation: int = 0
     task_subscription_token: int | None = None
+    project_subscription_token: int | None = None
+    workspace_subscription_token: int | None = None
 
 
 @dataclass(slots=True)
@@ -106,6 +110,7 @@ class TaskViewState:
 class PresentationState:
     status_message: str = ""
     last_error_id: str = ""
+    collaboration_conflict: dict = field(default_factory=dict)
     preview_graph_path: str = ""
     hdr_preview_active: bool = False
     preview_subtitles: list[tuple[int, int, str]] = field(default_factory=list)
@@ -114,7 +119,7 @@ class PresentationState:
         list[tuple[int, int, str]],
     ] = field(default_factory=dict)
     audio_metrics: dict = field(default_factory=dict)
-    video_encoder_options: list[dict] = field(default_factory=list)
+    encoder_policy_options: list[dict] = field(default_factory=list)
     home_summary: dict = field(
         default_factory=lambda: {
             "runningTaskCount": 0,
@@ -188,7 +193,7 @@ class AsyncRequestState:
     audio_metrics_id: int = 0
     project_close_id: int = 0
     project_close_future: Future | None = None
-    closing_project: EditorProject | None = None
+    closing_project: DesktopProject | None = None
     closing_project_error: str = ""
     shutting_down: bool = False
 

@@ -19,6 +19,7 @@ SESSION_EVENT_NAMES = (
     "previewRangeRequested",
     "errorOccurred",
     "errorReferenceChanged",
+    "collaborationConflictChanged",
 )
 
 
@@ -41,3 +42,5 @@ class SessionEvents(QObject):
     previewRangeRequested = Signal(int, int)
     errorOccurred = Signal(str)
     errorReferenceChanged = Signal()
+    collaborationConflictChanged = Signal()
+    workspaceCommandReceived = Signal(object)

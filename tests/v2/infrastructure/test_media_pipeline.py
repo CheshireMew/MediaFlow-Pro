@@ -19,7 +19,7 @@ from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import AssetKind, AssetOrigin, ColorMode, TaskStatus, TrackKind
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
     utf16_units,
@@ -33,6 +33,7 @@ from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.visual_analysis import (
     SceneDetectionService,
@@ -79,7 +80,7 @@ def generate_real_media(path: Path, paths: RuntimePaths, *, width: int = 640, he
 def test_native_media_services_reject_an_overlong_external_source_before_launch(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     short_source = tmp_path / "source.mp4"
     short_source.write_bytes(b"not launched by this boundary test")
     deep_parent = tmp_path
@@ -203,7 +204,7 @@ def test_media_probe_rejects_deep_source_before_starting_ffprobe(
     monkeypatch.setattr(media_probe.subprocess, "run", fail_if_started)
 
     with pytest.raises(ValueError, match="路径过深"):
-        MediaProbe(RuntimePaths.discover()).probe(source)
+        MediaProbe(RuntimeContext.discover().paths).probe(source)
 
     assert subprocess_started is False
 
@@ -212,7 +213,7 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
     tmp_path: Path,
     max_project_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths)
 
@@ -286,11 +287,11 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
 def test_waveform_task_progress_survives_events_storage_and_artifact_consumption(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "task-waveform.mp4"
     generate_real_media(source, paths)
     repository = ProjectRepository.create(tmp_path / "Task Waveform", "Task Waveform")
-    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    project = EditorProject(repository, settings=ServiceSettings(), paths=paths)
     progress_events: list[OperationProgress] = []
     transported_tasks: list[Task] = []
 
@@ -353,7 +354,7 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
 def test_stale_waveform_producer_cannot_overwrite_current_asset_waveform(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "changing-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
 
@@ -394,7 +395,7 @@ def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(
     tmp_path: Path,
     max_project_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     video_source = tmp_path / "black-intro.mp4"
     generate_black_intro_video(video_source, paths)
     image_source = tmp_path / "portrait.png"
@@ -433,7 +434,7 @@ def test_media_thumbnail_uses_first_visible_video_frame_and_scales_images(
 def test_thumbnail_cache_tracks_content_when_size_and_timestamp_are_unchanged(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     image_source = tmp_path / "changing.bmp"
     blue = QImage(64, 64, QImage.Format.Format_RGB32)
     blue.fill(0xFF145AC4)
@@ -479,7 +480,7 @@ def test_thumbnail_cache_tracks_content_when_size_and_timestamp_are_unchanged(
 
 
 def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     web_root = tmp_path / "web"
     web_root.mkdir()
     source = web_root / "sample.mp4"
@@ -492,7 +493,7 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
     try:
         with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
             asset_service = AssetService(repository, MediaProbe(paths))
-            downloader = YtDlpDownloadService()
+            downloader = YtDlpDownloadService(paths)
             url = f"http://127.0.0.1:{server.server_address[1]}/sample.mp4"
             analyzed = downloader.analyze(url)
             media_workspace = tmp_path / "WorkSpace"
@@ -527,7 +528,7 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
             assert collection_path.name.startswith("001 Lesson One [")
         external_directory = tmp_path / "Configured Downloads"
         with ProjectRepository.create(tmp_path / "External Project", "External") as repository:
-            downloaded = YtDlpDownloadService().download(
+            downloaded = YtDlpDownloadService(paths).download(
                 DownloadRequest(
                     entry=analyzed.entries[0],
                     output_directory=str(external_directory.resolve()),
@@ -542,9 +543,9 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
             assert Path(asset.path).is_file()
             assert repository.catalog.resolve_asset_path(asset) == Path(asset.path)
         task_repository = ProjectRepository.create(tmp_path / "Task Download", "Task Download")
-        project = EditorProject(task_repository, settings=GlobalSettings(), paths=paths)
+        project = EditorProject(task_repository, settings=ServiceSettings(), paths=paths)
         try:
-            plan = YtDlpDownloadService().analyze(url)
+            plan = YtDlpDownloadService(paths).analyze(url)
             entry = plan.entries[0].model_copy(update={"index": 7, "title": "Task Lesson"})
             selected_output = tmp_path / "Task Selected Output"
             request = DownloadRequest(
@@ -582,7 +583,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     web_root = tmp_path / "web"
     web_root.mkdir()
     source = web_root / "sample.mp4"
@@ -611,7 +612,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
     )
     project = EditorProject(
         repository,
-        settings=GlobalSettings(),
+        settings=ServiceSettings(),
         paths=paths,
     )
     selected_output = tmp_path / "Selected Output"
@@ -620,7 +621,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
             f"http://127.0.0.1:"
             f"{server.server_address[1]}/sample.mp4"
         )
-        plan = YtDlpDownloadService().analyze(url)
+        plan = YtDlpDownloadService(paths).analyze(url)
 
         def fail_registration(*_args, **_kwargs):
             raise RuntimeError(
@@ -676,7 +677,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
 
 
 def test_hdr_project_generates_hdr_and_sdr_display_proxies(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     profile = ProjectProfile(
@@ -708,7 +709,7 @@ def test_hdr_project_generates_hdr_and_sdr_display_proxies(tmp_path: Path) -> No
             source_in=0,
             duration=25,
         )
-        document = TimelineCompiler(repository).compile(
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(
             editor.state,
             use_proxies=True,
             native_preview=True,

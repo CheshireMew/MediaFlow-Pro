@@ -5,13 +5,15 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Slot
+from PySide6.QtCore import Signal, Slot
+from PySide6.QtGui import QGuiApplication
 
-from mediaflow.composition import EditorProject
 from mediaflow.desktop.session_state import (
+    DesktopProject,
     ProjectInteractionSnapshot,
     TimelinePlacement,
 )
+from mediaflow.domain.collaboration import ProjectChangeEvent
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.storage_names import (
     PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
@@ -25,14 +27,31 @@ logger = logging.getLogger(__name__)
 PROJECT_CLOSE_TIMEOUT_SECONDS = 15.0
 
 
+def _paths_overlap(left: str, right: str) -> bool:
+    normalized_left = left.rstrip("/")
+    normalized_right = right.rstrip("/")
+    return (
+        normalized_left == normalized_right
+        or normalized_left.startswith(normalized_right + "/")
+        or normalized_right.startswith(normalized_left + "/")
+    )
+
+
 class ProjectLifecycle(SessionCoordinator):
+    projectEventReceived = Signal(object)
+
     def __init__(self, session):
         super().__init__(session)
-        self._revision_timer = QTimer(session)
-        self._revision_timer.setInterval(500)
-        self._revision_timer.timeout.connect(self.poll_external_changes)
+        self._active_draft_path = ""
+        self._deferred_events: list[ProjectChangeEvent] = []
+        self._application: QGuiApplication | None = None
+        self.projectEventReceived.connect(self._on_project_event)
+        application = QGuiApplication.instance()
+        if isinstance(application, QGuiApplication):
+            self._application = application
+            application.focusObjectChanged.connect(self._on_focus_object_changed)
 
-    def replace(self, candidate: EditorProject) -> None:
+    def replace(self, candidate: DesktopProject) -> None:
         if self._session.requests.closing_project is not None:
             candidate.close()
             raise RuntimeError("正在释放上一个项目，请稍候再打开项目")
@@ -40,13 +59,13 @@ class ProjectLifecycle(SessionCoordinator):
             project_document = candidate.get_project()
             candidate.timeline(project_document.main_sequence_id)
             candidate.list_tasks()
-            if not candidate.read_only:
-                candidate.reconcile_workflow()
         except Exception:
             candidate.close()
             raise
         previous = self._session.binding.current
         previous_subscription = self._session.binding.task_subscription_token
+        previous_project_subscription = self._session.binding.project_subscription_token
+        previous_workspace_subscription = self._session.binding.workspace_subscription_token
         preserved_selection = self._capture_interaction()
         try:
             self._bind(candidate)
@@ -55,6 +74,21 @@ class ProjectLifecycle(SessionCoordinator):
                 self._session.binding.current.unsubscribe_task_events(
                     self._session.binding.task_subscription_token
                 )
+            if (
+                self._session.binding.current
+                and self._session.binding.project_subscription_token is not None
+            ):
+                self._unsubscribe_project_events(
+                    self._session.binding.current,
+                    self._session.binding.project_subscription_token,
+                )
+            if (
+                self._session.binding.current
+                and self._session.binding.workspace_subscription_token is not None
+            ):
+                self._session.binding.current.unsubscribe_workspace_events(
+                    self._session.binding.workspace_subscription_token
+                )
             candidate.close()
             if previous is None:
                 self._session.binding.current = None
@@ -62,12 +96,30 @@ class ProjectLifecycle(SessionCoordinator):
             else:
                 if previous_subscription is not None:
                     previous.unsubscribe_task_events(previous_subscription)
+                if previous_project_subscription is not None:
+                    self._unsubscribe_project_events(
+                        previous,
+                        previous_project_subscription,
+                    )
+                if previous_workspace_subscription is not None:
+                    previous.unsubscribe_workspace_events(
+                        previous_workspace_subscription
+                    )
                 self._restore_interaction(preserved_selection)
                 self._bind(previous, reset_selection=False)
             raise
         if previous is not None:
             if previous_subscription is not None:
                 previous.unsubscribe_task_events(previous_subscription)
+            if previous_project_subscription is not None:
+                self._unsubscribe_project_events(
+                    previous,
+                    previous_project_subscription,
+                )
+            if previous_workspace_subscription is not None:
+                previous.unsubscribe_workspace_events(
+                    previous_workspace_subscription
+                )
             self._dispose(previous, close_in_background=True)
         self.remember_recent(candidate.project_dir)
 
@@ -149,7 +201,7 @@ class ProjectLifecycle(SessionCoordinator):
             display_name = f"{display_name} ({suffix - 1})"
         return root, display_name
 
-    def _bind(self, project: EditorProject, *, reset_selection: bool = True) -> None:
+    def _bind(self, project: DesktopProject, *, reset_selection: bool = True) -> None:
         self._session.binding.generation += 1
         generation = self._session.binding.generation
         if reset_selection:
@@ -159,7 +211,6 @@ class ProjectLifecycle(SessionCoordinator):
         self._session.binding.project_id = current.id
         self._session.binding.active_sequence_id = current.main_sequence_id
         self._session.binding.timeline = project.timeline(self._session.binding.active_sequence_id)
-        self._revision_timer.start()
         self._session.tasks.reset_delivery_state()
         initial_tasks, self._session.task_state.cursor = self._session.binding.current.task_snapshot()
         self._session.task_state.items = {task.id: task for task in initial_tasks}
@@ -168,45 +219,142 @@ class ProjectLifecycle(SessionCoordinator):
             lambda event: self._session.tasks.publish((generation, event)),
             include_snapshot=False,
         )
-        self._session.tasks.consume_unconsumed_results()
-        self._sync_task_events()
+        self._session.binding.project_subscription_token = project.subscribe_project_events(
+            lambda event: self.projectEventReceived.emit((generation, event)),
+            include_snapshot=False,
+        )
+        self._session.binding.workspace_subscription_token = project.subscribe_workspace_events(
+            self._session.events.workspaceCommandReceived.emit
+        )
+        self.reconcile_task_events()
         self._session.projectors.refresh_project()
 
-    @Slot()
-    def poll_external_changes(self) -> None:
+    @Slot(object)
+    def _on_project_event(self, envelope: object) -> None:
+        if not isinstance(envelope, tuple) or len(envelope) != 2:
+            return
+        generation, event = envelope
         if (
-            not self._session.binding.current
-            or not self._session.binding.current
+            generation != self._session.binding.generation
+            or not isinstance(event, ProjectChangeEvent)
+            or self._session.binding.current is None
             or self._session.requests.shutting_down
         ):
             return
+        if event.actor.id == self._session.binding.current.actor_id:
+            # The command response has already projected this desktop client's
+            # write. Replaying its journal event can erase a pending deferred
+            # dataChanged notification without producing a replacement.
+            return
+        if (
+            self._active_draft_path
+            and any(
+                _paths_overlap(self._active_draft_path, path)
+                for path in event.write_set
+            )
+        ):
+            self._deferred_events.append(event)
+            self._session._set_status("外部修改与当前输入冲突，已保护未提交内容")
+            return
+        self._apply_project_event(event)
+
+    def _apply_project_event(self, event: ProjectChangeEvent) -> None:
+        current = self._session.binding.current
+        if current is None:
+            return
         try:
-            self._session.tasks.consume_unconsumed_results()
-            self._sync_task_events()
-            revision = self._session.binding.current.content_revision()
-            if revision == self._session.binding.current.known_content_revision:
-                return
-            self._session.binding.current.reload_external_changes()
-            available_sequences = {item.id for item in self._session.binding.current.list_sequences()}
+            current.reload_external_changes()
+            available_sequences = {
+                item.id for item in current.list_sequences()
+            }
             if self._session.binding.active_sequence_id not in available_sequences:
                 self._session.binding.active_sequence_id = (
-                    self._session.binding.current.get_project().main_sequence_id
+                    current.get_project().main_sequence_id
                 )
-            self._session.binding.timeline = self._session.binding.current.timeline(
+            self._session.binding.timeline = current.timeline(
                 self._session.binding.active_sequence_id
             )
             self._session.projectors.refresh_project()
             self._session.events.selectionChanged.emit()
+            self._session.events.historyChanged.emit()
             self._session.projectors.timeline.schedule_preview_graph()
-            self._session._set_status("已同步 CLI 或其它进程提交的项目修改")
+            self._session._set_status(
+                f"已实时同步 {event.actor.name or event.actor.kind} 的修改"
+            )
         except Exception as error:
-            self._session.events.errorOccurred.emit(f"无法同步外部项目修改：{error}")
+            self._session.events.errorOccurred.emit(f"无法投影项目修改：{error}")
 
-    def _sync_task_events(self) -> None:
+    @Slot(object)
+    def _on_focus_object_changed(self, focus: object) -> None:
+        next_path = ""
+        property_reader = getattr(focus, "property", None)
+        if callable(property_reader):
+            next_path = str(property_reader("collaborationPath") or "").rstrip("/")
+        if next_path == self._active_draft_path:
+            return
+        current = self._session.binding.current
+        if current is not None and self._active_draft_path:
+            current.end_draft(self._active_draft_path)
+        self._active_draft_path = next_path
+        if current is not None and next_path:
+            current.begin_draft(next_path)
+        self._flush_deferred_events()
+
+    def _flush_deferred_events(self) -> None:
+        if not self._deferred_events:
+            return
+        applicable: list[ProjectChangeEvent] = []
+        retained: list[ProjectChangeEvent] = []
+        for event in self._deferred_events:
+            if self._active_draft_path and any(
+                _paths_overlap(self._active_draft_path, path)
+                for path in event.write_set
+            ):
+                retained.append(event)
+            else:
+                applicable.append(event)
+        self._deferred_events = retained
+        if applicable:
+            self._apply_project_event(applicable[-1])
+
+    def resolve_collaboration_conflict(self, resolution: str) -> None:
+        current = self._session.binding.current
+        if current is None:
+            raise RuntimeError("当前没有打开的项目")
+        focus = QGuiApplication.focusObject()
+        set_focus = getattr(focus, "setFocus", None)
+        if callable(set_focus):
+            set_focus(False)
+        if self._active_draft_path:
+            current.end_draft(self._active_draft_path)
+        self._active_draft_path = ""
+        current.resolve_pending_conflict(resolution)
+        current.reload_external_changes()
+        if self._deferred_events:
+            latest = self._deferred_events[-1]
+            self._deferred_events.clear()
+            self._apply_project_event(latest)
+        else:
+            self._session.binding.timeline = current.timeline(
+                self._session.binding.active_sequence_id
+            )
+            self._session.projectors.refresh_project()
+            self._session.events.selectionChanged.emit()
+            self._session.events.historyChanged.emit()
+            self._session.projectors.timeline.schedule_preview_graph()
+        self._session._set_status(
+            "已保留你的修改" if resolution == "keep_local" else "已采用最新项目内容"
+        )
+
+    def replay_task_events(self) -> None:
         if not self._session.binding.current:
             return
         for event in self._session.binding.current.task_events_after(self._session.task_state.cursor):
             self._session.tasks.publish((self._session.binding.generation, event))
+
+    def reconcile_task_events(self) -> None:
+        self._session.tasks.reconcile_committed_results()
+        self.replay_task_events()
 
     def _capture_interaction(self) -> ProjectInteractionSnapshot:
         return ProjectInteractionSnapshot(
@@ -271,13 +419,13 @@ class ProjectLifecycle(SessionCoordinator):
     def remember_recent(self, project_dir: Path) -> None:
         project_path = str(project_dir.expanduser().resolve())
         project_key = self._recent_key(project_path)
-        candidate = self._session.settings.model_copy(deep=True)
+        candidate = self._session.desktop_settings.model_copy(deep=True)
         candidate.ui.recent_project_paths = [
             project_path,
             *(path for path in candidate.ui.recent_project_paths if self._recent_key(path) != project_key),
         ][:10]
         try:
-            self._session._commit_settings(candidate)
+            self._session.settings_persistence.commit(candidate)
         except Exception as error:
             self._session.events.errorOccurred.emit(f"项目已打开，但无法更新最近项目记录：{error}")
         self._session.projectors.workspace.refresh_recent_projects()
@@ -286,14 +434,16 @@ class ProjectLifecycle(SessionCoordinator):
         project_key = self._recent_key(project_dir)
         remaining = [
             path
-            for path in self._session.settings.ui.recent_project_paths
+            for path in self._session.desktop_settings.ui.recent_project_paths
             if self._recent_key(path) != project_key
         ]
-        if len(remaining) == len(self._session.settings.ui.recent_project_paths):
+        if len(remaining) == len(
+            self._session.desktop_settings.ui.recent_project_paths
+        ):
             return False
-        candidate = self._session.settings.model_copy(deep=True)
+        candidate = self._session.desktop_settings.model_copy(deep=True)
         candidate.ui.recent_project_paths = remaining
-        self._session._commit_settings(candidate)
+        self._session.settings_persistence.commit(candidate)
         self._session.projectors.workspace.refresh_recent_projects()
         return True
 
@@ -303,12 +453,30 @@ class ProjectLifecycle(SessionCoordinator):
 
     def close(self, *, close_in_background: bool = True) -> None:
         self._session.binding.generation += 1
-        self._revision_timer.stop()
         if self._session.binding.current and self._session.binding.task_subscription_token is not None:
             self._session.binding.current.unsubscribe_task_events(
                 self._session.binding.task_subscription_token
             )
         self._session.binding.task_subscription_token = None
+        if (
+            self._session.binding.current
+            and self._session.binding.project_subscription_token is not None
+        ):
+            self._unsubscribe_project_events(
+                self._session.binding.current,
+                self._session.binding.project_subscription_token,
+            )
+        self._session.binding.project_subscription_token = None
+        if (
+            self._session.binding.current
+            and self._session.binding.workspace_subscription_token is not None
+        ):
+            self._session.binding.current.unsubscribe_workspace_events(
+                self._session.binding.workspace_subscription_token
+            )
+        self._session.binding.workspace_subscription_token = None
+        self._active_draft_path = ""
+        self._deferred_events.clear()
         self._session.task_state.cursor = 0
         closing_project = self._session.binding.current
         self._session.binding.current = None
@@ -383,9 +551,23 @@ class ProjectLifecycle(SessionCoordinator):
                 close_in_background=close_in_background,
             )
 
+    def shutdown(self) -> None:
+        try:
+            self.close(close_in_background=False)
+        finally:
+            application = self._application
+            self._application = None
+            if application is not None:
+                try:
+                    application.focusObjectChanged.disconnect(
+                        self._on_focus_object_changed
+                    )
+                except (RuntimeError, TypeError):
+                    pass
+
     def _dispose(
         self,
-        project: EditorProject,
+        project: DesktopProject,
         *,
         close_in_background: bool,
     ) -> None:
@@ -411,6 +593,10 @@ class ProjectLifecycle(SessionCoordinator):
             )
         else:
             project.close()
+
+    @staticmethod
+    def _unsubscribe_project_events(project: DesktopProject, token: int) -> None:
+        project.unsubscribe_project_events(token)
 
     def retry_close(self) -> None:
         project = self._session.requests.closing_project

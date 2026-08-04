@@ -16,12 +16,13 @@ from mediaflow.domain.runtime_capabilities import RUNTIME_CAPABILITY_PROFILES
 from mediaflow.infrastructure.runtime_capabilities import (
     RuntimeCapabilityInspector,
 )
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from scripts.run_artifacts import verification_run
 
 
 def verify(run_dir: Path, *, profile: str) -> int:
     required_ids = RUNTIME_CAPABILITY_PROFILES[profile]
-    inspection = RuntimeCapabilityInspector().inspect()
+    inspection = RuntimeCapabilityInspector(runtime=RuntimeContext.discover()).inspect()
     statuses = {item.id: item for item in inspection.capabilities}
     missing = required_ids - statuses.keys()
     failed = [

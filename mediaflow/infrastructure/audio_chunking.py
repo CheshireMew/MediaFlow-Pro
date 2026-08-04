@@ -18,8 +18,8 @@ class AudioPreparationService:
     STRONG_ANTIPHASE_MEDIAN_THRESHOLD = -0.75
     STRONG_ANTIPHASE_FRAME_RATIO = 0.60
 
-    def __init__(self, paths: RuntimePaths | None = None):
-        self.paths = paths or RuntimePaths.discover()
+    def __init__(self, paths: RuntimePaths):
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def prepare_for_asr(
@@ -235,8 +235,8 @@ class AudioPreparationService:
 
 
 class AudioChunkingService:
-    def __init__(self, paths: RuntimePaths | None = None):
-        self.paths = paths or RuntimePaths.discover()
+    def __init__(self, paths: RuntimePaths):
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def duration_seconds(self, media_path: str | Path) -> float:

@@ -593,6 +593,11 @@ AppScrollView {
                         AppTextArea {
                             id: segmentText
                             objectName: "subtitleSegmentTextEditor"
+                            collaborationPath: "/subtitles/documents/"
+                                + subtitleController.selectedDocumentId
+                                + "/segments/"
+                                + subtitleController.selectedSubtitleSegmentId
+                                + "/text"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             wrapMode: TextEdit.Wrap
@@ -714,6 +719,9 @@ AppScrollView {
                         spacing: 6
                         AppTextArea {
                             id: placementText
+                            collaborationPath: "/subtitles/placements/"
+                                + subtitleController.selectedSubtitlePlacementId
+                                + "/text"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             text: subtitleController.selectedSubtitlePlacementData.text || ""

@@ -17,6 +17,18 @@ ColumnLayout {
             value)
     }
 
+    function collaborationPath() {
+        const target = String(descriptor.target || "");
+        let source = String(descriptor.source_id || "")
+            .replace(/~/g, "~0").replace(/\//g, "~1");
+        if (target === "layer")
+            source = source.replace(/\./g, "/");
+        const section = target === "parameter" ? "parameters" :
+            target === "layer" ? "layers" : target;
+        return "/web/clips/" + webController.webClipId
+            + "/" + section + "/" + source;
+    }
+
     RowLayout {
         Layout.fillWidth: true
         Text {
@@ -92,6 +104,7 @@ ColumnLayout {
         id: textEditor
         AppTextField {
             Layout.fillWidth: true
+            collaborationPath: root.collaborationPath()
             text: root.descriptor.target === "data"
                 ? String(root.descriptor.valueText || "")
                 : String(root.descriptor.value ?? "")
@@ -136,6 +149,7 @@ ColumnLayout {
             }
             AppTextField {
                 Layout.preferredWidth: 78
+                collaborationPath: root.collaborationPath()
                 text: root.descriptor.kind === "integer"
                     ? String(Math.round(slider.value))
                     : Number(slider.value).toFixed(2)

@@ -25,9 +25,7 @@ def _process_until(predicate, *, timeout: float = 10.0) -> bool:
 
 def test_timeline_canvases_render_with_the_application_monospace_font(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     messages: list[str] = []

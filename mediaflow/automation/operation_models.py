@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import Field, JsonValue, model_serializer, model_validator
 
 from mediaflow.domain.audio import AudioBus, AudioEffect
-from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import DomainModel
@@ -321,6 +320,10 @@ class TaskStatusArguments(DomainModel):
     task_id: str = Field(min_length=1)
 
 
+class TaskWaitArguments(TaskStatusArguments):
+    timeout: float = Field(default=3600, gt=0, le=86_400)
+
+
 class TaskStartArguments(SequenceArguments):
     task_command: TaskCommand
     input_asset_ids: list[str] | None = None
@@ -539,29 +542,8 @@ class AssetListResult(DomainModel):
     assets: list[Asset]
 
 
-class AutomationWorkflowResult(DomainModel):
-    selected_asset_ids: list[str]
-    status_message: str
-
-
-class AutomationTaskApplicationResult(DomainModel):
-    workflow: AutomationWorkflowResult
-    imported_asset_id: str
-    imported_document_id: str
-    imported_purpose: str
-    download_plan: DownloadPlan | None
-    sequence_bounds_status: str
-    sequence_id: str
-    audio_metrics: dict[str, float] | None
-
-
-class TaskCompletionResult(DomainModel):
+class TaskReceiptResult(DomainModel):
     task: Task
-    result: AutomationTaskApplicationResult
-
-
-class AssetImportResult(TaskCompletionResult):
-    asset: Asset
 
 
 class SequenceResult(DomainModel):

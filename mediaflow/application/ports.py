@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,7 +121,6 @@ class TaskStore(Protocol):
     ) -> Task | None: ...
     def get(self, task_id: str) -> Task: ...
     def list(self) -> builtins.list[Task]: ...
-    def list_unconsumed_terminal(self) -> builtins.list[Task]: ...
     def list_claimable(self, at_ms: int) -> builtins.list[Task]: ...
     def delete(self, task_id: str, *, event_type: str = "deleted") -> None: ...
     def delete_terminal(self) -> builtins.list[Task]: ...
@@ -133,6 +132,8 @@ class TaskStore(Protocol):
 class TaskProjectAccess(Protocol):
     project_dir: Path
     read_only: bool
+
+    def transaction(self) -> AbstractContextManager[Any]: ...
 
 
 class ProjectAccess(Protocol):
@@ -179,6 +180,12 @@ class SequenceDocuments(Protocol):
         name: str,
         profile: ProjectProfile | None = None,
     ) -> Sequence: ...
+    def prepare_short_sequence(
+        self,
+        name: str,
+        profile: ProjectProfile | None = None,
+    ) -> Sequence: ...
+    def commit_short_sequence(self, sequence: Sequence) -> Sequence: ...
     def archive_short_sequence(self, sequence_id: str) -> Sequence: ...
     def restore_short_sequence(self, sequence_id: str) -> Sequence: ...
 
@@ -684,6 +691,32 @@ ProgressCallback = Callable[[OperationProgress], None]
 CancellationCheck = Callable[[], None]
 
 
+class AnalysisOutputPublication(Protocol):
+    @property
+    def archived_outputs(self) -> tuple[Path, ...]: ...
+
+    def temporary_path(
+        self,
+        destination: str | Path,
+        label: str,
+    ) -> Path: ...
+
+    def publish(self) -> None: ...
+
+    def finalize(
+        self,
+        *,
+        archive_replaced_to: Path | None = None,
+    ) -> None: ...
+
+
+class AnalysisOutputTransaction(
+    AbstractContextManager[AnalysisOutputPublication],
+    Protocol,
+):
+    pass
+
+
 class WebTaskRuntime(Protocol):
     def render_web_export(
         self,
@@ -709,14 +742,27 @@ class WebTaskRuntime(Protocol):
     ) -> Path: ...
 
 
+class PreparedProxyTaskResult(Protocol):
+    @property
+    def proxy_path(self) -> Path: ...
+
+    @property
+    def sdr_preview_proxy_path(self) -> Path | None: ...
+
+
 class AssetTaskRuntime(Protocol):
-    def generate_proxy(
+    def prepare_proxy(
         self,
         asset: Asset,
         profile: ProjectProfile,
         *,
         progress: ProgressCallback,
         check_cancelled: CancellationCheck,
+    ) -> PreparedProxyTaskResult: ...
+
+    def commit_proxy(
+        self,
+        prepared: PreparedProxyTaskResult,
     ) -> Asset: ...
 
     def generate_waveform(
@@ -726,7 +772,7 @@ class AssetTaskRuntime(Protocol):
         duration_seconds: float,
         progress: ProgressCallback,
         check_cancelled: CancellationCheck,
-    ) -> Asset: ...
+    ) -> Path: ...
 
 
 class DownloadTaskRuntime(Protocol):
@@ -886,6 +932,13 @@ class TranscriptionTaskRuntime(Protocol):
 
 
 class AnalysisTaskRuntime(Protocol):
+    def output_transaction(
+        self,
+        destinations: Iterable[str | Path],
+        *,
+        overwrite: bool,
+    ) -> AnalysisOutputTransaction: ...
+
     def analyze_sequence_bounds(
         self,
         state: TimelineState,

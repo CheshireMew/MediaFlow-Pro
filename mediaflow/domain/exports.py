@@ -9,6 +9,9 @@ from pydantic import Field, field_validator, model_validator
 from .enums import ExportFormat
 from .model_base import DomainModel, new_id
 
+EncoderPolicyMode = Literal["software", "prefer_hardware"]
+EncoderVendor = Literal["auto", "nvidia", "intel", "amd", "apple"]
+
 _CONTAINER_EXTENSIONS: dict[str, tuple[str, ...]] = {
     "flac": ("flac",),
     "ipod": ("m4a",),
@@ -34,7 +37,7 @@ _INTEGER_ADVANCED_FIELDS = frozenset(
 
 
 class SubtitleStyle(DomainModel):
-    font_family: str = "Microsoft YaHei UI"
+    font_family: str = "LXGW WenKai"
     font_size: int = Field(default=24, ge=8, le=240)
     font_color: str = "#FFFFFF"
     bold: bool = True
@@ -86,12 +89,23 @@ class WatermarkOverlay(DomainModel):
         return self
 
 
+class VideoEncoderPolicy(DomainModel):
+    mode: EncoderPolicyMode = "software"
+    vendor: EncoderVendor = "auto"
+
+    @model_validator(mode="after")
+    def coherent_vendor(self) -> VideoEncoderPolicy:
+        if self.mode == "software" and self.vendor != "auto":
+            raise ValueError("Software encoder policy must use the automatic vendor")
+        return self
+
+
 class ExportPreset(DomainModel):
     id: str = Field(default_factory=new_id)
     name: str
     format: ExportFormat
     container: str
-    video_codec: str | None
+    encoder_policy: VideoEncoderPolicy | None
     audio_codec: str | None
     pixel_format: str | None
     quality_mode: Literal["crf"] = "crf"
@@ -141,7 +155,6 @@ class ExportPreset(DomainModel):
         return normalized
 
     @field_validator(
-        "video_codec",
         "audio_codec",
         "pixel_format",
         "burn_subtitle_track_id",
@@ -172,9 +185,9 @@ class ExportPreset(DomainModel):
     @model_validator(mode="after")
     def coherent_media_format(self) -> ExportPreset:
         if self.format == ExportFormat.AUDIO:
-            if self.video_codec is not None:
+            if self.encoder_policy is not None:
                 raise ValueError(
-                    "Audio-only export cannot use a video codec"
+                    "Audio-only export cannot use a video encoder policy"
                 )
             if self.pixel_format is not None:
                 raise ValueError(
@@ -184,6 +197,8 @@ class ExportPreset(DomainModel):
                 raise ValueError(
                     "Audio-only export requires an audio codec"
                 )
+        elif self.encoder_policy is None:
+            raise ValueError("Video export requires a video encoder policy")
         for key in _INTEGER_ADVANCED_FIELDS:
             value = self.advanced.get(key)
             if value is not None and (

@@ -14,16 +14,16 @@ from mediaflow.application.translation_service import TranslationService
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import AssetKind, TaskStatus
 from mediaflow.domain.settings import (
-    GlobalSettings,
     GlossaryTermSettings,
     LlmProviderSettings,
+    ServiceSettings,
 )
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.domain.task_commands import TranslateSegmentsCommand
 from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.translation_cache import TranslationCache
 
 pytestmark = pytest.mark.integration
@@ -35,7 +35,7 @@ def _translation_service(repository: ProjectRepository) -> TranslationService:
         repository,
         OpenAIJsonClient,
         TranslationCache(
-            RuntimePaths.discover().project_cache_dir(
+            RuntimeContext.discover().paths.project_cache_dir(
                 repository.project_dir
             )
             / "translations"
@@ -142,7 +142,10 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
             publication = SubtitlePublicationService(repository)
             source = SubtitleAcquisitionService(repository, publication).import_subtitle_file(
                 subtitle,
-                AssetService(repository, MediaProbe()),
+                AssetService(
+                    repository,
+                    MediaProbe(RuntimeContext.discover().paths),
+                ),
             )
             segments = repository.subtitles.list_subtitle_segments(source.id)
             assert repository.catalog.get_asset(source.asset_id).kind == AssetKind.SUBTITLE
@@ -295,11 +298,11 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
 
             project_app = EditorProject(
                 repository,
-                settings=GlobalSettings(
+                settings=ServiceSettings(
                     llm_providers=[provider],
                     active_llm_provider_id=provider.id,
                 ),
-                paths=RuntimePaths.discover(),
+                paths=RuntimeContext.discover().paths,
             )
             try:
                 task = project_app.start_task(

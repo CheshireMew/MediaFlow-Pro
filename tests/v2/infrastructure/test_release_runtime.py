@@ -63,4 +63,6 @@ def test_release_runtime_reads_ready_evidence_from_the_real_desktop_startup(
     assert report["startup_ready"] == ready
     assert report["startup_ready_path"] == str(ready_path)
     assert report["application_running"] is True
+    assert report["editor_service_listener_verified"] is True
+    assert report["unexpected_listening_ports"] == []
     assert report["passed"] is True

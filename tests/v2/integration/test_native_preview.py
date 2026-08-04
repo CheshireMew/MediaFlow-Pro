@@ -20,7 +20,7 @@ from mediaflow.domain.timeline import Clip
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -43,10 +43,15 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
     tmp_path: Path,
     native_qml_instances,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     assert paths.melt is not None
     assert paths.native_qml is not None
-    assert (paths.native_qml / "MediaFlow" / "Native" / "mediaflownativeplugin.dll").is_file()
+    plugin_names = {
+        "windows": "mediaflownativeplugin.dll",
+        "linux": "libmediaflownativeplugin.so",
+        "macos": "libmediaflownativeplugin.dylib",
+    }
+    assert (paths.native_qml / "MediaFlow" / "Native" / plugin_names[paths.target.operating_system]).is_file()
     source = tmp_path / "native-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
 
@@ -62,17 +67,16 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
             duration=25,
         )
         graph = repository.project_dir / "cache" / "mlt" / "native-test.mlt"
-        TimelineCompiler(repository).write(editor.state, graph, native_preview=True)
+        TimelineCompiler(repository, RuntimeContext.discover().paths).write(
+            editor.state, graph, native_preview=True
+        )
         short_graph = repository.project_dir / "cache" / "mlt" / "native-short-test.mlt"
         short_state = editor.state.model_copy(
-            update={
-                "clips": [
-                    clip.model_copy(update={"duration": 12})
-                    for clip in editor.state.clips
-                ]
-            }
+            update={"clips": [clip.model_copy(update={"duration": 12}) for clip in editor.state.clips]}
         )
-        TimelineCompiler(repository).write(short_state, short_graph, native_preview=True)
+        TimelineCompiler(repository, RuntimeContext.discover().paths).write(
+            short_state, short_graph, native_preview=True
+        )
 
         app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
@@ -97,7 +101,10 @@ ApplicationWindow {
         preview = window.findChild(QObject, "preview")
         assert preview is not None
         native_qml_instances.append((engine, window, preview))
-        preview.setProperty("runtimeRoot", str(paths.melt.parent))
+        preview.setProperty("runtimeRoot", str(paths.mlt_root))
+        preview.setProperty("mltLibrary", str(paths.mlt_library))
+        preview.setProperty("mltRepository", str(paths.mlt_preview_repository))
+        preview.setProperty("mltData", str(paths.mlt_data))
         open_started = time.monotonic()
         preview.setProperty("source", str(graph))
 
@@ -149,13 +156,15 @@ ApplicationWindow {
         }
         assert len(colors) > 5
 
-        exported = MltExportService(TimelineCompiler(repository), paths).export(
+        exported = MltExportService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        ).export(
             editor.state,
             ExportPreset(
                 name="Preview Parity",
                 format=ExportFormat.H264,
                 container="mp4",
-                video_codec="libx264",
+                encoder_policy={"mode": "software"},
                 audio_codec="aac",
                 pixel_format="yuv420p",
                 quality_value=18,
@@ -201,7 +210,8 @@ ApplicationWindow {
 
         forward_range_positions: list[int] = []
         preview.positionChanged.connect(
-            lambda: forward_range_positions.append(int(preview.property("position"))))
+            lambda: forward_range_positions.append(int(preview.property("position")))
+        )
         preview.seek(4)
         preview.playRange(4, 9)
         deadline = time.monotonic() + 3
@@ -218,7 +228,8 @@ ApplicationWindow {
         preview.setProperty("playbackRate", -1.0)
         reverse_range_positions: list[int] = []
         preview.positionChanged.connect(
-            lambda: reverse_range_positions.append(int(preview.property("position"))))
+            lambda: reverse_range_positions.append(int(preview.property("position")))
+        )
         preview.seek(8)
         preview.playRange(4, 9)
         deadline = time.monotonic() + 3
@@ -248,7 +259,8 @@ ApplicationWindow {
         preview.setProperty("source", str(graph))
         durations_after_latest_source: list[int] = []
         preview.durationChanged.connect(
-            lambda: durations_after_latest_source.append(int(preview.property("duration"))))
+            lambda: durations_after_latest_source.append(int(preview.property("duration")))
+        )
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and preview.property("duration") != 25:
             QCoreApplication.processEvents()
@@ -319,26 +331,56 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(
     tmp_path: Path,
     native_qml_instances,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     assert paths.ffmpeg is not None and paths.melt is not None and paths.native_qml is not None
     silent_video = tmp_path / "silent-portrait.mp4"
     audio_only = tmp_path / "tone.wav"
     still_image = tmp_path / "still.png"
     commands = [
         [
-            str(paths.ffmpeg), "-y", "-hide_banner", "-v", "error",
-            "-f", "lavfi", "-i", "testsrc2=size=180x320:rate=25:duration=1",
-            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(silent_video),
+            str(paths.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=180x320:rate=25:duration=1",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(silent_video),
         ],
         [
-            str(paths.ffmpeg), "-y", "-hide_banner", "-v", "error",
-            "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=1",
-            "-c:a", "pcm_s16le", str(audio_only),
+            str(paths.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=660:sample_rate=48000:duration=1",
+            "-c:a",
+            "pcm_s16le",
+            str(audio_only),
         ],
         [
-            str(paths.ffmpeg), "-y", "-hide_banner", "-v", "error",
-            "-f", "lavfi", "-i", "testsrc2=size=180x320:rate=1",
-            "-frames:v", "1", str(still_image),
+            str(paths.ffmpeg),
+            "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=180x320:rate=1",
+            "-frames:v",
+            "1",
+            str(still_image),
         ],
     ]
     for command in commands:
@@ -389,7 +431,9 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(
                 }
             )
             graph = repository.project_dir / "cache" / "mlt" / f"matrix-{asset.kind.value}.mlt"
-            TimelineCompiler(repository).write(state, graph, native_preview=True)
+            TimelineCompiler(repository, RuntimeContext.discover().paths).write(
+                state, graph, native_preview=True
+            )
             graphs.append((graph, duration, asset.kind))
 
         _app = QGuiApplication.instance() or QGuiApplication([])
@@ -415,7 +459,10 @@ ApplicationWindow {
         preview = window.findChild(QObject, "preview")
         assert preview is not None
         native_qml_instances.append((engine, window, preview))
-        preview.setProperty("runtimeRoot", str(paths.melt.parent))
+        preview.setProperty("runtimeRoot", str(paths.mlt_root))
+        preview.setProperty("mltLibrary", str(paths.mlt_library))
+        preview.setProperty("mltRepository", str(paths.mlt_preview_repository))
+        preview.setProperty("mltData", str(paths.mlt_data))
 
         for graph, duration, _kind in graphs:
             preview.setProperty("source", str(graph))
@@ -446,7 +493,7 @@ def test_native_preview_tone_maps_hdr_graph_on_sdr_output(
     tmp_path: Path,
     native_qml_instances,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     assert paths.melt is not None
     assert paths.native_qml is not None
     source = tmp_path / "hdr-preview-source.mp4"
@@ -472,7 +519,9 @@ def test_native_preview_tone_maps_hdr_graph_on_sdr_output(
             duration=25,
         )
         graph = repository.project_dir / "cache" / "mlt" / "native-hdr-test.mlt"
-        document = TimelineCompiler(repository).write(editor.state, graph, native_preview=True)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).write(
+            editor.state, graph, native_preview=True
+        )
         assert "color_sdr_to_hdr_" in document.xml
         assert "avfilter.zscale" in document.xml
 
@@ -499,7 +548,10 @@ ApplicationWindow {
         preview = window.findChild(QObject, "preview")
         assert preview is not None
         native_qml_instances.append((engine, window, preview))
-        preview.setProperty("runtimeRoot", str(paths.melt.parent))
+        preview.setProperty("runtimeRoot", str(paths.mlt_root))
+        preview.setProperty("mltLibrary", str(paths.mlt_library))
+        preview.setProperty("mltRepository", str(paths.mlt_preview_repository))
+        preview.setProperty("mltData", str(paths.mlt_data))
         preview.setProperty("source", str(graph))
 
         deadline = time.monotonic() + 10

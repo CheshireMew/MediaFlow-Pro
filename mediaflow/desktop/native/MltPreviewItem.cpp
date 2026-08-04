@@ -112,6 +112,33 @@ void MltPreviewItem::setRuntimeRoot(const QString &value)
     scheduleOpen();
 }
 
+void MltPreviewItem::setMltLibrary(const QString &value)
+{
+    if (m_mltLibrary == value)
+        return;
+    m_mltLibrary = value;
+    emit mltLibraryChanged();
+    scheduleOpen();
+}
+
+void MltPreviewItem::setMltRepository(const QString &value)
+{
+    if (m_mltRepository == value)
+        return;
+    m_mltRepository = value;
+    emit mltRepositoryChanged();
+    scheduleOpen();
+}
+
+void MltPreviewItem::setMltData(const QString &value)
+{
+    if (m_mltData == value)
+        return;
+    m_mltData = value;
+    emit mltDataChanged();
+    scheduleOpen();
+}
+
 void MltPreviewItem::setReloadToken(int value)
 {
     if (m_reloadToken == value)
@@ -400,7 +427,11 @@ void MltPreviewItem::scheduleOpen(bool preservePosition)
 
 void MltPreviewItem::openIfReady()
 {
-    if (!m_source.isEmpty() && !m_runtimeRoot.isEmpty()) {
+    if (!m_source.isEmpty()
+        && !m_runtimeRoot.isEmpty()
+        && !m_mltLibrary.isEmpty()
+        && !m_mltRepository.isEmpty()
+        && !m_mltData.isEmpty()) {
         clearError();
         const bool active = m_hdrEnabled && screenSupportsHdr();
         if (m_hdrActive != active) {
@@ -411,6 +442,9 @@ void MltPreviewItem::openIfReady()
         emit openRequested(
             m_source,
             m_runtimeRoot,
+            m_mltLibrary,
+            m_mltRepository,
+            m_mltData,
             m_hdrEnabled,
             m_hdrActive,
             m_requestedPosition,

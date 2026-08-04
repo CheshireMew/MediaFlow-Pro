@@ -1,19 +1,49 @@
 {
-  "schema_version": 1,
-  "windows": {
-    "shotcut": {
-      "version": "26.6.25",
-      "archive_url": "https://github.com/mltframework/shotcut/releases/download/v26.6.25/shotcut-win64-26.6.25.zip",
-      "archive_sha256": "e44a28442c5686895e59eb5d4f4f86d9a71e9f5c008e0a4c35be78717ea15690",
-      "archive_root": "Shotcut",
-      "melt_version": "7.40.0",
-      "ffmpeg_version": "n8.1.2"
-    },
-    "qt": {
-      "version": "6.11.1",
-      "architecture": "win64_msvc2022_64",
-      "install_directory": "6.11.1/msvc2022_64",
-      "archives": [
+  "schema_version": 2,
+  "targets": {
+    "windows-x86_64": {
+      "operating_system": "windows",
+      "architecture": "x86_64",
+      "minimum_release": "10",
+      "reviewed_bundle": {
+        "provider": "shotcut",
+        "version": "26.6.25",
+        "archive_url": "https://github.com/mltframework/shotcut/releases/download/v26.6.25/shotcut-win64-26.6.25.zip",
+        "archive_sha256": "e44a28442c5686895e59eb5d4f4f86d9a71e9f5c008e0a4c35be78717ea15690",
+        "archive_format": "zip",
+        "archive_root": "Shotcut"
+      },
+      "layout": {
+        "ffmpeg": "ffmpeg.exe",
+        "ffprobe": "ffprobe.exe",
+        "melt": "melt.exe",
+        "mlt_library": "libmlt-7.dll",
+        "mlt_root": ".",
+        "mlt_repository": "lib/mlt",
+        "mlt_preview_repository": "lib/mlt-preview",
+        "mlt_data": "share/mlt",
+        "native_qml": "native/windows-x86_64/qml"
+      },
+      "ffmpeg": {
+        "version": "n8.1.2",
+        "version_match": "exact",
+        "executable": "ffmpeg.exe",
+        "probe": "ffprobe.exe",
+        "probe_arguments": ["-version"]
+      },
+      "mlt": {
+        "version": "7.40.0",
+        "version_match": "exact",
+        "executable": "melt.exe",
+        "probe_arguments": ["-version"]
+      },
+      "qt": {
+        "version": "6.11.1",
+        "toolchain": "msvc2022_64",
+        "architecture": "win64_msvc2022_64",
+        "install_directory": "6.11.1/msvc2022_64"
+      },
+      "qt_archives": [
         {
           "name": "qtbase",
           "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6111/qt6_6111_msvc2022_64/qt.qt6.6111.win64_msvc2022_64/6.11.1-0-202605090529qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
@@ -24,7 +54,147 @@
           "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6111/qt6_6111_msvc2022_64/qt.qt6.6111.win64_msvc2022_64/6.11.1-0-202605090529qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
           "sha256": "fc716b905581922ee8254740ae0017fcdc90b58138109ce0d9a927c099412f44"
         }
-      ]
+      ],
+      "playwright": {
+        "version": "1.61.0",
+        "chromium_revision": "1228",
+        "browser_version": "149.0.7827.55",
+        "archive_url": "https://cdn.playwright.dev/builds/cft/149.0.7827.55/win64/chrome-win64.zip",
+        "archive_sha256": "ebc0c2b75e2ea98151a7f18ff47037bfcbab44a8660e79b9ffa6520f9b7607ab",
+        "archive_root": "chrome-win64",
+        "executable": "chrome.exe",
+        "probe_arguments": ["--version"]
+      }
+    },
+    "linux-x86_64": {
+      "operating_system": "linux",
+      "architecture": "x86_64",
+      "minimum_release": "ubuntu-24.04",
+      "reviewed_bundle": {
+        "provider": "shotcut",
+        "version": "26.6.25",
+        "archive_url": "https://github.com/mltframework/shotcut/releases/download/v26.6.25/shotcut-linux-x86_64-26.6.25.txz",
+        "archive_sha256": "132393297d07b5fe36dd8ca995d0917262c1463427cda25ee2660c25da759b37",
+        "archive_format": "txz",
+        "archive_root": "Shotcut.app"
+      },
+      "layout": {
+        "ffmpeg": "ffmpeg",
+        "ffprobe": "ffprobe",
+        "melt": "melt",
+        "mlt_library": "lib/libmlt-7.so.7",
+        "mlt_root": ".",
+        "mlt_repository": "lib/mlt-7",
+        "mlt_preview_repository": "lib/mlt-7",
+        "mlt_data": "share/mlt-7",
+        "native_qml": "native/linux-x86_64/qml"
+      },
+      "ffmpeg": {
+        "version": "n8.1.2",
+        "version_match": "exact",
+        "executable": "ffmpeg",
+        "probe": "ffprobe",
+        "probe_arguments": ["-version"]
+      },
+      "mlt": {
+        "version": "7.40.0",
+        "version_match": "exact",
+        "executable": "melt",
+        "probe_arguments": ["-version"]
+      },
+      "qt": {
+        "version": "6.11.1",
+        "toolchain": "gcc-x86_64",
+        "architecture": "linux_gcc_64",
+        "install_directory": "6.11.1/gcc_64"
+      },
+      "qt_archives": [
+        {
+          "name": "qtbase",
+          "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6111/qt6_6111/qt.qt6.6111.linux_gcc_64/6.11.1-0-202605090529qtbase-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+          "sha256": "1d6d82d765987d657d0df136fb347e98d6e29e99ef8d1cb433abf9f15c86ab6f"
+        },
+        {
+          "name": "qtdeclarative",
+          "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6111/qt6_6111/qt.qt6.6111.linux_gcc_64/6.11.1-0-202605090529qtdeclarative-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
+          "sha256": "1eaeb3dc66eb50b2513791b694caaf07e6e667cd296cea8f97df1b1a675f550d"
+        }
+      ],
+      "playwright": {
+        "version": "1.61.0",
+        "chromium_revision": "1228",
+        "browser_version": "149.0.7827.55",
+        "archive_url": "https://cdn.playwright.dev/builds/cft/149.0.7827.55/linux64/chrome-linux64.zip",
+        "archive_sha256": "13113b963ac22fffdad898a677591028e4397c46c1daa9e61811258eed6e35b5",
+        "archive_root": "chrome-linux64",
+        "executable": "chrome",
+        "probe_arguments": ["--version"]
+      }
+    },
+    "macos-arm64": {
+      "operating_system": "macos",
+      "architecture": "arm64",
+      "minimum_release": "14.0",
+      "reviewed_bundle": {
+        "provider": "shotcut",
+        "version": "26.6.25",
+        "archive_url": "https://github.com/mltframework/shotcut/releases/download/v26.6.25/shotcut-macos-26.6.25.dmg",
+        "archive_sha256": "630dcb251915f0ceaf9344b5fd4213cfda162ccef2ae00215bdf4de79d3e5c69",
+        "archive_format": "dmg",
+        "archive_root": "Shotcut/Shotcut.app"
+      },
+      "layout": {
+        "ffmpeg": "Contents/MacOS/ffmpeg",
+        "ffprobe": "Contents/MacOS/ffprobe",
+        "melt": "Contents/MacOS/melt",
+        "mlt_library": "Contents/Frameworks/libmlt-7.7.dylib",
+        "mlt_root": "Contents",
+        "mlt_repository": "Contents/PlugIns/mlt",
+        "mlt_preview_repository": "Contents/PlugIns/mlt",
+        "mlt_data": "Contents/Resources/mlt",
+        "native_qml": "native/macos-arm64/qml"
+      },
+      "ffmpeg": {
+        "version": "n8.1.2",
+        "version_match": "exact",
+        "executable": "ffmpeg",
+        "probe": "ffprobe",
+        "probe_arguments": ["-version"]
+      },
+      "mlt": {
+        "version": "7.40.0",
+        "version_match": "exact",
+        "executable": "melt",
+        "probe_arguments": ["-version"]
+      },
+      "qt": {
+        "version": "6.11.1",
+        "toolchain": "clang-arm64",
+        "architecture": "clang_64",
+        "install_directory": "6.11.1/macos"
+      },
+      "qt_archives": [
+        {
+          "name": "qtbase",
+          "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6111/qt6_6111/qt.qt6.6111.clang_64/6.11.1-0-202605090526qtbase-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+          "sha256": "a116552ad5b6660562308e8341ce25f3c81b857ca293fb67727a9f1fcfb1fded"
+        },
+        {
+          "name": "qtdeclarative",
+          "url": "https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6111/qt6_6111/qt.qt6.6111.clang_64/6.11.1-0-202605090526qtdeclarative-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z",
+          "sha256": "25328fb08c7f9b53e414fa81618c1ffaecef3d350d60670a85d51378fb44d1c5"
+        }
+      ],
+      "playwright": {
+        "version": "1.61.0",
+        "chromium_revision": "1228",
+        "browser_version": "149.0.7827.55",
+        "archive_url": "https://cdn.playwright.dev/builds/cft/149.0.7827.55/mac-arm64/chrome-mac-arm64.zip",
+        "archive_sha256": "311211b54c429245e2cec0314ee1e314085e9c00350215b95e1a879350786630",
+        "archive_root": "chrome-mac-arm64",
+        "executable": "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "probe_arguments": ["--version"]
+      }
     }
   }
 }

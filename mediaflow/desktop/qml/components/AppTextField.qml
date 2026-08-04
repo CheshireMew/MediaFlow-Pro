@@ -3,6 +3,7 @@ import QtQuick.Controls
 import ".."
 
 TextField {
+    property string collaborationPath: ""
     id: control
     property bool error: false
     hoverEnabled: true

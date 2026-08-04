@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -21,7 +22,7 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
     utf16_units,
@@ -37,7 +38,7 @@ from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from tests.v2.infrastructure.test_media_pipeline import (
     generate_black_intro_video,
     generate_real_media,
@@ -45,14 +46,14 @@ from tests.v2.infrastructure.test_media_pipeline import (
 
 
 def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "scene-source.mp4"
     generate_black_intro_video(source, paths)
     repository = ProjectRepository.create(tmp_path / "Visual Project", "Visual Project")
     assets = AssetService(repository, MediaProbe(paths))
     asset = assets.import_external(source)
     asset = assets.adopt_main_profile_from_video(asset.id)
-    project = EditorProject(repository, settings=GlobalSettings(), paths=paths)
+    project = EditorProject(repository, settings=ServiceSettings(), paths=paths)
     try:
         sequence_id = repository.catalog.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
@@ -66,9 +67,19 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
         )
         task_progress: dict[str, list[OperationProgress]] = {}
         user_marker_id = ""
+        user_write_error: list[BaseException] = []
+
+        def write_user_marker() -> None:
+            nonlocal user_marker_id
+            try:
+                user_marker_id = project.timeline(sequence_id).add_marker(
+                    1,
+                    "分析期间用户标记",
+                ).id
+            except BaseException as error:
+                user_write_error.append(error)
 
         def record_progress(event) -> None:
-            nonlocal user_marker_id
             progress = OperationProgress.model_validate(event.payload["progress"])
             task_progress.setdefault(event.task_id, []).append(
                 progress
@@ -77,10 +88,16 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
                 not user_marker_id
                 and progress.message_code == "scene_detection_analyzing"
             ):
-                user_marker_id = TimelineEditor(repository, sequence_id).add_marker(
-                    1,
-                    "分析期间用户标记",
-                ).id
+                writer = threading.Thread(
+                    target=write_user_marker,
+                    name="mediaflow-test-human-writer",
+                )
+                writer.start()
+                writer.join(timeout=10)
+                if writer.is_alive():
+                    user_write_error.append(
+                        TimeoutError("Human project command did not settle")
+                    )
 
         project.subscribe_task_events(record_progress, include_snapshot=False)
         scene_task = project.start_task(
@@ -90,6 +107,7 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
         )
         completed_scene = project.wait_for_task(scene_task.id, timeout=60)
         assert completed_scene.status == TaskStatus.COMPLETED, completed_scene.error
+        assert not user_write_error, user_write_error
         scene_artifact = completed_scene.artifacts[0].resolve(repository.project_dir)
         scene_payload = json.loads(scene_artifact.read_text(encoding="utf-8"))
         state = repository.timeline.load_timeline(sequence_id)
@@ -134,7 +152,7 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
         ]
         assert tracking_measurements
         assert tracking_measurements[-1].completed == tracking_measurements[-1].total
-        xml = TimelineCompiler(repository).compile(state).xml
+        xml = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(state).xml
         transform_filter = ET.fromstring(xml).find(f".//filter[@id='transform_{clip.id}']")
         assert transform_filter is not None
         rect = next(
@@ -148,7 +166,7 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
 
 
 def test_fcpxml_exports_real_media_timing_markers_and_captions(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     subtitle = tmp_path / "source.zh.srt"
@@ -185,7 +203,7 @@ def test_fcpxml_exports_real_media_timing_markers_and_captions(tmp_path: Path) -
             offset_frames=5,
             follow_clips=False,
         )
-        output = FcpxmlExportService(repository).export(
+        output = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             repository.timeline.load_timeline(sequence_id),
             tmp_path / "handoff.fcpxml",
         )
@@ -230,7 +248,7 @@ def test_fcpxml_exports_real_media_timing_markers_and_captions(tmp_path: Path) -
         assert caption is not None and caption.text == "城市夜景"
         original = output.read_bytes()
         with pytest.raises(FileExistsError):
-            FcpxmlExportService(repository).export(
+            FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
                 repository.timeline.load_timeline(sequence_id),
                 output,
             )
@@ -316,7 +334,7 @@ def test_fcpxml_uses_effective_tracks_retime_maps_and_hdr10_pq(tmp_path: Path) -
             follow_clips=False,
         )
 
-        output = FcpxmlExportService(repository).export(
+        output = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             repository.timeline.load_timeline(sequence_id),
             tmp_path / "semantic-handoff.fcpxml",
         )
@@ -380,9 +398,9 @@ def test_short_sequence_clock_is_shared_by_mlt_and_fcpxml(tmp_path: Path) -> Non
         editor.add_marker(15, "重叠区")
         state = editor.state
 
-        compiled = TimelineCompiler(repository).compile(state)
+        compiled = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(state)
         assert compiled.duration_frames == 35
-        output = FcpxmlExportService(repository).export(
+        output = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             state,
             tmp_path / "short-clock.fcpxml",
         )
@@ -457,7 +475,7 @@ def test_fcpxml_long_destination_uses_a_short_atomic_sibling(
             parent /= "deep-user-export-folder"
         parent.mkdir(parents=True)
         destination = (parent / filename).resolve()
-        output = FcpxmlExportService(repository).export(
+        output = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             editor.state,
             destination,
         )
@@ -613,7 +631,7 @@ def test_fcpxml_preserves_linked_mute_detached_components_and_adjustments(
             4,
         )
 
-        output = FcpxmlExportService(repository).export(
+        output = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             repository.timeline.load_timeline(sequence_id),
             tmp_path / "component-semantics.fcpxml",
         )
@@ -795,7 +813,7 @@ def test_fcpxml_preflight_rejects_unreliable_transition_and_bus_processing(
             ValueError,
             match="标准交叉溶解",
         ):
-            FcpxmlExportService(repository).export(
+            FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
                 editor.state,
                 unsupported_output,
             )
@@ -822,7 +840,7 @@ def test_fcpxml_preflight_rejects_unreliable_transition_and_bus_processing(
             ValueError,
             match="音频总线",
         ):
-            FcpxmlExportService(repository).export(
+            FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
                 editor.state,
                 protected_output,
                 overwrite=True,
@@ -847,5 +865,5 @@ def test_fcpxml_preflight_rejects_an_unusable_path_before_creating_directories(
 
         assert not output_parent.exists()
         with pytest.raises(ValueError, match="路径过深"):
-            FcpxmlExportService(repository).export(state, output)
+            FcpxmlExportService(repository, RuntimeContext.discover().paths).export(state, output)
         assert not output_parent.exists()

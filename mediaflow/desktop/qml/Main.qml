@@ -154,9 +154,69 @@ ApplicationWindow {
         id: workspaceTour
         anchors.fill: parent
     }
+
+    AppDialog {
+        id: collaborationConflictDialog
+        objectName: "collaborationConflictDialog"
+        title: qsTr("这项内容刚刚被其他协作者修改")
+        modal: true
+        width: Math.min(620, window.width - 48)
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.NoAutoClose
+        contentItem: ColumnLayout {
+            width: collaborationConflictDialog.availableWidth
+            spacing: 12
+            Text {
+                Layout.fillWidth: true
+                text: {
+                    const actors = workspaceController.collaborationConflict.actors || []
+                    return actors.length > 0
+                        ? qsTr("%1 在你开始输入后修改了同一项内容。你的输入仍然保留，请选择采用哪一份。").arg(actors.join("、"))
+                        : qsTr("项目中的同一项内容在你开始输入后发生了变化。你的输入仍然保留，请选择采用哪一份。")
+                }
+                color: Theme.textStrong
+                font.pixelSize: Theme.fontSizeBody
+                wrapMode: Text.WordWrap
+            }
+            Text {
+                Layout.fillWidth: true
+                text: {
+                    const paths = workspaceController.collaborationConflict.paths || []
+                    return paths.length > 0
+                        ? qsTr("发生冲突的位置：%1").arg(paths.join("\n"))
+                        : ""
+                }
+                visible: text.length > 0
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeCaption
+                wrapMode: Text.WrapAnywhere
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    objectName: "acceptRemoteConflictButton"
+                    text: qsTr("采用项目中的最新内容")
+                    onClicked: workspaceController.resolveCollaborationConflict("accept_remote")
+                }
+                AppButton {
+                    objectName: "keepLocalConflictButton"
+                    primary: true
+                    text: qsTr("保留我的输入")
+                    onClicked: workspaceController.resolveCollaborationConflict("keep_local")
+                }
+            }
+        }
+    }
     Connections {
         target: workspaceController
         function onSampleTourRequested() { workspaceTour.open(); }
+        function onCollaborationConflictChanged() {
+            if (workspaceController.collaborationConflictPending)
+                collaborationConflictDialog.open()
+            else
+                collaborationConflictDialog.close()
+        }
     }
 
     FolderDialog {

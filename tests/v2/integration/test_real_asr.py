@@ -7,11 +7,11 @@ from mediaflow.application.asset_service import AssetService
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import TaskStatus, TrackKind
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
-from mediaflow.domain.settings import AsrSettings, GlobalSettings
+from mediaflow.domain.settings import AsrSettings, ServiceSettings
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -39,10 +39,10 @@ def synthesize_real_speech(path: Path) -> None:
 def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Path) -> None:
     speech = tmp_path / "speech.wav"
     synthesize_real_speech(speech)
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     repository = ProjectRepository.create(tmp_path / "Project", "Project")
     asset = AssetService(repository, MediaProbe(paths)).import_external(speech)
-    settings = GlobalSettings(
+    settings = ServiceSettings(
         asr=AsrSettings(
             model="tiny.en",
             device="cpu",

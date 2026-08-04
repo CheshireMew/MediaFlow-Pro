@@ -39,6 +39,7 @@ from mediaflow.environment import test_fixture_root
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from scripts.run_artifacts import verification_run
 
@@ -217,8 +218,14 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     if arguments.duration_seconds < arguments.playback_check_seconds:
         raise ValueError("The media duration must cover the playback check")
 
-    paths = RuntimePaths.discover()
-    if paths.melt is None or paths.native_qml is None:
+    paths = RuntimeContext.discover().paths
+    if (
+        paths.melt is None
+        or paths.native_qml is None
+        or paths.mlt_library is None
+        or paths.mlt_preview_repository is None
+        or paths.mlt_data is None
+    ):
         raise RuntimeError("MLT and the native QML plugin must be installed")
     media_seconds = arguments.duration_seconds + 5
     fixture = FIXTURE_ROOT / f"preview-motion-silent-long-gop-1080p30-{media_seconds}s.mkv"
@@ -236,7 +243,7 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
             duration=media_seconds * 30,
         )
         graph = repository.project_dir / "cache/mlt/preview-performance.mlt"
-        TimelineCompiler(repository).write(editor.state, graph, native_preview=True)
+        TimelineCompiler(repository, paths).write(editor.state, graph, native_preview=True)
 
         configure_application_identity()
         _app = QGuiApplication.instance() or QGuiApplication([])
@@ -281,6 +288,9 @@ ApplicationWindow {
         preview.positionChanged.connect(record_presentation)
         window.frameSwapped.connect(record_visible_frame)
         preview.setProperty("runtimeRoot", str(paths.melt.parent))
+        preview.setProperty("mltLibrary", str(paths.mlt_library))
+        preview.setProperty("mltRepository", str(paths.mlt_preview_repository))
+        preview.setProperty("mltData", str(paths.mlt_data))
         open_started = time.monotonic()
         preview.setProperty("source", str(graph))
         pump_until(lambda: int(preview.property("duration")) > 0, 10)

@@ -16,6 +16,7 @@ from mediaflow.domain.storage_names import utf16_units
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import LoudnessAnalysisService, TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -58,7 +59,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
     tmp_path: Path,
     max_project_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "constant-tone.mp4"
     _generate_tone(paths, source, duration=5)
 
@@ -79,7 +80,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
 
         progress = []
         metrics, result_path = LoudnessAnalysisService(
-            TimelineCompiler(repository),
+            TimelineCompiler(repository, RuntimeContext.discover().paths),
             paths,
         ).analyze(editor.state, progress=progress.append)
 
@@ -102,24 +103,20 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         assert utf16_units(str(source_graph)) <= 240
         assert utf16_units(str(result_path)) <= 240
         assert not list((repository.project_dir / "cache" / "l").glob("*.wav"))
-        render_progress = [
-            item for item in progress if item.message_code == "audio_analysis_rendering"
-        ]
+        render_progress = [item for item in progress if item.message_code == "audio_analysis_rendering"]
         loudness_progress = [
-            item
-            for item in progress
-            if item.message_code == "audio_analysis_measuring_loudness"
+            item for item in progress if item.message_code == "audio_analysis_measuring_loudness"
         ]
         assert render_progress[-1].completed == render_progress[-1].total
         assert loudness_progress[-1].completed == loudness_progress[-1].total
 
-        service = LoudnessAnalysisService(TimelineCompiler(repository), paths)
+        service = LoudnessAnalysisService(
+            TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+        )
         first_hash = service.snapshot_hash(editor.state)
         assert first_hash == payload["snapshot_hash"]
         master = next(
-            bus
-            for bus in repository.audio.list_audio_buses(editor.sequence_id)
-            if bus.parent_bus_id is None
+            bus for bus in repository.audio.list_audio_buses(editor.sequence_id) if bus.parent_bus_id is None
         )
         repository.audio.save_audio_bus(master.model_copy(update={"gain_db": -4.0}))
         current_state = repository.timeline.load_timeline(editor.sequence_id)
@@ -139,9 +136,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         changed_clip = changed_state.clips[0]
         changed_state.clips[0] = changed_clip.model_copy(
             update={
-                "audio": changed_clip.audio.model_copy(
-                    update={"gain_db": changed_clip.audio.gain_db - 6.0}
-                )
+                "audio": changed_clip.audio.model_copy(update={"gain_db": changed_clip.audio.gain_db - 6.0})
             }
         )
         changed_hash = service.snapshot_hash(changed_state)
@@ -150,17 +145,23 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
                 executor.submit(
-                    LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
+                    LoudnessAnalysisService(
+                        TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+                    ).analyze,
                     current_state,
                     progress=concurrent_progress[0].append,
                 ),
                 executor.submit(
-                    LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
+                    LoudnessAnalysisService(
+                        TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+                    ).analyze,
                     changed_state,
                     progress=concurrent_progress[1].append,
                 ),
                 executor.submit(
-                    LoudnessAnalysisService(TimelineCompiler(repository), paths).analyze,
+                    LoudnessAnalysisService(
+                        TimelineCompiler(repository, RuntimeContext.discover().paths), paths
+                    ).analyze,
                     changed_state,
                     progress=concurrent_progress[2].append,
                 ),
@@ -177,17 +178,11 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         producers = [
             events
             for events in concurrent_progress
-            if any(
-                event.message_code == "audio_analysis_rendering"
-                for event in events
-            )
+            if any(event.message_code == "audio_analysis_rendering" for event in events)
         ]
         assert len(producers) == 1
         assert all(
-            any(
-                event.message_code == "audio_analysis_cache_ready"
-                for event in events
-            )
+            any(event.message_code == "audio_analysis_cache_ready" for event in events)
             for events in concurrent_progress
             if events is not producers[0]
         )
@@ -248,7 +243,9 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
 
     with ProjectRepository.open(project_dir) as reopened:
         state = reopened.timeline.load_timeline(editor.sequence_id)
-        reopened_service = LoudnessAnalysisService(TimelineCompiler(reopened), paths)
+        reopened_service = LoudnessAnalysisService(
+            TimelineCompiler(reopened, RuntimeContext.discover().paths), paths
+        )
         reopened_hash = reopened_service.snapshot_hash(state)
         assert reopened_hash == current_hash
         reopened_metrics = reopened_service.read_metrics(
@@ -266,7 +263,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
 def test_same_loudness_snapshot_has_one_real_producer_across_processes(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "cross-process-tone.mp4"
     _generate_tone(paths, source, duration=3)
     project_dir = tmp_path / "cross-process-project"
@@ -294,7 +291,7 @@ from pathlib import Path
 
 from mediaflow.infrastructure.mlt import LoudnessAnalysisService, TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 
 project = Path(sys.argv[1])
 start = Path(sys.argv[2])
@@ -302,7 +299,8 @@ ready = Path(sys.argv[3])
 sequence_id = sys.argv[4]
 with ProjectRepository.open(project, writable=False) as repository:
     state = repository.timeline.load_timeline(sequence_id)
-    service = LoudnessAnalysisService(TimelineCompiler(repository), RuntimePaths.discover())
+    paths = RuntimeContext.discover().paths
+    service = LoudnessAnalysisService(TimelineCompiler(repository, paths), paths)
     events = []
     ready.write_text("ready", encoding="utf-8")
     while not start.exists():

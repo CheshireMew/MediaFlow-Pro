@@ -17,6 +17,20 @@ def get_task(context: OperationContext) -> dict:
     return {"task": task}
 
 
+def cancel_task(context: OperationContext) -> dict:
+    task_id = str(context.required("task_id"))
+    context.project.cancel_task(task_id)
+    return {"task": context.project.get_task(task_id)}
+
+
+def wait_for_task(context: OperationContext) -> dict:
+    task = context.project.wait_for_task(
+        str(context.required("task_id")),
+        timeout=float(context.arguments.get("timeout", 3600)),
+    )
+    return {"task": task}
+
+
 def start_task(context: OperationContext) -> dict:
     task_command = _TASK_COMMAND_ADAPTER.validate_python(
         context.required("task_command")
@@ -30,11 +44,11 @@ def start_task(context: OperationContext) -> dict:
         sequence_id=context.sequence_id(),
         idempotency_key=context.task_idempotency(),
     )
-    return context.task_result(task)
+    return context.task_receipt(task)
 
 
 def resume_task(context: OperationContext) -> dict:
-    return context.task_result(
+    return context.task_receipt(
         context.project.resume_task(
             str(context.required("task_id")),
             allow_existing=context.retrying,

@@ -57,7 +57,7 @@ class OperationContext:
     def actor(self) -> Literal["human", "automation"]:
         return cast(
             Literal["human", "automation"],
-            str(self.arguments.get("actor", "automation")),
+            "human" if self.envelope.actor.kind == "human" else "automation",
         )
 
     def task_idempotency(self) -> str | None:
@@ -68,18 +68,13 @@ class OperationContext:
             f"{self.envelope.operation}"
         )
 
-    def task_result(self, task: Task) -> dict[str, Any]:
-        completed = self.project.wait_for_task(
-            task.id,
-            timeout=float(self.arguments.get("timeout", 3600)),
-        )
-        result = self.project.consume_task_result(completed)
+    @staticmethod
+    def task_receipt(task: Task) -> dict[str, Any]:
         return {
-            "task": completed.model_dump(
+            "task": task.model_dump(
                 mode="json",
                 exclude_computed_fields=True,
             ),
-            "result": result.as_dict(),
         }
 
 

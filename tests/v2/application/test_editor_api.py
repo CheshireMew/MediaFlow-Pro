@@ -7,6 +7,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import wave
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.automation.contracts import describe_contract
-from mediaflow.cli import execute_request, main
+from mediaflow.cli import main
 from mediaflow.composition import EditorApplication
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.product_identity import PRODUCT_NAME
@@ -25,8 +26,86 @@ from mediaflow.domain.storage_names import utf16_units
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.storage_paths import default_project_root
+from mediaflow.service.client import EditorServiceRpcError, call_sync
+from tests.v2.editor_service_api import EditorServiceApi
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+_SERVICE_API: EditorServiceApi | None = None
+
+
+@pytest.fixture(autouse=True)
+def _editor_api_service(
+    editor_service_api: EditorServiceApi,
+):
+    global _SERVICE_API
+    _SERVICE_API = editor_service_api
+    try:
+        yield
+    finally:
+        _SERVICE_API = None
+
+
+def execute_request(
+    request: dict,
+    *,
+    application: EditorApplication | None = None,
+) -> dict:
+    del application
+    api = _SERVICE_API
+    if api is None:
+        raise RuntimeError("Editor Service test client is not bound")
+    if request.get("protocol") != "mediaflow-editor" or request.get("version") != 3:
+        raise AssertionError("Tests must exercise the current public protocol")
+    payload = api.request(
+        str(request["operation"]),
+        project=request.get("project"),
+        arguments=request.get("arguments"),
+        request_id=request.get("request_id"),
+        base_revision=request.get("base_revision"),
+    )
+    return api.execute_request(payload)["result"]
+
+
+def wait_for_task(project: Path, receipt: dict, *, timeout: float = 30) -> dict:
+    task_id = str(receipt["task"]["id"])
+    deadline = time.monotonic() + timeout
+    while True:
+        task = execute_request(
+            {
+                "protocol": "mediaflow-editor",
+                "version": 3,
+                "operation": "task.get",
+                "project": str(project),
+                "arguments": {"task_id": task_id},
+            }
+        )["task"]
+        if task["status"] in {"completed", "failed", "cancelled"}:
+            return task
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Task did not finish: {task_id}")
+        time.sleep(0.05)
+
+
+def wait_for_imported_asset(project: Path, receipt: dict) -> dict:
+    task = wait_for_task(project, receipt)
+    assert task["status"] == "completed", task.get("error")
+    asset_id = str(task["outcome"]["asset_id"])
+    deadline = time.monotonic() + 5
+    while True:
+        inspected = execute_request(
+            {
+                "protocol": "mediaflow-editor",
+                "version": 3,
+                "operation": "project.inspect",
+                "project": str(project),
+            }
+        )
+        assets = [item for item in inspected["assets"] if item["id"] == asset_id]
+        if assets:
+            return assets[0]
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Task result was not committed: {task['id']}")
+        time.sleep(0.05)
 
 
 def _write_wave(path: Path) -> None:
@@ -71,16 +150,17 @@ def _run_cli_request(
     operation: str,
     arguments: dict | None = None,
 ) -> tuple[int, dict]:
+    api = _SERVICE_API
+    if api is None:
+        raise RuntimeError("Editor Service test client is not bound")
     request_path = tmp_path / f"{operation.replace('.', '-')}.json"
     request_path.write_text(
         json.dumps(
-            {
-                "protocol": "mediaflow-cli",
-                "version": 2,
-                "operation": operation,
-                "project": str(project_path),
-                "arguments": arguments or {},
-            }
+            api.request(
+                operation,
+                project=project_path,
+                arguments=arguments,
+            )
         ),
         encoding="utf-8",
     )
@@ -119,13 +199,21 @@ def _run_cli_request(
                 "stderr": completed.stderr,
             }
         ) from error
+    if output.get("ok") is True and isinstance(output.get("result"), dict):
+        operation_response = output["result"]
+        if isinstance(operation_response.get("result"), dict):
+            output = {
+                **output,
+                "collaboration": operation_response,
+                "result": operation_response["result"],
+            }
     return completed.returncode, output
 
 
 def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> None:
     contract = describe_contract()
     assert contract["product"] == PRODUCT_NAME
-    assert contract["version"] == 2
+    assert contract["version"] == 3
     assert contract["default_project_root"] == default_project_root()
     assert "$ref" not in json.dumps(contract)
     assert "#/$defs/" not in json.dumps(contract)
@@ -190,6 +278,7 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
             "name",
             "project_access",
             "execution_mode",
+            "history_mode",
             "idempotency",
             "required_capabilities",
             "arguments_schema",
@@ -215,8 +304,8 @@ def test_project_create_persists_the_explicit_public_profile(
 
     created = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "project.create",
             "arguments": {
                 "name": "Explicit Profile",
@@ -242,8 +331,8 @@ def test_project_create_persists_the_explicit_public_profile(
 def test_runtime_inspection_is_projectless_and_reports_every_runtime_capability() -> None:
     inspected = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "runtime.inspect",
         }
     )
@@ -265,8 +354,8 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     application = EditorApplication()
     created = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "project.create",
             "arguments": {
                 "name": "FCPXML CLI Project",
@@ -282,21 +371,22 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     assert project_path == (tmp_path / "fcpxml-cli-project").resolve()
     source = tmp_path / "handoff-tone.wav"
     _write_wave(source)
-    imported = execute_request(
+    import_receipt = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "asset.import",
             "project": str(project_path),
             "arguments": {"source": str(source)},
         },
         application=application,
     )
+    imported = wait_for_imported_asset(project_path, import_receipt)
     sequence_id = created["project"]["main_sequence_id"]
     track = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.track.add",
             "project": str(project_path),
             "arguments": {"sequence_id": sequence_id, "kind": "audio"},
@@ -305,19 +395,19 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     )["track"]
     execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.clip.add",
             "project": str(project_path),
             "arguments": {
                 "sequence_id": sequence_id,
                 "track_id": track["id"],
-                "asset_id": imported["asset"]["id"],
+                "asset_id": imported["id"],
                 "timeline_start": 0,
                 "source_in": 0,
                 "duration": min(
                     25,
-                    imported["asset"]["metadata"]["duration_frames"],
+                    imported["metadata"]["duration_frames"],
                 ),
             },
         },
@@ -327,8 +417,8 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
 
     exported = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "export.fcpxml",
             "project": str(project_path),
             "arguments": {
@@ -365,8 +455,8 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
 
     replaced = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.clip.source.replace",
             "project": str(project_path),
             "arguments": {
@@ -381,8 +471,8 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
 
     added = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.clip.effect.add",
             "project": str(project_path),
             "arguments": {
@@ -396,8 +486,8 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     effect_id = added["visual_effects"][0]["id"]
     updated = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.clip.effect.update",
             "project": str(project_path),
             "arguments": {
@@ -414,8 +504,8 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
 
     removed = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.clip.effect.remove",
             "project": str(project_path),
             "arguments": {
@@ -429,7 +519,7 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     assert removed["visual_effects"] == []
 
     described = execute_request(
-        {"protocol": "mediaflow-cli", "version": 2, "operation": "describe"},
+        {"protocol": "mediaflow-editor", "version": 3, "operation": "describe"},
         application=application,
     )
     operation_names = {item["name"] for item in described["operations"]}
@@ -447,14 +537,13 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     monkeypatch,
     capsys,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
     application = EditorApplication()
 
     created = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "project.create",
             "arguments": {
                 "name": "Headless Project",
@@ -473,22 +562,22 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
 
     source = tmp_path / "tone.wav"
     _write_wave(source)
-    imported = execute_request(
+    import_receipt = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "asset.import",
             "project": str(project_path),
             "arguments": {"source": str(source)},
         },
         application=application,
     )
-    asset_id = imported["asset"]["id"]
+    asset_id = wait_for_imported_asset(project_path, import_receipt)["id"]
 
-    completed = execute_request(
+    waveform_receipt = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "task.start",
             "project": str(project_path),
             "arguments": {
@@ -501,14 +590,15 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
             },
         },
         application=application,
-    )["task"]
+    )
+    completed = wait_for_task(project_path, waveform_receipt, timeout=60)
     assert completed["status"] == "completed"
     assert completed["artifacts"]
 
     inspected = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "project.inspect",
             "project": str(project_path),
         },
@@ -520,33 +610,31 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     assert inspected["tasks"][-1]["id"] == completed["id"]
 
     request_path = tmp_path / "inspect-request.json"
+    assert _SERVICE_API is not None
     request_path.write_text(
         json.dumps(
-            {
-                "protocol": "mediaflow-cli",
-                "version": 2,
-                "operation": "project.inspect",
-                "project": str(project_path),
-            }
+            _SERVICE_API.request(
+                "project.inspect",
+                project=project_path,
+            )
         ),
         encoding="utf-8",
     )
     assert main(["execute", "--request", str(request_path)]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["ok"] is True
-    assert output["result"]["assets"][0]["id"] == asset_id
+    assert output["result"]["result"]["assets"][0]["id"] == asset_id
 
 
 def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
     application = EditorApplication()
     create_request = {
-        "protocol": "mediaflow-cli",
-        "version": 2,
+        "protocol": "mediaflow-editor",
+        "version": 3,
         "operation": "project.create",
         "request_id": "create-project-once",
         "arguments": {
@@ -569,18 +657,20 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
             ),
         },
     }
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(EditorServiceRpcError, match="request_id was reused"):
         execute_request(mismatched_create, application=application)
     project_path = Path(first_project["path"])
     assert project_path == (tmp_path / "idempotent-cli-project").resolve()
 
     sequence_id = first_project["project"]["main_sequence_id"]
+    assert _SERVICE_API is not None
     add_track_request = {
-        "protocol": "mediaflow-cli",
-        "version": 2,
+        "protocol": "mediaflow-editor",
+        "version": 3,
         "operation": "timeline.track.add",
         "project": str(project_path),
         "request_id": "add-track-once",
+        "base_revision": _SERVICE_API.revision(project_path),
         "arguments": {
             "sequence_id": sequence_id,
             "kind": "video",
@@ -593,8 +683,8 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
 
     visible = execute_request(
         {
-            "protocol": "mediaflow-cli",
-            "version": 2,
+            "protocol": "mediaflow-editor",
+            "version": 3,
             "operation": "timeline.get",
             "project": str(project_path),
             "arguments": {"sequence_id": sequence_id},
@@ -610,7 +700,7 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
         **add_track_request["arguments"],
         "name": "Different input",
     }
-    with pytest.raises(ValueError, match="request_id was reused"):
+    with pytest.raises(EditorServiceRpcError, match="request_id was reused"):
         execute_request(conflicting, application=application)
 
 
@@ -793,30 +883,46 @@ def test_ai_transcript_edit_plan_runs_through_real_cli_and_can_restore(
         assert "one two three" in restored_srt.read_text(encoding="utf-8-sig")
 
 
-def test_timeline_navigation_preserves_one_project_history(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    application = EditorApplication()
-    with application.create_project(tmp_path / "Project", "Project") as project:
-        main = project.get_project().main_sequence_id
-        main_editor = project.timeline(main)
-        main_editor.add_marker(10, "Keep undo")
-        short = project.create_short_sequence("Short")
+def test_timeline_navigation_preserves_one_project_history(tmp_path: Path) -> None:
+    assert _SERVICE_API is not None
+    created = _SERVICE_API.execute(
+        "project.create",
+        arguments={
+            "name": "History Project",
+            "directory_name": tmp_path.name,
+            "profile": ProjectProfile().model_dump(
+                mode="json",
+                exclude_computed_fields=True,
+            ),
+        },
+    )
+    project_path = Path(created["path"])
+    main = created["project"]["main_sequence_id"]
+    track = _SERVICE_API.execute(
+        "timeline.track.add",
+        project=project_path,
+        arguments={"sequence_id": main, "kind": "video", "name": "Undo me"},
+    )["track"]
 
-        assert project.timeline(short.id) is project.timeline(short.id)
-        assert project.timeline(main) is main_editor
-        assert project.can_undo is True
+    inspected = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": main},
+    )
+    assert track["id"] in {item["id"] for item in inspected["timeline"]["tracks"]}
 
-        project.timeline(short.id)
-        assert project.can_undo is True
-        project.undo()
-        assert project.load_timeline(main).markers == []
+    _SERVICE_API.history("undo", project_path)
+    undone = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": main},
+    )
+    assert track["id"] not in {item["id"] for item in undone["timeline"]["tracks"]}
 
 
 def test_public_batch_clip_add_is_atomic_and_idempotent(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
     source = tmp_path / "batch-tone.wav"
     _write_wave(source)
@@ -826,12 +932,14 @@ def test_public_batch_clip_add_is_atomic_and_idempotent(
         sequence_id = project.get_project().main_sequence_id
         track = project.timeline(sequence_id).add_track(TrackKind.AUDIO)
 
+    assert _SERVICE_API is not None
     request = {
-        "protocol": "mediaflow-cli",
-        "version": 2,
+        "protocol": "mediaflow-editor",
+        "version": 3,
         "operation": "timeline.clip.batch.add",
         "project": str(project_path),
         "request_id": "batch-clips-once",
+        "base_revision": _SERVICE_API.revision(project_path),
         "arguments": {
             "sequence_id": sequence_id,
             "clips": [
@@ -864,9 +972,7 @@ def test_public_batch_clip_add_is_atomic_and_idempotent(
 def test_preview_snapshots_are_content_addressed_and_never_overwrite_active_graph(
     tmp_path: Path,
     max_project_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     application = EditorApplication()
     source = tmp_path / "preview-tone.wav"
     _write_wave(source)
@@ -907,8 +1013,8 @@ def test_preview_snapshots_are_content_addressed_and_never_overwrite_active_grap
         assert first != second
         assert repeated == second
         assert first.is_file() and second.is_file()
-        assert first.is_relative_to(tmp_path / "runtime")
-        assert second.is_relative_to(tmp_path / "runtime")
+        assert first.is_relative_to(application.runtime_paths.runtime_dir)
+        assert second.is_relative_to(application.runtime_paths.runtime_dir)
         assert utf16_units(str(first)) <= 240
         assert utf16_units(str(second)) <= 240
         assert first.read_text(encoding="utf-8") == first_xml
@@ -924,20 +1030,45 @@ def test_preview_snapshots_are_content_addressed_and_never_overwrite_active_grap
 
 def test_short_sequence_archive_is_recoverable_through_project_history(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
+    assert _SERVICE_API is not None
+    project_path = tmp_path / "Recoverable Project"
     application = EditorApplication()
-    with application.create_project(tmp_path / "Project", "Project") as project:
+    with application.create_project(project_path, "Recoverable Project") as project:
         short = project.create_short_sequence("Recoverable")
 
-        project.archive_short_sequence(short.id)
-        assert short.id not in {item.id for item in project.list_sequences()}
-        assert project.get_sequence(short.id).archived is True
+    client_id = _SERVICE_API.client_id
+    _SERVICE_API.execute("project.inspect", project=project_path)
+    base_revision = _SERVICE_API.revision(project_path)
 
-        project.undo()
-        assert short.id in {item.id for item in project.list_sequences()}
-        assert project.get_sequence(short.id).archived is False
+    call_sync(
+        "project.open",
+        {"project": str(project_path), "client_id": client_id},
+    )
+    call_sync(
+        "desktop.project.call",
+        {
+            "project": str(project_path),
+            "client_id": client_id,
+            "target": "project",
+            "command": "archive_short_sequence",
+            "args": [short.id],
+            "base_revision": base_revision,
+            "request_id": "archive-short-sequence",
+            "actor": _SERVICE_API.actor,
+        },
+    )
+    archived = _SERVICE_API.execute("project.inspect", project=project_path)
+    assert short.id not in {item["id"] for item in archived["sequences"]}
 
-        project.redo()
-        assert short.id not in {item.id for item in project.list_sequences()}
+    _SERVICE_API.history("undo", project_path)
+    restored = _SERVICE_API.execute("project.inspect", project=project_path)
+    assert short.id in {item["id"] for item in restored["sequences"]}
+
+    _SERVICE_API.history("redo", project_path)
+    rearchived = _SERVICE_API.execute("project.inspect", project=project_path)
+    assert short.id not in {item["id"] for item in rearchived["sequences"]}
+    call_sync(
+        "project.close",
+        {"project": str(project_path), "client_id": client_id},
+    )

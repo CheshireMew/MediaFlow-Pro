@@ -63,9 +63,6 @@ if (-not $env:MEDIAFLOW_TEST_ROOT) {
 if (-not $env:MEDIAFLOW_TEST_FIXTURE_ROOT) {
     $env:MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:MEDIAFLOW_DEV_ROOT "test-fixtures"
 }
-if (-not $env:MEDIAFLOW_NATIVE_BUILD_DIR) {
-    $env:MEDIAFLOW_NATIVE_BUILD_DIR = Join-Path $env:MEDIAFLOW_DEV_ROOT "build\native-qt611"
-}
 if (-not $env:QT_ROOT_DIR) {
     $env:QT_ROOT_DIR = Join-Path $env:MEDIAFLOW_DEV_ROOT "qt"
 }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from mediaflow.application.ports import SequenceServiceDocuments
 from mediaflow.application.timeline_clock import (
     project_frame_profile,
@@ -8,6 +10,7 @@ from mediaflow.application.timeline_clock import (
 from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.enums import AudioEffectKind, TrackKind
 from mediaflow.domain.model_base import new_id
+from mediaflow.domain.project import Sequence
 from mediaflow.domain.subtitles import SubtitlePlacement
 from mediaflow.domain.timebase import (
     reframe_frames,
@@ -24,6 +27,15 @@ from mediaflow.domain.timeline import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedShortSequence:
+    state: TimelineState
+    audio_buses: tuple[AudioBus, ...]
+    audio_effects: tuple[AudioEffect, ...]
+    subtitle_placements: tuple[SubtitlePlacement, ...]
+    new_sequence: bool
+
+
 class SequenceService:
     def __init__(self, repository: SequenceServiceDocuments):
         self.repository = repository
@@ -34,13 +46,14 @@ class SequenceService:
         range_id: str,
         *,
         name: str | None = None,
-    ):
-        with self.repository.transaction():
-            return self._create_short_from_range(
+    ) -> Sequence:
+        return self.commit_prepared_short(
+            self.prepare_short_from_range(
                 source_sequence_id,
                 range_id,
                 name=name,
             )
+        )
 
     def create_short_from_bounds(
         self,
@@ -49,15 +62,15 @@ class SequenceService:
         end_frame: int,
         *,
         name: str | None = None,
-    ):
-        with self.repository.transaction():
-            source, selected = self._bounded_selection(
+    ) -> Sequence:
+        return self.commit_prepared_short(
+            self.prepare_short_from_bounds(
                 source_sequence_id,
                 start_frame,
                 end_frame,
                 name=name,
             )
-            return self._copy_selection(source, selected, name=name)
+        )
 
     def sync_short_from_bounds(
         self,
@@ -67,35 +80,54 @@ class SequenceService:
         end_frame: int,
         *,
         name: str | None = None,
-    ):
-        with self.repository.transaction():
-            source, selected = self._bounded_selection(
+    ) -> Sequence:
+        return self.commit_prepared_short(
+            self.prepare_short_from_bounds(
                 source_sequence_id,
                 start_frame,
                 end_frame,
                 name=name,
+                destination_sequence=(
+                    self.repository.catalog.get_sequence(short_sequence_id)
+                ),
             )
-            destination_sequence = self.repository.catalog.get_sequence(short_sequence_id)
-            return self._copy_selection(
-                source,
-                selected,
-                name=name,
-                destination_sequence=destination_sequence,
-            )
+        )
 
-    def _create_short_from_range(
+    def prepare_short_from_range(
         self,
         source_sequence_id: str,
         range_id: str,
         *,
         name: str | None = None,
-    ):
+    ) -> PreparedShortSequence:
         source = self.repository.timeline.load_timeline(source_sequence_id)
         try:
             selected = next(item for item in source.ranges if item.id == range_id)
         except StopIteration as error:
             raise KeyError(range_id) from error
-        return self._copy_selection(source, selected, name=name)
+        return self._prepare_copy_selection(source, selected, name=name)
+
+    def prepare_short_from_bounds(
+        self,
+        source_sequence_id: str,
+        start_frame: int,
+        end_frame: int,
+        *,
+        name: str | None = None,
+        destination_sequence: Sequence | None = None,
+    ) -> PreparedShortSequence:
+        source, selected = self._bounded_selection(
+            source_sequence_id,
+            start_frame,
+            end_frame,
+            name=name,
+        )
+        return self._prepare_copy_selection(
+                source,
+                selected,
+                name=name,
+                destination_sequence=destination_sequence,
+            )
 
     def _bounded_selection(
         self,
@@ -117,18 +149,22 @@ class SequenceService:
             name=(name or "短视频").strip() or "短视频",
         )
 
-    def _copy_selection(
+    def _prepare_copy_selection(
         self,
         source: TimelineState,
         selected: TimelineRange,
         *,
         name: str | None,
-        destination_sequence=None,
-    ):
-        destination_sequence = destination_sequence or self.repository.catalog.create_short_sequence(
-            name or selected.name or "短视频"
+        destination_sequence: Sequence | None = None,
+    ) -> PreparedShortSequence:
+        new_sequence = destination_sequence is None
+        destination_sequence = (
+            destination_sequence
+            or self.repository.catalog.prepare_short_sequence(
+                name or selected.name or "短视频"
+            )
         )
-        destination = self.repository.timeline.load_timeline(destination_sequence.id)
+        destination = TimelineState(sequence=destination_sequence)
         source_profile = source.sequence.profile
         destination_profile = destination.sequence.profile
         destination_name = (name or selected.name or destination.sequence.name).strip()
@@ -333,13 +369,6 @@ class SequenceService:
             destination_profile,
             asset_source_profile=project_frame_profile(self.repository.catalog),
         ).state
-        self.repository.audio.replace_audio_graph(
-            destination_sequence.id,
-            cloned_buses,
-            cloned_effects,
-        )
-        self.repository.timeline.save_timeline(destination)
-
         placements: list[SubtitlePlacement] = []
         for source_track_id, destination_track_id in track_map.items():
             source_track = next(item for item in source.tracks if item.id == source_track_id)
@@ -373,5 +402,29 @@ class SequenceService:
                         timing_overridden=placement.timing_overridden,
                     )
                 )
-        self.repository.subtitles.add_subtitle_placements(placements)
-        return self.repository.catalog.get_sequence(destination_sequence.id)
+        return PreparedShortSequence(
+            state=destination,
+            audio_buses=tuple(cloned_buses),
+            audio_effects=tuple(cloned_effects),
+            subtitle_placements=tuple(placements),
+            new_sequence=new_sequence,
+        )
+
+    def commit_prepared_short(
+        self,
+        prepared: PreparedShortSequence,
+    ) -> Sequence:
+        sequence = prepared.state.sequence
+        with self.repository.transaction():
+            if prepared.new_sequence:
+                self.repository.catalog.commit_short_sequence(sequence)
+            self.repository.audio.replace_audio_graph(
+                sequence.id,
+                list(prepared.audio_buses),
+                list(prepared.audio_effects),
+            )
+            self.repository.timeline.save_timeline(prepared.state)
+            self.repository.subtitles.add_subtitle_placements(
+                list(prepared.subtitle_placements)
+            )
+        return self.repository.catalog.get_sequence(sequence.id)

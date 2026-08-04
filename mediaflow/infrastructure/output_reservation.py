@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import msvcrt
 import os
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -16,6 +15,7 @@ from mediaflow.domain.storage_names import (
     safe_path_component,
 )
 
+from .project_lock import ProcessFileLock
 from .runtime_paths import runtime_directory
 
 _ROLLBACK_ATTEMPTS = 3
@@ -115,29 +115,21 @@ def _reserve_resolved_outputs(
     root = Path(runtime_dir).expanduser().resolve() if runtime_dir is not None else runtime_directory()
     lock_root = root / "cache" / "output-locks"
     lock_root.mkdir(parents=True, exist_ok=True)
-    handles = []
+    locks: list[ProcessFileLock] = []
     try:
         for output_key, output in sorted(outputs_by_key.items()):
             lock_key = hashlib.sha256(output_key.encode("utf-8")).hexdigest()
             lock_path = lock_root / f"{lock_key}.lock"
-            handle = lock_path.open("a+b")
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as error:
-                handle.close()
-                raise RuntimeError(f"Another export is already writing destination: {output}") from error
-            handles.append(handle)
+            lock = ProcessFileLock(lock_path)
+            if not lock.acquire():
+                raise RuntimeError(
+                    f"Another export is already writing destination: {output}"
+                )
+            locks.append(lock)
         yield
     finally:
-        for handle in reversed(handles):
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            handle.close()
+        for lock in reversed(locks):
+            lock.release()
 
 
 @contextmanager
@@ -202,12 +194,17 @@ class OutputSetTransaction:
         self._archived: list[Path] = []
         self._backups: dict[str, Path] = {}
         self._published_keys: list[str] = []
+        self._replaced_output_archives: dict[Path, Path] = {}
         self._publication_open = False
         self._committed = False
 
     @property
     def archived_outputs(self) -> tuple[Path, ...]:
         return tuple(self._archived)
+
+    @property
+    def replaced_output_archives(self) -> dict[Path, Path]:
+        return dict(self._replaced_output_archives)
 
     def check_conflicts(self) -> None:
         if self.overwrite:
@@ -331,13 +328,14 @@ class OutputSetTransaction:
         else:
             archive_directory = Path(archive_replaced_to).expanduser().resolve()
             for key, backup in self._backups.items():
-                archived.append(
-                    self._archive_replaced(
-                        backup,
-                        archive_directory,
-                        self._destinations_by_key[key],
-                    )
+                destination = self._destinations_by_key[key]
+                archived_path = self._archive_replaced(
+                    backup,
+                    archive_directory,
+                    destination,
                 )
+                archived.append(archived_path)
+                self._replaced_output_archives[destination] = archived_path
             self._archived.extend(archived)
         self._backups = {}
         self._published_keys = []

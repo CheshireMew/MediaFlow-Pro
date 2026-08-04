@@ -33,12 +33,12 @@ class AsrPipeline:
     def __init__(
         self,
         engine: AsrEngine,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
         *,
         check_cancelled: Callable[[], None] | None = None,
     ):
         self.engine = engine
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.check_cancelled = check_cancelled
 
     def transcribe_region(
@@ -75,7 +75,7 @@ class ChunkedAsrEngine:
         self,
         engine: AsrEngine,
         settings: AsrSettings,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
         *,
         check_cancelled: Callable[[], None] | None = None,
         threshold_seconds: float = 900.0,
@@ -84,7 +84,7 @@ class ChunkedAsrEngine:
     ):
         self.engine = engine
         self.settings = settings
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.check_cancelled = check_cancelled
         self.threshold_seconds = threshold_seconds
         self.target_chunk_seconds = target_chunk_seconds
@@ -152,7 +152,7 @@ class ChunkedAsrEngine:
             len(chunks),
             self.worker_count
             if self.worker_count is not None
-            else recommended_chunk_workers(self.settings),
+            else recommended_chunk_workers(self.settings, self.paths),
         )
 
         def transcribe_chunk(index: int) -> tuple[int, AsrResult]:
@@ -255,10 +255,10 @@ class FasterWhisperEngine:
     def __init__(
         self,
         settings: AsrSettings,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
     ):
         self.settings = settings
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self._model = None
 
     def transcribe(
@@ -337,7 +337,9 @@ class FasterWhisperEngine:
         from faster_whisper import WhisperModel
 
         device = self.settings.device
-        if device == "auto":
+        if self.paths.target.operating_system == "macos":
+            device = "cpu"
+        elif device == "auto":
             device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
         compute_type = self.settings.compute_type
         if device == "cpu" and compute_type in {"float16", "int8_float16"}:
@@ -356,12 +358,11 @@ class FasterWhisperEngine:
 def _whisper_process_entry(
     messages,
     settings_data: dict,
-    runtime_dir: str,
+    paths: RuntimePaths,
     media_path: str,
     language: str | None,
 ) -> None:
     try:
-        os.environ["MEDIAFLOW_RUNTIME_DIR"] = runtime_dir
         settings = AsrSettings.model_validate(settings_data)
 
         def report(value: OperationProgress) -> None:
@@ -372,7 +373,7 @@ def _whisper_process_entry(
                 )
             )
 
-        result = FasterWhisperEngine(settings).transcribe(
+        result = FasterWhisperEngine(settings, paths).transcribe(
             media_path,
             language=language,
             progress=report,
@@ -388,12 +389,12 @@ class FasterWhisperProcessEngine:
     def __init__(
         self,
         settings: AsrSettings,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
         *,
         check_cancelled: Callable[[], None] | None = None,
     ):
         self.settings = settings
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.check_cancelled = check_cancelled
 
     def transcribe(
@@ -440,7 +441,7 @@ class FasterWhisperProcessEngine:
             args=(
                 messages,
                 self.settings.model_dump(mode="json"),
-                str(self.paths.runtime_dir),
+                self.paths,
                 str(source),
                 language,
             ),
@@ -522,12 +523,12 @@ class FasterWhisperCliEngine:
     def __init__(
         self,
         settings: AsrSettings,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
         *,
         check_cancelled: Callable[[], None] | None = None,
     ):
         self.settings = settings
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.check_cancelled = check_cancelled
 
     def transcribe(
@@ -648,6 +649,11 @@ class FasterWhisperCliEngine:
         return command
 
     def _cli_path(self) -> Path:
+        if self.paths.target.key != "windows-x86_64":
+            raise RuntimeError(
+                "Faster-Whisper XXL is not available for "
+                f"{self.paths.target.key}; use the built-in faster-whisper engine"
+            )
         candidates = [
             Path(self.settings.cli_path).expanduser() if self.settings.cli_path else None,
             self.paths.runtime_dir / "tools" / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe",
@@ -721,11 +727,11 @@ class FasterWhisperCliEngine:
 
 def create_asr_pipeline(
     settings: AsrSettings,
-    paths: RuntimePaths | None = None,
+    paths: RuntimePaths,
     *,
     check_cancelled: Callable[[], None] | None = None,
 ) -> AsrPipeline:
-    runtime_paths = paths or RuntimePaths.discover()
+    runtime_paths = paths
     if settings.engine == "faster_whisper_cli":
         backend: AsrEngine = FasterWhisperCliEngine(
             settings,
@@ -750,14 +756,17 @@ def create_asr_pipeline(
     )
 
 
-def recommended_chunk_workers(settings: AsrSettings) -> int:
+def recommended_chunk_workers(
+    settings: AsrSettings,
+    paths: RuntimePaths,
+) -> int:
     if settings.parallel_chunks > 0:
         return settings.parallel_chunks
     cpu_count = max(1, os.cpu_count() or 1)
     available_memory = available_physical_memory_bytes()
     model_memory = _estimated_model_memory_bytes(settings.model)
     memory_workers = max(1, int(available_memory * 0.60 // model_memory))
-    if _resolved_device(settings) == "cuda":
+    if _resolved_device(settings, paths) == "cuda":
         free_vram = _cuda_free_memory_bytes()
         if free_vram is not None:
             memory_workers = max(1, int(free_vram * 0.80 // model_memory))
@@ -765,7 +774,9 @@ def recommended_chunk_workers(settings: AsrSettings) -> int:
     return max(1, min(2, cpu_count // 4, memory_workers))
 
 
-def _resolved_device(settings: AsrSettings) -> str:
+def _resolved_device(settings: AsrSettings, paths: RuntimePaths) -> str:
+    if paths.target.operating_system == "macos":
+        return "cpu"
     if settings.device != "auto":
         return settings.device
     return "cuda" if shutil.which("nvidia-smi") else "cpu"

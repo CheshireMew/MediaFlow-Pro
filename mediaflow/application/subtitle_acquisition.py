@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,14 @@ if TYPE_CHECKING:
         AssetService,
         PreparedAssetRegistration,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedSubtitleImport:
+    document: SubtitleDocument
+    subtitle: PreparedAssetRegistration
+    related_media: PreparedAssetRegistration | None
+    publication: SubtitleDocumentPublication | None
 
 
 class SubtitleAcquisitionService:
@@ -249,6 +258,24 @@ class SubtitleAcquisitionService:
         media_asset_id: str | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> SubtitleDocument:
+        prepared = self.prepare_subtitle_import(
+            path,
+            asset_service,
+            language=language,
+            media_asset_id=media_asset_id,
+            check_cancelled=check_cancelled,
+        )
+        return self.commit_subtitle_import(prepared, asset_service)
+
+    def prepare_subtitle_import(
+        self,
+        path: str | Path,
+        asset_service: AssetService,
+        *,
+        language: str | None = None,
+        media_asset_id: str | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> PreparedSubtitleImport:
         source = Path(path).resolve(strict=True)
         if source.suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}:
             raise ValueError("支持导入 SRT、WebVTT、ASS 和 SSA 字幕")
@@ -287,7 +314,12 @@ class SubtitleAcquisitionService:
             == (associated_media.id if associated_media else None)
         ]
         if existing:
-            return existing[0]
+            return PreparedSubtitleImport(
+                document=existing[0],
+                subtitle=prepared_subtitle,
+                related_media=None,
+                publication=None,
+            )
         document, segments = self._build_document_from_cues(
             asset.id,
             source,
@@ -300,34 +332,47 @@ class SubtitleAcquisitionService:
         if check_cancelled is not None:
             check_cancelled()
 
+        return PreparedSubtitleImport(
+            document=document,
+            subtitle=prepared_subtitle,
+            related_media=prepared_media,
+            publication=SubtitleDocumentPublication(
+                document=document,
+                segments=tuple(segments),
+            ),
+        )
+
+    def commit_subtitle_import(
+        self,
+        prepared: PreparedSubtitleImport,
+        asset_service: AssetService,
+    ) -> SubtitleDocument:
+        if prepared.publication is None:
+            return prepared.document
+
         def commit_import() -> SubtitleDocument:
-            if prepared_media is not None:
+            if prepared.related_media is not None:
                 committed_media = asset_service.commit_prepared(
-                    prepared_media
+                    prepared.related_media
                 )
-                if committed_media.id != prepared_media.asset.id:
+                if committed_media.id != prepared.related_media.asset.id:
                     raise RuntimeError(
                         "关联媒体在导入准备后发生冲突，请重试"
                     )
             committed_subtitle = asset_service.commit_prepared(
-                prepared_subtitle
+                prepared.subtitle
             )
-            if committed_subtitle.id != document.asset_id:
+            if committed_subtitle.id != prepared.document.asset_id:
                 raise RuntimeError(
                     "字幕素材在导入准备后发生冲突，请重试"
                 )
-            return document
+            return prepared.document
 
-        _result, _outputs = self.publication.commit_prepared_documents(
+        self.publication.commit_prepared_documents(
             commit_import,
-            (
-                SubtitleDocumentPublication(
-                    document=document,
-                    segments=tuple(segments),
-                ),
-            ),
+            (prepared.publication,),
         )
-        return document
+        return prepared.document
 
     def create_document_from_subtitle_asset(
         self,

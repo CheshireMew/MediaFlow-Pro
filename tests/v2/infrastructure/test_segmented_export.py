@@ -11,14 +11,16 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import ExportFormat, TaskStatus, TrackKind
 from mediaflow.domain.exports import ExportPreset
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import BuildSequenceCommand, SequenceBuildUnit
 from mediaflow.domain.tasks import SequenceBuildTaskOutcome
 from mediaflow.domain.timeline import ClipAddRequest, ClipAudio, ClipTransform
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.segmented_export_service import SegmentedExportService
+from tests.v2.editor_service_api import EditorServiceApi
 
 FIXTURE = (
     Path(__file__).resolve().parents[2]
@@ -110,7 +112,7 @@ def _generate_avatar_clip(
 
 
 def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: Path) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     assert paths.melt is not None
     origin = json.loads((FIXTURE / "fixture-origin.json").read_text(encoding="utf-8"))
     assert origin["producer"] == (
@@ -194,7 +196,7 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
             name="Segmented H.264",
             format=ExportFormat.H264,
             container="mp4",
-            video_codec="libx264",
+            encoder_policy={"mode": "software"},
             audio_codec="aac",
             pixel_format="yuv420p",
             quality_value=23,
@@ -296,7 +298,7 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
 
         project_app = EditorProject(
             repository,
-            settings=GlobalSettings(),
+            settings=ServiceSettings(),
             paths=paths,
         )
         try:
@@ -344,13 +346,21 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
             assert task_probe.metadata.has_video is True
             assert task_probe.metadata.has_audio is True
 
+            service_base_revision = project_app.content_revision()
+            sequence_profile = editor.state.sequence.profile
+            project_app.close()
+            project_app = None
+
             cli_output = project_root / "exports" / "public-cli.mp4"
             cli_request = {
-                "protocol": "mediaflow-cli",
-                "version": 2,
+                "protocol": "mediaflow-editor",
+                "version": 3,
                 "operation": "export.sequence.build",
                 "project": str(project_root),
                 "request_id": "segmented-build-public-cli",
+                "base_revision": service_base_revision,
+                "actor": {"kind": "agent", "id": "segmented-export-test"},
+                "client_id": "pytest-segmented-export",
                 "arguments": {
                     "sequence_id": project.main_sequence_id,
                     "units": [unit.model_dump(mode="json") for unit in units],
@@ -373,7 +383,12 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
             assert cli.returncode == 0, cli.stdout
             cli_result = json.loads(cli.stdout)
             assert cli_result["ok"] is True
-            cli_task = cli_result["result"]["task"]
+            cli_task_receipt = cli_result["result"]["result"]["task"]
+            cli_task = EditorServiceApi().execute(
+                "task.wait",
+                project=project_root,
+                arguments={"task_id": cli_task_receipt["id"], "timeout": 90},
+            )["task"]
             assert cli_task["status"] == "completed"
             assert [item["status"] for item in cli_task["outcome"]["units"]] == [
                 "reused",
@@ -384,10 +399,20 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
             assert cli_task["outcome"]["assembly_status"] == "reused"
             cli_probe = MediaProbe(paths).probe(
                 cli_output,
-                timeline_profile=editor.state.sequence.profile,
+                timeline_profile=sequence_profile,
             )
             assert cli_probe.metadata.duration_frames == 75
             assert cli_probe.metadata.has_video is True
             assert cli_probe.metadata.has_audio is True
         finally:
-            project_app.close()
+            if project_app is not None:
+                project_app.close()
+            subprocess.run(
+                [sys.executable, "-m", "mediaflow.cli", "service", "shutdown"],
+                cwd=Path(__file__).resolve().parents[3],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+                check=False,
+            )

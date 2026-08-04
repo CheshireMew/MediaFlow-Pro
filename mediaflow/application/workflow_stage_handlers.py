@@ -10,7 +10,7 @@ from mediaflow.application.workflow_coordinator import WorkflowCoordinator
 from mediaflow.domain.enums import AssetKind, AssetOrigin, WorkflowStage
 from mediaflow.domain.project import Sequence
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import (
     AnalyzeHighlightsCommand,
     DownloadMediaCommand,
@@ -46,7 +46,7 @@ class WorkflowUpdate:
 class WorkflowStageContext:
     documents: ProjectWorkflowDocuments
     coordinator: WorkflowCoordinator
-    settings: GlobalSettings
+    settings: ServiceSettings
     start_tasks: Callable[..., WorkflowUpdate]
     continue_after: Callable[[WorkflowRun], WorkflowUpdate]
     proxy_decision: Callable[..., ProxyDecision]
@@ -460,5 +460,5 @@ def workflow_stage_handlers() -> dict[WorkflowStage, WorkflowStageHandler]:
     return {handler.stage: handler for handler in handlers}
 
 
-def _has_active_llm_provider(settings: GlobalSettings) -> bool:
+def _has_active_llm_provider(settings: ServiceSettings) -> bool:
     return any(provider.enabled for provider in settings.llm_providers)

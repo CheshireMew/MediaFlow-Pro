@@ -15,6 +15,9 @@ class MltPreviewItem : public QQuickItem
     Q_OBJECT
     Q_PROPERTY(QString source READ source WRITE setSource NOTIFY sourceChanged)
     Q_PROPERTY(QString runtimeRoot READ runtimeRoot WRITE setRuntimeRoot NOTIFY runtimeRootChanged)
+    Q_PROPERTY(QString mltLibrary READ mltLibrary WRITE setMltLibrary NOTIFY mltLibraryChanged)
+    Q_PROPERTY(QString mltRepository READ mltRepository WRITE setMltRepository NOTIFY mltRepositoryChanged)
+    Q_PROPERTY(QString mltData READ mltData WRITE setMltData NOTIFY mltDataChanged)
     Q_PROPERTY(int reloadToken READ reloadToken WRITE setReloadToken NOTIFY reloadTokenChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
     Q_PROPERTY(int position READ position NOTIFY positionChanged)
@@ -34,6 +37,12 @@ public:
     void setSource(const QString &value);
     QString runtimeRoot() const { return m_runtimeRoot; }
     void setRuntimeRoot(const QString &value);
+    QString mltLibrary() const { return m_mltLibrary; }
+    void setMltLibrary(const QString &value);
+    QString mltRepository() const { return m_mltRepository; }
+    void setMltRepository(const QString &value);
+    QString mltData() const { return m_mltData; }
+    void setMltData(const QString &value);
     int reloadToken() const { return m_reloadToken; }
     void setReloadToken(int value);
     bool playing() const { return m_playing; }
@@ -58,6 +67,9 @@ public:
 signals:
     void sourceChanged();
     void runtimeRootChanged();
+    void mltLibraryChanged();
+    void mltRepositoryChanged();
+    void mltDataChanged();
     void reloadTokenChanged();
     void playingChanged();
     void positionChanged();
@@ -72,6 +84,9 @@ signals:
     void openRequested(
         const QString &graphPath,
         const QString &runtimeRoot,
+        const QString &mltLibrary,
+        const QString &mltRepository,
+        const QString &mltData,
         bool sourceHdr,
         bool outputHdr,
         int initialFrame,
@@ -104,6 +119,9 @@ private:
 
     QString m_source;
     QString m_runtimeRoot;
+    QString m_mltLibrary;
+    QString m_mltRepository;
+    QString m_mltData;
     int m_reloadToken = 0;
     bool m_playing = false;
     int m_position = 0;

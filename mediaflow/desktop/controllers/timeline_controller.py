@@ -105,7 +105,7 @@ class TimelineController(ControllerFacet):
             path = self._session._api.write_preview_snapshot(
                 self._session.binding.current.project_dir,
                 state,
-                use_proxies=self._session.settings.preview.preview_quality != "source",
+                use_proxies=self._session.service_settings.preview.preview_quality != "source",
                 prefer_sdr_preview_proxy=(
                     state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
                     and not self._session.presentation.hdr_preview_active
@@ -526,23 +526,28 @@ class TimelineController(ControllerFacet):
         )
         targets = self._session._timeline_snap_targets(selected_ids, playhead_frame) if snap_enabled else []
         tolerance = self._session._snap_tolerance_frames(pixels_per_frame) if snap_enabled else 0
+        snapped_start = self._session.binding.timeline.snap_frame(
+            max(0, start_frame),
+            targets,
+            tolerance,
+        )
         if len(selected_ids) > 1:
             source = next(item for item in self._session.binding.timeline.state.clips if item.id == clip_id)
             self._session.binding.timeline.move_clips(
                 selected_ids,
                 primary_clip_id=clip_id,
-                timeline_start=max(0, start_frame),
+                timeline_start=snapped_start,
                 track_id=track_id or source.track_id,
-                snap_targets=targets,
-                snap_tolerance_frames=tolerance,
+                snap_targets=(),
+                snap_tolerance_frames=0,
             )
         else:
             self._session.binding.timeline.move_clip(
                 clip_id,
-                timeline_start=max(0, start_frame),
+                timeline_start=snapped_start,
                 track_id=track_id or None,
-                snap_targets=targets,
-                snap_tolerance_frames=tolerance,
+                snap_targets=(),
+                snap_tolerance_frames=0,
             )
         self._session.projectors.timeline.refresh_timeline(defer_clip_updates=True)
         self._session.events.historyChanged.emit()

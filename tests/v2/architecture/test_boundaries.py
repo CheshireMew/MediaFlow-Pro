@@ -78,6 +78,32 @@ def test_removed_architecture_has_no_runtime_or_test_entry_point() -> None:
     assert not (ROOT / "mediaflow" / "application" / "subtitle_service.py").exists()
 
 
+def test_legacy_aggregate_settings_have_no_runtime_entry_point() -> None:
+    banned_patterns = {
+        "aggregate type": re.compile(r"\bGlobal" + r"Settings\b"),
+        "aggregate repository": re.compile(r"\bSettings" + r"Repository\b"),
+        "aggregate environment": re.compile(r"\bMEDIAFLOW_" + r"SETTINGS_PATH\b"),
+        "aggregate filename": re.compile(r'(?<![-\w])settings\.json["\']'),
+    }
+    sources = [
+        *list((ROOT / "mediaflow").rglob("*.py")),
+        *[
+            path
+            for path in (ROOT / "scripts").glob("*.py")
+            if path.name != "migrate_settings.py"
+        ],
+    ]
+    violations = []
+    for path in sources:
+        if "archive" in path.parts:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for label, pattern in banned_patterns.items():
+            if pattern.search(source):
+                violations.append(f"{path.relative_to(ROOT)} retains {label}")
+    assert violations == []
+
+
 def test_domain_and_application_layers_do_not_depend_on_outer_layers() -> None:
     violations: list[str] = []
     for path in (ROOT / "mediaflow" / "domain").glob("*.py"):
@@ -122,6 +148,7 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         "begin_automation_request",
         "save_automation_result",
         "consume_task_result_once",
+        "coalesced_revision",
         "enlist_transaction_publication",
         "transaction",
         "close",
@@ -554,6 +581,7 @@ def test_audited_god_files_stay_replaced_by_focused_components() -> None:
         "BackgroundRequests",
         "ProjectLifecycle",
         "RuntimeToolOperations",
+        "SettingsPersistence",
         "TaskOperations",
         "TimelineAssetOperations",
     ):
@@ -597,10 +625,16 @@ def test_automation_contract_models_access_and_execution_share_one_registry() ->
             ):
                 registry_definitions.append(path.name)
     assert registry_definitions == ["operation_registry.py"]
-    for consumer in ("contracts.py", "dispatcher.py"):
+    for consumer in ("contracts.py",):
         assert "operation_registry import OPERATIONS" in (
             ROOT / "mediaflow" / "automation" / consumer
         ).read_text(encoding="utf-8")
+    assert "operation_registry import OPERATIONS" in (
+        ROOT / "mediaflow" / "service" / "sessions.py"
+    ).read_text(encoding="utf-8")
+    assert "operation_registry import OPERATIONS" not in (
+        ROOT / "mediaflow" / "automation" / "dispatcher.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_automation_context_uses_the_typed_application_boundary() -> None:

@@ -91,7 +91,9 @@ class ExportTaskHandlers(ProjectTaskHandler):
                     files=[self._export_file_outcome(result)]
                 ),
             )
-            self.documents.records.save_export_history(
+            self._defer_export_history(
+                context,
+                result,
                 ExportHistoryRecord(
                     id=context.task.id,
                     task_id=context.task.id,
@@ -234,7 +236,9 @@ class ExportTaskHandlers(ProjectTaskHandler):
                 report_path,
                 outcome=outcome,
             )
-            self.documents.records.save_export_history(
+            self._defer_export_history(
+                context,
+                result,
                 ExportHistoryRecord(
                     id=context.task.id,
                     task_id=context.task.id,
@@ -254,6 +258,25 @@ class ExportTaskHandlers(ProjectTaskHandler):
                 quality_report_id=context.task.id,
             )
             raise
+
+    def _defer_export_history(
+        self,
+        context: TaskContext,
+        result: ExportExecutionResult,
+        history: ExportHistoryRecord,
+    ) -> None:
+        def commit_history() -> None:
+            try:
+                self.documents.records.save_export_history(history)
+            except BaseException as error:
+                self._archive_unrecorded_exports(
+                    [result],
+                    error,
+                    quality_report_id=context.task.id,
+                )
+                raise
+
+        context.defer_project_change(commit_history)
 
     def _export_highlights(
         self,
@@ -278,7 +301,7 @@ class ExportTaskHandlers(ProjectTaskHandler):
         outputs: list[str | Path] = []
         outcome_files: list[ExportFileTaskOutcome] = []
         requests: list[ExportSequenceRequest] = []
-        with self.documents.transaction():
+        def commit_short_sequences() -> None:
             for index, candidate_id in enumerate(
                 command.candidate_ids,
                 start=1,
@@ -340,10 +363,14 @@ class ExportTaskHandlers(ProjectTaskHandler):
                         output_path=output_path,
                     )
                 )
+            # Output validation belongs to the same transaction as temporary
+            # short-sequence creation.  A conflict must roll the project back
+            # before any derived sequence becomes observable.
             self.runtime.preflight_sequence_exports(
                 requests,
                 overwrite=context.recovered,
             )
+        context.commit_project_change(commit_short_sequences)
         results = self.runtime.export_sequences_atomically(
             requests,
             overwrite=context.recovered,

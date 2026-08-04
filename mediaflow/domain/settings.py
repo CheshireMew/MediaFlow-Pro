@@ -174,7 +174,6 @@ class UiSettings(DomainModel):
         default_factory=WorkspaceLayoutsSettings
     )
     workspace_tour_completed: bool = False
-    default_project_directory: str = ""
     default_import_directory: str | None = None
     recent_project_paths: list[str] = Field(default_factory=list)
 
@@ -189,8 +188,12 @@ class UiSettings(DomainModel):
         return value
 
 
-class GlobalSettings(DomainModel):
-    schema_version: int = 21
+class SettingsDocument(DomainModel):
+    schema_version: int = 1
+
+
+class ServiceSettings(SettingsDocument):
+    default_project_directory: str = ""
     workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     asr: AsrSettings = Field(default_factory=AsrSettings)
@@ -201,4 +204,7 @@ class GlobalSettings(DomainModel):
     subtitle_style_presets: list[SubtitleStylePresetSettings] = Field(default_factory=list)
     llm_providers: list[LlmProviderSettings] = Field(default_factory=list)
     active_llm_provider_id: str | None = None
+
+
+class DesktopSettings(SettingsDocument):
     ui: UiSettings = Field(default_factory=UiSettings)

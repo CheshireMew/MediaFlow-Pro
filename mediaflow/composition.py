@@ -10,17 +10,22 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from mediaflow.application.asset_service import AssetService
-from mediaflow.application.edit_history import ProjectEditCommand, ProjectEditHistory
+from mediaflow.application.edit_history import (
+    ProjectEditAction,
+    ProjectEditCommand,
+    ProjectEditHistory,
+)
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.highlight_service import HighlightService
 from mediaflow.application.ports import MediaProbePort
+from mediaflow.application.project_command_queue import ProjectCommandQueue
 from mediaflow.application.project_task_handlers import ProjectTaskHandlers
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
 from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
-from mediaflow.application.task_service import TaskService
+from mediaflow.application.task_service import TaskService, TaskSettlementPersistence
 from mediaflow.application.timeline_clock import asset_in_timeline_clock
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcript_editing import TranscriptEditingService
@@ -29,6 +34,14 @@ from mediaflow.application.web_media_service import WebMediaServices
 from mediaflow.application.web_package_files import web_package_root
 from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.domain.collaboration import (
+    ActiveUndoGroupState,
+    ActorIdentity,
+    ProjectChange,
+    ProjectChangeEvent,
+    ProjectRevisionConflict,
+    ProjectUndoGroup,
+)
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import (
     AssetKind,
@@ -38,17 +51,20 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
-from mediaflow.domain.settings import GlobalSettings, LlmProviderSettings
+from mediaflow.domain.settings import LlmProviderSettings, ServiceSettings
 from mediaflow.domain.storage_names import content_addressed_child_path
 from mediaflow.domain.task_commands import (
     ImportAssetCommand,
     TaskCommand,
 )
 from mediaflow.domain.tasks import (
+    ArtifactReference,
     DownloadAnalysisTaskOutcome,
+    ExportTaskOutcome,
     ImportedAssetTaskOutcome,
     LoudnessTaskOutcome,
     SequenceBoundaryTaskOutcome,
+    SequenceBuildTaskOutcome,
     Task,
 )
 from mediaflow.domain.timeline import Clip, TimelineState, Track, default_clip_media_kind
@@ -58,7 +74,6 @@ from mediaflow.infrastructure.cookie_store import CookieStore
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
-from mediaflow.infrastructure.font_assets import subtitle_font_options
 from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
@@ -71,10 +86,11 @@ from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_migration_runner import ProjectUpgradeRequiredError
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.runtime_tools import RuntimeToolService
-from mediaflow.infrastructure.settings_repository import SettingsRepository
-from mediaflow.infrastructure.storage_paths import default_media_root, default_project_root
+from mediaflow.infrastructure.settings_repository import ServiceSettingsRepository
+from mediaflow.infrastructure.storage_paths import default_media_root
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import InfrastructureTaskRuntimes
 from mediaflow.infrastructure.translation_cache import TranslationCache
@@ -84,6 +100,79 @@ from mediaflow.infrastructure.web_browser import (
 )
 from mediaflow.infrastructure.web_render_service import WebRenderCache, WebRenderService
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+
+_UNSET_AUTOMATION_BASE = object()
+
+
+def _user_visible_task_artifacts(
+    task: Task,
+) -> tuple[ArtifactReference, ...]:
+    """Return deliverables, excluding internal graphs and QA evidence."""
+
+    if isinstance(task.outcome, ExportTaskOutcome):
+        return tuple(item.output for item in task.outcome.files)
+    if isinstance(task.outcome, SequenceBuildTaskOutcome):
+        return (task.outcome.output.output,)
+    return tuple(task.artifacts)
+
+
+def _task_project_write_set(task: Task) -> list[str]:
+    command = task.command
+    command_type = str(getattr(command, "command_type", task.kind.value))
+    paths: list[str]
+    if command_type in {"import_asset", "download_media", "generate_proxy"}:
+        paths = ["/assets"]
+    elif command_type in {
+        "transcribe_sequence",
+        "translate_document",
+        "translate_segments",
+    }:
+        paths = ["/subtitles"]
+    elif command_type == "analyze_highlights":
+        paths = ["/highlights"]
+    elif command_type in {"export_sequence", "build_sequence", "export_highlights"}:
+        paths = ["/exports/history"]
+    elif command_type in {"render_web_clip", "export_web_clip"}:
+        paths = ["/web/cache"]
+    else:
+        paths = [f"/tasks/{task.id}/output"]
+    if command.workflow is not None:
+        paths.append("/workflow")
+    return paths
+
+
+def _automation_request_input_hash(
+    *,
+    arguments: dict[str, Any],
+    base_revision: int | None,
+    actor: ActorIdentity,
+    write_set: list[str],
+    undo_group_id: str | None,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "arguments": arguments,
+                "base_revision": base_revision,
+                "actor": actor.model_dump(mode="json"),
+                "write_set": write_set,
+                "undo_group_id": undo_group_id,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _project_write_paths_overlap(left: str, right: str) -> bool:
+    normalized_left = left.rstrip("/")
+    normalized_right = right.rstrip("/")
+    return (
+        normalized_left == normalized_right
+        or normalized_left.startswith(normalized_right + "/")
+        or normalized_right.startswith(normalized_left + "/")
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +233,16 @@ class ProjectTaskResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AutomationBatchCommand:
+    request_id: str
+    operation: str
+    arguments: dict[str, Any]
+    actor: ActorIdentity
+    write_set: list[str]
+    action: Callable[[], dict[str, Any]]
+
+
 class EditorProject:
     """One open project and all operations that depend on its document boundary."""
 
@@ -151,22 +250,29 @@ class EditorProject:
         self,
         repository: ProjectRepository,
         *,
-        settings: GlobalSettings,
+        settings: ServiceSettings,
         paths: RuntimePaths,
     ):
         self._repository = repository
+        self._write_gate = ProjectCommandQueue()
+        if not repository.read_only:
+            self._repository._bind_mutation_gate(self._write_gate)
         self._closed = False
         self._settings = settings
         self._paths = paths
         self._cookies = CookieStore(paths.runtime_dir / "cookies")
         self._history = ProjectEditHistory()
+        self._history.register_handler(
+            "sequence.archive-state",
+            self._apply_sequence_archive_history_action,
+        )
         self._timelines: dict[str, TimelineEditor] = {}
         self._assets = AssetService(
             repository,
             cast(MediaProbePort, MediaProbe(paths)),
             fingerprint_file,
         )
-        web_validator = BrowserWebPackageValidator()
+        web_validator = BrowserWebPackageValidator(paths.chromium)
         web_services = WebMediaServices(repository, self.timeline, web_validator)
         self._web_packages = web_services.packages
         self._web_clips = web_services.clips
@@ -189,6 +295,7 @@ class EditorProject:
             repository,
             self._subtitle_publication,
             self._history,
+            timeline_provider=self.timeline,
         )
         self._highlights = HighlightService(repository, OpenAIJsonClient)
         self._translations = TranslationService(
@@ -201,6 +308,9 @@ class EditorProject:
         self._tasks = TaskService(
             TaskRepository(repository),
             recover_expired=not repository.read_only,
+            preparation_scope=self._task_preparation_scope,
+            project_change_committer=self._commit_task_project_change,
+            settlement_committer=self._commit_task_settlement,
         )
         self._workflows = ProjectWorkflowService(
             repository,
@@ -212,7 +322,6 @@ class EditorProject:
         )
         self._task_followup_updates: dict[str, WorkflowUpdate] = {}
         self._task_followup_lock = threading.RLock()
-        self._task_followup_subscription: int | None = None
         self._task_handlers = ProjectTaskHandlers(
             self._repository,
             self._assets,
@@ -230,11 +339,6 @@ class EditorProject:
             active_llm_provider=self._active_llm_provider,
         )
         self._task_handlers.register_with(self._tasks)
-        if not repository.read_only:
-            self._task_followup_subscription = self._tasks.events.subscribe(
-                self._handle_task_followup_event,
-                include_snapshot=True,
-            )
 
     @property
     def project_dir(self) -> Path:
@@ -254,17 +358,325 @@ class EditorProject:
 
     @property
     def can_undo(self) -> bool:
-        return self._history.can_undo
+        return self._repository.history.has_applied()
 
     @property
     def can_redo(self) -> bool:
-        return self._history.can_redo
+        return self._repository.history.has_undone()
 
-    def undo(self) -> None:
-        self._history.undo()
+    def list_history(self) -> list[ProjectUndoGroup]:
+        return self._repository.history.list_groups()
 
-    def redo(self) -> None:
-        self._history.redo()
+    def history_target(
+        self,
+        direction: Literal["undo", "redo"],
+        *,
+        undo_group_id: str | None = None,
+    ) -> ProjectUndoGroup:
+        group = (
+            self._repository.history.get(undo_group_id)
+            if undo_group_id
+            else (
+                self._repository.history.latest_applied()
+                if direction == "undo"
+                else self._repository.history.latest_undone()
+            )
+        )
+        expected_state = "applied" if direction == "undo" else "undone"
+        if group is None or group.state != expected_state:
+            raise RuntimeError(f"Nothing to {direction}")
+        return group
+
+    def execute_history_command(
+        self,
+        direction: Literal["undo", "redo"],
+        *,
+        request_id: str,
+        base_revision: int,
+        actor: ActorIdentity,
+        undo_group_id: str | None = None,
+        on_event: Callable[[ProjectChangeEvent], None] | None = None,
+    ) -> tuple[dict[str, Any], ProjectChangeEvent]:
+        input_hash = _automation_request_input_hash(
+            arguments={
+                "direction": direction,
+                "undo_group_id": undo_group_id,
+            },
+            base_revision=base_revision,
+            actor=actor,
+            write_set=[],
+            undo_group_id=undo_group_id,
+        )
+        operation = f"history.{direction}"
+        with self._repository.transaction():
+            cached = self._repository.automation_result(
+                request_id,
+                operation,
+                input_hash,
+            )
+            if cached is not None:
+                event = self._repository.events.for_request(request_id)
+                if event is None:
+                    raise RuntimeError("Persisted history request has no project event")
+                return cached, event
+            before_revision = self._repository.content_revision()
+            group = self.history_target(
+                direction,
+                undo_group_id=undo_group_id,
+            )
+            self._raise_if_write_set_conflicts(
+                start_revision=base_revision,
+                current_revision=before_revision,
+                write_set=group.write_set,
+                reason="one or more fields changed after the requested base revision",
+            )
+            self._ensure_history_command_handlers(group.command)
+            self._raise_if_history_conflicts(group, current_revision=before_revision)
+            actions = (
+                group.command.undo_actions
+                if direction == "undo"
+                else group.command.redo_actions
+            )
+            with self._repository.coalesced_revision():
+                self._history.apply_actions(actions)
+            after_revision = self._repository.content_revision()
+            if after_revision != before_revision + 1:
+                raise RuntimeError(
+                    f"history.{direction} must advance exactly one revision"
+                )
+            state: ActiveUndoGroupState = (
+                "undone" if direction == "undo" else "applied"
+            )
+            transitioned = self._repository.history.transition(
+                group.id,
+                expected=cast(ActiveUndoGroupState, group.state),
+                state=state,
+                state_revision=after_revision,
+            )
+            result = {
+                "direction": direction,
+                "undo_group": transitioned.model_dump(
+                    mode="json",
+                    exclude_computed_fields=True,
+                ),
+                "can_undo": self._repository.history.latest_applied() is not None,
+                "can_redo": self._repository.history.latest_undone() is not None,
+            }
+            stored = self._repository.save_automation_result(
+                request_id,
+                operation,
+                input_hash,
+                result,
+            )
+            event = self._repository.events.append(
+                base_revision=before_revision,
+                project_revision=after_revision,
+                operation=operation,
+                actor=actor,
+                request_id=request_id,
+                undo_group_id=group.id,
+                write_set=group.write_set,
+                changes=[
+                    ProjectChange(path=path, action="invoke")
+                    for path in group.write_set
+                ],
+                operation_result=stored,
+                inverse_command=group.command,
+            )
+            if on_event is not None:
+                self._repository.enlist_transaction_publication(
+                    on_commit=lambda: on_event(event),
+                    on_rollback=lambda _error: None,
+                )
+            return stored, event
+
+    def _ensure_history_command_handlers(self, command: ProjectEditCommand) -> None:
+        for action in (*command.undo_actions, *command.redo_actions):
+            prefix = "timeline.restore:"
+            if action.kind.startswith(prefix):
+                sequence_id = action.kind.removeprefix(prefix).strip()
+                if not sequence_id:
+                    raise RuntimeError("Persisted timeline action has no sequence id")
+                self.timeline(sequence_id)
+
+    def _raise_if_history_conflicts(
+        self,
+        group: ProjectUndoGroup,
+        *,
+        current_revision: int,
+    ) -> None:
+        self._raise_if_write_set_conflicts(
+            start_revision=group.state_revision,
+            current_revision=current_revision,
+            write_set=group.write_set,
+            reason="one or more fields changed after the undo target",
+        )
+
+    def _raise_if_write_set_conflicts(
+        self,
+        *,
+        start_revision: int,
+        current_revision: int,
+        write_set: list[str],
+        reason: str,
+    ) -> None:
+        if start_revision > current_revision:
+            raise ProjectRevisionConflict(
+                expected_revision=start_revision,
+                current_revision=current_revision,
+                write_set=write_set,
+                conflicting_events=[],
+                reason="the requested base revision is newer than the project",
+            )
+        events = self._repository.events.list_after_revision(start_revision)
+        covered_revision = start_revision
+        conflicts: list[ProjectChangeEvent] = []
+        for event in events:
+            if event.base_revision != covered_revision:
+                raise ProjectRevisionConflict(
+                    expected_revision=start_revision,
+                    current_revision=current_revision,
+                    write_set=write_set,
+                    conflicting_events=[],
+                    reason="the durable event journal does not cover the requested revision",
+                )
+            if any(
+                _project_write_paths_overlap(left, right)
+                for left in write_set
+                for right in event.write_set
+            ):
+                conflicts.append(event)
+            covered_revision = event.project_revision
+        if covered_revision != current_revision:
+            raise ProjectRevisionConflict(
+                expected_revision=start_revision,
+                current_revision=current_revision,
+                write_set=write_set,
+                conflicting_events=[],
+                reason="the durable event journal does not reach the current revision",
+            )
+        if conflicts:
+            raise ProjectRevisionConflict(
+                expected_revision=start_revision,
+                current_revision=current_revision,
+                write_set=write_set,
+                conflicting_events=conflicts,
+                reason=reason,
+            )
+
+    def execute_automation_batch(
+        self,
+        commands: list[AutomationBatchCommand],
+        *,
+        batch_id: str,
+        label: str,
+        base_revision: int,
+        idempotency_base_revision: int,
+        on_event: Callable[[ProjectChangeEvent], None] | None = None,
+    ) -> tuple[list[dict[str, Any]], ProjectChangeEvent]:
+        if not commands:
+            raise ValueError("Automation batch must contain at least one command")
+        checkpoint = self._history.checkpoint()
+        try:
+            with self._repository.transaction():
+                before_revision = self._repository.content_revision()
+                if base_revision != before_revision:
+                    raise RuntimeError(
+                        "Project revision conflict: "
+                        f"expected {base_revision}, current {before_revision}"
+                    )
+                results: list[dict[str, Any]] = []
+                with self._repository.coalesced_revision():
+                    for command in commands:
+                        input_hash = _automation_request_input_hash(
+                            arguments=command.arguments,
+                            base_revision=idempotency_base_revision,
+                            actor=command.actor,
+                            write_set=command.write_set,
+                            undo_group_id=batch_id,
+                        )
+                        cached = self._repository.automation_result(
+                            command.request_id,
+                            command.operation,
+                            input_hash,
+                        )
+                        if cached is not None:
+                            raise RuntimeError(
+                                "Atomic collaboration batch contains an already completed request"
+                            )
+                        result = command.action()
+                        results.append(
+                            self._repository.save_automation_result(
+                                command.request_id,
+                                command.operation,
+                                input_hash,
+                                result,
+                            )
+                        )
+                after_revision = self._repository.content_revision()
+                if after_revision != before_revision + 1:
+                    raise RuntimeError(
+                        "Atomic collaboration batch must advance exactly one revision"
+                    )
+                durable_command = self._history.combined_since(
+                    checkpoint,
+                    label=label,
+                )
+                if durable_command is None:
+                    raise RuntimeError(
+                        "Atomic collaboration batch did not produce an inverse command"
+                    )
+                combined_write_set = sorted(
+                    {path for command in commands for path in command.write_set}
+                )
+                self._history.squash_since(checkpoint, label=label)
+                self._repository.history.record_group(
+                    group_id=batch_id,
+                    source_revision=after_revision,
+                    label=durable_command.label,
+                    actor=commands[0].actor,
+                    write_set=combined_write_set,
+                    command=durable_command,
+                )
+                event_result = {
+                    "batch_id": batch_id,
+                    "results": [
+                        {
+                            "request_id": command.request_id,
+                            "result": result,
+                        }
+                        for command, result in zip(commands, results, strict=True)
+                    ],
+                }
+                event = self._repository.events.append(
+                    base_revision=before_revision,
+                    project_revision=after_revision,
+                    operation="operation.execute_batch",
+                    actor=commands[0].actor,
+                    request_id=batch_id,
+                    undo_group_id=batch_id,
+                    write_set=combined_write_set,
+                    changes=[
+                        ProjectChange(path=path, action="invoke")
+                        for path in combined_write_set
+                    ],
+                    operation_result=event_result,
+                    inverse_command=durable_command,
+                )
+                if on_event is not None:
+                    self._repository.enlist_transaction_publication(
+                        on_commit=lambda: on_event(event),
+                        on_rollback=lambda _error: None,
+                    )
+                return results, event
+        except BaseException:
+            self._history.restore(checkpoint)
+            for sequence_id, editor in list(self._timelines.items()):
+                try:
+                    editor.reload()
+                except Exception:
+                    self._timelines.pop(sequence_id, None)
+            raise
 
     def execute_automation_request(
         self,
@@ -274,17 +686,30 @@ class EditorProject:
         action: Callable[[bool], dict[str, Any]],
         *,
         atomic: bool,
-    ) -> dict[str, Any]:
+        base_revision: int | None = None,
+        idempotency_base_revision: int | None | object = _UNSET_AUTOMATION_BASE,
+        actor: ActorIdentity,
+        write_set: list[str] | None = None,
+        undo_group_id: str | None = None,
+        on_event: Callable[[ProjectChangeEvent], None] | None = None,
+        force_event: bool = False,
+        reversible: bool = False,
+    ) -> tuple[dict[str, Any], ProjectChangeEvent | None]:
+        identity = actor
+        command_write_set = list(write_set or ())
         if not request_id:
-            return action(False)
-        input_hash = hashlib.sha256(
-            json.dumps(
-                arguments,
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+            return action(False), None
+        input_hash = _automation_request_input_hash(
+            arguments=arguments,
+            base_revision=(
+                base_revision
+                if idempotency_base_revision is _UNSET_AUTOMATION_BASE
+                else cast(int | None, idempotency_base_revision)
+            ),
+            actor=identity,
+            write_set=command_write_set,
+            undo_group_id=undo_group_id,
+        )
         if not atomic:
             cached, retrying = self._repository.begin_automation_request(
                 request_id,
@@ -292,13 +717,13 @@ class EditorProject:
                 input_hash,
             )
             if cached is not None:
-                return cached
+                return cached, None
             return self._repository.save_automation_result(
                 request_id,
                 operation,
                 input_hash,
                 action(retrying),
-            )
+            ), None
         history_checkpoint = self._history.checkpoint()
         try:
             with self._repository.transaction():
@@ -308,14 +733,72 @@ class EditorProject:
                     input_hash,
                 )
                 if cached is not None:
-                    return cached
+                    return cached, self._repository.events.for_request(request_id)
+                before_revision = self._repository.content_revision()
+                if base_revision is None:
+                    raise ValueError("base_revision is required for project writes")
+                if base_revision != before_revision:
+                    raise RuntimeError(
+                        "Project revision conflict: "
+                        f"expected {base_revision}, current {before_revision}"
+                    )
                 result = action(False)
-                return self._repository.save_automation_result(
+                command = (
+                    self._history.combined_since(history_checkpoint)
+                    if reversible
+                    else None
+                )
+                stored = self._repository.save_automation_result(
                     request_id,
                     operation,
                     input_hash,
                     result,
                 )
+                after_revision = self._repository.content_revision()
+                if reversible and after_revision != before_revision and command is None:
+                    raise RuntimeError(
+                        f"Reversible operation {operation!r} did not produce an inverse command"
+                    )
+                event = None
+                if force_event or after_revision != before_revision:
+                    group_id = undo_group_id or request_id
+                    if command is None:
+                        self._repository.history.discard_redo()
+                    else:
+                        self._repository.history.record_group(
+                            group_id=group_id,
+                            source_revision=after_revision,
+                            label=command.label,
+                            actor=identity,
+                            write_set=command_write_set,
+                            command=command,
+                        )
+                    event = self._repository.events.append(
+                        base_revision=before_revision,
+                        project_revision=after_revision,
+                        operation=operation,
+                        actor=identity,
+                        request_id=request_id,
+                        undo_group_id=group_id,
+                        write_set=command_write_set,
+                        changes=[
+                            ProjectChange(
+                                path=path,
+                                action="invoke",
+                                value=result,
+                            )
+                            for path in command_write_set
+                        ],
+                        operation_result=result,
+                        inverse_command=command,
+                        replace_implicit=operation == "project.upgrade",
+                    )
+                    if on_event is not None:
+                        self._repository.enlist_transaction_publication(
+                            on_commit=lambda: on_event(event),
+                            on_rollback=lambda _error: None,
+                        )
+                return stored, event
         except BaseException:
             self._history.restore(history_checkpoint)
             for sequence_id, editor in list(self._timelines.items()):
@@ -325,6 +808,63 @@ class EditorProject:
                     self._timelines.pop(sequence_id, None)
             raise
 
+    def replay_automation_request(
+        self,
+        request_id: str | None,
+        operation: str,
+        arguments: dict[str, Any],
+        *,
+        base_revision: int | None,
+        actor: ActorIdentity,
+        write_set: list[str],
+        undo_group_id: str | None = None,
+    ) -> tuple[dict[str, Any], ProjectChangeEvent | None] | None:
+        """Return an exact durable retry before applying revision conflict rules."""
+
+        if not request_id:
+            return None
+        input_hash = _automation_request_input_hash(
+            arguments=arguments,
+            base_revision=base_revision,
+            actor=actor,
+            write_set=write_set,
+            undo_group_id=undo_group_id,
+        )
+        result = self._repository.automation_result(
+            request_id,
+            operation,
+            input_hash,
+        )
+        if result is None:
+            return None
+        return result, self._repository.events.for_request(request_id)
+
+    def automation_request_is_running(
+        self,
+        request_id: str | None,
+        operation: str,
+        arguments: dict[str, Any],
+        *,
+        base_revision: int | None,
+        actor: ActorIdentity,
+        write_set: list[str],
+        undo_group_id: str | None = None,
+    ) -> bool:
+        if not request_id:
+            return False
+        input_hash = _automation_request_input_hash(
+            arguments=arguments,
+            base_revision=base_revision,
+            actor=actor,
+            write_set=write_set,
+            undo_group_id=undo_group_id,
+        )
+        return self._repository._automation_request_is_running(
+            request_id,
+            operation,
+            input_hash,
+        )
+
     # This class is the sole application API for an open project. Desktop and
     # automation callers do not receive repositories or concrete services.
     def get_project(self):
@@ -332,6 +872,28 @@ class EditorProject:
 
     def content_revision(self) -> int:
         return self._repository.content_revision()
+
+    @property
+    def owns_project_writer(self) -> bool:
+        return self._repository.owns_project_lock and not self._repository.read_only
+
+    def list_project_events(self, *, after_cursor: int = 0) -> list[ProjectChangeEvent]:
+        return self._repository.events.list_events(after_cursor=after_cursor)
+
+    def project_event_cursor(self) -> int:
+        return self._repository.events.latest_cursor()
+
+    def project_event_for_undo_group(
+        self,
+        undo_group_id: str,
+    ) -> ProjectChangeEvent | None:
+        return self._repository.events.for_undo_group(undo_group_id)
+
+    def list_project_events_after_revision(self, revision: int) -> list[ProjectChangeEvent]:
+        return self._repository.events.list_after_revision(revision)
+
+    def has_pending_project_upgrade(self) -> bool:
+        return self._repository.events.has_pending_upgrade()
 
     def get_sequence(self, sequence_id: str):
         return self._repository.catalog.get_sequence(sequence_id)
@@ -448,7 +1010,10 @@ class EditorProject:
         except StopIteration as error:
             raise KeyError(clip_id) from error
         asset = self._repository.catalog.get_asset(clip.asset_id)
-        return WebRenderCache(self._repository).target(state, clip, asset).path.is_file()
+        return WebRenderCache(
+            self._repository,
+            self._paths,
+        ).target(state, clip, asset).path.is_file()
 
     def list_audio_buses(self, sequence_id: str):
         return self._repository.audio.list_audio_buses(sequence_id)
@@ -617,9 +1182,6 @@ class EditorProject:
 
     def list_tasks(self) -> list[Task]:
         return self._tasks.list()
-
-    def list_unconsumed_terminal_tasks(self) -> list[Task]:
-        return self._tasks.list_unconsumed_terminal()
 
     def task_snapshot(self) -> tuple[list[Task], int]:
         return self._tasks.snapshot()
@@ -828,7 +1390,7 @@ class EditorProject:
         overwrite: bool = False,
     ) -> Path:
         state = self._repository.timeline.load_timeline(sequence_id)
-        exporter = FcpxmlExportService(self._repository)
+        exporter = FcpxmlExportService(self._repository, self._paths)
         output = exporter.preflight(
             state,
             destination,
@@ -850,14 +1412,14 @@ class EditorProject:
     def sequence_boundary_snapshot_hash(self, sequence_id: str) -> str:
         state = self._repository.timeline.load_timeline(sequence_id)
         return SequenceBoundaryAnalysisService(
-            TimelineCompiler(self._repository),
+            TimelineCompiler(self._repository, self._paths),
             self._paths,
         ).snapshot_hash(state)
 
     def loudness_snapshot_hash(self, sequence_id: str) -> str:
         state = self._repository.timeline.load_timeline(sequence_id)
         return LoudnessAnalysisService(
-            TimelineCompiler(self._repository),
+            TimelineCompiler(self._repository, self._paths),
             self._paths,
         ).snapshot_hash(state)
 
@@ -918,7 +1480,46 @@ class EditorProject:
             idempotency_key=idempotency_key,
         )
 
-    def consume_task_result(self, task: Task) -> ProjectTaskResult:
+    def committed_task_result(self, task_id: str) -> ProjectTaskResult | None:
+        stored = self._repository._committed_task_result(task_id)
+        return ProjectTaskResult.from_dict(stored) if stored is not None else None
+
+    def _commit_task_settlement(
+        self,
+        task: Task,
+        persist: TaskSettlementPersistence,
+        project_changes: tuple[Callable[[], None], ...],
+    ) -> Task:
+        """Atomically publish one settled task state and its project command."""
+
+        with (
+            self._write_gate,
+            self._task_project_change_scope(task),
+            self._repository.transaction(),
+            self._repository.coalesced_revision(),
+        ):
+            completed = persist()
+            for change in project_changes:
+                change()
+            if completed.status.is_terminal:
+                self._consume_task_result(completed)
+        return completed
+
+    def _commit_task_project_change(
+        self,
+        task: Task,
+        change: Callable[[], None],
+    ) -> None:
+        with (
+            self._write_gate,
+            self._repository._task_project_command(),
+            self._task_project_change_scope(task),
+            self._repository.transaction(),
+            self._repository.coalesced_revision(),
+        ):
+            change()
+
+    def _consume_task_result(self, task: Task) -> ProjectTaskResult:
         project = self._repository.catalog.get_project()
         if task.project_id != project.id:
             raise ValueError("Task does not belong to this project")
@@ -1001,26 +1602,39 @@ class EditorProject:
 
     def archive_short_sequence(self, sequence_id: str) -> None:
         sequence = self._repository.catalog.archive_short_sequence(sequence_id)
-
-        def restore() -> None:
-            self._repository.catalog.restore_short_sequence(sequence.id)
-
-        def archive() -> None:
-            self._repository.catalog.archive_short_sequence(sequence.id)
-
         self._history.push(
             ProjectEditCommand(
                 label="删除短视频序列",
-                undo_action=restore,
-                redo_action=archive,
+                undo_actions=[
+                    ProjectEditAction(
+                        kind="sequence.archive-state",
+                        payload={"sequence_id": sequence.id, "archived": False},
+                    )
+                ],
+                redo_actions=[
+                    ProjectEditAction(
+                        kind="sequence.archive-state",
+                        payload={"sequence_id": sequence.id, "archived": True},
+                    )
+                ],
             )
         )
+
+    def _apply_sequence_archive_history_action(
+        self,
+        action: ProjectEditAction,
+    ) -> None:
+        sequence_id = str(action.payload.get("sequence_id") or "")
+        if bool(action.payload.get("archived")):
+            self._repository.catalog.archive_short_sequence(sequence_id)
+        else:
+            self._repository.catalog.restore_short_sequence(sequence_id)
 
     def refresh_workflow_mode(self) -> ProjectWorkflowService:
         self._workflows.update_settings(self._settings)
         return self._workflows
 
-    def update_settings(self, settings: GlobalSettings) -> None:
+    def update_settings(self, settings: ServiceSettings) -> None:
         self._settings = settings
         self.refresh_workflow_mode()
 
@@ -1029,18 +1643,37 @@ class EditorProject:
             return
         self.close_web_preview()
         self._tasks.shutdown(timeout=timeout)
-        if self._task_followup_subscription is not None:
-            self._tasks.events.unsubscribe(self._task_followup_subscription)
-            self._task_followup_subscription = None
         self._repository.close()
         self._closed = True
 
-    def _handle_task_followup_event(self, event: TaskEvent) -> None:
-        if event.event_type == "deleted":
-            return
-        task = Task.model_validate(event.payload)
-        if task.status.is_terminal:
-            self._settle_task_followups(task)
+    def _task_project_change_scope(self, task: Task):
+        command = task.command
+        command_type = str(getattr(command, "command_type", task.kind.value))
+        write_set = _task_project_write_set(task)
+        return self._repository.events.change_scope(
+            operation=f"task.{command_type}",
+            actor=ActorIdentity(
+                kind="system",
+                id="editor-service-task-runner",
+                name="MediaFlow Pro task runner",
+            ),
+            request_id=f"task-{task.id}",
+            undo_group_id=f"task-{task.id}",
+            write_set=write_set,
+        )
+
+    def _task_preparation_scope(self, task: Task):
+        return self._repository._task_preparation_scope(task.id)
+
+    @property
+    def write_gate(self) -> ProjectCommandQueue:
+        return self._write_gate
+
+    def observe_implicit_project_events(
+        self,
+        observer: Callable[[ProjectChangeEvent], None] | None,
+    ) -> None:
+        self._repository.events.observe_implicit_changes(observer)
 
     def _settle_task_followups(self, task: Task) -> WorkflowUpdate:
         starts_import_workflow = (
@@ -1106,19 +1739,41 @@ class EditorProject:
 class EditorApplication:
     """Single composition root shared by desktop and headless entry points."""
 
-    def __init__(self):
-        self._paths = RuntimePaths.discover()
+    def __init__(self, runtime: RuntimeContext | None = None):
+        self.runtime = runtime or RuntimeContext.discover()
+        self._paths = self.runtime.paths
         CacheManager(self._paths.runtime_dir / "cache").prune_runs()
-        self._settings_repository = SettingsRepository()
-        self.settings = self._settings_repository.load()
-        self._settings_repository.prepare_storage(self.settings)
+        self._settings_repository = ServiceSettingsRepository()
+        self.service_settings = self._settings_repository.load()
+        self._settings_repository.prepare_storage(self.service_settings)
         self.cookies = CookieStore(self._paths.runtime_dir / "cookies")
+        self._encoder_discovery = EncoderDiscoveryService(self._paths)
         self._media_thumbnails = MediaThumbnailService(self._paths)
         self._project_covers = ProjectCoverService(self._paths)
 
     @property
     def mlt_runtime_root(self) -> str:
-        return str(self._paths.melt.parent) if self._paths.melt else ""
+        return str(self._paths.mlt_root) if self._paths.mlt_root else ""
+
+    @property
+    def mlt_library_path(self) -> str:
+        return str(self._paths.mlt_library) if self._paths.mlt_library else ""
+
+    @property
+    def mlt_repository_path(self) -> str:
+        return str(self._paths.mlt_repository) if self._paths.mlt_repository else ""
+
+    @property
+    def mlt_preview_repository_path(self) -> str:
+        return (
+            str(self._paths.mlt_preview_repository)
+            if self._paths.mlt_preview_repository
+            else ""
+        )
+
+    @property
+    def mlt_data_path(self) -> str:
+        return str(self._paths.mlt_data) if self._paths.mlt_data else ""
 
     @property
     def native_qml_root(self) -> Path | None:
@@ -1134,20 +1789,20 @@ class EditorApplication:
 
     @property
     def default_project_directory(self) -> str:
-        return default_project_root()
+        return self.service_settings.default_project_directory
 
-    def save_settings(self) -> None:
-        self._settings_repository.save(self.settings)
+    def save_service_settings(self) -> None:
+        self._settings_repository.save(self.service_settings)
 
-    def replace_settings(self, settings: GlobalSettings) -> None:
+    def replace_service_settings(self, settings: ServiceSettings) -> None:
         # Persist first so a disk error cannot leave the running application in
         # a state that was never durably accepted.
         self._settings_repository.save(settings)
-        self.settings = self._settings_repository.with_storage_defaults(settings)
-        self._settings_repository.prepare_storage(self.settings)
+        self.service_settings = self._settings_repository.normalize(settings)
+        self._settings_repository.prepare_storage(self.service_settings)
 
-    def discover_video_encoder_options(self) -> list[dict]:
-        return EncoderDiscoveryService(self._paths).video_options()
+    def discover_encoder_policy_options(self) -> list[dict]:
+        return self._encoder_discovery.video_options()
 
     def analyze_download_url(
         self,
@@ -1157,8 +1812,9 @@ class EditorApplication:
     ) -> DownloadPlan:
         return YtDlpDownloadService.analyze_configured(
             url,
-            settings=self.settings.download,
+            settings=self.service_settings.download,
             cookies=self.cookies,
+            paths=self._paths,
             check_cancelled=check_cancelled,
         )
 
@@ -1166,15 +1822,14 @@ class EditorApplication:
     def test_llm_provider(provider: LlmProviderSettings) -> None:
         OpenAIJsonClient(provider).test_connection()
 
-    @staticmethod
-    def subtitle_font_options() -> list[dict]:
-        return subtitle_font_options()
-
     def runtime_tool_status(self) -> dict:
-        return RuntimeToolService(self.settings, self._paths).status()
+        return RuntimeToolService(self.service_settings, self._paths).status()
 
     def installed_asr_models(self) -> frozenset[str]:
-        return FasterWhisperModelStore(self.settings.asr, self._paths).installed_models()
+        return FasterWhisperModelStore(
+            self.service_settings.asr,
+            self._paths,
+        ).installed_models()
 
     def run_runtime_tool(
         self,
@@ -1184,7 +1839,7 @@ class EditorApplication:
         progress: Callable[[OperationProgress], None],
         check_cancelled: Callable[[], None],
     ) -> object:
-        tools = RuntimeToolService(self.settings, self._paths)
+        tools = RuntimeToolService(self.service_settings, self._paths)
         values = arguments or {}
         if operation == "inspect":
             return tools.cuda_readiness()
@@ -1220,7 +1875,7 @@ class EditorApplication:
         # project can be switched or closed without sharing its repository
         # connection with a worker thread.
         with ProjectRepository.open(project_dir, writable=False) as repository:
-            document = TimelineCompiler(repository).compile(
+            document = TimelineCompiler(repository, self._paths).compile(
                 state,
                 use_proxies=use_proxies,
                 native_preview=True,
@@ -1282,7 +1937,7 @@ class EditorApplication:
                 ),
             )
             state = TimelineState(sequence=sequence, tracks=[track], clips=[clip])
-            document = TimelineCompiler(repository).compile(
+            document = TimelineCompiler(repository, self._paths).compile(
                 state,
                 use_proxies=True,
                 native_preview=True,
@@ -1306,18 +1961,36 @@ class EditorApplication:
         name: str,
         profile: ProjectProfile | None = None,
     ) -> EditorProject:
-        repository = ProjectRepository.create(root, name, profile)
-        return EditorProject(repository, settings=self.settings, paths=self._paths)
+        repository = ProjectRepository.create(
+            root,
+            name,
+            profile,
+        )
+        return EditorProject(
+            repository,
+            settings=self.service_settings,
+            paths=self._paths,
+        )
 
     def open_project(
         self,
         root: str | Path,
         *,
         writable: bool = True,
-        cooperative: bool = False,
     ) -> EditorProject:
-        repository = ProjectRepository.open(root, writable=writable, cooperative=cooperative)
-        return EditorProject(repository, settings=self.settings, paths=self._paths)
+        repository = ProjectRepository.open(
+            root,
+            writable=writable,
+            migration_chromium=self._paths.chromium,
+        )
+        project = EditorProject(
+            repository,
+            settings=self.service_settings,
+            paths=self._paths,
+        )
+        if writable and not project.read_only:
+            project.reconcile_workflow()
+        return project
 
     def recent_projects(self, paths: list[str]) -> RecentProjectSnapshot:
         items: list[dict] = []
@@ -1360,7 +2033,9 @@ class EditorApplication:
                         artifacts = [
                             value.resolve(path)
                             for task in reversed(tasks)
-                            for value in reversed(task.artifacts)
+                            for value in reversed(
+                                _user_visible_task_artifacts(task)
+                            )
                             if value.resolve(path).is_file()
                         ]
                         item["recentArtifact"] = str(artifacts[0]) if artifacts else ""

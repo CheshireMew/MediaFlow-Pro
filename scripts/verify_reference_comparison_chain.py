@@ -35,11 +35,13 @@ def _request(
     project: Path | None = None,
 ) -> dict[str, object]:
     request: dict[str, object] = {
-        "protocol": "mediaflow-cli",
-        "version": 2,
+        "protocol": "mediaflow-editor",
+        "version": 3,
         "operation": operation,
         "arguments": arguments,
         "request_id": f"reference-chain-{operation}-{uuid.uuid4().hex}",
+        "actor": {"kind": "agent", "id": "reference-comparison-chain"},
+        "client_id": "reference-comparison-chain",
     }
     if project is not None:
         request["project"] = str(project)
@@ -48,14 +50,58 @@ def _request(
 
 def verify(package: Path, run_dir: Path) -> dict[str, object]:
     from mediaflow.automation.contracts import describe_contract
-    from mediaflow.automation.dispatcher import execute_request
+    from mediaflow.automation.operation_registry import OPERATIONS
     from mediaflow.domain.project import ProjectProfile
+    from mediaflow.service.client import call_sync, execute_sync
 
     source = package.expanduser().resolve(strict=True)
     if not source.is_dir():
         raise ValueError(f"editable-media package must be a directory: {source}")
     os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(run_dir / "projects")
     os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(run_dir / "media")
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(run_dir / "service")
+    observed_revisions: dict[str, int] = {}
+
+    def execute_request(request: dict[str, object]) -> dict[str, object]:
+        operation = str(request["operation"])
+        definition = OPERATIONS[operation]
+        project_value = request.get("project")
+        project_text = str(Path(str(project_value)).resolve()) if project_value else None
+        if definition.project_access == "write":
+            if project_text is None:
+                raise RuntimeError(f"{operation} requires a project")
+            revision = observed_revisions.get(project_text)
+            if revision is None:
+                descriptor = call_sync(
+                    "project.snapshot",
+                    {"project": project_text},
+                )
+                revision = int(descriptor["project_revision"])
+            request["base_revision"] = revision
+        response = execute_sync(request)
+        result = response["result"]
+        revision_value = response.get("project_revision")
+        if project_text is None and operation == "project.create":
+            project_text = str(Path(str(result["path"])).resolve())
+        if project_text is not None and revision_value is not None:
+            observed_revisions[project_text] = int(revision_value)
+        return result
+
+    def wait_for_task(receipt: dict[str, object], project: Path) -> dict[str, object]:
+        task = receipt.get("task")
+        if not isinstance(task, dict) or not task.get("id"):
+            raise RuntimeError("Task-backed operation returned no task receipt")
+        waited = execute_request(
+            _request(
+                "task.wait",
+                {"task_id": str(task["id"]), "timeout": 600},
+                project=project,
+            )
+        )
+        completed = waited.get("task")
+        if not isinstance(completed, dict) or completed.get("status") != "completed":
+            raise RuntimeError(f"Task did not complete: {completed}")
+        return completed
     contract = describe_contract()
     if contract["product"] != "MediaFlow Pro":
         raise RuntimeError("describe did not identify MediaFlow Pro")
@@ -149,7 +195,7 @@ def verify(package: Path, run_dir: Path) -> dict[str, object]:
         )
     )
     revision = int(selected["web_clip_state"]["revision"])
-    execute_request(
+    render_receipt = execute_request(
         _request(
             "web.clip.render",
             {"sequence_id": sequence_id, "clip_id": clip_id, "timeout": 600},
@@ -157,7 +203,8 @@ def verify(package: Path, run_dir: Path) -> dict[str, object]:
         )
     )
     output = run_dir / "exports" / "editable-media-final.mp4"
-    execute_request(
+    wait_for_task(render_receipt, project)
+    export_receipt = execute_request(
         _request(
             "web.clip.export",
             {
@@ -171,6 +218,7 @@ def verify(package: Path, run_dir: Path) -> dict[str, object]:
             project=project,
         )
     )
+    wait_for_task(export_receipt, project)
     if not output.is_file() or output.stat().st_size <= 0:
         raise RuntimeError("MediaFlow Pro did not create the real web export")
     reopened = execute_request(
@@ -238,9 +286,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=DEFAULT_RUN_ROOT)
     arguments = parser.parse_args(argv)
     run_dir = _new_run_dir(arguments.root)
-    report = verify(arguments.package, run_dir)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0
+    try:
+        report = verify(arguments.package, run_dir)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        from mediaflow.service.client import EditorServiceUnavailable, call_sync
+
+        try:
+            call_sync("service.shutdown", start_if_needed=False)
+        except EditorServiceUnavailable:
+            pass
 
 
 if __name__ == "__main__":

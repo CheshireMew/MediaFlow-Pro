@@ -79,8 +79,8 @@ def web_render_requirements_met(
 def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
     os.environ["MEDIAFLOW_WEB_WORKERS"] = str(workers)
     os.environ["MEDIAFLOW_WEB_FAST_CAPTURE"] = "1"
-    os.environ["MEDIAFLOW_SETTINGS_PATH"] = str(
-        run_dir / f"settings-{workers}" / "settings.json"
+    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(
+        run_dir / f"settings-{workers}" / "service-settings.json"
     )
     os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(run_dir / f"media-{workers}")
     os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(run_dir / f"projects-{workers}")
@@ -88,13 +88,14 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
     from mediaflow.application.timeline_editor import TimelineEditor
     from mediaflow.application.web_media_service import WebMediaServices
     from mediaflow.domain.enums import TrackKind
-    from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
     from mediaflow.infrastructure.project_repository import ProjectRepository
-    from mediaflow.infrastructure.runtime_paths import RuntimePaths
+    from mediaflow.infrastructure.runtime_context import RuntimeContext
     from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
     from mediaflow.infrastructure.web_capture_engine import web_capture_diagnostics
     from mediaflow.infrastructure.web_render_service import WebRenderService
 
+    runtime = RuntimeContext.discover()
+    paths = runtime.paths
     project_dir = run_dir / f"workers-{workers}"
     with ProjectRepository.create(
         project_dir,
@@ -105,7 +106,7 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
         services = WebMediaServices(
             repository,
             lambda sequence_id: editor,
-            BrowserWebPackageValidator(),
+            BrowserWebPackageValidator(paths.chromium),
         )
         asset = services.packages.import_package(FIXTURE)
         track = editor.add_track(TrackKind.VIDEO)
@@ -118,12 +119,13 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
         )
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
         started = time.perf_counter()
-        cache = WebRenderService(repository, RuntimePaths.discover()).render_clip(
+        cache = WebRenderService(repository, paths).render_clip(
             timeline,
             clip.id,
         )
         elapsed = time.perf_counter() - started
-        diagnostics = web_capture_diagnostics(find_chromium_executable())
+        assert paths.chromium is not None
+        diagnostics = web_capture_diagnostics(paths.chromium)
         metrics = diagnostics.last_metrics
         if metrics is None:
             raise RuntimeError("Web capture engine did not publish render metrics")
@@ -285,13 +287,13 @@ def _new_run_dir(root: Path) -> Path:
 def verify(frame_count: int, run_root: Path) -> int:
     if frame_count < 151:
         raise ValueError("Web render verification needs at least 151 frames")
-    from mediaflow.infrastructure.runtime_paths import RuntimePaths
+    from mediaflow.infrastructure.runtime_context import RuntimeContext
 
     run_dir = _new_run_dir(run_root)
     script = Path(__file__).resolve()
     serial = _child_result(script, run_dir, 1, frame_count)
     parallel = _child_result(script, run_dir, 4, frame_count)
-    ffmpeg = RuntimePaths.discover().ffmpeg
+    ffmpeg = RuntimeContext.discover().paths.ffmpeg
     serial_cache = Path(serial["cache"])
     parallel_cache = Path(parallel["cache"])
     serial_hashes = _frame_hashes(ffmpeg, serial_cache)

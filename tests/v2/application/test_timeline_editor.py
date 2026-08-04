@@ -113,6 +113,41 @@ def test_batch_add_is_one_atomic_undoable_edit(editor_fixture) -> None:
     assert repository.timeline.load_timeline(editor.sequence_id).clips == []
 
 
+def test_timeline_history_serializes_only_entities_changed_by_the_edit(
+    editor_fixture,
+) -> None:
+    _repository, editor, asset, video_track = editor_fixture
+    clips = editor.add_clips(
+        [
+            ClipAddRequest(
+                track_id=video_track.id,
+                asset_id=asset.id,
+                timeline_start=index * 20,
+                source_in=index * 20,
+                duration=20,
+            )
+            for index in range(100)
+        ]
+    )
+    editor.history.clear()
+
+    editor.move_clip(
+        clips[-1].id,
+        timeline_start=2_000,
+    )
+
+    command = editor.history.checkpoint().undo[-1]
+    assert len(command.undo_actions) == 1
+    assert len(command.redo_actions) == 1
+    for action in (*command.undo_actions, *command.redo_actions):
+        assert action.payload["mode"] == "patch"
+        assert action.payload["source"]["tracks"] == []
+        assert action.payload["destination"]["tracks"] == []
+        assert len(action.payload["source"]["clips"]) == 1
+        assert len(action.payload["destination"]["clips"]) == 1
+    assert len(command.model_dump_json(exclude_computed_fields=True)) < 10_000
+
+
 def test_known_media_source_bounds_are_enforced_at_edit_and_storage_boundaries(
     editor_fixture,
 ) -> None:
@@ -319,6 +354,56 @@ def test_undo_and_redo_preserve_unrelated_background_timeline_changes(
     after_redo = repository.timeline.load_timeline(editor.sequence_id)
     assert marker in after_redo.markers
     assert added.id in {track.id for track in after_redo.tracks}
+
+
+def test_edit_merges_background_change_without_manual_reload(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=20,
+    )
+    background = repository.timeline.load_timeline(editor.sequence_id)
+    marker = TimelineMarker(
+        sequence_id=editor.sequence_id,
+        frame=12,
+        name="后台分析结果",
+    )
+    background.markers.append(marker)
+    repository.timeline.save_timeline(background)
+
+    editor.move_clip(clip.id, timeline_start=30)
+
+    persisted = repository.timeline.load_timeline(editor.sequence_id)
+    assert persisted.markers == [marker]
+    assert persisted.clips[0].timeline_start == 30
+    assert editor.state.sequence.timeline_revision == persisted.sequence.timeline_revision
+
+
+def test_in_memory_timeline_matches_durable_order_after_fast_persistence(
+    editor_fixture,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    overlay_track = editor.add_track(TrackKind.VIDEO, "Overlay")
+    later = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=30,
+        source_in=0,
+        duration=20,
+    )
+    editor.add_clip(
+        track_id=overlay_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=20,
+    )
+    editor.set_clip_audio(later.id, ClipAudio(gain_db=-3.0))
+
+    assert editor.state == repository.timeline.load_timeline(editor.sequence_id)
 
 
 def test_sequence_in_out_is_persisted_undoable_and_does_not_trim_clip(editor_fixture) -> None:

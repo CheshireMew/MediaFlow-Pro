@@ -31,7 +31,9 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.service.client import shutdown_sync_service
 from scripts.run_artifacts import verification_run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -510,29 +512,32 @@ def wait_preview_graph(
 
 
 def verify(project_parent: Path) -> None:
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(
+        project_parent.resolve() / "editor-service"
+    )
     configure_application_identity()
     app = QGuiApplication.instance() or QGuiApplication([])
     errors: list[str] = []
     controller = EditorControllers()
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     fixture_server = None
     fixture_thread = None
     controller.session.events.errorOccurred.connect(errors.append)
     try:
         run_root = project_parent.resolve()
         download_root = run_root / "downloads"
-        controller.session.settings.download.output_directory = str(download_root)
-        controller.session.settings.asr.model = "tiny.en"
-        controller.session.settings.asr.device = "cpu"
-        controller.session.settings.asr.compute_type = "int8"
-        controller.session.settings.asr.language = "en"
+        controller.session.service_settings.download.output_directory = str(download_root)
+        controller.session.service_settings.asr.model = "tiny.en"
+        controller.session.service_settings.asr.device = "cpu"
+        controller.session.service_settings.asr.compute_type = "int8"
+        controller.session.service_settings.asr.language = "en"
         model_override = os.environ.get("MEDIAFLOW_E2E_MODEL", "").strip()
         api_key_override = (
             os.environ.get("MEDIAFLOW_E2E_API_KEY", "").strip()
             or os.environ.get("OPENAI_API_KEY", "").strip()
         )
         if (
-            not controller.session.settings.llm_providers
+            not controller.session.service_settings.llm_providers
             and model_override
             and api_key_override
         ):
@@ -546,14 +551,14 @@ def verify(project_parent: Path) -> None:
                 api_key=api_key_override,
                 model=model_override,
             )
-            controller.session.settings.llm_providers = [provider]
-            controller.session.settings.active_llm_provider_id = provider.id
-        if model_override and controller.session.settings.llm_providers:
-            active_provider_id = controller.session.settings.active_llm_provider_id
+            controller.session.service_settings.llm_providers = [provider]
+            controller.session.service_settings.active_llm_provider_id = provider.id
+        if model_override and controller.session.service_settings.llm_providers:
+            active_provider_id = controller.session.service_settings.active_llm_provider_id
             provider = next(
                 (
                     item
-                    for item in controller.session.settings.llm_providers
+                    for item in controller.session.service_settings.llm_providers
                     if item.id == active_provider_id
                 ),
                 None,
@@ -562,7 +567,8 @@ def verify(project_parent: Path) -> None:
                 raise RuntimeError("No active LLM provider is available for model override")
             provider.model = model_override
         if not any(
-            provider.enabled and provider.api_key for provider in controller.session.settings.llm_providers
+            provider.enabled and provider.api_key
+            for provider in controller.session.service_settings.llm_providers
         ):
             raise RuntimeError(
                 "The isolated real workflow needs MEDIAFLOW_E2E_MODEL and "
@@ -592,10 +598,10 @@ def verify(project_parent: Path) -> None:
         controller.tasks.analyzeDownloadUrl(source_url)
         wait_download_plan(controller, errors=errors)
         controller.tasks.submitDownloadPlan(
-            controller.session.settings.download.resolution,
+            controller.session.service_settings.download.resolution,
             "",
-            controller.session.settings.download.download_subtitles,
-            controller.session.settings.download.codec,
+            controller.session.service_settings.download.download_subtitles,
+            controller.session.service_settings.download.codec,
             "",
         )
         workflow_id = controller.workspace.workflowRunId
@@ -944,7 +950,10 @@ def verify(project_parent: Path) -> None:
         atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
-        controller.shutdown()
+        try:
+            controller.shutdown()
+        finally:
+            shutdown_sync_service()
         if fixture_server is not None:
             fixture_server.shutdown()
             fixture_server.server_close()

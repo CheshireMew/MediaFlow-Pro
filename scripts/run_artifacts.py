@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import msvcrt
 import os
 import re
 import shutil
@@ -13,10 +12,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO, Literal
+from typing import Literal
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.environment import test_run_root
+from mediaflow.infrastructure.project_lock import ProcessFileLock
 
 MANIFEST_FILENAME = "run-result.json"
 MANIFEST_SCHEMA = "mediaflow-script-run/v1"
@@ -51,25 +51,11 @@ def _is_link(path: Path) -> bool:
     )
 
 
-def _lock_first_byte(handle: BinaryIO) -> None:
-    handle.seek(0, os.SEEK_END)
-    if handle.tell() == 0:
-        handle.write(b"\0")
-        handle.flush()
-    handle.seek(0)
-    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-
-
 @contextmanager
 def _lifecycle_lock(category_root: Path) -> Iterator[None]:
     lock_path = category_root / ".lifecycle.lock"
-    with lock_path.open("a+b") as handle:
-        _lock_first_byte(handle)
-        try:
-            yield
-        finally:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    with ProcessFileLock(lock_path):
+        yield
 
 
 def _write_manifest(path: Path, payload: dict[str, object]) -> None:
@@ -178,7 +164,12 @@ class VerificationRun:
         if self._entered:
             raise RuntimeError(f"Verification run is already active: {self.path}")
         isolated = {
-            "MEDIAFLOW_SETTINGS_PATH": self.path / "settings" / "settings.json",
+            "MEDIAFLOW_SERVICE_SETTINGS_PATH": (
+                self.path / "settings" / "service-settings.json"
+            ),
+            "MEDIAFLOW_DESKTOP_SETTINGS_PATH": (
+                self.path / "settings" / "desktop-settings.json"
+            ),
             "MEDIAFLOW_MEDIA_ROOT": self.path / "media",
             "MEDIAFLOW_PROJECT_ROOT": self.path / "projects",
         }

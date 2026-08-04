@@ -48,6 +48,7 @@ def atomic_write_text(
     *,
     encoding: str = "utf-8",
     durable: bool = False,
+    mode: int | None = None,
 ) -> Path:
     """Write text without exposing a partial destination to concurrent readers."""
 
@@ -60,6 +61,8 @@ def atomic_write_text(
             stream.flush()
             if durable:
                 os.fsync(stream.fileno())
+        if mode is not None:
+            temporary.chmod(mode)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -71,6 +74,7 @@ def atomic_write_bytes(
     content: bytes,
     *,
     durable: bool = False,
+    mode: int | None = None,
 ) -> Path:
     """Write bytes without exposing a partial destination to concurrent readers."""
 
@@ -83,6 +87,8 @@ def atomic_write_bytes(
             stream.flush()
             if durable:
                 os.fsync(stream.fileno())
+        if mode is not None:
+            temporary.chmod(mode)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

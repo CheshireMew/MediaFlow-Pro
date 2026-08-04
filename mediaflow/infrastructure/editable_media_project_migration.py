@@ -234,6 +234,7 @@ def _stage_v5_publication(
     asset_id: str,
     source_tree: web_files.WebPackageTree,
     manifest: EditableMediaManifest,
+    chromium: Path,
 ) -> web_files.WebPackagePublication:
     (
         token,
@@ -263,7 +264,7 @@ def _stage_v5_publication(
             migrated_tree,
             manifest,
         )
-        BrowserWebPackageValidator().validate(staging, manifest)
+        BrowserWebPackageValidator(chromium).validate(staging, manifest)
         publication = web_files.WebPackagePublication(
             asset_id=asset_id,
             manifest=manifest,
@@ -378,7 +379,11 @@ def _migrated_clip_state_json(
     )
 
 
-def migrate_project_editable_media_to_v5(workspace: Any) -> None:
+def migrate_project_editable_media_to_v5(
+    workspace: Any,
+    *,
+    chromium: Path | None,
+) -> None:
     project_dir = Path(workspace.project_dir).resolve()
     connection = workspace._connection
     connection.execute(
@@ -416,6 +421,10 @@ def migrate_project_editable_media_to_v5(workspace: Any) -> None:
             raise RuntimeError(
                 f"Legacy editable-media assets must be project-managed before v5 migration: {row['asset_id']}"
             )
+        if chromium is None:
+            raise RuntimeError(
+                "Editable-media v5 migration requires the service RuntimeContext"
+            )
         manifest = migrate_editable_media_v4_manifest(raw_object)
         entry = _managed_asset_path(project_dir, str(row["path"]))
         package = web_files.web_package_root_for_entry(
@@ -430,6 +439,7 @@ def migrate_project_editable_media_to_v5(workspace: Any) -> None:
             str(row["asset_id"]),
             source_tree,
             manifest,
+            chromium,
         )
         try:
             archive = _legacy_archive(

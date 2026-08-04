@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 import wave
-from ctypes import WinDLL, create_unicode_buffer
+from ctypes import create_unicode_buffer
 from functools import partial
 from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -44,11 +44,14 @@ from mediaflow.domain.task_commands import (
     ExportSequenceCommand,
     TranscribeSequenceCommand,
 )
-from mediaflow.domain.tasks import ArtifactReference, Task
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.settings_repository import SettingsRepository
-from mediaflow.infrastructure.task_repository import TaskRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.settings_repository import (
+    DesktopSettingsRepository,
+    ServiceSettingsRepository,
+)
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+from mediaflow.service.client import EditorServiceRpcError, call_sync
+from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 from tests.v2.infrastructure.test_media_pipeline import generate_real_media
 
 
@@ -98,6 +101,10 @@ class _OpenAITranslationFixtureHandler(BaseHTTPRequestHandler):
 
 
 def _windows_environment(name: str) -> str | None:
+    if os.name != "nt":
+        return os.environ.get(name)
+    from ctypes import WinDLL
+
     buffer = create_unicode_buffer(32768)
     length = WinDLL("kernel32", use_last_error=True).GetEnvironmentVariableW(
         name,
@@ -108,6 +115,10 @@ def _windows_environment(name: str) -> str | None:
 
 
 def _windows_dll_directory() -> str | None:
+    if os.name != "nt":
+        return None
+    from ctypes import WinDLL
+
     buffer = create_unicode_buffer(32768)
     length = WinDLL("kernel32", use_last_error=True).GetDllDirectoryW(len(buffer), buffer)
     return buffer.value if length else None
@@ -127,6 +138,108 @@ def _process_until(predicate, *, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.01)
     return bool(predicate())
+
+
+@pytest.mark.integration
+def test_service_backed_preview_request_reaches_qml_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    QCoreApplication.setApplicationName(PRODUCT_NAME)
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Preview service chain",
+        )
+        source = tmp_path / "preview-source.mp4"
+        generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
+        project = controllers.session.binding.current
+        assert project is not None
+        asset = project.import_external_asset(source)
+        project.adopt_main_profile_from_video(asset.id)
+        document = project.get_project()
+        timeline = project.timeline(document.main_sequence_id)
+        track = timeline.add_track(TrackKind.VIDEO)
+        asset = project.get_asset(asset.id)
+        timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
+        )
+        controllers.session.binding.timeline = timeline
+        controllers.session.projectors.timeline.refresh_timeline()
+
+        assert _process_until(
+            lambda: controllers.session.requests.preview_id > 0,
+            timeout=5,
+        )
+        assert _process_until(
+            lambda: bool(controllers.workspace.previewGraphPath),
+            timeout=20,
+        ), repr(controllers.session.requests.preview_future)
+        assert Path(controllers.workspace.previewGraphPath).is_file()
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+@pytest.mark.integration
+def test_connected_workspace_command_reaches_real_qml_preview(
+    tmp_path: Path,
+) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Workspace command chain",
+        )
+        window = engine.rootObjects()[0]
+        window.setWidth(1280)
+        window.setHeight(800)
+        assert _process_until(
+            lambda: window.findChild(QQuickItem, "previewViewport") is not None,
+        )
+        preview = window.findChild(QQuickItem, "previewViewport")
+        workspace_session_id = controllers.session._api.workspace_session_id
+        sent = False
+
+        def send_seek_once() -> bool:
+            nonlocal sent
+            if sent:
+                return True
+            try:
+                call_sync(
+                    "workspace.command",
+                    {
+                        "workspace_session_id": workspace_session_id,
+                        "command": "playhead.seek",
+                        "arguments": {"frame": 41},
+                    },
+                )
+            except EditorServiceRpcError:
+                return False
+            sent = True
+            return True
+
+        assert _process_until(send_seek_once, timeout=5)
+        assert _process_until(
+            lambda: preview.property("scrubFrame") == 41,
+            timeout=5,
+        )
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
 
 
 def _drag_quick_item(
@@ -151,15 +264,17 @@ def _drag_quick_item(
 
 
 def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    settings_repository = SettingsRepository()
+    settings_repository = ServiceSettingsRepository()
     settings = settings_repository.load()
     settings.download.last_url = "https://example.com/remembered-video"
-    settings.ui.default_project_directory = str(tmp_path / "Projects")
+    settings.default_project_directory = str(tmp_path / "Projects")
     settings_repository.save(settings)
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
-    engine, controllers = create_engine(app)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(EditorApplication()),
+    )
     try:
         monospace_family = str(
             engine.rootContext().contextProperty("applicationMonospaceFontFamily")
@@ -318,8 +433,7 @@ def test_saved_maximized_window_keeps_clamped_normal_geometry(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    settings_repository = SettingsRepository()
+    settings_repository = DesktopSettingsRepository()
     settings = settings_repository.load()
     settings.ui.window_width = 1024
     settings.ui.window_height = 640
@@ -352,10 +466,9 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
-    settings_repository = SettingsRepository()
+    settings_repository = ServiceSettingsRepository()
     settings = settings_repository.load()
-    settings.ui.default_project_directory = str(tmp_path / "Projects")
+    settings.default_project_directory = str(tmp_path / "Projects")
     settings_repository.save(settings)
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
@@ -447,7 +560,7 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
 
         assert QMetaObject.invokeMethod(tour, "finish")
         assert not tour.isVisible()
-        assert SettingsRepository().load().ui.workspace_tour_completed is True
+        assert DesktopSettingsRepository().load().ui.workspace_tour_completed is True
         rendered = window.grabWindow()
         screenshot = tmp_path / "sample-evolved-workspace.png"
         assert not rendered.isNull() and rendered.save(str(screenshot))
@@ -463,7 +576,6 @@ def test_settings_exposes_selectable_external_speech_components(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
@@ -515,7 +627,6 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     project_root = tmp_path / "Read Only"
     holder = EditorApplication().create_project(project_root, "Read Only")
     project = holder.get_project()
@@ -523,7 +634,7 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
     source = tmp_path / "read-only-source.mp4"
     generate_real_media(
         source,
-        RuntimePaths.discover(),
+        RuntimeContext.discover().paths,
         width=320,
         height=180,
     )
@@ -539,18 +650,15 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
         source_in=0,
         duration=min(25, asset.metadata.duration_frames),
     )
-    TaskRepository(holder).create(
-        Task(
-            project_id=project.id,
+    failed_output = project_root / "exports" / "readonly.mp4"
+    failed_output.write_bytes(b"existing user output")
+    failed_task = holder.start_task(
+        ExportSequenceCommand(
             sequence_id=project.main_sequence_id,
-            command=ExportSequenceCommand(
-                sequence_id=project.main_sequence_id,
-                output_path=str(project_root / "exports" / "readonly.mp4"),
-            ),
-            status=TaskStatus.FAILED,
-            error="read-only fixture failure",
+            output_path=str(failed_output),
         )
     )
+    assert holder.wait_for_task(failed_task.id, timeout=30).status == TaskStatus.FAILED
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
@@ -614,7 +722,7 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
             preview_errors.append
         )
         controllers.workspace.reportPreviewDroppedFrames(
-            controllers.session.settings.preview.dropped_frame_proxy_threshold
+            controllers.session.service_settings.preview.dropped_frame_proxy_threshold
         )
         QCoreApplication.processEvents()
         assert preview_errors == []
@@ -701,7 +809,6 @@ def test_export_capability_follows_real_active_sequence_content(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
@@ -733,7 +840,8 @@ def test_export_capability_follows_real_active_sequence_content(
         assert _process_until(
             lambda: export_encoder.property("currentIndex") >= 0
             and export_encoder.property("currentValue")
-            in {option["value"] for option in controllers.export.videoEncoderOptions}
+            in {option["value"] for option in controllers.export.encoderPolicyOptions},
+            timeout=30,
         )
         assert controllers.export.canExportSequence is False
         assert all(not button.isEnabled() for button in export_buttons)
@@ -759,7 +867,7 @@ def test_export_capability_follows_real_active_sequence_content(
         assert not blocked_fcpxml.exists()
 
         source = tmp_path / "exportable-source.mp4"
-        generate_real_media(source, RuntimePaths.discover(), width=320, height=180)
+        generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
         controllers.media.importFiles(
             [QUrl.fromLocalFile(str(source))]
         )
@@ -778,11 +886,19 @@ def test_export_capability_follows_real_active_sequence_content(
             True,
             False,
         )
-        assert _process_until(
+        placed = _process_until(
             lambda: controllers.timeline.clipsModel.rowCount() == 1
             and controllers.export.canExportSequence,
             timeout=20,
         )
+        assert placed, {
+            "trackCount": controllers.timeline.tracksModel.rowCount(),
+            "clipCount": controllers.timeline.clipsModel.rowCount(),
+            "pendingAssetIds": list(controllers.session.asset_state.pending_batch_ids),
+            "pendingProfileAssetId": controllers.session.asset_state.pending_profile_asset_id,
+            "status": controllers.workspace.statusMessage,
+            "errors": errors,
+        }
         assert all(button.isEnabled() for button in export_buttons)
         video_track = next(
             controllers.timeline.tracksModel.get(index)
@@ -857,7 +973,6 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     opened_folders: list[Path] = []
     monkeypatch.setattr(
         QDesktopServices,
@@ -924,7 +1039,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         preview_viewport.seek(0)
         video_source = tmp_path / "video" / "first-video.mp4"
         video_source.parent.mkdir()
-        generate_real_media(video_source, RuntimePaths.discover(), width=640, height=360)
+        generate_real_media(video_source, RuntimeContext.discover().paths, width=640, height=360)
         controllers.media.importFiles([QUrl.fromLocalFile(str(video_source))])
         assert _process_until(
             lambda: controllers.media.assetsModel.rowCount() == 1,
@@ -1073,8 +1188,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert initial_preview_graph.name.startswith("pv-")
         assert initial_preview_graph.is_relative_to(
             (
-                tmp_path
-                / "runtime"
+                RuntimeContext.discover().paths.runtime_dir
                 / "cache"
                 / "projects"
             ).resolve()
@@ -1256,7 +1370,10 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         large_delegate = asset_delegate(image_asset["assetId"])
         assert large_delegate.property("viewMode") == "large_thumbnails"
         assert large_delegate.height() == 132
-        assert SettingsRepository().load().ui.asset_view_mode == "large_thumbnails"
+        assert (
+            DesktopSettingsRepository().load().ui.asset_view_mode
+            == "large_thumbnails"
+        )
         large_thumbnail_render = window.grabWindow()
         assert not large_thumbnail_render.isNull()
         assert large_thumbnail_render.save(str(tmp_path / "media-large-thumbnail-view.png"))
@@ -1477,8 +1594,6 @@ def test_transcript_button_runs_real_timeline_chain_and_opens_generated_subtitle
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    runtime_dir = tmp_path / "runtime"
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(runtime_dir))
     fake_cli = tmp_path / "timeline_faster_whisper.py"
     fake_cli.write_text(
         """from pathlib import Path
@@ -1497,7 +1612,7 @@ print('100%', flush=True)
 """,
         encoding="utf-8",
     )
-    settings_repository = SettingsRepository()
+    settings_repository = ServiceSettingsRepository()
     settings = settings_repository.load()
     settings.asr = AsrSettings(
         engine="faster_whisper_cli",
@@ -1509,7 +1624,7 @@ print('100%', flush=True)
     settings_repository.save(settings)
 
     source = tmp_path / "timeline-source.mp4"
-    generate_real_media(source, RuntimePaths.discover())
+    generate_real_media(source, RuntimeContext.discover().paths)
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
@@ -1587,17 +1702,13 @@ print('100%', flush=True)
         def transcription_completed() -> bool:
             return any(
                 isinstance(task.command, TranscribeSequenceCommand) and task.status == TaskStatus.COMPLETED
-                for task in TaskRepository(
-                    controllers.session.binding.current
-                ).list()
+                for task in controllers.session.binding.current.list_tasks()
             )
 
         assert _process_until(transcription_completed, timeout=20)
         transcription_task = next(
             task
-            for task in TaskRepository(
-                controllers.session.binding.current
-            ).list()
+            for task in controllers.session.binding.current.list_tasks()
             if isinstance(task.command, TranscribeSequenceCommand)
         )
         assert transcription_task.command.plan.asr.model == "tiny.en"
@@ -1682,8 +1793,6 @@ def test_large_transcription_avoids_word_editor_and_keeps_native_preview_alive(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    runtime_dir = tmp_path / "runtime"
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(runtime_dir))
     fake_cli = tmp_path / "large_transcript_faster_whisper.py"
     fake_cli.write_text(
         """from pathlib import Path
@@ -1713,7 +1822,7 @@ print('100%', flush=True)
 """,
         encoding="utf-8",
     )
-    settings_repository = SettingsRepository()
+    settings_repository = ServiceSettingsRepository()
     settings = settings_repository.load()
     settings.asr = AsrSettings(
         engine="faster_whisper_cli",
@@ -1725,7 +1834,7 @@ print('100%', flush=True)
     )
     settings_repository.save(settings)
 
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "large-transcript-source.m4a"
     generated = subprocess.run(
         [
@@ -1801,9 +1910,7 @@ print('100%', flush=True)
         def transcription_completed() -> bool:
             return any(
                 isinstance(task.command, TranscribeSequenceCommand) and task.status == TaskStatus.COMPLETED
-                for task in TaskRepository(
-                    controllers.session.binding.current
-                ).list()
+                for task in controllers.session.binding.current.list_tasks()
             )
 
         assert _process_until(transcription_completed, timeout=90)
@@ -1847,7 +1954,6 @@ def test_qml_title_bar_uses_the_mediaflow_pro_product_name(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = QGuiApplication.instance() or QGuiApplication([])
     QCoreApplication.setApplicationName(PRODUCT_NAME)
     configure_application_font(app)
@@ -1871,7 +1977,6 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         name: _windows_environment(name) for name in ("MLT_DATA", "MLT_REPOSITORY", "MLT_REPOSITORY_DENY")
     }
     dll_directory_before = _windows_dll_directory()
-    monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(tmp_path / "runtime"))
     app = QGuiApplication.instance() or QGuiApplication([])
     QCoreApplication.setApplicationName(PRODUCT_NAME)
     configure_application_font(app)
@@ -1883,20 +1988,25 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.timeline.tracksModel.rowCount() == 0
 
         assert _process_until(
-            lambda: any(option["value"] == "libx264" for option in controllers.export.videoEncoderOptions)
+            lambda: any(
+                option["value"] == "software"
+                and "h264" in option["formats"]
+                for option in controllers.export.encoderPolicyOptions
+            )
         )
         assert (
             next(
                 option["label"]
-                for option in controllers.export.videoEncoderOptions
-                if option["value"] == "libx264"
+                for option in controllers.export.encoderPolicyOptions
+                if option["value"] == "software"
+                and "h264" in option["formats"]
             )
             == "H.264 软件"
         )
         assert controllers.export.subtitleTrackOptions[0]["label"] == "不烧录"
 
         source = tmp_path / "ui-source.mp4"
-        generate_real_media(source, RuntimePaths.discover(), width=320, height=180)
+        generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
         handler = partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1962,14 +2072,46 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.timeline.clipsModel.rowCount() == 1
         assert controllers.timeline.selectedClipId == controllers.timeline.clipsModel.get(0)["clipId"]
         assert engine.rootObjects()[0].title() == "UI Test"
-
+        assert (
+            controllers.session.projectors.timeline._preview_timer.isActive()
+            or controllers.session.requests.preview_id > 0
+        )
         assert _process_until(
+            lambda: controllers.session.requests.preview_id > 0,
+            timeout=5,
+        ), {
+            "timer_active": controllers.session.projectors.timeline._preview_timer.isActive(),
+            "timer_remaining_ms": (
+                controllers.session.projectors.timeline._preview_timer.remainingTime()
+            ),
+        }
+
+        preview_ready = _process_until(
             lambda: bool(controllers.workspace.previewGraphPath),
             timeout=30,
         )
+        preview_future = controllers.session.requests.preview_future
+        assert preview_ready, {
+            "preview_request_id": controllers.session.requests.preview_id,
+            "preview_timer_active": (
+                controllers.session.projectors.timeline._preview_timer.isActive()
+            ),
+            "preview_timer_remaining_ms": (
+                controllers.session.projectors.timeline._preview_timer.remainingTime()
+            ),
+            "future": repr(preview_future),
+            "future_done": preview_future.done() if preview_future is not None else None,
+            "future_error": (
+                repr(preview_future.exception())
+                if preview_future is not None and preview_future.done()
+                else ""
+            ),
+            "last_error_id": controllers.session.presentation.last_error_id,
+            "status": controllers.session.presentation.status_message,
+        }
         source_preview_graph = controllers.workspace.previewGraphPath
         controllers.workspace.reportPreviewDroppedFrames(
-            controllers.session.settings.preview.dropped_frame_proxy_threshold
+            controllers.session.service_settings.preview.dropped_frame_proxy_threshold
         )
         assert _process_until(
             lambda: any(
@@ -2558,7 +2700,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             "standard", 400, 360, 380, True, True, True
         )
         controllers.settings.saveWindowState(1440, 900, False)
-        persisted_ui = SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load().ui
+        persisted_ui = DesktopSettingsRepository(
+            os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]
+        ).load().ui
         assert (
             persisted_ui.workspace_layouts.standard.left_panel_width,
             persisted_ui.workspace_layouts.standard.inspector_panel_width,
@@ -2849,6 +2993,16 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert moved_linked_clip["audioTrackPosition"] == 1
 
+        assert _process_until(
+            lambda: any(
+                item.objectName() == "embeddedAudioClip"
+                and item.property("clipId") == new_clip_projection["clipId"]
+                and item.property("trackPosition") == 0
+                and item.property("audioTrackPosition") == 1
+                for item in _visual_items(timeline)
+            )
+        )
+
         moved_linked_audio_item = next(
             item
             for item in _visual_items(timeline)
@@ -3097,6 +3251,10 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         subtitle_projection = controllers.subtitles.subtitlePlacementsModel.get(0)
         assert subtitle_projection["clipId"]
         assert subtitle_projection["audioTrackPosition"] == 1
+        preview_player.pause()
+        assert _process_until(
+            lambda: preview_player.property("playing") is False
+        )
         controllers.subtitles.selectSubtitlePlacement(
             subtitle_projection["placementId"]
         )
@@ -3226,11 +3384,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert not settings_render.isNull()
         assert settings_render.save(str(tmp_path / "settings-dialog.png"))
         persisted_before = (
-            SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load().workflow.auto_continue
+            ServiceSettingsRepository(
+                os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
+            ).load().workflow.auto_continue
         )
         assert QMetaObject.invokeMethod(auto_continue_setting, "click")
         assert _process_until(
-            lambda: SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load().workflow.auto_continue
+            lambda: ServiceSettingsRepository(
+                os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
+            ).load().workflow.auto_continue
             is not persisted_before,
             timeout=3,
         )
@@ -3581,21 +3743,24 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert moved_track["locked"] is True
 
         project_path = Path(controllers.workspace.projectPath)
-        recent_artifact = project_path / "exports" / "recent-output.txt"
-        recent_artifact.write_text("observable output", encoding="utf-8")
-        TaskRepository(controllers.session.binding.current).create(
-            Task(
-                project_id=controllers.session.binding.current.get_project().id,
+        current = controllers.session.binding.current
+        recent_artifact = project_path / "exports" / "recent-output.mp4"
+        export_task = current.start_task(
+            ExportSequenceCommand(
                 sequence_id=controllers.workspace.activeSequenceId,
-                command=ExportSequenceCommand(
-                    sequence_id=controllers.workspace.activeSequenceId,
-                    output_path=str(recent_artifact),
-                ),
-                status=TaskStatus.FAILED,
-                error="fixture failure",
-                artifacts=[ArtifactReference.external(recent_artifact)],
+                output_path=str(recent_artifact),
             )
         )
+        assert current.wait_for_task(export_task.id, timeout=120).status == TaskStatus.COMPLETED
+        failed_output = project_path / "exports" / "existing-output.mp4"
+        failed_output.write_bytes(b"existing user output")
+        failed_task = current.start_task(
+            ExportSequenceCommand(
+                sequence_id=controllers.workspace.activeSequenceId,
+                output_path=str(failed_output),
+            )
+        )
+        assert current.wait_for_task(failed_task.id, timeout=30).status == TaskStatus.FAILED
         controllers.workspace.closeProject()
         assert _process_until(
             lambda: controllers.workspace.homeSummary["failedTaskCount"] >= 1
@@ -3770,7 +3935,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert QMetaObject.invokeMethod(recent_remove, "click")
         assert _process_until(lambda: controllers.workspace.recentProjectsModel.rowCount() == 9)
         persisted_recent_paths = (
-            SettingsRepository(os.environ["MEDIAFLOW_SETTINGS_PATH"]).load().ui.recent_project_paths
+            DesktopSettingsRepository(
+                os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]
+            ).load().ui.recent_project_paths
         )
         assert str(removed_project_path) not in persisted_recent_paths
         assert (removed_project_path / "project.mfp").is_file()

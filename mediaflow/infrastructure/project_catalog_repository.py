@@ -181,10 +181,19 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
         name: str,
         profile: ProjectProfile | None = None,
     ) -> Sequence:
+        return self.commit_short_sequence(
+            self.prepare_short_sequence(name, profile)
+        )
+
+    def prepare_short_sequence(
+        self,
+        name: str,
+        profile: ProjectProfile | None = None,
+    ) -> Sequence:
         project = self.get_project()
         main_profile = self.get_sequence(project.main_sequence_id).profile
         position = len(self.list_sequences())
-        sequence = Sequence(
+        return Sequence(
             project_id=project.id,
             name=name,
             kind=SequenceKind.SHORT,
@@ -192,6 +201,12 @@ class ProjectCatalogRepository(ProjectRepositoryComponent):
             profile=profile or main_profile.model_copy(update={"width": 1080, "height": 1920}),
             profile_confirmed=True,
         )
+
+    def commit_short_sequence(self, sequence: Sequence) -> Sequence:
+        if sequence.kind != SequenceKind.SHORT:
+            raise ValueError(
+                "Only a short sequence can use short-sequence registration"
+            )
         master = AudioBus(sequence_id=sequence.id, name="主总线", position=0)
         dialogue = AudioBus(
             sequence_id=sequence.id,

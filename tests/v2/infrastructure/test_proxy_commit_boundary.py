@@ -26,7 +26,7 @@ from mediaflow.infrastructure.output_reservation import (
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
-from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import (
     InfrastructureAssetTaskRuntime,
@@ -80,7 +80,7 @@ def test_two_phase_output_set_archives_replaced_files_only_after_finalize(
 def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "proxy-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(
@@ -183,7 +183,7 @@ def test_hdr_proxy_db_commit_failure_restores_both_registered_outputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimePaths.discover()
+    paths = RuntimeContext.discover().paths
     source = tmp_path / "hdr-proxy-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     profile = ProjectProfile(
@@ -261,8 +261,8 @@ def test_hdr_proxy_db_commit_failure_restores_both_registered_outputs(
         withdrawn = list(
             (
                 repository.project_dir
-                / "proxies"
-                / "MediaFlow Pro Failed Exports"
+                / "archive"
+                / "failed-proxies"
             ).glob("*.mp4")
         )
         assert len(withdrawn) == 2

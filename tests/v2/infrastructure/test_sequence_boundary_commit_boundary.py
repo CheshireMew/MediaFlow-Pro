@@ -14,6 +14,7 @@ from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.mlt.boundary_service import SequenceBoundaryAnalysisService
 from mediaflow.infrastructure.mlt.compiler import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 
 
@@ -87,7 +88,9 @@ def test_sequence_boundary_cancels_before_publication_then_publishes_readable_re
 
     with ProjectRepository.create(project_dir, "Boundary Commit Project") as repository:
         state = _create_timeline(repository, tmp_path / "boundary-source.mp4")
-        service = _DeterministicBoundaryAnalysisService(TimelineCompiler(repository), paths)
+        service = _DeterministicBoundaryAnalysisService(
+            TimelineCompiler(repository, paths), paths
+        )
         expected_snapshot_hash = service.snapshot_hash(state)
         cancellation_requested = False
 
@@ -115,7 +118,7 @@ def test_sequence_boundary_cancels_before_publication_then_publishes_readable_re
     with ProjectRepository.open(project_dir) as reopened:
         persisted_state = reopened.timeline.load_timeline(state.sequence.id)
         assert persisted_state == state
-        compiler = TimelineCompiler(reopened)
+        compiler = TimelineCompiler(reopened, RuntimeContext.discover().paths)
         compiled = compiler.compile(persisted_state)
         assert compiled.duration_frames == persisted_state.duration_frames
 

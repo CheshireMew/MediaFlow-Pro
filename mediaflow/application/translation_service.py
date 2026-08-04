@@ -27,6 +27,20 @@ class _TranslationBatch:
     context_before: tuple[SubtitleSegment, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedDocumentTranslation:
+    document: SubtitleDocument
+    exists: bool
+    segments: tuple[SubtitleSegment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedSegmentTranslation:
+    document_id: str
+    segments: tuple[SubtitleSegment, ...]
+    result: tuple[SubtitleSegment, ...]
+
+
 class TranslationService:
     BATCH_SIZE = 10
     CONTEXT_OVERLAP = 3
@@ -44,7 +58,7 @@ class TranslationService:
         self.cache = cache
         self.publication = publication
 
-    def translate_document(
+    def prepare_document_translation(
         self,
         document_id: str,
         *,
@@ -55,7 +69,7 @@ class TranslationService:
         progress: TranslationProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
         operation_id: str | None = None,
-    ) -> SubtitleDocument:
+    ) -> PreparedDocumentTranslation:
         mode = validate_translation_mode(mode)
         source_document = self.repository.subtitles.get_subtitle_document(document_id)
         source_segments = self.repository.subtitles.list_subtitle_segments(document_id)
@@ -146,24 +160,61 @@ class TranslationService:
         if progress:
             progress(OperationProgress.indeterminate("translation_saving"))
 
+        return PreparedDocumentTranslation(
+            document=document,
+            exists=existing is not None,
+            segments=tuple(output_segments),
+        )
+
+    def commit_document_translation(
+        self,
+        prepared: PreparedDocumentTranslation,
+    ) -> SubtitleDocument:
         def save_translation() -> None:
-            if existing is None:
+            if not prepared.exists:
                 self.repository.subtitles.create_subtitle_document(
-                    document,
-                    output_segments,
+                    prepared.document,
+                    list(prepared.segments),
                 )
             else:
-                self.repository.subtitles.save_subtitle_document(document)
+                self.repository.subtitles.save_subtitle_document(
+                    prepared.document
+                )
                 self.repository.subtitles.save_subtitle_segments(
-                    document.id,
-                    output_segments,
+                    prepared.document.id,
+                    list(prepared.segments),
                 )
 
         self.publication.commit_document_change(
-            document.id,
+            prepared.document.id,
             save_translation,
         )
-        return document
+        return prepared.document
+
+    def translate_document(
+        self,
+        document_id: str,
+        *,
+        target_language: str,
+        provider: LlmProviderSettings,
+        mode: TranslationMode = "standard",
+        glossary: list[GlossaryTermSettings] | None = None,
+        progress: TranslationProgress | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+        operation_id: str | None = None,
+    ) -> SubtitleDocument:
+        return self.commit_document_translation(
+            self.prepare_document_translation(
+                document_id,
+                target_language=target_language,
+                provider=provider,
+                mode=mode,
+                glossary=glossary,
+                progress=progress,
+                check_cancelled=check_cancelled,
+                operation_id=operation_id,
+            )
+        )
 
     def translate_segments_preserving_timing(
         self,
@@ -207,7 +258,7 @@ class TranslationService:
             check_cancelled=check_cancelled,
         )
 
-    def translate_selected_in_document(
+    def prepare_selected_in_document_translation(
         self,
         document_id: str,
         segment_ids: list[str],
@@ -218,7 +269,7 @@ class TranslationService:
         glossary: list[GlossaryTermSettings] | None = None,
         progress: TranslationProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
-    ) -> list[SubtitleSegment]:
+    ) -> PreparedSegmentTranslation:
         wanted = set(segment_ids)
         if not wanted:
             raise ValueError("请先选择要翻译的字幕段")
@@ -237,19 +288,41 @@ class TranslationService:
         )
         replacements = {segment.id: segment for segment in translated}
         self._checkpoint(check_cancelled)
-        self.publication.commit_document_change(
-            document_id,
-            lambda: self.repository.subtitles.save_subtitle_segments(
-                document_id,
-                [
-                    replacements.get(segment.id, segment)
-                    for segment in all_segments
-                ],
+        return PreparedSegmentTranslation(
+            document_id=document_id,
+            segments=tuple(
+                replacements.get(segment.id, segment)
+                for segment in all_segments
             ),
+            result=tuple(translated),
         )
-        return translated
 
-    def translate_selected_to_document(
+    def translate_selected_in_document(
+        self,
+        document_id: str,
+        segment_ids: list[str],
+        *,
+        target_language: str,
+        provider: LlmProviderSettings,
+        mode: TranslationMode = "standard",
+        glossary: list[GlossaryTermSettings] | None = None,
+        progress: TranslationProgress | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> list[SubtitleSegment]:
+        return self.commit_segment_translation(
+            self.prepare_selected_in_document_translation(
+                document_id,
+                segment_ids,
+                target_language=target_language,
+                provider=provider,
+                mode=mode,
+                glossary=glossary,
+                progress=progress,
+                check_cancelled=check_cancelled,
+            )
+        )
+
+    def prepare_selected_to_document_translation(
         self,
         source_document_id: str,
         target_document_id: str,
@@ -261,7 +334,7 @@ class TranslationService:
         glossary: list[GlossaryTermSettings] | None = None,
         progress: TranslationProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
-    ) -> list[SubtitleSegment]:
+    ) -> PreparedSegmentTranslation:
         source_document = self.repository.subtitles.get_subtitle_document(source_document_id)
         target_document = self.repository.subtitles.get_subtitle_document(target_document_id)
         if target_document.source_document_id != source_document.id:
@@ -332,14 +405,51 @@ class TranslationService:
         ] + additions
         updated.sort(key=lambda segment: (segment.start_frame, segment.end_frame, segment.id))
         self._checkpoint(check_cancelled)
-        self.publication.commit_document_change(
-            target_document_id,
-            lambda: self.repository.subtitles.save_subtitle_segments(
+        return PreparedSegmentTranslation(
+            document_id=target_document_id,
+            segments=tuple(updated),
+            result=tuple([*replacements.values(), *additions]),
+        )
+
+    def translate_selected_to_document(
+        self,
+        source_document_id: str,
+        target_document_id: str,
+        segment_ids: list[str],
+        *,
+        target_language: str,
+        provider: LlmProviderSettings,
+        mode: TranslationMode = "standard",
+        glossary: list[GlossaryTermSettings] | None = None,
+        progress: TranslationProgress | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> list[SubtitleSegment]:
+        return self.commit_segment_translation(
+            self.prepare_selected_to_document_translation(
+                source_document_id,
                 target_document_id,
-                updated,
+                segment_ids,
+                target_language=target_language,
+                provider=provider,
+                mode=mode,
+                glossary=glossary,
+                progress=progress,
+                check_cancelled=check_cancelled,
+            )
+        )
+
+    def commit_segment_translation(
+        self,
+        prepared: PreparedSegmentTranslation,
+    ) -> list[SubtitleSegment]:
+        self.publication.commit_document_change(
+            prepared.document_id,
+            lambda: self.repository.subtitles.save_subtitle_segments(
+                prepared.document_id,
+                list(prepared.segments),
             ),
         )
-        return [*replacements.values(), *additions]
+        return list(prepared.result)
 
     def _translate_strict_batch(
         self,

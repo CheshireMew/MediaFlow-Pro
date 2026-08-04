@@ -312,13 +312,16 @@ class TranscriptionTaskHandler(ProjectTaskHandler):
                 )
             )
 
-        _subtitle_asset, output = self.subtitle_publication.commit_document_change(
-            document_id,
-            save_transcript,
-            destination=output,
-            prepare_output=prepare_output,
-            after_write=update_fingerprint,
-        )
+        def commit_transcript() -> None:
+            self.subtitle_publication.commit_document_change(
+                document_id,
+                save_transcript,
+                destination=output,
+                prepare_output=prepare_output,
+                after_write=update_fingerprint,
+            )
+
+        context.defer_project_change(commit_transcript)
         return self.completion(output)
 
     @staticmethod

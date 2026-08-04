@@ -26,7 +26,7 @@ from mediaflow.domain.downloads import DownloadEntry, DownloadPlan, DownloadRequ
 from mediaflow.domain.enums import AssetKind, TaskKind, TaskStatus, TrackKind
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import MediaMetadata, ProjectProfile
-from mediaflow.domain.settings import GlobalSettings
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import (
     AnalyzeDownloadCommand,
     AnalyzeScenesCommand,
@@ -41,6 +41,7 @@ from mediaflow.domain.tasks import (
 )
 from mediaflow.domain.timeline import ClipTransform, ClipTransformKeyframe
 from mediaflow.infrastructure.media_probe import ProbeResult
+from mediaflow.infrastructure.output_reservation import output_set_transaction
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.visual_analysis import write_visual_analysis
@@ -126,6 +127,10 @@ class _AnalysisRuntime:
         self.analyze_release = analyze_release
         self.write_calls = 0
 
+    @staticmethod
+    def output_transaction(destinations, *, overwrite):
+        return output_set_transaction(destinations, overwrite=overwrite)
+
     def analyze_sequence_bounds(self, *_args, **_kwargs):
         raise AssertionError("sequence boundary runtime is not used by these tests")
 
@@ -196,10 +201,18 @@ def _task_service(
     kind: TaskKind,
     handler,
 ) -> TaskService:
+    def commit_completion(_task, persist, changes):
+        with repository.transaction(), repository.coalesced_revision():
+            completed = persist()
+            for change in changes:
+                change()
+        return completed
+
     service = TaskService(
         TaskRepository(repository),
         max_workers=1,
         recover_expired=False,
+        settlement_committer=commit_completion,
     )
     service.register(kind, handler)
     return service
@@ -404,7 +417,7 @@ def test_download_asset_and_subtitle_registration_rolls_back_as_one_unit(
         AssetService(repository, _Probe(AssetKind.SUBTITLE)),
         _DownloadRuntime([first, second]),
         _subtitle_acquisition(repository),
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     service = _task_service(repository, TaskKind.DOWNLOAD, handler.handle)
     plan = _download_plan()
@@ -461,7 +474,7 @@ def test_download_database_commit_failure_withdraws_every_generated_subtitle(
         AssetService(repository, _Probe(AssetKind.SUBTITLE)),
         _DownloadRuntime([first, second]),
         _subtitle_acquisition(repository),
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     plan = _download_plan()
     task = Task(
@@ -486,6 +499,12 @@ def test_download_database_commit_failure_withdraws_every_generated_subtitle(
             match="injected download database commit failure",
         ):
             handler.handle(context)
+            with (
+                repository.transaction(),
+                repository.coalesced_revision(),
+            ):
+                for change in context.project_changes():
+                    change()
 
         assert repository.catalog.list_assets() == []
         assert repository.subtitles.list_subtitle_documents() == []
@@ -533,7 +552,7 @@ def test_visual_analysis_cancelled_at_saving_publishes_no_file_or_timeline_edit(
     handler = AnalysisTaskHandlers(
         repository,
         runtime,
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     service = _task_service(repository, TaskKind.ANALYZE, handler.handle)
     cancellation_requested = threading.Event()
@@ -598,7 +617,7 @@ def test_visual_analysis_timeline_failure_rolls_back_db_and_archives_json(
     handler = AnalysisTaskHandlers(
         repository,
         runtime,
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     original = TimelineEditor.replace_scene_markers
 
@@ -652,7 +671,7 @@ def test_visual_analysis_cancelled_after_publication_completes_and_is_consumable
     handler = AnalysisTaskHandlers(
         repository,
         runtime,
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     published = threading.Event()
     allow_return = threading.Event()
@@ -708,7 +727,7 @@ def test_download_analysis_cancellation_reaches_runtime_before_artifact_write(
     handler = AnalysisTaskHandlers(
         repository,
         runtime,
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     service = _task_service(repository, TaskKind.ANALYZE, handler.handle)
     try:
@@ -745,7 +764,7 @@ def test_download_analysis_cancelled_after_write_completes_with_persisted_outcom
     handler = AnalysisTaskHandlers(
         repository,
         _AnalysisRuntime(download_plan=plan),
-        lambda: GlobalSettings(),
+        lambda: ServiceSettings(),
     )
     published = threading.Event()
     allow_return = threading.Event()

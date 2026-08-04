@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mediaflow.composition import EditorProject
     from mediaflow.desktop.controllers.project_controller import ProjectSession
+    from mediaflow.service.desktop_proxy import RemoteEditorProject
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class WebEditorContext:
 def require_mutable_web_clip(
     session: ProjectSession,
     clip_id: str,
-) -> EditorProject:
+) -> RemoteEditorProject:
     session._require_writable()
     if not clip_id:
         raise ValueError("请先选择网页片段")

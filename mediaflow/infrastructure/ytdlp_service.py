@@ -57,8 +57,9 @@ def _youtube_dl(
 class YtDlpDownloadService:
     """The sole URL analysis and download implementation in MediaFlow Pro."""
 
-    def __init__(self):
-        self.platforms = PlatformMediaResolver()
+    def __init__(self, paths: RuntimePaths):
+        self.paths = paths
+        self.platforms = PlatformMediaResolver(paths.chromium)
 
     def analyze(
         self,
@@ -70,7 +71,7 @@ class YtDlpDownloadService:
         check_cancelled: CancellationCheck | None = None,
     ) -> DownloadPlan:
         _checkpoint(check_cancelled)
-        prepare_ytdlp_import()
+        prepare_ytdlp_import(self.paths)
         import yt_dlp
 
         normalized_url = self.normalize_url(url)
@@ -123,6 +124,7 @@ class YtDlpDownloadService:
         *,
         settings: DownloadSettings,
         cookies: CookieStore,
+        paths: RuntimePaths,
         check_cancelled: CancellationCheck | None = None,
     ) -> DownloadPlan:
         """Analyze through the single configured cookie and proxy path."""
@@ -130,7 +132,7 @@ class YtDlpDownloadService:
         cookie_file = settings.cookie_file or (
             str(managed_cookie) if managed_cookie is not None else None
         )
-        return cls().analyze(
+        return cls(paths).analyze(
             url,
             cookie_file=cookie_file,
             browser_cookies=None if cookie_file else settings.browser_cookies,
@@ -275,7 +277,7 @@ class YtDlpDownloadService:
         if request.resolution != "audio":
             options["merge_output_format"] = "mp4"
         _checkpoint(check_cancelled)
-        prepare_ytdlp_import()
+        prepare_ytdlp_import(self.paths)
         import yt_dlp
 
         output_template.parent.mkdir(parents=True, exist_ok=True)
@@ -344,8 +346,8 @@ class YtDlpDownloadService:
             raise RuntimeError("yt-dlp completed without an observable downloaded file")
         return outputs
 
-    @staticmethod
     def _base_options(
+        self,
         cookie_file: str | None,
         browser_cookies: str | None,
         proxy: str | None,
@@ -364,9 +366,7 @@ class YtDlpDownloadService:
             "file_access_retries": 3,
             "socket_timeout": YTDLP_SOCKET_TIMEOUT_SECONDS,
         }
-        runtime_paths = RuntimePaths.discover()
-        if runtime_paths.ffmpeg is not None:
-            options["ffmpeg_location"] = str(runtime_paths.ffmpeg.parent)
+        options["ffmpeg_location"] = str(self.paths.ffmpeg.parent)
         if cookie_file:
             options["cookiefile"] = str(Path(cookie_file).resolve(strict=True))
         if browser_cookies:

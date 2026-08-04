@@ -116,6 +116,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                     str(project_row["id"]),
                     record,
                 )
+                self._touch_project(connection)
                 temporary.replace(snapshot_path)
                 published = True
 

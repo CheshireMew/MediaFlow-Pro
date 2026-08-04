@@ -14,6 +14,9 @@ Rectangle {
 
     property string source: ""
     property string runtimeRoot: ""
+    property string mltLibrary: ""
+    property string mltRepository: ""
+    property string mltData: ""
     property bool hdrEnabled: false
     property int profileWidth: 1920
     property int profileHeight: 1080
@@ -90,6 +93,22 @@ Rectangle {
         playbackRetryTimer.stop();
     }
 
+    function confirmPendingPlaybackProgress() {
+        if (pendingPlaybackMode === 0 || !preview.playing)
+            return;
+        const startFrame = boundedPlaybackFrame(pendingPlaybackFrame);
+        const boundary = pendingPlaybackMode === 2
+            ? Math.max(startFrame, playbackRangeEnd - 1)
+            : pendingPlaybackMode < 0 ? 0 : preview.duration - 1;
+        const available = Math.abs(boundary - startFrame);
+        const required = Math.min(2, Math.max(1, available));
+        const progressed = pendingPlaybackMode < 0
+            ? startFrame - preview.position
+            : preview.position - startFrame;
+        if (progressed >= required)
+            cancelPendingPlayback();
+    }
+
     function attemptPendingPlayback() {
         if (pendingPlaybackMode === 0)
             return;
@@ -99,6 +118,10 @@ Rectangle {
         }
         pendingPlaybackAttempts += 1;
         if (preview.duration <= 0) {
+            playbackRetryTimer.start();
+            return;
+        }
+        if (preview.playing) {
             playbackRetryTimer.start();
             return;
         }
@@ -291,15 +314,17 @@ Rectangle {
             anchors.margins: 1
             source: root.source
             runtimeRoot: root.runtimeRoot
+            mltLibrary: root.mltLibrary
+            mltRepository: root.mltRepository
+            mltData: root.mltData
             hdrEnabled: root.hdrEnabled
             volume: root.previewMuted ? 0.0 : root.previewVolume
             onDroppedFramesChanged: root.droppedFramesReported(droppedFrames)
             onHdrActiveChanged: root.hdrActiveReported(hdrActive)
             onDurationChanged: if (preview.duration > 0 && root.playbackRequested)
                 Qt.callLater(root.attemptPendingPlayback)
-            onPlayingChanged: if (preview.playing)
-                root.cancelPendingPlayback()
             onPositionChanged: {
+                root.confirmPendingPlaybackProgress();
                 const start = root.playbackRangeStart >= 0 ? root.playbackRangeStart : 0;
                 const end = root.playbackRangeEnd > start ? root.playbackRangeEnd : preview.duration;
                 const lastFrame = Math.max(start, end - 1);

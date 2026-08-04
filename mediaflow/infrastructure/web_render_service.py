@@ -36,7 +36,6 @@ from mediaflow.domain.web_media import (
     web_media_sources_have_audio,
     web_runtime_state,
 )
-from mediaflow.infrastructure.chromium_runtime import find_chromium_executable
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegInputPipe, FfmpegRunner
 from mediaflow.infrastructure.file_fingerprint import (
     fingerprint_file,
@@ -533,10 +532,14 @@ class WebRenderCache:
     def __init__(
         self,
         documents: TimelineCompilationDocuments,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
     ):
+        render_identity = paths.render_identity
+        if render_identity is None:
+            raise RuntimeError("Web rendering requires a pinned render runtime identity")
         self.documents = documents
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
+        self.render_identity = render_identity
 
     def target(
         self,
@@ -600,6 +603,7 @@ class WebRenderCache:
         render_state.pop("revision", None)
         payload = {
             "renderer_version": WEB_RENDERER_VERSION,
+            "render_runtime": self.render_identity.model_dump(mode="json"),
             "source_hash": source_hash,
             "state": render_state,
             "sequence": state.sequence.profile.model_dump(mode="json"),
@@ -646,10 +650,10 @@ class WebRenderService:
     def __init__(
         self,
         documents: TimelineCompilationDocuments,
-        paths: RuntimePaths | None = None,
+        paths: RuntimePaths,
     ) -> None:
         self.documents = documents
-        self.paths = paths or RuntimePaths.discover()
+        self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
         self.cache = WebRenderCache(documents, self.paths)
 
@@ -1141,7 +1145,9 @@ class WebRenderService:
         progress=None,
         check_cancelled=None,
     ) -> None:
-        executable = find_chromium_executable()
+        executable = self.paths.chromium
+        if executable is None or not executable.is_file():
+            raise FileNotFoundError("Pinned Playwright Chromium is unavailable")
         engine = get_web_capture_engine(executable)
         manifest = spec.manifest
         package_root = web_package_root(entry, manifest)
