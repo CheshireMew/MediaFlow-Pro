@@ -267,6 +267,10 @@ void MltPreviewItem::play()
 void MltPreviewItem::playRange(int startFrame, int endFrame)
 {
     clearError();
+    m_requestedPosition = qMax(0, startFrame);
+    m_seekPending = false;
+    m_seekRetryAttempts = 0;
+    m_seekRetryTimer.stop();
     emit playRangeRequested(
         startFrame,
         endFrame,
