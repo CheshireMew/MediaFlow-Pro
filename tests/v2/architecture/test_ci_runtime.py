@@ -175,6 +175,12 @@ def test_native_preview_consumes_explicit_runtime_paths_without_layout_guesses()
     assert "libmlt-7.dylib" not in source
     assert "lib/mlt-preview" not in source
     assert "share/mlt" not in source
+    preview_source = (
+        ROOT / "mediaflow" / "desktop" / "native" / "MltPreviewItem.cpp"
+    ).read_text(encoding="utf-8")
+    assert "QFileInfo mltLibraryInfo(mltLibrary)" in preview_source
+    assert "mltLibraryInfo.absolutePath()" in preview_source
+    assert "QLibrary::ExportExternalSymbolsHint" in preview_source
 
 
 def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None:

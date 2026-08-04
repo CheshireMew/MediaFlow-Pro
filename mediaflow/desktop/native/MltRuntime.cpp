@@ -190,7 +190,9 @@ bool MltRuntime::loadApi(const QString &mltLibrary)
     }
     m_library.setFileName(mltLibrary);
     m_library.setLoadHints(
-        QLibrary::ResolveAllSymbolsHint | QLibrary::PreventUnloadHint);
+        QLibrary::ResolveAllSymbolsHint
+        | QLibrary::ExportExternalSymbolsHint
+        | QLibrary::PreventUnloadHint);
     if (!m_library.load()) {
         emit errorOccurred(
             QStringLiteral("Unable to load MLT runtime from %1: %2")

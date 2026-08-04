@@ -2,16 +2,93 @@
 
 #include "MltRuntime.h"
 
+#include <QDir>
+#include <QFileInfo>
+#include <QLibrary>
 #include <QMetaObject>
 #include <QMutexLocker>
 #include <QQuickWindow>
+#include <QSet>
 #include <QSGSimpleTextureNode>
 #include <QtQuick/private/qsgplaintexture_p.h>
+
+#include <memory>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #include <dxgi1_6.h>
 #include <windows.h>
 #endif
+
+namespace {
+#ifndef Q_OS_WIN
+struct PosixRuntimeLibraries final
+{
+    QMutex mutex;
+    QSet<QString> preparedDirectories;
+    std::vector<std::unique_ptr<QLibrary>> libraries;
+};
+
+PosixRuntimeLibraries &posixRuntimeLibraries()
+{
+    static PosixRuntimeLibraries state;
+    return state;
+}
+
+void preloadMltRuntimeLibraries(const QString &mltLibrary)
+{
+    const QFileInfo mltLibraryInfo(mltLibrary);
+    if (!mltLibraryInfo.isFile())
+        return;
+    const QString directoryPath = mltLibraryInfo.absolutePath();
+    PosixRuntimeLibraries &state = posixRuntimeLibraries();
+    const QMutexLocker locker(&state.mutex);
+    if (state.preparedDirectories.contains(directoryPath))
+        return;
+
+    QStringList filters;
+#ifdef Q_OS_MACOS
+    filters << QStringLiteral("*.dylib");
+#else
+    filters << QStringLiteral("*.so") << QStringLiteral("*.so.*");
+#endif
+    QSet<QString> pending;
+    const QFileInfoList entries = QDir(directoryPath).entryInfoList(
+        filters,
+        QDir::Files,
+        QDir::Name);
+    for (const QFileInfo &entry : entries) {
+        if (entry.fileName().startsWith(QStringLiteral("libQt")))
+            continue;
+        const QString canonical = entry.canonicalFilePath();
+        pending.insert(canonical.isEmpty() ? entry.absoluteFilePath() : canonical);
+    }
+
+    bool madeProgress = true;
+    while (madeProgress && !pending.isEmpty()) {
+        madeProgress = false;
+        QStringList candidates = pending.values();
+        candidates.sort(Qt::CaseSensitive);
+        for (const QString &candidate : candidates) {
+            auto library = std::make_unique<QLibrary>(candidate);
+            library->setLoadHints(
+                QLibrary::ExportExternalSymbolsHint
+                | QLibrary::PreventUnloadHint);
+            if (!library->load())
+                continue;
+            pending.remove(candidate);
+            state.libraries.push_back(std::move(library));
+            madeProgress = true;
+        }
+    }
+    state.preparedDirectories.insert(directoryPath);
+}
+#else
+void preloadMltRuntimeLibraries(const QString &)
+{
+}
+#endif
+}
 
 MltPreviewItem::MltPreviewItem(QQuickItem *parent)
     : QQuickItem(parent)
@@ -116,6 +193,7 @@ void MltPreviewItem::setMltLibrary(const QString &value)
 {
     if (m_mltLibrary == value)
         return;
+    preloadMltRuntimeLibraries(value);
     m_mltLibrary = value;
     emit mltLibraryChanged();
     scheduleOpen();
