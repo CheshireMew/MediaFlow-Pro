@@ -55,10 +55,12 @@ def test_three_platform_media_runtime_has_one_versioned_contract() -> None:
         assert target["playwright"]["chromium_revision"] == "1228"
         assert target["playwright"]["browser_version"] == "149.0.7827.55"
         assert re.fullmatch(r"[0-9a-f]{64}", target["playwright"]["archive_sha256"])
-        assert [archive["name"] for archive in target["qt_archives"]] == [
-            "qtbase",
-            "qtdeclarative",
-        ]
+        expected_qt_archives = ["qtbase", "qtdeclarative"]
+        if target["operating_system"] == "linux":
+            expected_qt_archives.append("icu")
+        assert [archive["name"] for archive in target["qt_archives"]] == (
+            expected_qt_archives
+        )
         assert all(
             re.fullmatch(r"[0-9a-f]{64}", archive["sha256"])
             for archive in target["qt_archives"]

@@ -298,7 +298,12 @@ def load_runtime_contract(
         ),
     )
     archives = record.get("qt_archives") or ()
-    if len(archives) != 2 or not all(isinstance(item, dict) for item in archives):
+    expected_qt_archives = {"qtbase", "qtdeclarative"}
+    if selected.operating_system == "linux":
+        expected_qt_archives.add("icu")
+    if len(archives) != len(expected_qt_archives) or not all(
+        isinstance(item, dict) for item in archives
+    ):
         raise ValueError("Runtime qt_archives must be an array of objects")
     normalized_archives = tuple(
         {
@@ -308,6 +313,9 @@ def load_runtime_contract(
         }
         for item in archives
     )
+    if {item["name"] for item in normalized_archives} != expected_qt_archives:
+        expected = ", ".join(sorted(expected_qt_archives))
+        raise ValueError(f"Runtime {selected.key} qt_archives must contain {expected}")
     return RuntimeContract(
         target=selected,
         minimum_release=_required_text(record, "minimum_release", selected.key),

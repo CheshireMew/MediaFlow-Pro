@@ -118,6 +118,11 @@
           "name": "qtdeclarative",
           "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6111/qt6_6111/qt.qt6.6111.linux_gcc_64/6.11.1-0-202605090529qtdeclarative-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z",
           "sha256": "1eaeb3dc66eb50b2513791b694caaf07e6e667cd296cea8f97df1b1a675f550d"
+        },
+        {
+          "name": "icu",
+          "url": "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop/qt6_6111/qt6_6111/qt.qt6.6111.linux_gcc_64/6.11.1-0-202605090529icu-linux-Rhel8.6-x86_64.7z",
+          "sha256": "6ea4a612560b6eb39173bcfaa35abc08904fc124e4c0f93e1b39dd22368c33c8"
         }
       ],
       "playwright": {

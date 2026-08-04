@@ -42,8 +42,12 @@ def _load_qt_contract(
     archives = qt.get("archives")
     if not isinstance(archives, list) or not archives:
         raise RuntimeError("The Qt runtime contract must declare pinned archives")
-    if {item.get("name") for item in archives} != {"qtbase", "qtdeclarative"}:
-        raise RuntimeError("The Qt SDK must contain exactly qtbase and qtdeclarative")
+    required_archives = {"qtbase", "qtdeclarative"}
+    if target.operating_system == "linux":
+        required_archives.add("icu")
+    if {item.get("name") for item in archives} != required_archives:
+        expected = ", ".join(sorted(required_archives))
+        raise RuntimeError(f"The {target.key} Qt SDK must contain exactly {expected}")
     for item in archives:
         checksum = item.get("sha256")
         if not isinstance(checksum, str) or len(checksum) != 64:

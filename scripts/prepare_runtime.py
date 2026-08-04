@@ -81,6 +81,7 @@ def _extract_archive(
     if archive_format == "zip":
         with zipfile.ZipFile(archive) as source:
             source.extractall(destination)
+        _restore_zip_permissions(archive, destination)
         return
     if archive_format == "txz":
         with tarfile.open(archive, mode="r:xz") as source:
@@ -126,6 +127,22 @@ def _extract_archive(
             ["hdiutil", "detach", str(mount_point)],
             check=True,
         )
+
+
+def _restore_zip_permissions(archive: Path, destination: Path) -> None:
+    if os.name == "nt":
+        return
+    root = destination.resolve()
+    with zipfile.ZipFile(archive) as source:
+        for member in source.infolist():
+            mode = (member.external_attr >> 16) & 0o777
+            if mode == 0:
+                continue
+            extracted = (destination / member.filename).resolve()
+            if not extracted.is_relative_to(root):
+                raise RuntimeError(f"Archive member escapes the runtime root: {member.filename}")
+            if extracted.exists():
+                extracted.chmod(mode)
 
 
 def _require_runtime_layout(paths: RuntimePaths) -> None:
@@ -222,7 +239,13 @@ def _prepare_chromium(runtime_root: Path, contract: RuntimeContract) -> None:
     browser = contract.playwright
     install_root = runtime_root / "deps" / f"chromium-{browser.browser_version}"
     executable = contract.chromium_directory(runtime_root) / browser.executable
+    archive = _download(
+        runtime_root,
+        url=browser.archive_url,
+        sha256=browser.archive_sha256,
+    )
     if executable.is_file():
+        _restore_zip_permissions(archive, install_root)
         _make_executable(executable)
         return
     if install_root.exists():
@@ -230,11 +253,6 @@ def _prepare_chromium(runtime_root: Path, contract: RuntimeContract) -> None:
             "An incomplete pinned Chromium runtime already exists and will not be "
             f"overwritten: {install_root}"
         )
-    archive = _download(
-        runtime_root,
-        url=browser.archive_url,
-        sha256=browser.archive_sha256,
-    )
     staging = runtime_root / "deps" / f"staging-chromium-{uuid.uuid4().hex}"
     staging.mkdir(parents=True)
     try:

@@ -11,6 +11,7 @@ This source repository does not contain a generated portable runtime. When a por
 | Python | 3.12.x | Python Software Foundation License | https://www.python.org/ |
 | PySide6 / Qt for Python | 6.11.1 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only | https://doc.qt.io/qtforpython-6/ |
 | Qt | 6.11.1 | GPL-3.0-only, LGPL-3.0-only, or commercial terms depending on module and distribution choice | https://www.qt.io/licensing/open-source-lgpl-obligations |
+| ICU (Linux Qt build runtime) | 73.x | ICU License | https://icu.unicode.org/ |
 | MLT Framework | 7.40.0 | Core libraries LGPL-2.1; melt and individual modules may use GPL or other compatible licenses | https://www.mltframework.org/docs/copyrightpolicy/ |
 | FFmpeg | n8.1.2 tested runtime | GPLv3-or-later for the tested build because it is configured with `--enable-gpl --enable-version3` | https://ffmpeg.org/legal.html |
 | yt-dlp | 2026.3.17 | Unlicense | https://github.com/yt-dlp/yt-dlp |

@@ -486,7 +486,7 @@ jobs:
         run: |
           python -m playwright install-deps chromium
           sudo apt-get update
-          sudo apt-get install -y weston xvfb
+          sudo apt-get install -y libgl1-mesa-dev libva2 libva-drm2 libva-x11-2 libvdpau1 weston xvfb
       - name: Prepare the exact target media and Chromium runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Install the target Qt SDK
@@ -608,7 +608,9 @@ jobs:
           key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Install Linux libraries required by the reviewed MLT runtime
         if: runner.os == 'Linux'
-        run: python -m playwright install-deps chromium
+        run: |
+          python -m playwright install-deps chromium
+          sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
       - name: Prepare the exact target runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Prove the producer architecture
@@ -701,7 +703,9 @@ jobs:
           key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Install Linux libraries required by the reviewed MLT runtime
         if: runner.os == 'Linux'
-        run: python -m playwright install-deps chromium
+        run: |
+          python -m playwright install-deps chromium
+          sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
       - name: Prepare the exact consumer runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Download the foreign project artifact
