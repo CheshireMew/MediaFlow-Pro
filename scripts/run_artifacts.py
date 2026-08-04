@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import time
 import traceback
 import uuid
 from collections.abc import Iterator
@@ -26,6 +27,8 @@ _MANAGED_RUN_PATTERN = re.compile(
     r"^r-\d{8}T\d{6}\.\d{6}Z-\d+-[0-9a-f]{8}$"
 )
 _RunStatus = Literal["running", "passed", "failed"]
+_LIFECYCLE_LOCK_TIMEOUT_SECONDS = 5.0
+_LIFECYCLE_LOCK_POLL_SECONDS = 0.01
 
 
 def _timestamp() -> str:
@@ -54,8 +57,18 @@ def _is_link(path: Path) -> bool:
 @contextmanager
 def _lifecycle_lock(category_root: Path) -> Iterator[None]:
     lock_path = category_root / ".lifecycle.lock"
-    with ProcessFileLock(lock_path):
+    lock = ProcessFileLock(lock_path)
+    deadline = time.monotonic() + _LIFECYCLE_LOCK_TIMEOUT_SECONDS
+    while not lock.acquire():
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Timed out waiting for verification run lifecycle lock: {lock_path}"
+            )
+        time.sleep(_LIFECYCLE_LOCK_POLL_SECONDS)
+    try:
         yield
+    finally:
+        lock.release()
 
 
 def _write_manifest(path: Path, payload: dict[str, object]) -> None:

@@ -457,7 +457,9 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
         const QMutexLocker locker(&m_frameMutex);
         m_frame = QImage();
         m_pendingFrame = QImage();
-        m_pendingRequestId = m_requestId.load(std::memory_order_acquire);
+        m_pendingPosition = 0;
+        m_pendingDuration = 0;
+        m_pendingRequestId = 0;
     }
     if (m_playing) {
         m_playing = false;
