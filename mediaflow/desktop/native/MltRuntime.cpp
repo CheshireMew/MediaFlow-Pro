@@ -964,11 +964,24 @@ void MltRuntime::deliverPresentationFrame(
         return;
     }
 
+    const int boundaryFrame = m_rate > 0.0
+        ? m_playbackEnd - 1
+        : m_playbackStart;
+    const bool crossedBoundary = m_rate > 0.0
+        ? frame > boundaryFrame
+        : frame < boundaryFrame;
+    if (crossedBoundary) {
+        const quint64 requestId = m_requestId.load(std::memory_order_acquire);
+        pause(requestId);
+        if (m_position != boundaryFrame)
+            decodeStillFrame(boundaryFrame);
+        return;
+    }
+
     m_position = frame;
     const quint64 requestId = m_requestId.load(std::memory_order_acquire);
     emit frameReady(image, frame, m_duration, requestId);
-    if ((m_rate > 0.0 && frame >= m_playbackEnd - 1)
-        || (m_rate < 0.0 && frame <= m_playbackStart)) {
+    if (frame == boundaryFrame) {
         pause(requestId);
     }
 }
