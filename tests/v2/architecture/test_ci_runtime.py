@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import py7zr
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.runtime_contract import PlatformTarget, load_runtime_contract
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from scripts import prepare_ci_qt
+from scripts import prepare_ci_qt, prepare_runtime
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_LOCK = ROOT / "runtime.lock.json"
@@ -181,6 +182,57 @@ def test_native_preview_consumes_explicit_runtime_paths_without_layout_guesses()
     assert "QFileInfo mltLibraryInfo(mltLibrary)" in preview_source
     assert "mltLibraryInfo.absolutePath()" in preview_source
     assert "QLibrary::ExportExternalSymbolsHint" in preview_source
+    assert "#ifdef Q_OS_LINUX" in preview_source
+    runtime_preparation = (ROOT / "scripts" / "prepare_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"install_name_tool", "-add_rpath"' in runtime_preparation
+    assert '"@loader_path/../../Frameworks"' in runtime_preparation
+    assert '["codesign", "--force", "--sign", "-"' in runtime_preparation
+    assert runtime_preparation.count("_prepare_macos_runtime_rpaths(") == 3
+
+
+def test_macos_runtime_repairs_framework_and_mlt_plugin_rpaths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = tmp_path / "Shotcut.app"
+    framework = bundle / "Contents" / "Frameworks" / "libavcodec.62.dylib"
+    plugin = bundle / "Contents" / "PlugIns" / "mlt" / "libmltavformat.so"
+    framework.parent.mkdir(parents=True)
+    plugin.parent.mkdir(parents=True)
+    framework.write_bytes(b"framework")
+    plugin.write_bytes(b"plugin")
+    commands: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        prepare_runtime.PlatformTarget,
+        "current",
+        lambda: PlatformTarget("macos", "arm64"),
+    )
+
+    def record(command: list[str], **_kwargs):
+        commands.append(tuple(command))
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(prepare_runtime.subprocess, "run", record)
+
+    prepare_runtime._prepare_macos_runtime_rpaths(bundle)
+
+    assert (
+        "install_name_tool",
+        "-add_rpath",
+        "@loader_path",
+        str(framework.resolve()),
+    ) in commands
+    assert (
+        "install_name_tool",
+        "-add_rpath",
+        "@loader_path/../../Frameworks",
+        str(plugin.resolve()),
+    ) in commands
+    signed = [command[-1] for command in commands if command[0] == "codesign"]
+    assert signed == [str(framework.resolve()), str(plugin.resolve())]
 
 
 def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None:

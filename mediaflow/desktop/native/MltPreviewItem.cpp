@@ -21,17 +21,17 @@
 #endif
 
 namespace {
-#ifndef Q_OS_WIN
-struct PosixRuntimeLibraries final
+#ifdef Q_OS_LINUX
+struct LinuxRuntimeLibraries final
 {
     QMutex mutex;
     QSet<QString> preparedDirectories;
     std::vector<std::unique_ptr<QLibrary>> libraries;
 };
 
-PosixRuntimeLibraries &posixRuntimeLibraries()
+LinuxRuntimeLibraries &linuxRuntimeLibraries()
 {
-    static PosixRuntimeLibraries state;
+    static LinuxRuntimeLibraries state;
     return state;
 }
 
@@ -41,17 +41,13 @@ void preloadMltRuntimeLibraries(const QString &mltLibrary)
     if (!mltLibraryInfo.isFile())
         return;
     const QString directoryPath = mltLibraryInfo.absolutePath();
-    PosixRuntimeLibraries &state = posixRuntimeLibraries();
+    LinuxRuntimeLibraries &state = linuxRuntimeLibraries();
     const QMutexLocker locker(&state.mutex);
     if (state.preparedDirectories.contains(directoryPath))
         return;
 
     QStringList filters;
-#ifdef Q_OS_MACOS
-    filters << QStringLiteral("*.dylib");
-#else
     filters << QStringLiteral("*.so") << QStringLiteral("*.so.*");
-#endif
     QSet<QString> pending;
     const QFileInfoList entries = QDir(directoryPath).entryInfoList(
         filters,

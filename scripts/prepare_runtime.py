@@ -145,6 +145,45 @@ def _restore_zip_permissions(archive: Path, destination: Path) -> None:
                 extracted.chmod(mode)
 
 
+def _ensure_macos_rpath(binary: Path, rpath: str) -> None:
+    inspected = subprocess.run(
+        ["otool", "-l", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if f"path {rpath} " in inspected.stdout:
+        return
+    subprocess.run(
+        ["install_name_tool", "-add_rpath", rpath, str(binary)],
+        check=True,
+    )
+    subprocess.run(
+        ["codesign", "--force", "--sign", "-", str(binary)],
+        check=True,
+    )
+
+
+def _prepare_macos_runtime_rpaths(bundle_root: Path) -> None:
+    if PlatformTarget.current().operating_system != "macos":
+        return
+    frameworks = bundle_root / "Contents" / "Frameworks"
+    repository = bundle_root / "Contents" / "PlugIns" / "mlt"
+    if not frameworks.is_dir():
+        raise FileNotFoundError(frameworks)
+    if not repository.is_dir():
+        raise FileNotFoundError(repository)
+    targets: dict[Path, str] = {}
+    for binary in frameworks.glob("*.dylib"):
+        if binary.is_file():
+            targets[binary.resolve()] = "@loader_path"
+    for plugin in repository.glob("*.so"):
+        if plugin.is_file():
+            targets[plugin.resolve()] = "@loader_path/../../Frameworks"
+    for binary, rpath in sorted(targets.items(), key=lambda item: str(item[0])):
+        _ensure_macos_rpath(binary, rpath)
+
+
 def _require_runtime_layout(paths: RuntimePaths) -> None:
     required_files = {
         "ffmpeg": paths.ffmpeg,
@@ -204,6 +243,8 @@ def _prepare_bundle(runtime_root: Path, contract: RuntimeContract) -> None:
     if bundle_root.is_dir():
         if contract.target.operating_system == "windows":
             _prepare_windows_preview_repository(bundle_root)
+        elif contract.target.operating_system == "macos":
+            _prepare_macos_runtime_rpaths(bundle_root)
         return
     if install_root.exists():
         raise RuntimeError(
@@ -226,6 +267,8 @@ def _prepare_bundle(runtime_root: Path, contract: RuntimeContract) -> None:
             )
         if contract.target.operating_system == "windows":
             _prepare_windows_preview_repository(staged_bundle)
+        elif contract.target.operating_system == "macos":
+            _prepare_macos_runtime_rpaths(staged_bundle)
         install_root.parent.mkdir(parents=True, exist_ok=True)
         staging.replace(install_root)
     except BaseException as error:
