@@ -675,7 +675,11 @@ class FasterWhisperCliEngine:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if os.name == "nt"
+                else 0
+            ),
         )
         lines: queue.Queue[str | None] = queue.Queue()
 
@@ -810,7 +814,11 @@ def _cuda_free_memory_bytes() -> int | None:
         text=True,
         timeout=5,
         check=False,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        creationflags=(
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if os.name == "nt"
+            else 0
+        ),
     )
     if result.returncode != 0:
         return None

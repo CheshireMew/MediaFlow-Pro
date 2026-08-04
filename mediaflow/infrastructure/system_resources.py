@@ -24,7 +24,10 @@ def available_physical_memory_bytes() -> int:
 
         status = MemoryStatus()
         status.length = ctypes.sizeof(MemoryStatus)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        windll = getattr(ctypes, "windll", None)
+        if windll is not None and windll.kernel32.GlobalMemoryStatusEx(
+            ctypes.byref(status)
+        ):
             return max(1, int(status.available_physical))
     try:
         sysconf = getattr(os, "sys" + "conf")

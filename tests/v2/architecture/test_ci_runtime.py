@@ -253,6 +253,7 @@ def test_portable_ci_builds_and_executes_linux_and_apple_silicon_chains() -> Non
     assert "Type-check on the actual target platform" in workflow
     assert "linux-x86_64" in workflow
     assert "macos-arm64" in workflow
+    assert "libxcb-cursor0" in workflow
     assert "xvfb-run -a env QT_QPA_PLATFORM=xcb" in workflow
     assert "weston --backend=headless-backend.so" in workflow
     assert "QT_QPA_PLATFORM=wayland" in workflow

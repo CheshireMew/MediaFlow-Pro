@@ -1306,7 +1306,11 @@ class WebRenderService:
             encoding="utf-8",
             errors="replace",
             timeout=30,
-            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if os.name == "nt"
+                else 0
+            ),
         )
         if result.returncode != 0:
             raise RuntimeError(f"FFprobe rejected editable web media cache: {result.stderr.strip()}")

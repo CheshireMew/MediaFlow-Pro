@@ -29,7 +29,8 @@ def _launch_windows_service() -> int:
 
         startup = services.Get("Win32_ProcessStartup").SpawnInstance_()
         startup.Properties_.Item("CreateFlags").Value = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         )
         startup.Properties_.Item("ShowWindow").Value = 0
         startup.Properties_.Item("EnvironmentVariables").Value = [

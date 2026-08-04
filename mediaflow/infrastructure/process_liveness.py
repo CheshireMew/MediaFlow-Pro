@@ -3,10 +3,12 @@ from __future__ import annotations
 import ctypes
 import os
 from ctypes import wintypes
+from typing import Any, cast
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_INVALID_PARAMETER = 87
 _STILL_ACTIVE = 259
+_WINDOWS_CTYPES = cast(Any, ctypes)
 
 
 def process_is_alive(pid: int) -> bool:
@@ -34,7 +36,7 @@ def process_is_alive(pid: int) -> bool:
 
 
 def _windows_process_is_alive(pid: int) -> bool:
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _WINDOWS_CTYPES.WinDLL("kernel32", use_last_error=True)
     open_process = kernel32.OpenProcess
     open_process.argtypes = (
         wintypes.DWORD,
@@ -58,7 +60,7 @@ def _windows_process_is_alive(pid: int) -> bool:
         pid,
     )
     if not handle:
-        return ctypes.get_last_error() != _ERROR_INVALID_PARAMETER
+        return _WINDOWS_CTYPES.get_last_error() != _ERROR_INVALID_PARAMETER
     try:
         exit_code = wintypes.DWORD()
         if not get_exit_code_process(
