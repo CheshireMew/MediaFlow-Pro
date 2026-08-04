@@ -495,7 +495,10 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
         )
 
     with _open_writable(root) as migrated:
-        assert migrated._fetchone("SELECT version FROM schema_info")["version"] == 43
+        assert (
+            migrated._fetchone("SELECT version FROM schema_info")["version"]
+            == PROJECT_SCHEMA_VERSION
+        )
         current_command = json.loads(
             migrated._fetchone(
                 "SELECT command_json FROM undo_group WHERE id='legacy-full-state'"
@@ -521,7 +524,7 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
         snapshot.row_factory = sqlite3.Row
         assert snapshot.execute(
             "SELECT version FROM schema_info WHERE component='project'"
-        ).fetchone()["version"] == 43
+        ).fetchone()["version"] == PROJECT_SCHEMA_VERSION
         snapshot_command = json.loads(
             snapshot.execute(
                 "SELECT command_json FROM undo_group WHERE id='legacy-full-state'"
@@ -647,7 +650,7 @@ def test_version_thirty_three_project_migrates_task_leases_and_request_state(
             task.id
         ]
         assert repository.automation_result(
-            "completed-request",
+            "pre-v44:completed-request",
             "task.start",
             "completed-hash",
         ) == {"task_id": task.id}
@@ -1633,6 +1636,21 @@ def test_v39_encoder_policy_migration_updates_named_version_snapshots(
                 "UPDATE sequence_export_setting SET preset_json=? WHERE sequence_id=?",
                 (json.dumps(stored), sequence_id),
             )
+            project_id = connection.execute("SELECT id FROM project").fetchone()[0]
+            connection.execute(
+                """INSERT INTO task_event(
+                       project_id, task_id, task_revision, event_type,
+                       payload_json, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    project_id,
+                    "legacy-export-task",
+                    1,
+                    "completed",
+                    json.dumps({"preset": stored}),
+                    1,
+                ),
+            )
             connection.execute(
                 "UPDATE schema_info SET version=39 WHERE component='project'"
             )
@@ -1651,6 +1669,16 @@ def test_v39_encoder_policy_migration_updates_named_version_snapshots(
         assert migrated.encoder_policy is not None
         assert migrated.encoder_policy.mode == "prefer_hardware"
         assert migrated.encoder_policy.vendor == "nvidia"
+        migrated_event = json.loads(
+            repository._fetchone(
+                "SELECT payload_json FROM task_event WHERE task_id=?",
+                ("legacy-export-task",),
+            )["payload_json"]
+        )
+        assert migrated_event["preset"]["encoder_policy"] == {
+            "mode": "prefer_hardware",
+            "vendor": "nvidia",
+        }
         migrated_version = repository.records.list_project_versions()[0]
         assert migrated_version.sha256 == sha256_file(snapshot_path)
         repository.records.restore_project_version(version.id)
@@ -1687,6 +1715,14 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
     with ProjectRepository.create(root, "Interim encoder policy migration") as repository:
         sequence_id = repository.catalog.get_project().main_sequence_id
         repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        task = TaskRepository(repository).create(
+            Task(
+                project_id=repository.catalog.get_project().id,
+                idempotency_key="automation:interim-policy:test",
+                command=AnalyzeDownloadCommand(url="test://idempotency-epoch"),
+                status=TaskStatus.COMPLETED,
+            )
+        )
         version = repository.records.create_project_version("Interim policy")
 
     snapshot_path = root / version.snapshot_path
@@ -1734,7 +1770,7 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
         assert migrated.encoder_policy.mode == "prefer_hardware"
         assert migrated.encoder_policy.vendor == "nvidia"
         stored_result = repository.automation_result(
-            "interim-policy",
+            "pre-v44:interim-policy",
             "test",
             "hash",
         )
@@ -1744,6 +1780,9 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
             "vendor": "nvidia",
         }
         assert "video_encoder" not in stored_result
+        assert TaskRepository(repository).get(task.id).idempotency_key == (
+            "pre-v44:automation:interim-policy:test"
+        )
         repository.records.restore_project_version(version.id)
         restored = repository.catalog.get_sequence(sequence_id).export_preset
         assert restored is not None and restored.encoder_policy is not None

@@ -217,7 +217,7 @@ def _migrate_v39_export_preset_documents(connection: sqlite3.Connection) -> None
     )
     for table, column in json_columns:
         for row in connection.execute(
-            f"SELECT rowid, {column} AS document FROM {table}"
+            f"SELECT rowid AS storage_rowid, {column} AS document FROM {table}"
         ).fetchall():
             document = json.loads(str(row["document"]))
             migrated, changed = _migrate_export_presets(document)
@@ -230,7 +230,7 @@ def _migrate_v39_export_preset_documents(connection: sqlite3.Connection) -> None
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ),
-                        row["rowid"],
+                        row["storage_rowid"],
                     ),
                 )
 

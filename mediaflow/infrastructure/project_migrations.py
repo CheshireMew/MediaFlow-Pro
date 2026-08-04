@@ -54,7 +54,7 @@ from .project_migrations_v33_v40 import (
     migrate_v39_to_v40,
 )
 from .project_migrations_v40_v47 import migrate_v40_to_v41, migrate_v41_to_v42
-from .project_migrations_v42_v49 import migrate_v42_to_v43
+from .project_migrations_v42_v49 import migrate_v42_to_v43, migrate_v43_to_v44
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +130,7 @@ PROJECT_MIGRATIONS = (
     ProjectMigration(40, 41, migrate_v40_to_v41),
     ProjectMigration(41, 42, migrate_v41_to_v42),
     ProjectMigration(42, 43, migrate_v42_to_v43),
+    ProjectMigration(43, 44, migrate_v43_to_v44),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

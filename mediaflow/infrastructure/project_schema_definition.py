@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 43
+PROJECT_SCHEMA_VERSION = 44
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 

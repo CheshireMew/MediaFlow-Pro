@@ -12,6 +12,8 @@ from mediaflow.domain.timeline_history import (
 
 from .project_snapshot_migration import migrate_version_snapshots
 
+_PRE_COLLABORATION_IDEMPOTENCY_PREFIX = "pre-v44:"
+
 
 def migrate_v42_to_v43(workspace) -> None:
     with workspace.transaction() as connection:
@@ -26,6 +28,39 @@ def migrate_v42_to_v43(workspace) -> None:
         connection.execute(
             "UPDATE schema_info SET version=43 WHERE component='project'"
         )
+
+
+def migrate_v43_to_v44(workspace) -> None:
+    with workspace.transaction() as connection:
+        migrate_version_snapshots(
+            workspace,
+            connection,
+            source_version=43,
+            target_version=44,
+            migrate_database=_begin_collaboration_idempotency_epoch,
+        )
+        _begin_collaboration_idempotency_epoch(connection)
+        connection.execute(
+            "UPDATE schema_info SET version=44 WHERE component='project'"
+        )
+
+
+def _begin_collaboration_idempotency_epoch(
+    connection: sqlite3.Connection,
+) -> None:
+    # Collaboration v3 binds idempotency to actor, revision, write set, and
+    # undo group. Earlier hashes only covered arguments, so their keys must
+    # leave the active namespace instead of causing false reuse conflicts.
+    connection.execute(
+        "UPDATE automation_request SET request_id=? || request_id",
+        (_PRE_COLLABORATION_IDEMPOTENCY_PREFIX,),
+    )
+    connection.execute(
+        """UPDATE task
+           SET idempotency_key=? || idempotency_key
+           WHERE idempotency_key IS NOT NULL""",
+        (_PRE_COLLABORATION_IDEMPOTENCY_PREFIX,),
+    )
 
 
 def _migrate_v42_history_documents(connection: sqlite3.Connection) -> None:
