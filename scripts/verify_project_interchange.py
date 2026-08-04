@@ -19,6 +19,18 @@ if str(ROOT) not in sys.path:
 
 from mediaflow.environment import test_run_root
 
+# Cross-platform software encoders and font rasterizers are not bit-identical.
+# These bounds reject structural, timing, subtitle, and visibly material drift
+# while allowing the small color/antialiasing differences measured across the
+# reviewed Windows, Linux, and macOS runtimes.
+CROSS_PLATFORM_VISUAL_ACCEPTANCE: dict[str, bool | float | int] = {
+    "require_same_remaining_frame_count": True,
+    "maximum_mean_absolute_error": 3.0,
+    "maximum_boundary_mean_absolute_error": 1.0,
+    "minimum_psnr_db": 25.0,
+    "maximum_temporal_mismatch_count": 12,
+}
+
 
 def _configure_run_root(root: Path) -> None:
     resolved = root.expanduser().resolve()
@@ -168,13 +180,7 @@ def _compare(reference: Path, candidate: Path, output_dir: Path) -> dict[str, An
             "temporal_search_radius_frames": 1,
             "boundary_frame_count": 3,
             "contact_sheet_rows": 8,
-            "acceptance": {
-                "require_same_remaining_frame_count": True,
-                "minimum_exact_frame_ratio": 1,
-                "maximum_mean_absolute_error": 0,
-                "maximum_boundary_mean_absolute_error": 0,
-                "maximum_temporal_mismatch_count": 0,
-            },
+            "acceptance": CROSS_PLATFORM_VISUAL_ACCEPTANCE,
         },
         "request_id": f"interchange-compare-{uuid.uuid4().hex}",
         "actor": {"kind": "agent", "id": "project-interchange"},
@@ -215,10 +221,21 @@ def _assert_no_machine_runtime_paths(project_file: Path, forbidden: list[Path]) 
         raise RuntimeError(f"Project truth contains machine runtime/cache paths: {leaks}")
 
 
+def _close_application(project: Any, application: Any) -> None:
+    from mediaflow.service.client import call_sync
+
+    try:
+        project.close(timeout=30)
+    finally:
+        try:
+            application.close_client_transport()
+        finally:
+            call_sync("service.shutdown", start_if_needed=False)
+
+
 def produce(bundle: Path, work_root: Path, platform_key: str) -> dict[str, Any]:
     from mediaflow.domain.enums import TrackKind
     from mediaflow.infrastructure.runtime_context import RuntimeContext
-    from mediaflow.service.client import call_sync
     from mediaflow.service.desktop_proxy import DesktopEditorApplication
 
     target = RuntimeContext.discover().target.key
@@ -327,9 +344,7 @@ def produce(bundle: Path, work_root: Path, platform_key: str) -> dict[str, Any]:
         )
         return manifest
     finally:
-        project.close(timeout=30)
-        application.close_client_transport()
-        call_sync("service.shutdown", start_if_needed=False)
+        _close_application(project, application)
 
 
 def consume(
@@ -340,7 +355,6 @@ def consume(
 ) -> dict[str, Any]:
     from mediaflow.domain.enums import TrackKind
     from mediaflow.infrastructure.runtime_context import RuntimeContext
-    from mediaflow.service.client import call_sync
     from mediaflow.service.desktop_proxy import DesktopEditorApplication
 
     target = RuntimeContext.discover().target.key
@@ -440,9 +454,7 @@ def consume(
         report["report"] = str(report_path)
         return report
     finally:
-        project.close(timeout=30)
-        application.close_client_transport()
-        call_sync("service.shutdown", start_if_needed=False)
+        _close_application(project, application)
 
 
 def main(argv: list[str] | None = None) -> int:

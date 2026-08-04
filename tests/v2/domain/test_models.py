@@ -30,6 +30,7 @@ from mediaflow.domain.task_commands import (
     TranslateSegmentsCommand,
     WorkflowTaskLink,
 )
+from mediaflow.domain.tasks import ArtifactReference
 from mediaflow.domain.timebase import frames_to_seconds, round_fraction, seconds_to_frames
 from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
 
@@ -236,6 +237,28 @@ def test_download_request_persists_one_absolute_output_directory(tmp_path) -> No
         DownloadRequest(entry=entry, output_directory="")
     with pytest.raises(ValidationError, match="must be absolute"):
         DownloadRequest(entry=entry, output_directory="relative/folder")
+
+
+def test_artifact_references_preserve_foreign_absolute_paths(tmp_path: Path) -> None:
+    references = [
+        ArtifactReference(scope="external", path="/home/runner/output.mp4"),
+        ArtifactReference(scope="external", path="C:/Runner/output.mp4"),
+    ]
+    foreign = next(
+        reference
+        for reference in references
+        if not Path(reference.path).is_absolute()
+    )
+
+    assert foreign.display_path(tmp_path) == foreign.path
+    assert foreign.local_path(tmp_path) is None
+    with pytest.raises(ValueError, match="different operating-system path flavor"):
+        foreign.resolve(tmp_path)
+
+    local = ArtifactReference.external(tmp_path / "output.mp4")
+    assert local.resolve(tmp_path) == (tmp_path / "output.mp4").resolve()
+    with pytest.raises(ValidationError, match="project-relative"):
+        ArtifactReference(scope="project", path="C:/Runner/output.mp4")
 
 
 def test_export_commands_reject_conflicting_or_audio_highlight_presets() -> None:

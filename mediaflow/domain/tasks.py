@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
 from pydantic import Field, computed_field, model_validator
@@ -27,18 +27,24 @@ class ArtifactReference(DomainModel):
 
     @model_validator(mode="after")
     def validate_path_scope(self) -> ArtifactReference:
-        path = Path(self.path)
         if self.scope == "project":
-            if path.is_absolute() or ".." in path.parts:
+            path = PurePosixPath(self.path.replace("\\", "/"))
+            if _absolute_path_flavor(self.path) is not None or ".." in path.parts:
                 raise ValueError("Project artifact paths must be project-relative")
             normalized = path.as_posix().strip()
             if not normalized or normalized == ".":
                 raise ValueError("Project artifact paths cannot be empty")
             object.__setattr__(self, "path", normalized)
-        elif not path.is_absolute():
-            raise ValueError("External artifact paths must be absolute")
         else:
-            object.__setattr__(self, "path", str(path.resolve()))
+            flavor = _absolute_path_flavor(self.path)
+            if flavor is None:
+                raise ValueError("External artifact paths must be absolute")
+            normalized = (
+                str(PureWindowsPath(self.path))
+                if flavor == "windows"
+                else PurePosixPath(self.path).as_posix()
+            )
+            object.__setattr__(self, "path", normalized)
         return self
 
     @classmethod
@@ -68,9 +74,31 @@ class ArtifactReference(DomainModel):
         return cls.project(root, resolved)
 
     def resolve(self, project_dir: str | Path) -> Path:
+        local = self.local_path(project_dir)
+        if local is None:
+            raise ValueError(
+                "External artifact belongs to a different operating-system path flavor"
+            )
+        return local
+
+    def local_path(self, project_dir: str | Path) -> Path | None:
+        if self.scope == "project":
+            return Path(project_dir).resolve() / self.path
+        path = Path(self.path)
+        return path if path.is_absolute() else None
+
+    def display_path(self, project_dir: str | Path) -> str:
         if self.scope == "external":
-            return Path(self.path)
-        return Path(project_dir).resolve() / self.path
+            return self.path
+        return str(self.resolve(project_dir))
+
+
+def _absolute_path_flavor(value: str) -> Literal["posix", "windows"] | None:
+    if PureWindowsPath(value).is_absolute():
+        return "windows"
+    if PurePosixPath(value).is_absolute():
+        return "posix"
+    return None
 
 
 class ImportedAssetTaskOutcome(DomainModel):

@@ -16,6 +16,11 @@ from .base import Projector
 
 class TaskProjector(Projector):
     def refresh_tasks(self) -> None:
+        project = self._session.binding.current
+        if project is None:
+            self._session.models.tasks.set_items([])
+            self._session.events.tasksChanged.emit()
+            return
         tasks = sorted(
             self._session.task_state.items.values(),
             key=lambda task: (task.created_at, task.id),
@@ -65,7 +70,7 @@ class TaskProjector(Projector):
                     "contextId": self._task_context_id(task.command),
                     "error": task.error or "",
                     "artifacts": [
-                        str(item.resolve(self._session.binding.current.project_dir))
+                        item.display_path(project.project_dir)
                         for item in task.artifacts
                     ],
                     "executionTrace": [

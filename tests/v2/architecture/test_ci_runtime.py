@@ -294,6 +294,7 @@ def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
             "lib/cmake/Qt6Quick/Qt6QuickConfig.cmake",
             "lib/cmake/Qt6QuickPrivate/Qt6QuickPrivateConfig.cmake",
         ),
+        "icu": ("libicui18n.so.73",),
     }
     archives = []
     for name, relative_files in archive_files.items():
@@ -318,11 +319,11 @@ def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
             {
                 "schema_version": 2,
                 "targets": {
-                    "windows-x86_64": {
+                    "linux-x86_64": {
                         "qt": {
-                        "version": "6.11.1",
-                        "architecture": "win64_msvc2022_64",
-                        "install_directory": "6.11.1/msvc2022_64",
+                            "version": "6.11.1",
+                            "architecture": "linux_gcc_64",
+                            "install_directory": "6.11.1/gcc_64",
                         },
                         "qt_archives": archives,
                     },
@@ -337,11 +338,16 @@ def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
         lambda *_args, **_kwargs: None,
     )
 
-    installed = prepare_ci_qt.prepare_qt(qt_root, contract)
+    installed = prepare_ci_qt.prepare_qt(
+        qt_root,
+        contract,
+        target=PlatformTarget("linux", "x86_64"),
+    )
 
-    assert installed == (qt_root / "6.11.1/msvc2022_64").resolve()
+    assert installed == (qt_root / "6.11.1/gcc_64").resolve()
     assert all(
         (installed / relative).is_file()
         for relative in prepare_ci_qt.REQUIRED_QT_FILES
     )
+    assert (installed / "lib" / "libicui18n.so.73").is_file()
     assert not list(qt_root.glob("install-*"))

@@ -2031,12 +2031,13 @@ class EditorApplication:
                         cover = self._project_covers.cover_for(repository)
                         item["coverPath"] = str(cover) if cover else ""
                         artifacts = [
-                            value.resolve(path)
+                            local
                             for task in reversed(tasks)
                             for value in reversed(
                                 _user_visible_task_artifacts(task)
                             )
-                            if value.resolve(path).is_file()
+                            if (local := value.local_path(path)) is not None
+                            and local.is_file()
                         ]
                         item["recentArtifact"] = str(artifacts[0]) if artifacts else ""
                 except ProjectUpgradeRequiredError:

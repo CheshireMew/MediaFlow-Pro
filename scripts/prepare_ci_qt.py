@@ -120,8 +120,14 @@ def prepare_qt(
     try:
         for item in qt["archives"]:
             archive = _download_archive(item, download_root)
+            extraction_root = (
+                staging_install / "lib"
+                if item["name"] == "icu"
+                else staging_install
+            )
+            extraction_root.mkdir(parents=True, exist_ok=True)
             with py7zr.SevenZipFile(archive, mode="r") as source:
-                source.extractall(path=staging_install)
+                source.extractall(path=extraction_root)
 
         Updater.update(
             TargetConfig(
