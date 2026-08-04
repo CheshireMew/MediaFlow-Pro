@@ -486,7 +486,15 @@ jobs:
         run: |
           python -m playwright install-deps chromium
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libva2 libva-drm2 libva-x11-2 libvdpau1 libxcb-cursor0 libxkbcommon-dev libxkbcommon-x11-dev weston xvfb
+          sudo apt-get install -y \
+            libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libgtk-3-dev \
+            libva2 libva-drm2 libva-x11-2 libvdpau1 libx11-dev libx11-xcb-dev \
+            libxcb-cursor-dev libxcb-glx0-dev libxcb-icccm4-dev \
+            libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev \
+            libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev \
+            libxcb-sync-dev libxcb-util-dev libxcb-xfixes0-dev \
+            libxcb-xkb-dev libxcb1-dev libxext-dev libxfixes-dev libxi-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxrender-dev weston xvfb
       - name: Prepare the exact target media and Chromium runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Install the target Qt SDK
