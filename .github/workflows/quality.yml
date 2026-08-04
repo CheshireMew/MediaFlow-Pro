@@ -83,7 +83,7 @@ jobs:
       - name: Verify documentation, images, and license links
         run: python scripts/ci/verify_repository_docs.py
       - name: Verify deterministic test partitioning
-        run: python scripts/ci/test_shard.py --self-test
+        run: python -m scripts.ci.test_shard --self-test
 
   preflight:
     name: Fast source and environment preflight
@@ -134,7 +134,7 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Lint V2 source and verification scripts
         run: >-
           python -m ruff check
@@ -214,10 +214,10 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Run one deterministic lightweight shard
         run: >-
-          python scripts/ci/test_shard.py
+          python -m scripts.ci.test_shard
           --shard-index ${{ matrix.shard }}
           --shard-count 2
           --resource-profile lightweight
@@ -291,7 +291,7 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Restore pinned media and Chromium dependencies
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -317,7 +317,7 @@ jobs:
         run: python scripts/build_native.py --runtime-root "$env:MEDIAFLOW_RUNTIME_DIR"
       - name: Run one deterministic reviewed-runtime shard
         run: >-
-          python scripts/ci/test_shard.py
+          python -m scripts.ci.test_shard
           --shard-index ${{ matrix.shard }}
           --shard-count 4
           --resource-profile runtime
@@ -393,7 +393,7 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Restore pinned media and Chromium dependencies
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -565,7 +565,7 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Restore target media and Chromium dependencies
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -715,7 +715,7 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Restore the reviewed target runtime
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -816,7 +816,7 @@ jobs:
         run: >-
           python scripts/ci/prepare_python_environment.py
           --environment "${{ runner.temp }}/mediaflow-python"
-          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit == 'true' }}"
       - name: Restore the reviewed consumer runtime
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:

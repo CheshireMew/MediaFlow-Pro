@@ -157,7 +157,7 @@ def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional()
     assert "needs.plan.outputs.run_core == 'true'" in workflow
     assert "needs.plan.outputs.run_full == 'true'" in workflow
     assert "needs.plan.outputs.run_portable == 'true'" in workflow
-    assert "python scripts/ci/test_shard.py" in workflow
+    assert "python -m scripts.ci.test_shard" in workflow
     assert "--marker \"not integration and not slow\"" in workflow
     assert "--resource-profile lightweight" in workflow
     assert "--resource-profile runtime" in workflow
@@ -175,6 +175,7 @@ def test_complete_python_cache_is_reused_and_lightweight_core_has_no_media_sdk_s
 
     assert workflow.count("key: mediaflow-python-v1-") == 7
     assert workflow.count("python scripts/ci/prepare_python_environment.py") == 7
+    assert workflow.count("steps.python-environment.outputs.cache-hit == 'true'") == 7
     assert "--resource-profile lightweight" in core
     assert "prepare_runtime.py" not in core
     assert "prepare_ci_qt.py" not in core
