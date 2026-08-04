@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from scripts.ci.install_maintenance_tools import locked_requirement_block
+from scripts.ci.prepare_python_environment import (
+    STATE_FILE,
+    cached_environment_is_current,
+    environment_python,
+    expected_state,
+)
 from scripts.ci.quality_plan import forced_plan, normalize_path, plan_for_paths
+from scripts.ci.test_resources import requires_reviewed_runtime, select_resource_profile
 from scripts.ci.test_shard import (
     normalize_collected_node_id,
     partition_test_nodes,
@@ -99,6 +107,42 @@ def test_test_node_shards_are_deterministic_disjoint_complete_and_split_large_fi
     assert sum(nodes[0] in partition for partition in timed) == 1
 
 
+def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> None:
+    nodes = (
+        "tests/v2/domain/test_models.py::test_model",
+        "tests/v2/application/test_task_service.py::test_task",
+        "tests/v2/infrastructure/test_mlt_export.py::test_export",
+        "tests/v2/desktop/test_qml_smoke.py::test_window",
+    )
+
+    lightweight = select_resource_profile(nodes, "lightweight")
+    runtime = select_resource_profile(nodes, "runtime")
+
+    assert set(lightweight).isdisjoint(runtime)
+    assert set(lightweight) | set(runtime) == set(nodes)
+    assert requires_reviewed_runtime(nodes[2]) is True
+    assert requires_reviewed_runtime(nodes[3]) is True
+    assert requires_reviewed_runtime(nodes[0]) is False
+
+
+def test_complete_python_environment_state_rejects_a_different_lock(tmp_path: Path) -> None:
+    requirements = tmp_path / "requirements.lock"
+    requirements.write_text("example==1 --hash=sha256:abc\n", encoding="utf-8")
+    environment = tmp_path / "environment"
+    python = environment_python(environment)
+    python.parent.mkdir(parents=True)
+    python.touch()
+    (environment / STATE_FILE).write_text(
+        json.dumps(expected_state(requirements)),
+        encoding="utf-8",
+    )
+
+    assert cached_environment_is_current(environment, requirements) is True
+
+    requirements.write_text("example==2 --hash=sha256:def\n", encoding="utf-8")
+    assert cached_environment_is_current(environment, requirements) is False
+
+
 def test_maintenance_yaml_dependency_is_derived_from_the_reviewed_lock() -> None:
     requirement = locked_requirement_block("pyyaml")
 
@@ -115,12 +159,43 @@ def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional()
     assert "needs.plan.outputs.run_portable == 'true'" in workflow
     assert "python scripts/ci/test_shard.py" in workflow
     assert "--marker \"not integration and not slow\"" in workflow
+    assert "--resource-profile lightweight" in workflow
+    assert "--resource-profile runtime" in workflow
     assert "--timings-file scripts/ci/test_timings.windows.json" in workflow
     assert "--exclude-file tests/v2/architecture/test_ci_quality_plan.py" in workflow
     assert workflow.count("python scripts/ci/install_maintenance_tools.py") == 2
     assert "python -m pytest tests/v2 -m" not in workflow
     assert "cancel-in-progress:" in workflow
     assert "V2 quality gate" in workflow
+
+
+def test_complete_python_cache_is_reused_and_lightweight_core_has_no_media_sdk_setup() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    core = workflow.split("  core-tests:", 1)[1].split("  runtime-tests:", 1)[0]
+
+    assert workflow.count("key: mediaflow-python-v1-") == 7
+    assert workflow.count("python scripts/ci/prepare_python_environment.py") == 7
+    assert "--resource-profile lightweight" in core
+    assert "prepare_runtime.py" not in core
+    assert "prepare_ci_qt.py" not in core
+    assert "build_native.py" not in core
+    assert "mediaflow-runtime\\deps" not in core
+    assert "mediaflow-runtime\\qt" not in core
+    assert "mediaflow-runtime\\native" not in core
+
+
+def test_portable_native_preview_smoke_precedes_expensive_contracts() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    portable = workflow.split("  portable-core:", 1)[1].split(
+        "  interchange-produce:", 1
+    )[0]
+
+    smoke = portable.index("Run native preview smoke before portable contracts")
+    contracts = portable.index("Verify portable contracts and service core")
+    type_check = portable.index("Type-check on the actual target platform")
+    cli = portable.index("Run the real CLI and Chromium chains")
+    assert smoke < contracts < type_check < cli
+    assert portable.count("tests/v2/integration/test_native_preview.py") == 1
 
 
 def test_browser_scenarios_and_failure_diagnostics_have_process_boundaries() -> None:

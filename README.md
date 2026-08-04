@@ -158,7 +158,7 @@ Linux/macOS 使用相同入口：
 "$MEDIAFLOW_DEV_ROOT/.venv/bin/python" scripts/build_native.py --runtime-root "$MEDIAFLOW_RUNTIME_DIR"
 ```
 
-CI 使用 `scripts/prepare_runtime.py` 校验 SHA-256 后展开当前目标的 Shotcut 运行时和 Playwright Chromium，并由 `scripts/prepare_ci_qt.py` 直接校验、展开 `runtime.lock.json` 登记的 QtBase 与 QtDeclarative 官方归档，不依赖在线仓库元数据解析。随后现场编译原生插件。`scripts/verify_development_runtime.py --profile core` 会实际启动 FFmpeg、MLT 与 Chromium并核对原生 QML 包；`--profile full` 另外要求本机已安装 ASR 与语音合成组件。不能用跳过测试代替运行时准备。
+CI 按操作系统、架构、精确 Python 版本和 `requirements.lock` 摘要缓存完整虚拟环境，每个任务只刷新当前源码的 editable 安装并运行 `pip check`。普通核心测试拆成两个不准备 Qt SDK、MLT/FFmpeg 运行时、Chromium 或原生插件的轻量分片；只有经过审查、确实依赖这些资源的测试才在完整运行中进入四个运行时分片，不为测试库机械增加多层 marker。需要媒体运行时的任务使用 `scripts/prepare_runtime.py` 校验 SHA-256 后展开当前目标的 Shotcut 运行时和 Playwright Chromium，并由 `scripts/prepare_ci_qt.py` 直接校验、展开 `runtime.lock.json` 登记的 QtBase 与 QtDeclarative 官方归档，不依赖在线仓库元数据解析，随后现场编译原生插件。Linux 与 macOS 会在更昂贵的 portable 合同和跨平台交接链之前运行原生预览冒烟。`scripts/verify_development_runtime.py --profile core` 会实际启动 FFmpeg、MLT 与 Chromium并核对原生 QML 包；`--profile full` 另外要求本机已安装 ASR 与语音合成组件。不能用跳过测试代替运行时准备。
 
 启动应用：
 

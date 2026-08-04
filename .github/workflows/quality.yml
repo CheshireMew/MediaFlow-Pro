@@ -43,7 +43,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
       - name: Prove the classifier before consuming it
         run: python scripts/ci/quality_plan.py --self-test
       - name: Classify the commit range once
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Install the hashed YAML maintenance dependency
@@ -115,7 +115,7 @@ jobs:
           }
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Install the hashed YAML maintenance dependency
@@ -124,11 +124,17 @@ jobs:
         run: |
           python -m compileall -q mediaflow scripts tests/v2
           python -c "from pathlib import Path; import yaml; [yaml.safe_load(path.read_text(encoding='utf-8')) for path in Path('.github/workflows').glob('*.y*ml')]"
-      - name: Install the exact reviewed dependency set
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
-          python -m pip check
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
       - name: Lint V2 source and verification scripts
         run: >-
           python -m ruff check
@@ -159,11 +165,88 @@ jobs:
           --durations=25
 
   core-tests:
-    name: Core tests shard ${{ matrix.shard }} of 4
+    name: Lightweight core tests shard ${{ matrix.shard }} of 2
     needs:
       - plan
       - preflight
     if: needs.plan.outputs.run_core == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Configure isolated repository paths
+        shell: pwsh
+        run: |
+          $paths = @{
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+          }
+          foreach ($entry in $paths.GetEnumerator()) {
+            "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
+          }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
+      - name: Run one deterministic lightweight shard
+        run: >-
+          python scripts/ci/test_shard.py
+          --shard-index ${{ matrix.shard }}
+          --shard-count 2
+          --resource-profile lightweight
+          --marker "not integration and not slow"
+          --timings-file scripts/ci/test_timings.windows.json
+          --exclude-file tests/v2/architecture/test_ci_quality_plan.py
+          --exclude-file tests/v2/architecture/test_ci_runtime.py
+          --exclude-file tests/v2/infrastructure/test_environment.py
+          --exclude-file tests/v2/application/test_cli_process.py
+          --run --
+          --durations=25
+      - name: Upload core-test failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: core-${{ matrix.shard }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            ${{ env.MEDIAFLOW_TEST_ROOT }}
+            ${{ env.MEDIAFLOW_SERVICE_STATE_DIR }}
+            ${{ runner.temp }}\*.log
+
+  runtime-tests:
+    name: Reviewed-runtime tests shard ${{ matrix.shard }} of 4
+    needs:
+      - plan
+      - preflight
+    if: needs.plan.outputs.run_full == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -195,14 +278,20 @@ jobs:
           }
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
-      - name: Install the exact reviewed dependency set
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
-          python -m pip check
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
       - name: Restore pinned media and Chromium dependencies
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -226,11 +315,12 @@ jobs:
         run: python scripts/prepare_ci_qt.py --qt-root "$env:MEDIAFLOW_RUNTIME_DIR\qt"
       - name: Build the native preview plugin against the pinned Qt SDK
         run: python scripts/build_native.py --runtime-root "$env:MEDIAFLOW_RUNTIME_DIR"
-      - name: Run one deterministic hardware-independent shard
+      - name: Run one deterministic reviewed-runtime shard
         run: >-
           python scripts/ci/test_shard.py
           --shard-index ${{ matrix.shard }}
           --shard-count 4
+          --resource-profile runtime
           --marker "not integration and not slow"
           --timings-file scripts/ci/test_timings.windows.json
           --exclude-file tests/v2/architecture/test_ci_quality_plan.py
@@ -239,11 +329,11 @@ jobs:
           --exclude-file tests/v2/application/test_cli_process.py
           --run --
           --durations=25
-      - name: Upload core-test failure diagnostics
+      - name: Upload reviewed-runtime failure diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: core-${{ matrix.shard }}-${{ github.run_attempt }}
+          name: runtime-${{ matrix.shard }}-${{ github.run_attempt }}
           if-no-files-found: ignore
           retention-days: 7
           path: |
@@ -290,14 +380,20 @@ jobs:
           }
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
-      - name: Install the exact reviewed dependency set
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
-          python -m pip check
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
       - name: Restore pinned media and Chromium dependencies
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -441,7 +537,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Configure isolated portable paths
@@ -459,11 +555,17 @@ jobs:
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
           }
-      - name: Install exact Python dependencies
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
-          python -m pip check
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
       - name: Restore target media and Chromium dependencies
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -531,6 +633,8 @@ jobs:
           done
           test -S "$XDG_RUNTIME_DIR/mediaflow-wayland"
           WAYLAND_DISPLAY=mediaflow-wayland QT_QPA_PLATFORM=wayland python scripts/verify_display_capabilities.py
+      - name: Run native preview smoke before portable contracts
+        run: python -m pytest tests/v2/integration/test_native_preview.py
       - name: Verify portable contracts and service core
         run: >-
           python -m pytest
@@ -541,12 +645,11 @@ jobs:
           tests/v2/application/test_automation_commit_boundaries.py
       - name: Type-check on the actual target platform
         run: python -m mypy
-      - name: Run the real CLI, Chromium, and native-preview chains
+      - name: Run the real CLI and Chromium chains
         run: >-
           python -m pytest
           tests/v2/application/test_cli_process.py
           tests/v2/infrastructure/test_web_media.py::test_v5_cli_chain
-          tests/v2/integration/test_native_preview.py
       - name: Upload portable failure diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -586,7 +689,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Configure isolated producer paths
@@ -602,11 +705,17 @@ jobs:
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
           }
-      - name: Install exact Python dependencies
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
-          python -m pip check
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
       - name: Restore the reviewed target runtime
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -681,7 +790,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Configure isolated consumer paths
@@ -697,11 +806,17 @@ jobs:
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
           }
-      - name: Install exact Python dependencies
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
-          python -m pip check
+      - name: Restore the complete checksum-keyed Python environment
+        id: python-environment
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mediaflow-python
+          key: mediaflow-python-v1-${{ runner.os }}-${{ runner.arch }}-3.12.10-${{ hashFiles('requirements.lock') }}
+      - name: Prepare and activate the complete Python environment
+        run: >-
+          python scripts/ci/prepare_python_environment.py
+          --environment "${{ runner.temp }}/mediaflow-python"
+          --cache-hit "${{ steps.python-environment.outputs.cache-hit }}"
       - name: Restore the reviewed consumer runtime
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -747,6 +862,7 @@ jobs:
       - maintenance
       - preflight
       - core-tests
+      - runtime-tests
       - python
       - native-policy
       - portable-core
@@ -763,6 +879,7 @@ jobs:
           MAINTENANCE_RESULT: ${{ needs.maintenance.result }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           CORE_RESULT: ${{ needs.core-tests.result }}
+          RUNTIME_TEST_RESULT: ${{ needs.runtime-tests.result }}
           FULL_RESULT: ${{ needs.python.result }}
           NATIVE_POLICY_RESULT: ${{ needs.native-policy.result }}
           PORTABLE_RESULT: ${{ needs.portable-core.result }}
@@ -780,6 +897,7 @@ jobs:
             if ($env:CORE_RESULT -ne "success") { $failures.Add("core=$env:CORE_RESULT") }
           }
           if ($env:RUN_FULL -eq "true") {
+            if ($env:RUNTIME_TEST_RESULT -ne "success") { $failures.Add("runtime-tests=$env:RUNTIME_TEST_RESULT") }
             if ($env:FULL_RESULT -ne "success") { $failures.Add("windows-full=$env:FULL_RESULT") }
             if ($env:NATIVE_POLICY_RESULT -ne "success") { $failures.Add("native-policy=$env:NATIVE_POLICY_RESULT") }
           }

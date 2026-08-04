@@ -8,6 +8,8 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
+from scripts.ci.test_resources import RESOURCE_PROFILES, select_resource_profile
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPOSITORY_ROOT / "tests" / "v2"
 DEFAULT_TIMINGS_FILE = Path(__file__).with_name("test_timings.windows.json")
@@ -140,10 +142,16 @@ def relative_nodes(
     marker: str | None = None,
     excluded_files: Sequence[str] = (),
     timings_file: Path | None = DEFAULT_TIMINGS_FILE,
+    resource_profile: str = "all",
 ) -> tuple[str, ...]:
     if not 0 <= shard_index < shard_count:
         raise ValueError(f"shard_index must be between 0 and {shard_count - 1}")
-    nodes = discover_test_nodes(marker=marker, excluded_files=excluded_files)
+    nodes = select_resource_profile(
+        discover_test_nodes(marker=marker, excluded_files=excluded_files),
+        resource_profile,
+    )
+    if not nodes:
+        raise RuntimeError(f"pytest collection selected no {resource_profile} test nodes")
     timing_weights: dict[str, float] | None = None
     default_timing = 0.25
     if timings_file is not None and timings_file.is_file():
@@ -181,6 +189,17 @@ def self_test() -> None:
         raise AssertionError("Nodes from a large test file were not distributed evenly")
     if DEFAULT_TIMINGS_FILE.is_file():
         load_timing_weights(DEFAULT_TIMINGS_FILE)
+    resource_nodes = (
+        "tests/v2/domain/test_models.py::test_project",
+        "tests/v2/infrastructure/test_mlt_export.py::test_export",
+        "tests/v2/desktop/test_qml_smoke.py::test_window",
+    )
+    lightweight = select_resource_profile(resource_nodes, "lightweight")
+    runtime = select_resource_profile(resource_nodes, "runtime")
+    if set(lightweight).intersection(runtime) or set(lightweight).union(runtime) != set(
+        resource_nodes
+    ):
+        raise AssertionError("Resource profiles must be disjoint and complete")
     print(f"test shard self-test passed ({len(nodes)} synthetic nodes across 4 shards)")
 
 
@@ -191,6 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--marker")
     parser.add_argument("--exclude-file", action="append", default=[])
     parser.add_argument("--timings-file", type=Path, default=DEFAULT_TIMINGS_FILE)
+    parser.add_argument("--resource-profile", choices=RESOURCE_PROFILES, default="all")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     arguments, pytest_arguments = parser.parse_known_args(argv)
@@ -205,6 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         marker=arguments.marker,
         excluded_files=arguments.exclude_file,
         timings_file=arguments.timings_file,
+        resource_profile=arguments.resource_profile,
     )
     if not arguments.run:
         print("\n".join(selected))
