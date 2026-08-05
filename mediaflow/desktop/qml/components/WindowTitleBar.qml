@@ -51,7 +51,25 @@ Rectangle {
             font.letterSpacing: 0.2
         }
 
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumWidth: workspaceController.hasProject ? 80 : 0
+
+            Text {
+                id: projectName
+                objectName: "windowProjectName"
+                visible: workspaceController.hasProject
+                anchors.centerIn: parent
+                width: Math.min(320, parent.width)
+                text: root.hostWindow.title
+                color: Theme.text
+                font.pixelSize: Theme.fontSizeBody
+                font.weight: Font.Medium
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+            }
+        }
 
         WorkspaceHeader {
             visible: workspaceController.hasProject
@@ -90,21 +108,6 @@ Rectangle {
                 onClicked: root.hostWindow.close()
             }
         }
-    }
-
-    Text {
-        objectName: "windowProjectName"
-        visible: workspaceController.hasProject
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.min(320, Math.max(80, implicitWidth))
-        text: root.hostWindow.title
-        color: Theme.text
-        font.pixelSize: Theme.fontSizeBody
-        font.weight: Font.Medium
-        horizontalAlignment: Text.AlignHCenter
-        elide: Text.ElideRight
-        z: 2
     }
 
     Rectangle {

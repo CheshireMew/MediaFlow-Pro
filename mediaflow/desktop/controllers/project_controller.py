@@ -17,6 +17,7 @@ from mediaflow.desktop.coordinators import (
     TaskOperations,
     TimelineAssetOperations,
 )
+from mediaflow.desktop.presentation_catalogs import status_message
 from mediaflow.desktop.presenters import PresentationProjectors
 from mediaflow.desktop.session_events import SESSION_EVENT_NAMES, SessionEvents
 from mediaflow.desktop.session_state import (
@@ -133,14 +134,10 @@ class ProjectSession(QObject):
         if not self.binding.current or not self.binding.timeline:
             return False
         state = self.binding.timeline.state
-        active_video_track_ids = {
-            track.id for track in state.effective_tracks(TrackKind.VIDEO)
-        }
+        active_video_track_ids = {track.id for track in state.effective_tracks(TrackKind.VIDEO)}
         if any(clip.track_id in active_video_track_ids for clip in state.clips):
             return True
-        assets = {
-            asset.id: asset for asset in self.binding.current.list_assets()
-        }
+        assets = {asset.id: asset for asset in self.binding.current.list_assets()}
         audio = select_audible_sequence_audio(
             state,
             assets,
@@ -158,7 +155,12 @@ class ProjectSession(QObject):
             raise RuntimeError("请先选择字幕文档")
         self.binding.current.get_subtitle_document(self.selection.document_id)
 
-    def _finish_subtitle_edit(self, selected_ids: list[str], status: str) -> None:
+    def _finish_subtitle_edit(
+        self,
+        selected_ids: list[str],
+        status_source: str,
+        *status_arguments: object,
+    ) -> None:
         self.selection.subtitle_segment_ids = list(selected_ids)
         self.projectors.subtitles.refresh_documents()
         self.projectors.timeline.refresh_preview_subtitles()
@@ -166,14 +168,18 @@ class ProjectSession(QObject):
         self.events.projectStateChanged.emit()
         self.events.historyChanged.emit()
         self.projectors.timeline.schedule_preview_graph()
-        self._set_status(status)
+        self._set_status(status_source, *status_arguments)
 
-    def _finish_sequence_in_out_edit(self, status: str) -> None:
+    def _finish_sequence_in_out_edit(
+        self,
+        status_source: str,
+        *status_arguments: object,
+    ) -> None:
         self.projectors.timeline.refresh_sequences()
         self.projectors.timeline.refresh_timeline()
         self.events.projectStateChanged.emit()
         self.events.historyChanged.emit()
-        self._set_status(status)
+        self._set_status(status_source, *status_arguments)
 
     def _set_download_plan(self, plan: DownloadPlan) -> None:
         self.download_state.plan = plan
@@ -181,8 +187,8 @@ class ProjectSession(QObject):
         self.projectors.tasks.refresh_download_entries()
         self.events.downloadPlanChanged.emit()
 
-    def _set_status(self, message: str) -> None:
-        self.presentation.status_message = message
+    def _set_status(self, source: str, *arguments: object) -> None:
+        self.presentation.status_message = status_message(source, *arguments)
         self.events.statusChanged.emit()
 
     def _timeline_snap_targets(
@@ -225,13 +231,14 @@ class ProjectSession(QObject):
         if update.selected_asset_ids:
             self.selection.asset_ids = list(update.selected_asset_ids)
             self.events.selectionChanged.emit()
-        if update.status_message:
-            self._set_status(update.status_message)
+        if update.status_source:
+            self._set_status(update.status_source, *update.status_arguments)
         self.projectors.timeline.refresh_sequences()
         self.events.workflowChanged.emit()
 
     _snap_tolerance_frames = staticmethod(snap_tolerance_frames)
     _updated_selection = staticmethod(updated_selection)
+
     @staticmethod
     def _local_path(value: str) -> Path:
         url = QUrl(value)

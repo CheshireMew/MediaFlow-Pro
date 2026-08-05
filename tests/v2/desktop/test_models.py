@@ -73,9 +73,7 @@ def test_deferred_model_update_is_readable_before_qml_notification(qapp) -> None
     model = DictListModel(["id", "value"])
     model.set_items([{"id": "row", "value": 1}])
     changes: list[tuple[int, list[int]]] = []
-    model.dataChanged.connect(
-        lambda first, _last, roles: changes.append((first.row(), list(roles)))
-    )
+    model.dataChanged.connect(lambda first, _last, roles: changes.append((first.row(), list(roles))))
 
     model.set_items_deferred([{"id": "row", "value": 2}])
 
@@ -156,17 +154,13 @@ def test_maximum_desktop_project_root_can_construct_default_export_paths(
         root / "exports",
         "主序列导出" * 100,
         suffix=".mp4",
-        required_sibling_component_utf16_units=(
-            OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-        ),
+        required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
     )
     short_output = safe_child_path(
         root / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY,
         "短视频导出" * 100,
         suffix=".mp4",
-        required_sibling_component_utf16_units=(
-            OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-        ),
+        required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
     )
 
     assert utf16_units(str(main_output)) <= 240
@@ -241,9 +235,7 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
     monkeypatch.setattr(sys, "argv", ["mediaflow"])
 
     assert desktop_app.main() == 0
-    assert calls.index(("settings", settings_path)) < calls.index(
-        ("surface", startup_settings)
-    )
+    assert calls.index(("settings", settings_path)) < calls.index(("surface", startup_settings))
     assert calls.index(("surface", startup_settings)) < calls.index("webengine")
     assert calls.index("webengine") < calls.index("application")
     assert calls.index("application") < calls.index("editor-service-client")
@@ -268,17 +260,15 @@ def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(
     monkeypatch.delenv("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
     configured_runtime = tmp_path / "configured-runtime"
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_DIR", str(configured_runtime))
-    assert (
-        desktop_app.startup_settings_path()
-        == (configured_runtime / "desktop-settings.json").resolve()
-    )
+    assert desktop_app.startup_settings_path() == (configured_runtime / "desktop-settings.json").resolve()
 
     monkeypatch.delenv("MEDIAFLOW_RUNTIME_DIR")
     configured_development_root = tmp_path / "configured-development"
     monkeypatch.setenv("MEDIAFLOW_DEV_ROOT", str(configured_development_root))
-    assert desktop_app.startup_settings_path() == (
-        configured_development_root / "runtime" / "desktop-settings.json"
-    ).resolve()
+    assert (
+        desktop_app.startup_settings_path()
+        == (configured_development_root / "runtime" / "desktop-settings.json").resolve()
+    )
 
     monkeypatch.delenv("MEDIAFLOW_DEV_ROOT")
     saved_runtime = tmp_path / "saved-runtime"
@@ -286,21 +276,14 @@ def test_startup_settings_path_uses_env_and_bootstrap_without_runtime_discovery(
     monkeypatch.setattr(
         desktop_app,
         "QSettings",
-        lambda *_args: SimpleNamespace(
-            value=lambda _key, _default="": str(saved_runtime)
-        ),
+        lambda *_args: SimpleNamespace(value=lambda _key, _default="": str(saved_runtime)),
     )
-    assert (
-        desktop_app.startup_settings_path()
-        == (saved_runtime / "desktop-settings.json").resolve()
-    )
+    assert desktop_app.startup_settings_path() == (saved_runtime / "desktop-settings.json").resolve()
 
     monkeypatch.setattr(
         desktop_app,
         "QSettings",
-        lambda *_args: SimpleNamespace(
-            value=lambda _key, _default="": ""
-        ),
+        lambda *_args: SimpleNamespace(value=lambda _key, _default="": ""),
     )
     assert desktop_app.startup_settings_path() is None
 
@@ -401,12 +384,8 @@ def test_window_state_persists_normal_geometry_and_maximized_flag() -> None:
 def test_shutdown_drains_project_readers_before_releasing_project() -> None:
     controllers = EditorControllers()
     events: list[str] = []
-    original_project_shutdown = (
-        controllers.session.background.shutdown_project_requests
-    )
-    original_application_shutdown = (
-        controllers.session.background.shutdown_application_requests
-    )
+    original_project_shutdown = controllers.session.background.shutdown_project_requests
+    original_application_shutdown = controllers.session.background.shutdown_application_requests
     original_lifecycle_shutdown = controllers.session.lifecycle.shutdown
 
     def shutdown_project_requests() -> None:
@@ -421,12 +400,8 @@ def test_shutdown_drains_project_readers_before_releasing_project() -> None:
         events.append("project")
         original_lifecycle_shutdown()
 
-    controllers.session.background.shutdown_project_requests = (
-        shutdown_project_requests
-    )
-    controllers.session.background.shutdown_application_requests = (
-        shutdown_application_requests
-    )
+    controllers.session.background.shutdown_project_requests = shutdown_project_requests
+    controllers.session.background.shutdown_application_requests = shutdown_application_requests
     controllers.session.lifecycle.shutdown = shutdown_lifecycle
 
     controllers.shutdown()
@@ -519,9 +494,7 @@ def test_workspace_action_capabilities_share_one_read_only_and_closing_boundary(
         assert read_only["canCloseProject"] is True
 
         session.binding.current = None
-        session.requests.closing_project = SimpleNamespace(
-            project_dir=Path("D:/closing-project")
-        )
+        session.requests.closing_project = SimpleNamespace(project_dir=Path("D:/closing-project"))
         closing = controllers.workspace.actionCapabilities
         assert closing["canOpenProject"] is False
         assert closing["canCreateProject"] is False
@@ -560,10 +533,7 @@ def test_settings_form_save_merges_user_changes_with_async_runtime_updates(
 
         assert session.desktop_settings.ui.theme == "high_contrast"
         assert session.service_settings.asr.cli_path == str(installed_path)
-        assert (
-            ServiceSettingsRepository().load().asr.cli_path
-            == str(installed_path)
-        )
+        assert ServiceSettingsRepository().load().asr.cli_path == str(installed_path)
     finally:
         controllers.shutdown()
 
@@ -684,6 +654,7 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
             {
                 "sequenceId": "main",
                 "name": "Main",
+                "displayName": "Main",
                 "kind": "main",
                 "profile": "1920×1080",
                 "colorMode": "sdr_bt709",
@@ -691,6 +662,7 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
             {
                 "sequenceId": "short-a",
                 "name": "A",
+                "displayName": "A",
                 "kind": "short",
                 "profile": "1080×1920",
                 "colorMode": "sdr_bt709",
@@ -702,6 +674,7 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
             {
                 "sequenceId": "short-a",
                 "name": "A revised",
+                "displayName": "A revised",
                 "kind": "short",
                 "profile": "1080×1920",
                 "colorMode": "sdr_bt709",
@@ -709,6 +682,7 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
             {
                 "sequenceId": "main",
                 "name": "Main",
+                "displayName": "Main",
                 "kind": "main",
                 "profile": "1920×1080",
                 "colorMode": "sdr_bt709",
@@ -716,6 +690,7 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
             {
                 "sequenceId": "short-b",
                 "name": "B",
+                "displayName": "B",
                 "kind": "short",
                 "profile": "1080×1920",
                 "colorMode": "sdr_bt709",
@@ -826,15 +801,11 @@ def test_source_monitor_uses_real_graph_range_insertion_and_requested_frame(
 
         controllers.media.captureSourceFrame(0)
         first_capture = controllers.session.binding.current.resolve_asset_path(
-            controllers.session.binding.current.get_asset(
-                controllers.media.selectedAssetId
-            )
+            controllers.session.binding.current.get_asset(controllers.media.selectedAssetId)
         )
         controllers.media.captureSourceFrame(12)
         second_capture = controllers.session.binding.current.resolve_asset_path(
-            controllers.session.binding.current.get_asset(
-                controllers.media.selectedAssetId
-            )
+            controllers.session.binding.current.get_asset(controllers.media.selectedAssetId)
         )
         assert first_capture.is_file() and second_capture.is_file()
         assert first_capture.read_bytes() != second_capture.read_bytes()
@@ -1102,10 +1073,7 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
             running=True,
         )
         workflow_ids = {empty.id, missing.id, paused.id}
-        before = {
-            run.id: run.model_dump(mode="json")
-            for run in holder.catalog.list_workflow_runs()
-        }
+        before = {run.id: run.model_dump(mode="json") for run in holder.catalog.list_workflow_runs()}
         revision_before = holder.content_revision()
 
         observer = application.open_project(root, writable=True)
@@ -1117,10 +1085,7 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
         assert bound.read_only is True
         with pytest.raises(PermissionError, match="只读"):
             bound.reconcile_workflow()
-        assert {
-            run.id: run.model_dump(mode="json")
-            for run in holder.catalog.list_workflow_runs()
-        } == before
+        assert {run.id: run.model_dump(mode="json") for run in holder.catalog.list_workflow_runs()} == before
         assert holder.content_revision() == revision_before
 
         controllers.session.lifecycle.close(close_in_background=False)
@@ -1129,18 +1094,10 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
         assert writable.read_only is False
         controllers.session.lifecycle.replace(desktop_application.adapt_project(writable))
 
-        reconciled = {
-            run.id: run
-            for run in writable.list_workflow_runs()
-            if run.id in workflow_ids
-        }
+        reconciled = {run.id: run for run in writable.list_workflow_runs() if run.id in workflow_ids}
         assert set(reconciled) == workflow_ids
-        assert {
-            run.status for run in reconciled.values()
-        } == {WorkflowStatus.BLOCKED}
-        assert {
-            run.message_code for run in reconciled.values()
-        } == {"workflow_interrupted"}
+        assert {run.status for run in reconciled.values()} == {WorkflowStatus.BLOCKED}
+        assert {run.message_code for run in reconciled.values()} == {"workflow_interrupted"}
     finally:
         if holder.owns_project_lock:
             holder.close()
@@ -1152,9 +1109,7 @@ def test_default_export_uses_project_folder_and_avoids_existing_names(
     monkeypatch,
 ) -> None:
     application = EditorApplication()
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(application)
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(application))
     captured: list[ExportSequenceCommand] = []
 
     def capture_task(command, *, sequence_id=None):
@@ -1213,9 +1168,7 @@ def test_double_loudness_trigger_reuses_the_same_active_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = EditorApplication()
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(application)
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(application))
     handler_started = threading.Event()
     release_handler = threading.Event()
     executions = 0
@@ -1236,11 +1189,7 @@ def test_double_loudness_trigger_reuses_the_same_active_request(
         assert handler_started.wait(5)
         controllers.audio.analyzeLoudness()
 
-        tasks = [
-            task
-            for task in current.list_tasks()
-            if task.kind == TaskKind.ANALYZE
-        ]
+        tasks = [task for task in current.list_tasks() if task.kind == TaskKind.ANALYZE]
         assert len(tasks) == 1
         assert executions == 1
     finally:
@@ -1251,18 +1200,14 @@ def test_double_loudness_trigger_reuses_the_same_active_request(
 def test_open_desktop_consumes_persisted_task_events_from_project_service(
     tmp_path: Path,
 ) -> None:
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
         controllers.workspace.createProject(str(tmp_path), "External Task")
         session = controllers.session
         assert controllers.tasks.tasksModel.rowCount() == 0
         project_revision = session.binding.current.content_revision()
 
-        task = session.binding.current.start_task(
-            AnalyzeDownloadCommand(url="https://example.invalid/media")
-        )
+        task = session.binding.current.start_task(AnalyzeDownloadCommand(url="https://example.invalid/media"))
         external = session.binding.current.wait_for_task(task.id, timeout=5)
         assert external.status == TaskStatus.FAILED
         assert session.binding.current.content_revision() == project_revision
@@ -1326,9 +1271,7 @@ def _create_completed_sequence_boundary_task(
             speech_out_frame=90,
         )
     )
-    project._tasks._handlers[TaskKind.ANALYZE] = (
-        lambda _context: TaskCompletion(outcome=outcome)
-    )
+    project._tasks._handlers[TaskKind.ANALYZE] = lambda _context: TaskCompletion(outcome=outcome)
     task = project.start_task(
         AnalyzeSequenceBoundsCommand(
             sequence_id=sequence_id,
@@ -1353,14 +1296,15 @@ def test_open_desktop_projects_service_committed_terminal_task_state(
         assert project.load_timeline(sequence_id).sequence.in_out == (
             SequenceInOut(in_frame=10, out_frame=90)
         )
-        assert project._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (task.id,),
-        )["task_id"] == task.id
+        assert (
+            project._repository._fetchone(
+                "SELECT task_id FROM task_consumption WHERE task_id=?",
+                (task.id,),
+            )["task_id"]
+            == task.id
+        )
 
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(application)
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(application))
     try:
         controllers.workspace.openProject(str(root))
         current = controllers.session.binding.current
@@ -1368,10 +1312,13 @@ def test_open_desktop_projects_service_committed_terminal_task_state(
         assert current.load_timeline(sequence_id).sequence.in_out == (
             SequenceInOut(in_frame=10, out_frame=90)
         )
-        assert current._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (task.id,),
-        )["task_id"] == task.id
+        assert (
+            current._repository._fetchone(
+                "SELECT task_id FROM task_consumption WHERE task_id=?",
+                (task.id,),
+            )["task_id"]
+            == task.id
+        )
     finally:
         controllers.shutdown()
 
@@ -1380,9 +1327,7 @@ def test_desktop_retries_terminal_task_projection_after_transient_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     errors: list[str] = []
     controllers.session.events.errorOccurred.connect(errors.append)
     try:
@@ -1416,9 +1361,12 @@ def test_desktop_retries_terminal_task_projection_after_transient_failure(
         assert current.load_timeline(sequence_id).sequence.in_out == (
             SequenceInOut(in_frame=10, out_frame=90)
         )
-        assert current._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (task.id,),
-        )["task_id"] == task.id
+        assert (
+            current._repository._fetchone(
+                "SELECT task_id FROM task_consumption WHERE task_id=?",
+                (task.id,),
+            )["task_id"]
+            == task.id
+        )
     finally:
         controllers.shutdown()

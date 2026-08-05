@@ -33,12 +33,14 @@ class ProxyDecision(Protocol):
 @dataclass(slots=True)
 class WorkflowUpdate:
     selected_asset_ids: list[str] = field(default_factory=list)
-    status_message: str = ""
+    status_source: str = ""
+    status_arguments: tuple[str, ...] = ()
 
     def merge(self, other: WorkflowUpdate) -> WorkflowUpdate:
         return WorkflowUpdate(
             selected_asset_ids=other.selected_asset_ids or self.selected_asset_ids,
-            status_message=other.status_message or self.status_message,
+            status_source=other.status_source or self.status_source,
+            status_arguments=(other.status_arguments if other.status_source else self.status_arguments),
         )
 
 
@@ -142,9 +144,7 @@ class DownloadStageHandler(AdvancingStageHandler):
         tasks: list[Task],
     ) -> WorkflowUpdate:
         artifact_paths = {
-            str(value.resolve(context.documents.project_dir))
-            for task in tasks
-            for value in task.artifacts
+            str(value.resolve(context.documents.project_dir)) for task in tasks for value in task.artifacts
         }
         assets = [
             asset
@@ -201,7 +201,8 @@ class TranscribeStageHandler(AdvancingStageHandler):
         transcribable = [
             asset_id
             for asset_id in run.asset_ids
-            if context.documents.catalog.get_asset(asset_id).kind in {
+            if context.documents.catalog.get_asset(asset_id).kind
+            in {
                 AssetKind.VIDEO,
                 AssetKind.AUDIO,
             }
@@ -213,10 +214,7 @@ class TranscribeStageHandler(AdvancingStageHandler):
         bounds = state.sequence.in_out
         start_frame = min(duration, bounds.in_frame) if bounds else 0
         end_frame = min(duration, bounds.out_frame) if bounds else duration
-        assets = {
-            asset.id: asset
-            for asset in context.documents.catalog.list_assets()
-        }
+        assets = {asset.id: asset for asset in context.documents.catalog.list_assets()}
         try:
             plan = build_dialogue_transcription_plan(
                 state,
@@ -249,9 +247,7 @@ class TranscribeStageHandler(AdvancingStageHandler):
         del tasks
         document_ids = [
             document.id
-            for document in context.documents.subtitles.list_subtitle_documents(
-                sequence_id=run.sequence_id
-            )
+            for document in context.documents.subtitles.list_subtitle_documents(sequence_id=run.sequence_id)
             if document.is_source
             and document.source_document_id is None
             and document.purpose == "sequence_transcript"
@@ -289,10 +285,7 @@ class TranslateStageHandler(AdvancingStageHandler):
         ]
         if not documents:
             return context.block(run, "workflow_source_subtitles_required")
-        before = [
-            document.id
-            for document in context.documents.subtitles.list_subtitle_documents()
-        ]
+        before = [document.id for document in context.documents.subtitles.list_subtitle_documents()]
         return context.run_tasks(
             run,
             [
@@ -354,10 +347,7 @@ class HighlightStageHandler(AdvancingStageHandler):
         ]
         if not documents:
             return context.block(run, "workflow_subtitles_required")
-        before = [
-            candidate.id
-            for candidate in context.documents.highlights.list_highlights()
-        ]
+        before = [candidate.id for candidate in context.documents.highlights.list_highlights()]
         return context.run_tasks(
             run,
             [

@@ -85,7 +85,7 @@ class MediaController(ControllerFacet):
         )
         self._session.projectors.assets.refresh_assets()
         self._session.events.projectStateChanged.emit()
-        self._session._set_status(f"已创建素材文件夹：{normalized}")
+        self._session._set_status("已创建素材文件夹：%1", normalized)
 
     @Slot(str)
     @report_ui_errors
@@ -149,9 +149,7 @@ class MediaController(ControllerFacet):
         if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.IMAGE}:
             raise ValueError("该素材类型不能在源监视器中播放")
         project = self._session.binding.current.get_project()
-        main_profile = self._session.binding.current.get_sequence(
-            project.main_sequence_id
-        ).profile
+        main_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
         active_profile = self._session.binding.timeline.state.sequence.profile
         timeline_asset = asset.in_frame_clock(main_profile, active_profile)
         duration = timeline_asset.metadata.duration_frames or 150
@@ -235,7 +233,7 @@ class MediaController(ControllerFacet):
         self._session.projectors.assets.refresh_assets()
         self._session.events.projectStateChanged.emit()
         self._session.events.selectionChanged.emit()
-        self._session._set_status(f"已将当前画面保存为素材：{captured.name}")
+        self._session._set_status("已将当前画面保存为素材：%1", captured.name)
 
     @Slot(str, result=QUrl)
     def assetUrl(self, asset_id: str) -> QUrl:
@@ -285,7 +283,7 @@ class MediaController(ControllerFacet):
             purpose="watermark",
         )
         self._session.projectors.tasks.refresh_tasks()
-        self._session._set_status(f"正在导入水印 {source.name}")
+        self._session._set_status("正在导入水印 %1", source.name)
 
     @Slot(str)
     @report_ui_errors
@@ -351,10 +349,14 @@ class MediaController(ControllerFacet):
         self._session.projectors.assets.refresh_assets()
         self._session.events.projectStateChanged.emit()
         self._session.events.selectionChanged.emit()
-        self._session._set_status(
-            f"已重新关联 {len(relinked)} 个素材"
-            + (f"，仍有 {len(unresolved)} 个未找到" if unresolved else "")
-        )
+        if unresolved:
+            self._session._set_status(
+                "已重新关联 %1 个素材，仍有 %2 个未找到",
+                len(relinked),
+                len(unresolved),
+            )
+        else:
+            self._session._set_status("已重新关联 %1 个素材", len(relinked))
 
     @Slot(str)
     @Slot(str, bool)

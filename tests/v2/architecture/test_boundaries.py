@@ -48,6 +48,94 @@ def _class(path: Path, name: str) -> ast.ClassDef:
     return next(node for node in _tree(path).body if isinstance(node, ast.ClassDef) and node.name == name)
 
 
+def test_runtime_status_messages_use_the_registered_translation_boundary() -> None:
+    presentation_path = ROOT / "mediaflow" / "desktop" / "presentation_catalogs.py"
+    status_function = next(
+        node
+        for node in _tree(presentation_path).body
+        if isinstance(node, ast.FunctionDef) and node.name == "status_message"
+    )
+    registered = {
+        key.value
+        for node in ast.walk(status_function)
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    used: set[str] = set()
+    dynamic_bridges: set[tuple[str, str]] = set()
+    source_positions = {
+        "_set_status": 0,
+        "_finish_subtitle_edit": 1,
+        "_finish_sequence_in_out_edit": 0,
+        "_finish_subtitle_placement_edit": 1,
+        "_after_visual_effect_change": 0,
+        "commit": 1,
+        "remember_default_project_directory": 1,
+    }
+    mediaflow_root = ROOT / "mediaflow"
+    for path in mediaflow_root.rglob("*.py"):
+        if path == presentation_path:
+            continue
+        tree = _tree(path)
+        for function in (
+            node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ):
+            for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+                name = call.func.attr if isinstance(call.func, ast.Attribute) else ""
+                position = source_positions.get(name)
+                if position is not None and len(call.args) > position:
+                    source = call.args[position]
+                    if isinstance(source, ast.Constant) and isinstance(source.value, str):
+                        if source.value:
+                            used.add(source.value)
+                            placeholders = {int(value) for value in re.findall(r"%(\d+)", source.value)}
+                            supplied = len(call.args) - position - 1
+                            assert placeholders == set(range(1, supplied + 1))
+                    else:
+                        dynamic_bridges.add((path.relative_to(ROOT).as_posix(), function.name))
+                if isinstance(call.func, ast.Name) and call.func.id == "WorkflowUpdate":
+                    keyword = next(
+                        (item for item in call.keywords if item.arg == "status_source"),
+                        None,
+                    )
+                    if keyword is not None:
+                        if isinstance(keyword.value, ast.Constant):
+                            assert isinstance(keyword.value.value, str)
+                            used.add(keyword.value.value)
+                            arguments = next(
+                                (item for item in call.keywords if item.arg == "status_arguments"),
+                                None,
+                            )
+                            supplied = (
+                                len(arguments.value.elts)
+                                if arguments is not None and isinstance(arguments.value, ast.Tuple)
+                                else 0
+                            )
+                            placeholders = {
+                                int(value) for value in re.findall(r"%(\d+)", keyword.value.value)
+                            }
+                            assert placeholders == set(range(1, supplied + 1))
+                        else:
+                            dynamic_bridges.add((path.relative_to(ROOT).as_posix(), function.name))
+
+    assert dynamic_bridges == {
+        ("mediaflow/composition.py", "from_dict"),
+        ("mediaflow/desktop/controllers/project_controller.py", "_apply_workflow_update"),
+        ("mediaflow/desktop/controllers/project_controller.py", "_finish_sequence_in_out_edit"),
+        ("mediaflow/desktop/controllers/project_controller.py", "_finish_subtitle_edit"),
+        ("mediaflow/desktop/controllers/subtitle_controller.py", "_finish_subtitle_placement_edit"),
+        ("mediaflow/desktop/controllers/timeline_controller.py", "_after_visual_effect_change"),
+        ("mediaflow/desktop/coordinators/settings_persistence.py", "commit"),
+        (
+            "mediaflow/desktop/coordinators/settings_persistence.py",
+            "remember_default_project_directory",
+        ),
+        ("mediaflow/application/workflow_stage_handlers.py", "merge"),
+    }
+    assert used == registered
+
+
 def test_removed_architecture_has_no_runtime_or_test_entry_point() -> None:
     banned_modules = {
         "mediaflow.domain." + "models",
@@ -87,11 +175,7 @@ def test_legacy_aggregate_settings_have_no_runtime_entry_point() -> None:
     }
     sources = [
         *list((ROOT / "mediaflow").rglob("*.py")),
-        *[
-            path
-            for path in (ROOT / "scripts").glob("*.py")
-            if path.name != "migrate_settings.py"
-        ],
+        *[path for path in (ROOT / "scripts").glob("*.py") if path.name != "migrate_settings.py"],
     ]
     violations = []
     for path in sources:
@@ -553,9 +637,7 @@ def test_audited_god_files_stay_replaced_by_focused_components() -> None:
         "webController.exportSelected",
     ):
         assert old_member not in qml_source
-    real_chain = (
-        ROOT / "scripts" / "verify_real_user_chain.py"
-    ).read_text(encoding="utf-8")
+    real_chain = (ROOT / "scripts" / "verify_real_user_chain.py").read_text(encoding="utf-8")
     for old_member in (
         "controller.web.setKeyframeAtFrame",
         "controller.web.updateThemeValue",
@@ -603,8 +685,7 @@ def test_automation_contract_models_access_and_execution_share_one_registry() ->
     assert OPERATIONS
     assert all(isinstance(definition, OperationDefinition) for definition in OPERATIONS.values())
     assert all(
-        definition.execution_mode == "atomic"
-        or definition.project_access == "write"
+        definition.execution_mode == "atomic" or definition.project_access == "write"
         for definition in OPERATIONS.values()
     )
     assert all(
@@ -645,8 +726,7 @@ def test_automation_context_uses_the_typed_application_boundary() -> None:
     fields = {
         node.target.id: ast.unparse(node.annotation)
         for node in context.body
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
     }
     assert fields["_project"] == "EditorProject | None"
     assert fields["_application"] == "EditorApplication | None"

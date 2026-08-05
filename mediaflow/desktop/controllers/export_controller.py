@@ -125,9 +125,7 @@ class ExportController(ControllerFacet):
                     "warningCount": warnings,
                     "failureCount": failures,
                     "encoderFallbackUsed": encoder_recovery is not None,
-                    "requestedVideoCodec": recovery_details.get(
-                        "requested_video_codec", ""
-                    ),
+                    "requestedVideoCodec": recovery_details.get("requested_video_codec", ""),
                     "actualVideoCodec": recovery_details.get("actual_video_codec", ""),
                     "checks": [check.model_dump(mode="json") for check in record.quality.checks],
                     "proofFrames": list(record.quality.proof_frames),
@@ -154,7 +152,7 @@ class ExportController(ControllerFacet):
             self._session._local_path(path_url),
             overwrite=True,
         )
-        self._session._set_status(f"已导出 FCPXML：{output.name}")
+        self._session._set_status("已导出 FCPXML：%1", output.name)
 
     @Slot(str, str, "QVariantMap")
     @report_ui_errors
@@ -182,9 +180,7 @@ class ExportController(ControllerFacet):
                 directory,
                 sequence.name,
                 suffix=f"{numbered_suffix}.{extension}",
-                required_sibling_component_utf16_units=(
-                    OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-                ),
+                required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
             )
             if not output.exists() and output.resolve() not in reserved_outputs:
                 break

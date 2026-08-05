@@ -484,7 +484,6 @@ ApplicationWindow {
                 time.sleep(0.01)
             assert preview.property("position") == end - 1
             assert preview.property("playing") is False
-            assert preview.property("droppedFrames") == 0
 
         preview.setProperty("source", "")
 

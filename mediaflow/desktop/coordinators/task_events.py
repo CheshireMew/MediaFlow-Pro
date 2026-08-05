@@ -101,10 +101,7 @@ class TaskOperations(SessionCoordinator):
                 task = current.start_task(
                     command,
                     input_asset_ids,
-                    sequence_id=(
-                        sequence_id
-                        or self._session.binding.active_sequence_id
-                    ),
+                    sequence_id=(sequence_id or self._session.binding.active_sequence_id),
                 )
         self._session.task_state.items[task.id] = task
         self._session.projectors.tasks.refresh_tasks()
@@ -119,18 +116,14 @@ class TaskOperations(SessionCoordinator):
         current = self._session.binding.current
         if current is None:
             return None
-        observed: dict[str, Task] = dict(
-            self._session.task_state.items
-        )
+        observed: dict[str, Task] = dict(self._session.task_state.items)
         for task in current.list_tasks():
             observed.setdefault(task.id, task)
         return next(
             (
                 task
                 for task in observed.values()
-                if task.status.is_active
-                and self._active_request_scope(task.command)
-                == scope
+                if task.status.is_active and self._active_request_scope(task.command) == scope
             ),
             None,
         )
@@ -190,10 +183,7 @@ class TaskOperations(SessionCoordinator):
         if event.cursor:
             if event.cursor <= self._session.task_state.cursor:
                 return
-            if (
-                self._blocked_event_cursor is not None
-                and event.cursor > self._blocked_event_cursor
-            ):
+            if self._blocked_event_cursor is not None and event.cursor > self._blocked_event_cursor:
                 return
         previous_revision = self._session.task_state.revisions.get(event.task_id, -1)
         if event.event_type == "deleted":
@@ -226,9 +216,7 @@ class TaskOperations(SessionCoordinator):
                     "",
                 )
                 self._terminal_replays[task.id] = task
-            self._session.task_state.revisions[task.id] = (
-                event.revision
-            )
+            self._session.task_state.revisions[task.id] = event.revision
             if event.cursor:
                 self._session.task_state.cursor = event.cursor
                 if self._blocked_event_cursor == event.cursor:
@@ -257,29 +245,27 @@ class TaskOperations(SessionCoordinator):
             if task.status.is_terminal:
                 result = current.committed_task_result(task.id)
                 if result is None:
-                    raise RuntimeError(
-                        "服务尚未提交任务结果"
-                    )
+                    raise RuntimeError("服务尚未提交任务结果")
                 self._session._apply_workflow_update(result.workflow)
             if result is not None and result.imported_asset_id:
                 asset = current.get_asset(result.imported_asset_id)
                 self._session.selection.asset_ids = [asset.id]
                 if result.imported_purpose == "watermark":
                     self._session.selection.watermark_asset_id = asset.id
-                    self._session._set_status(f"已选择水印 {asset.name}")
+                    self._session._set_status("已选择水印 %1", asset.name)
                 elif result.imported_purpose == "subtitle":
                     self._session.selection.document_id = result.imported_document_id
                     self._session.selection.subtitle_segment_ids = []
                     self._session.projectors.subtitles.refresh_documents()
                     self._session.projectors.timeline.refresh_preview_subtitles()
-                    segment_count = len(
-                        current.list_subtitle_segments(
-                            result.imported_document_id
-                        )
+                    segment_count = len(current.list_subtitle_segments(result.imported_document_id))
+                    self._session._set_status(
+                        "已导入 %1，共 %2 条字幕",
+                        asset.name,
+                        segment_count,
                     )
-                    self._session._set_status(f"已导入 {asset.name}，共 {segment_count} 条字幕")
                 else:
-                    self._session._set_status(f"已导入 {asset.name}")
+                    self._session._set_status("已导入 %1", asset.name)
                 self._session.events.projectStateChanged.emit()
                 self._session.events.selectionChanged.emit()
             if result is not None and result.download_plan is not None:
@@ -289,21 +275,37 @@ class TaskOperations(SessionCoordinator):
                     self._session._set_status("分析期间时间线已修改，请重新运行智能入出点")
                 else:
                     sequence = current.get_sequence(result.sequence_id)
-                    note = (
-                        "；未发现启用的字幕，只处理了黑屏"
-                        if result.sequence_bounds_status == "applied_without_speech"
-                        else ""
-                    )
-                    status = (
-                        f"已设置序列入出点：{sequence.in_out.in_frame}–{sequence.in_out.out_frame} 帧{note}"
-                    )
+                    without_speech = result.sequence_bounds_status == "applied_without_speech"
                     if result.sequence_id == self._session.binding.active_sequence_id:
                         self._session.binding.timeline = current.timeline(
                             self._session.binding.active_sequence_id
                         )
-                        self._session._finish_sequence_in_out_edit(status)
+                        if without_speech:
+                            self._session._finish_sequence_in_out_edit(
+                                "已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏",
+                                sequence.in_out.in_frame,
+                                sequence.in_out.out_frame,
+                            )
+                        else:
+                            self._session._finish_sequence_in_out_edit(
+                                "已设置序列入出点：%1–%2 帧",
+                                sequence.in_out.in_frame,
+                                sequence.in_out.out_frame,
+                            )
                     else:
-                        self._session._set_status(f"{status}；结果已应用到原序列")
+                        if without_speech:
+                            self._session._set_status(
+                                "已设置序列入出点：%1–%2 帧；未发现启用的字幕，"
+                                "只处理了黑屏；结果已应用到原序列",
+                                sequence.in_out.in_frame,
+                                sequence.in_out.out_frame,
+                            )
+                        else:
+                            self._session._set_status(
+                                "已设置序列入出点：%1–%2 帧；结果已应用到原序列",
+                                sequence.in_out.in_frame,
+                                sequence.in_out.out_frame,
+                            )
             if result is not None and result.audio_metrics is not None:
                 self._session.requests.audio_metrics_id += 1
                 self._session.presentation.audio_metrics = result.audio_metrics
@@ -371,12 +373,10 @@ class TaskOperations(SessionCoordinator):
                 self._session.events.selectionChanged.emit()
                 self._session.events.historyChanged.emit()
             if task.status.value == "completed":
-                label = (
-                    "场景切点已写入时间线"
-                    if isinstance(task.command, AnalyzeScenesCommand)
-                    else "画面跟踪已应用"
-                )
-                self._session._set_status(label)
+                if isinstance(task.command, AnalyzeScenesCommand):
+                    self._session._set_status("场景切点已写入时间线")
+                else:
+                    self._session._set_status("画面跟踪已应用")
         if task.kind == TaskKind.HIGHLIGHT:
             self._session.projectors.highlights.refresh_highlights()
         if task.kind in {TaskKind.PROXY, TaskKind.ANALYZE}:
@@ -397,9 +397,7 @@ class TaskOperations(SessionCoordinator):
         if key in self._reported_delivery_errors:
             return
         self._reported_delivery_errors.add(key)
-        self._session.events.errorOccurred.emit(
-            f"处理任务结果失败，将自动重试：{error}"
-        )
+        self._session.events.errorOccurred.emit(f"处理任务结果失败，将自动重试：{error}")
 
     def active_workflow(self):
         return self._session.binding.current.active_workflow() if self._session.binding.current else None

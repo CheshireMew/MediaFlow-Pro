@@ -107,7 +107,7 @@ class AudioController(ControllerFacet):
         self._session.projectors.audio.refresh_audio_buses()
         self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.schedule_preview_graph()
-        self._session._set_status(f"已更新 {bus.name} 总线")
+        self._session._set_status("已更新 %1 总线", bus.name)
 
     @Slot(str)
     @report_ui_errors

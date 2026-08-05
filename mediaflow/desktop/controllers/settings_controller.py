@@ -111,9 +111,7 @@ class SettingsController(ControllerFacet):
         baseline_values: dict,
     ) -> None:
         submitted = SettingsForm.model_validate(values)
-        baseline = SettingsForm.model_validate(
-            baseline_values
-        )
+        baseline = SettingsForm.model_validate(baseline_values)
         current_values = SettingsForm.from_settings(
             self._session.service_settings,
             self._session.desktop_settings,
@@ -129,9 +127,7 @@ class SettingsController(ControllerFacet):
         for key, value in submitted_values.items():
             if value != baseline_data[key]:
                 current_values[key] = value
-        service_candidate, desktop_candidate = SettingsForm.model_validate(
-            current_values
-        ).apply_to(
+        service_candidate, desktop_candidate = SettingsForm.model_validate(current_values).apply_to(
             self._session.service_settings,
             self._session.desktop_settings,
         )
@@ -197,7 +193,11 @@ class SettingsController(ControllerFacet):
             *candidate.subtitle_style_presets,
             SubtitleStylePresetSettings(name=value, style=style),
         ]
-        self._session.settings_persistence.commit(candidate, f"已保存字幕样式预设：{value}")
+        self._session.settings_persistence.commit(
+            candidate,
+            "已保存字幕样式预设：%1",
+            value,
+        )
 
     @Slot(str)
     @report_ui_errors
@@ -205,9 +205,7 @@ class SettingsController(ControllerFacet):
         candidate = self._session.service_settings.model_copy(deep=True)
         before = len(candidate.subtitle_style_presets)
         candidate.subtitle_style_presets = [
-            item
-            for item in self._session.service_settings.subtitle_style_presets
-            if item.id != preset_id
+            item for item in self._session.service_settings.subtitle_style_presets if item.id != preset_id
         ]
         if len(candidate.subtitle_style_presets) == before:
             raise KeyError(preset_id)
@@ -305,11 +303,7 @@ class SettingsController(ControllerFacet):
     @Slot(str)
     @report_ui_errors
     def removeLlmProvider(self, provider_id: str) -> None:
-        providers = [
-            item
-            for item in self._session.service_settings.llm_providers
-            if item.id != provider_id
-        ]
+        providers = [item for item in self._session.service_settings.llm_providers if item.id != provider_id]
         if len(providers) == len(self._session.service_settings.llm_providers):
             raise KeyError(provider_id)
         candidate = self._session.service_settings.model_copy(deep=True)
@@ -326,9 +320,7 @@ class SettingsController(ControllerFacet):
     @report_ui_errors
     def setActiveLlmProvider(self, provider_id: str) -> None:
         provider = next(
-            item
-            for item in self._session.service_settings.llm_providers
-            if item.id == provider_id
+            item for item in self._session.service_settings.llm_providers if item.id == provider_id
         )
         if not provider.enabled:
             raise ValueError("启用提供商后才能设为当前提供商")
@@ -341,12 +333,10 @@ class SettingsController(ControllerFacet):
     @report_ui_errors(message="LLM 连接测试失败：{error}")
     def testLlmProvider(self, provider_id: str) -> None:
         provider = next(
-            item
-            for item in self._session.service_settings.llm_providers
-            if item.id == provider_id
+            item for item in self._session.service_settings.llm_providers if item.id == provider_id
         )
         self._session._api.test_llm_provider(provider)
-        self._session._set_status(f"{provider.name} 连接测试成功")
+        self._session._set_status("%1 连接测试成功", provider.name)
 
     @Slot(str)
     def selectGlossaryTerm(self, term_id: str) -> None:
@@ -389,13 +379,9 @@ class SettingsController(ControllerFacet):
     @report_ui_errors
     def removeGlossaryTerm(self, term_id: str) -> None:
         terms = [
-            item
-            for item in self._session.service_settings.translation.glossary_terms
-            if item.id != term_id
+            item for item in self._session.service_settings.translation.glossary_terms if item.id != term_id
         ]
-        if len(terms) == len(
-            self._session.service_settings.translation.glossary_terms
-        ):
+        if len(terms) == len(self._session.service_settings.translation.glossary_terms):
             raise KeyError(term_id)
         candidate = self._session.service_settings.model_copy(deep=True)
         candidate.translation.glossary_terms = terms
@@ -418,7 +404,7 @@ class SettingsController(ControllerFacet):
         path = self._session._api.cookies.save(domain, cookies)
         self._session.download_state.cookie_status = self._session._api.cookies.status(domain)
         self._session.events.settingsChanged.emit()
-        self._session._set_status(f"Cookie 已保存到 {path}")
+        self._session._set_status("Cookie 已保存到 %1", path)
 
     @Slot(str)
     @report_ui_errors
@@ -426,7 +412,10 @@ class SettingsController(ControllerFacet):
         removed = self._session._api.cookies.clear(domain)
         self._session.download_state.cookie_status = self._session._api.cookies.status(domain)
         self._session.events.settingsChanged.emit()
-        self._session._set_status("Cookie 已清除" if removed else "该域名没有已保存的 Cookie")
+        if removed:
+            self._session._set_status("Cookie 已清除")
+        else:
+            self._session._set_status("该域名没有已保存的 Cookie")
 
     @Slot(int, int, bool)
     @report_ui_errors

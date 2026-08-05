@@ -142,7 +142,10 @@ class ProjectWorkflowService:
                 self.tasks.cancel(task.id)
         advanced = self.coordinator.advance(run.id)
         return self._continue_if_configured(advanced).merge(
-            WorkflowUpdate(status_message=f"已跳过工作流阶段：{run.stage.value}")
+            WorkflowUpdate(
+                status_source="已跳过工作流阶段：%1",
+                status_arguments=(run.stage.value,),
+            )
         )
 
     def continue_run(
@@ -155,7 +158,7 @@ class ProjectWorkflowService:
         if run.status in {WorkflowStatus.COMPLETED, WorkflowStatus.CANCELLED}:
             return WorkflowUpdate()
         if run.status == WorkflowStatus.RUNNING:
-            return WorkflowUpdate(status_message="当前工作流阶段正在运行")
+            return WorkflowUpdate(status_source="当前工作流阶段正在运行")
 
         if not run.asset_ids and run.stage not in {WorkflowStage.DOWNLOAD, WorkflowStage.EXPORT}:
             self.coordinator.block(run.id, "workflow_assets_required")
@@ -192,14 +195,14 @@ class ProjectWorkflowService:
         # The current terminal task is still inside the project's atomic
         # settlement transaction.  Read the other tasks from durable storage,
         # but use the exact in-transaction snapshot for this task.
-        tasks = [
-            task if task_id == task.id else self.tasks.get(task_id)
-            for task_id in task_ids
-        ]
+        tasks = [task if task_id == task.id else self.tasks.get(task_id) for task_id in task_ids]
         if any(item.status == TaskStatus.FAILED for item in tasks):
             failed = next(item for item in tasks if item.status == TaskStatus.FAILED)
             self.coordinator.block(run.id, "workflow_task_failed")
-            return WorkflowUpdate(status_message=f"工作流任务失败：{failed.error or failed.kind.value}")
+            return WorkflowUpdate(
+                status_source="工作流任务失败：%1",
+                status_arguments=(failed.error or failed.kind.value,),
+            )
         if any(item.status == TaskStatus.CANCELLED for item in tasks):
             self.coordinator.block(run.id, "workflow_task_cancelled")
             return WorkflowUpdate()
@@ -228,9 +231,7 @@ class ProjectWorkflowService:
                     (task for task in tasks if task.status.is_terminal),
                     None,
                 )
-                if terminal is not None and all(
-                    task.status.is_terminal for task in tasks
-                ):
+                if terminal is not None and all(task.status.is_terminal for task in tasks):
                     self.handle_task(terminal)
                     continue
                 if any(task.status in {TaskStatus.PENDING, TaskStatus.PAUSED} for task in tasks):
@@ -251,9 +252,7 @@ class ProjectWorkflowService:
             if existing.status.is_active:
                 self.tasks.cancel(existing.id)
         stage_attempt = run.payload.stage_attempt + 1
-        attempt_payload = (
-            payload or WorkflowPayloadPatch()
-        ).model_copy(
+        attempt_payload = (payload or WorkflowPayloadPatch()).model_copy(
             update={"stage_attempt": stage_attempt}
         )
         task_ids = [
@@ -265,10 +264,7 @@ class ProjectWorkflowService:
                 ),
                 asset_ids,
                 sequence_id=run.sequence_id,
-                idempotency_key=(
-                    f"workflow:{run.id}:{run.stage.value}:"
-                    f"{stage_attempt}:{index}"
-                ),
+                idempotency_key=(f"workflow:{run.id}:{run.stage.value}:{stage_attempt}:{index}"),
             ).id
             for index, (command, asset_ids) in enumerate(specs)
         ]

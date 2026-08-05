@@ -196,7 +196,8 @@ class ProjectTaskResult:
         return {
             "workflow": {
                 "selected_asset_ids": list(self.workflow.selected_asset_ids),
-                "status_message": self.workflow.status_message,
+                "status_source": self.workflow.status_source,
+                "status_arguments": list(self.workflow.status_arguments),
             },
             "imported_asset_id": self.imported_asset_id,
             "imported_document_id": self.imported_document_id,
@@ -217,7 +218,8 @@ class ProjectTaskResult:
         return cls(
             workflow=WorkflowUpdate(
                 selected_asset_ids=[str(value) for value in workflow.get("selected_asset_ids") or []],
-                status_message=str(workflow.get("status_message") or ""),
+                status_source=str(workflow.get("status_source") or ""),
+                status_arguments=tuple(str(value) for value in workflow.get("status_arguments") or []),
             ),
             imported_asset_id=str(values.get("imported_asset_id") or ""),
             imported_document_id=str(values.get("imported_document_id") or ""),
@@ -432,21 +434,13 @@ class EditorProject:
             )
             self._ensure_history_command_handlers(group.command)
             self._raise_if_history_conflicts(group, current_revision=before_revision)
-            actions = (
-                group.command.undo_actions
-                if direction == "undo"
-                else group.command.redo_actions
-            )
+            actions = group.command.undo_actions if direction == "undo" else group.command.redo_actions
             with self._repository.coalesced_revision():
                 self._history.apply_actions(actions)
             after_revision = self._repository.content_revision()
             if after_revision != before_revision + 1:
-                raise RuntimeError(
-                    f"history.{direction} must advance exactly one revision"
-                )
-            state: ActiveUndoGroupState = (
-                "undone" if direction == "undo" else "applied"
-            )
+                raise RuntimeError(f"history.{direction} must advance exactly one revision")
+            state: ActiveUndoGroupState = "undone" if direction == "undo" else "applied"
             transitioned = self._repository.history.transition(
                 group.id,
                 expected=cast(ActiveUndoGroupState, group.state),
@@ -476,10 +470,7 @@ class EditorProject:
                 request_id=request_id,
                 undo_group_id=group.id,
                 write_set=group.write_set,
-                changes=[
-                    ProjectChange(path=path, action="invoke")
-                    for path in group.write_set
-                ],
+                changes=[ProjectChange(path=path, action="invoke") for path in group.write_set],
                 operation_result=stored,
                 inverse_command=group.command,
             )
@@ -541,9 +532,7 @@ class EditorProject:
                     reason="the durable event journal does not cover the requested revision",
                 )
             if any(
-                _project_write_paths_overlap(left, right)
-                for left in write_set
-                for right in event.write_set
+                _project_write_paths_overlap(left, right) for left in write_set for right in event.write_set
             ):
                 conflicts.append(event)
             covered_revision = event.project_revision
@@ -582,8 +571,7 @@ class EditorProject:
                 before_revision = self._repository.content_revision()
                 if base_revision != before_revision:
                     raise RuntimeError(
-                        "Project revision conflict: "
-                        f"expected {base_revision}, current {before_revision}"
+                        f"Project revision conflict: expected {base_revision}, current {before_revision}"
                     )
                 results: list[dict[str, Any]] = []
                 with self._repository.coalesced_revision():
@@ -615,20 +603,14 @@ class EditorProject:
                         )
                 after_revision = self._repository.content_revision()
                 if after_revision != before_revision + 1:
-                    raise RuntimeError(
-                        "Atomic collaboration batch must advance exactly one revision"
-                    )
+                    raise RuntimeError("Atomic collaboration batch must advance exactly one revision")
                 durable_command = self._history.combined_since(
                     checkpoint,
                     label=label,
                 )
                 if durable_command is None:
-                    raise RuntimeError(
-                        "Atomic collaboration batch did not produce an inverse command"
-                    )
-                combined_write_set = sorted(
-                    {path for command in commands for path in command.write_set}
-                )
+                    raise RuntimeError("Atomic collaboration batch did not produce an inverse command")
+                combined_write_set = sorted({path for command in commands for path in command.write_set})
                 self._history.squash_since(checkpoint, label=label)
                 self._repository.history.record_group(
                     group_id=batch_id,
@@ -656,10 +638,7 @@ class EditorProject:
                     request_id=batch_id,
                     undo_group_id=batch_id,
                     write_set=combined_write_set,
-                    changes=[
-                        ProjectChange(path=path, action="invoke")
-                        for path in combined_write_set
-                    ],
+                    changes=[ProjectChange(path=path, action="invoke") for path in combined_write_set],
                     operation_result=event_result,
                     inverse_command=durable_command,
                 )
@@ -739,15 +718,10 @@ class EditorProject:
                     raise ValueError("base_revision is required for project writes")
                 if base_revision != before_revision:
                     raise RuntimeError(
-                        "Project revision conflict: "
-                        f"expected {base_revision}, current {before_revision}"
+                        f"Project revision conflict: expected {base_revision}, current {before_revision}"
                     )
                 result = action(False)
-                command = (
-                    self._history.combined_since(history_checkpoint)
-                    if reversible
-                    else None
-                )
+                command = self._history.combined_since(history_checkpoint) if reversible else None
                 stored = self._repository.save_automation_result(
                     request_id,
                     operation,
@@ -1010,10 +984,14 @@ class EditorProject:
         except StopIteration as error:
             raise KeyError(clip_id) from error
         asset = self._repository.catalog.get_asset(clip.asset_id)
-        return WebRenderCache(
-            self._repository,
-            self._paths,
-        ).target(state, clip, asset).path.is_file()
+        return (
+            WebRenderCache(
+                self._repository,
+                self._paths,
+            )
+            .target(state, clip, asset)
+            .path.is_file()
+        )
 
     def list_audio_buses(self, sequence_id: str):
         return self._repository.audio.list_audio_buses(sequence_id)
@@ -1765,11 +1743,7 @@ class EditorApplication:
 
     @property
     def mlt_preview_repository_path(self) -> str:
-        return (
-            str(self._paths.mlt_preview_repository)
-            if self._paths.mlt_preview_repository
-            else ""
-        )
+        return str(self._paths.mlt_preview_repository) if self._paths.mlt_preview_repository else ""
 
     @property
     def mlt_data_path(self) -> str:
@@ -1914,9 +1888,7 @@ class EditorApplication:
             main_profile = repository.catalog.get_sequence(project.main_sequence_id).profile
             timeline_asset = asset.in_frame_clock(main_profile, sequence.profile)
             duration = timeline_asset.metadata.duration_frames or 150
-            track_kind = (
-                TrackKind.AUDIO if asset.kind == AssetKind.AUDIO else TrackKind.VIDEO
-            )
+            track_kind = TrackKind.AUDIO if asset.kind == AssetKind.AUDIO else TrackKind.VIDEO
             track = Track(
                 id=f"source-track-{asset.id}",
                 sequence_id=sequence.id,
@@ -2033,11 +2005,8 @@ class EditorApplication:
                         artifacts = [
                             local
                             for task in reversed(tasks)
-                            for value in reversed(
-                                _user_visible_task_artifacts(task)
-                            )
-                            if (local := value.local_path(path)) is not None
-                            and local.is_file()
+                            for value in reversed(_user_visible_task_artifacts(task))
+                            if (local := value.local_path(path)) is not None and local.is_file()
                         ]
                         item["recentArtifact"] = str(artifacts[0]) if artifacts else ""
                 except ProjectUpgradeRequiredError:

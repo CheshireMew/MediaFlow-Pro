@@ -3,7 +3,7 @@
     <context>
         <name>AsrLanguageCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+203" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+201" />
             <source>语言：自动识别</source>
             <translation>言語：自動検出</translation>
         </message>
@@ -158,7 +158,7 @@
     <context>
         <name>AudioCatalog</name>
         <message>
-            <location line="+389" />
+            <location line="+569" />
             <source>参数均衡器</source>
             <translation>パラメトリックEQ</translation>
         </message>
@@ -847,7 +847,7 @@
     <context>
         <name>EncoderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-390" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-381" />
             <source>H.264 软件</source>
             <translation>H.264 ソフトウェア</translation>
         </message>
@@ -866,16 +866,31 @@
             <source>ProRes 软件</source>
             <translation>ProRes ソフトウェア</translation>
         </message>
+        <message>
+            <location line="+1" />
+            <source>H.264 硬件优先（自动）</source>
+            <translation>H.264 ハードウェア優先（自動）</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>HEVC 硬件优先（自动）</source>
+            <translation>HEVC ハードウェア優先（自動）</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>AV1 硬件优先（自动）</source>
+            <translation>AV1 ハードウェア優先（自動）</translation>
+        </message>
     </context>
     <context>
         <name>ExportCatalog</name>
         <message>
-            <location line="+6" />
+            <location line="+10" />
             <source>不烧录</source>
             <translation>焼き付けない</translation>
         </message>
         <message>
-            <location line="+213" />
+            <location line="+193" />
             <source>MP4 视频 (*.mp4)</source>
             <translation>MP4 動画 (*.mp4)</translation>
         </message>
@@ -1921,7 +1936,7 @@
     <context>
         <name>LlmProviderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+269" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+265" />
             <source>自定义 / 本地</source>
             <translation>カスタム / ローカル</translation>
         </message>
@@ -2419,7 +2434,7 @@
     <context>
         <name>PreviewViewport</name>
         <message>
-            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+361" />
+            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+386" />
             <source>预览不可用：</source>
             <translation>プレビューを利用できません：</translation>
         </message>
@@ -2628,22 +2643,12 @@
             <translation>ショート</translation>
         </message>
         <message>
-            <location line="+11" />
-            <source>主序列</source>
-            <translation>メインシーケンス</translation>
-        </message>
-        <message>
-            <location line="+2" />
-            <source>短视频</source>
-            <translation>ショート動画</translation>
-        </message>
-        <message>
-            <location line="+10" />
+            <location line="+23" />
             <source>序列</source>
             <translation>シーケンス</translation>
         </message>
         <message>
-            <location line="+76" />
+            <location line="+77" />
             <source>当前：%1</source>
             <translation>現在：%1</translation>
         </message>
@@ -3306,6 +3311,574 @@
         </message>
     </context>
     <context>
+        <name>StatusMessageCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_catalogs.py" line="-693" />
+            <source>%1 连接测试成功</source>
+            <translation>%1 の接続テストに成功しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Cookie 已保存到 %1</source>
+            <translation>Cookie を %1 に保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Cookie 已清除</source>
+            <translation>Cookie を消去しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>LLM 提供商已保存</source>
+            <translation>LLM プロバイダーを保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>LLM 提供商已移除</source>
+            <translation>LLM プロバイダーを削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>修改已应用到字幕文档</source>
+            <translation>変更を字幕ドキュメントに適用しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>分析期间时间线已修改，请重新运行智能入出点</source>
+            <translation>解析中にタイムラインが変更されました。スマート入出点を再実行してください</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>场景切点已写入时间线</source>
+            <translation>シーンカットをタイムラインに書き込みました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>当前 LLM 提供商已切换</source>
+            <translation>現在の LLM プロバイダーを切り替えました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>当前工作流阶段正在运行</source>
+            <translation>現在のワークフローステージは実行中です</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>短视频序列已创建</source>
+            <translation>ショートシーケンスを作成しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>短视频序列已移除；可使用撤销恢复</source>
+            <translation>ショートシーケンスを削除しました。元に戻す操作で復元できます</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>工作流任务失败：%1</source>
+            <translation>ワークフロータスクに失敗しました：%1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高光候选已保存</source>
+            <translation>ハイライト候補を保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高光候选已删除</source>
+            <translation>ハイライト候補を削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高光区间已添加到主序列</source>
+            <translation>ハイライト範囲をメインシーケンスに追加しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>默认下载目录已更新</source>
+            <translation>既定のダウンロード先を更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>默认项目保存目录已更新</source>
+            <translation>既定のプロジェクト保存先を更新しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>外部修改与当前输入冲突，已保护未提交内容</source>
+            <translation>外部変更が現在の入力と競合したため、未確定の内容を保護しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>字幕已保存</source>
+            <translation>字幕を保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕已合并</source>
+            <translation>字幕を結合しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕已导出到 %1</source>
+            <translation>字幕を %1 に書き出しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕已拆分</source>
+            <translation>字幕を分割しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕样式预设已移除</source>
+            <translation>字幕スタイルプリセットを削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已从时间线选区创建短视频序列</source>
+            <translation>タイムライン範囲からショートシーケンスを作成しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已从最近项目中移除</source>
+            <translation>最近のプロジェクトから削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已从高光创建短视频序列</source>
+            <translation>ハイライトからショートシーケンスを作成しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已保存字幕样式预设：%1</source>
+            <translation>字幕スタイルプリセットを保存しました：%1</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已保存序列字幕覆盖</source>
+            <translation>シーケンス字幕の上書きを保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已保留你的修改</source>
+            <translation>変更内容を保持しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已修复 %1 条重叠字幕</source>
+            <translation>重なっていた字幕 %1 件を修正しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已创建 %1 个短视频草稿</source>
+            <translation>ショート動画の下書きを %1 件作成しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已创建命名版本“%1”</source>
+            <translation>名前付きバージョン「%1」を作成しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已创建复合片段</source>
+            <translation>複合クリップを作成しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已创建素材文件夹：%1</source>
+            <translation>素材フォルダーを作成しました：%1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已删除 %1 条字幕</source>
+            <translation>字幕を %1 件削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已复制 %1 条字幕</source>
+            <translation>字幕を %1 件コピーしました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已实时同步 %1 的修改</source>
+            <translation>%1 の変更をリアルタイムで同期しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已导入 %1</source>
+            <translation>%1 を読み込みました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已导入 %1 个素材</source>
+            <translation>素材を %1 件読み込みました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已导入 %1，共 %2 条字幕</source>
+            <translation>%1 を読み込みました（字幕 %2 件）</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已导出 FCPXML：%1</source>
+            <translation>FCPXML を書き出しました：%1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已将 %1 放入时间轴</source>
+            <translation>%1 をタイムラインに配置しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已将当前画面保存为素材：%1</source>
+            <translation>現在のフレームを素材として保存しました：%1</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已恢复命名版本“%1”</source>
+            <translation>名前付きバージョン「%1」を復元しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已恢复字幕文档时间</source>
+            <translation>字幕ドキュメントのタイミングを復元しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已放入 %1 条字幕</source>
+            <translation>字幕を %1 件配置しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已更新 %1 总线</source>
+            <translation>%1 バスを更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换 %1 处文本</source>
+            <translation>テキストを %1 か所置換しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换 %1 条字幕</source>
+            <translation>字幕を %1 件置換しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换当前匹配</source>
+            <translation>現在の一致箇所を置換しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换素材内容，预览缓存和音频波形将重新生成</source>
+            <translation>素材を置き換えました。プレビューキャッシュと音声波形を再生成します</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已添加字幕</source>
+            <translation>字幕を追加しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已添加手动高光候选</source>
+            <translation>手動ハイライト候補を追加しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已采用最新项目内容</source>
+            <translation>プロジェクトの最新内容を採用しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已清理 %1 条任务记录，任务产物仍保留</source>
+            <translation>タスク記録を %1 件消去しました。タスク成果物は保持されています</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已设置序列入出点：%1–%2 帧</source>
+            <translation>シーケンス入出点を設定しました：フレーム %1–%2</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏</source>
+            <translation>シーケンス入出点を設定しました：フレーム %1–%2。有効な字幕が見つからなかったため、黒フレームのみ処理しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已设置序列入出点：%1–%2 帧；结果已应用到原序列</source>
+            <translation>シーケンス入出点を設定しました：フレーム %1–%2。結果を元のシーケンスに適用しました</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏；结果已应用到原序列</source>
+            <translation>シーケンス入出点を設定しました：フレーム %1–%2。有効な字幕が見つからなかったため黒フレームのみ処理し、結果を元のシーケンスに適用しました</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>已设置序列入点</source>
+            <translation>シーケンス入点を設定しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已设置序列出点</source>
+            <translation>シーケンス出点を設定しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已移动序列字幕</source>
+            <translation>シーケンス字幕を移動しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已调整序列字幕时间</source>
+            <translation>シーケンス字幕のタイミングを調整しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已调整序列入出点</source>
+            <translation>シーケンス入出点を調整しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已清除序列入出点</source>
+            <translation>シーケンスの入出点を消去しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已移除任务记录，任务产物仍保留</source>
+            <translation>タスク記録を削除しました。タスク成果物は保持されています</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已解除复合片段</source>
+            <translation>複合クリップを解除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已解除视音频绑定；当前仅选中视频。点击空白处或按 Esc 可清除选择</source>
+            <translation>映像と音声のリンクを解除しました。現在は映像のみ選択されています。空白部分をクリックするか Esc キーで選択を解除できます</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已请求取消 %1 个任务</source>
+            <translation>%1 件のタスクのキャンセルを要求しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已请求取消任务</source>
+            <translation>タスクのキャンセルを要求しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已请求取消运行时工具操作</source>
+            <translation>ランタイムツール操作のキャンセルを要求しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已请求暂停 %1 个任务</source>
+            <translation>%1 件のタスクの一時停止を要求しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已请求暂停任务</source>
+            <translation>タスクの一時停止を要求しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已选择水印 %1</source>
+            <translation>透かし %1 を選択しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已重新关联 %1 个素材</source>
+            <translation>素材を %1 件再リンクしました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已重新关联 %1 个素材，仍有 %2 个未找到</source>
+            <translation>素材を %1 件再リンクしました。%2 件はまだ見つかっていません</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已重新创建任务</source>
+            <translation>タスクを再作成しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已跳过工作流阶段：%1</source>
+            <translation>ワークフローステージをスキップしました：%1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>序列配置已更新</source>
+            <translation>シーケンス設定を更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>智能拆分完成，共拆分 %1 条</source>
+            <translation>スマート分割が完了し、字幕を %1 件分割しました</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>术语已保存</source>
+            <translation>用語を保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>术语已移除</source>
+            <translation>用語を削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在关闭项目并释放文件…</source>
+            <translation>プロジェクトを閉じてファイルを解放しています…</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在分析画面主体</source>
+            <translation>映像の被写体を解析しています</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在导入 %1</source>
+            <translation>%1 を読み込んでいます</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在导入 %1 个素材</source>
+            <translation>素材を %1 件読み込んでいます</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在导入水印 %1</source>
+            <translation>透かし %1 を読み込んでいます</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在检测场景切点</source>
+            <translation>シーンカットを検出中</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>片段素材已替换</source>
+            <translation>クリップ素材を置き換えました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>画面跟踪已应用</source>
+            <translation>映像トラッキングを適用しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>离线素材已重新关联</source>
+            <translation>オフライン素材を再リンクしました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>素材文件夹已更新</source>
+            <translation>素材フォルダーを更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果已更新</source>
+            <translation>映像エフェクトを更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果已添加</source>
+            <translation>映像エフェクトを追加しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果已移除</source>
+            <translation>映像エフェクトを削除しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果顺序已更新</source>
+            <translation>映像エフェクトの順序を更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>设置已保存；界面语言将在下次启动时生效</source>
+            <translation>設定を保存しました。画面言語は次回起動時に切り替わります</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>示例项目已创建；跟随引导认识主要区域</source>
+            <translation>サンプルプロジェクトを作成しました。ツアーに沿って主要エリアを確認できます</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>译文已保存</source>
+            <translation>翻訳を保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>该域名没有已保存的 Cookie</source>
+            <translation>このドメインに保存されている Cookie はありません</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>该高光区间已经位于主序列中</source>
+            <translation>このハイライト範囲はすでにメインシーケンスにあります</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>转场已添加</source>
+            <translation>トランジションを追加しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>转录设置已更新</source>
+            <translation>文字起こし設定を更新しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>运行时工具操作已取消</source>
+            <translation>ランタイムツール操作をキャンセルしました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>运行时工具操作已完成</source>
+            <translation>ランタイムツール操作が完了しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>错误详情已复制</source>
+            <translation>エラー詳細をコピーしました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已保存</source>
+            <translation>プロジェクトを保存しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已关闭：%1</source>
+            <translation>プロジェクトを閉じました：%1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已创建</source>
+            <translation>プロジェクトを作成しました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已创建，正在下载视频</source>
+            <translation>プロジェクトを作成しました。動画をダウンロードしています</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>项目已打开</source>
+            <translation>プロジェクトを開きました</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目正被其他窗口使用，已只读打开</source>
+            <translation>このプロジェクトは別のウィンドウで使用中のため、読み取り専用で開きました</translation>
+        </message>
+    </context>
+    <context>
         <name>SubtitlePanel</name>
         <message>
             <location filename="../../desktop/qml/SubtitlePanel.qml" line="+125" />
@@ -3598,7 +4171,7 @@
     <context>
         <name>SubtitleStyleCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-110" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+408" />
             <source>经典白字</source>
             <translation>クラシックホワイト</translation>
         </message>
@@ -3626,7 +4199,12 @@
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location line="-466" />
+            <location line="-649" />
+            <source>主序列</source>
+            <translation>メインシーケンス</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>主总线</source>
             <translation>マスター</translation>
         </message>
@@ -3647,6 +4225,11 @@
         </message>
         <message>
             <location line="+5" />
+            <source>短视频 %1</source>
+            <translation>ショート動画 %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>视频 %1</source>
             <translation>ビデオ %1</translation>
         </message>
@@ -3664,7 +4247,7 @@
     <context>
         <name>TaskCatalog</name>
         <message>
-            <location line="-27" />
+            <location line="-26" />
             <source>内置 faster-whisper</source>
             <translation>内蔵 faster-whisper</translation>
         </message>
@@ -3679,7 +4262,7 @@
             <translation>%1 チャンク並列</translation>
         </message>
         <message>
-            <location line="+63" />
+            <location line="+267" />
             <source>导入素材 %1</source>
             <translation>メディア %1 を読み込む</translation>
         </message>
@@ -3945,7 +4528,7 @@
             <translation>文字起こし音声の情報を読込中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在检查音频声道</source>
             <translation>音声チャンネルを確認中</translation>
         </message>
@@ -3970,12 +4553,12 @@
             <translation>長い音声の無音位置を検出中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在生成长音频分块</source>
             <translation>長い音声の分割を生成中</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+8" />
             <source>正在保存翻译结果</source>
             <translation>翻訳結果を保存中</translation>
         </message>
@@ -3990,7 +4573,7 @@
             <translation>SDR 軽量プレビューファイルを作成中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在登记轻量预览文件</source>
             <translation>軽量プレビューファイルを登録中</translation>
         </message>
@@ -4005,7 +4588,7 @@
             <translation>音声波形を保存中</translation>
         </message>
         <message>
-            <location line="+18" />
+            <location line="+14" />
             <source>正在处理网页素材</source>
             <translation>Web 素材を処理中</translation>
         </message>
@@ -4015,7 +4598,7 @@
             <translation>既存の Web フレームを再利用中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在复制网页素材结果</source>
             <translation>Web 素材の結果をコピー中</translation>
         </message>
@@ -4045,7 +4628,7 @@
             <translation>ダウンロード解析結果を保存中</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="+9" />
             <source>正在保存响度结果</source>
             <translation>ラウドネス結果を保存中</translation>
         </message>
@@ -4055,7 +4638,7 @@
             <translation>シーケンスのイン・アウト解析を保存中</translation>
         </message>
         <message>
-            <location line="-97" />
+            <location line="-79" />
             <source>正在复用已有源区间转录</source>
             <translation>既存のソース範囲の文字起こしを再利用しています</translation>
         </message>
@@ -4065,12 +4648,12 @@
             <translation>現在のソース音声範囲の認識が完了しました</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="+6" />
             <source>正在并行转录长音频分块</source>
             <translation>長時間音声のチャンクを並列で文字起こししています</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>CUDA 不可用，正在切换到 CPU</source>
             <translation>CUDA が利用できないため CPU に切り替えています</translation>
         </message>
@@ -4100,7 +4683,7 @@
             <translation>軽量プレビューファイルを作成中</translation>
         </message>
         <message>
-            <location line="+5" />
+            <location line="+3" />
             <source>正在准备音频波形</source>
             <translation>音声波形を準備中</translation>
         </message>
@@ -4145,12 +4728,12 @@
             <translation>完成映像の検証用フレームを生成中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在校验成片文件</source>
             <translation>完成映像ファイルを検証中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在准备网页画面</source>
             <translation>Web フレームを準備中</translation>
         </message>
@@ -4160,7 +4743,7 @@
             <translation>Web フレームをレンダリング中</translation>
         </message>
         <message>
-            <location line="+7" />
+            <location line="+5" />
             <source>正在准备场景检测</source>
             <translation>シーン検出を準備中</translation>
         </message>
@@ -4185,7 +4768,7 @@
             <translation>ダウンロードリンクを解析中</translation>
         </message>
         <message>
-            <location line="+4" />
+            <location line="+2" />
             <source>正在编译音频图</source>
             <translation>音声グラフをコンパイル中</translation>
         </message>
@@ -4195,7 +4778,7 @@
             <translation>同じラウドネス解析の完了を待機中</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在复用响度分析结果</source>
             <translation>ラウドネス解析結果を再利用中</translation>
         </message>
@@ -4263,7 +4846,7 @@
     <context>
         <name>TaskStatusCatalog</name>
         <message>
-            <location line="-157" />
+            <location line="-137" />
             <source>等待中</source>
             <translation>待機中</translation>
         </message>
@@ -4898,7 +5481,7 @@
     <context>
         <name>TranslationCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+198" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+176" />
             <source>标准翻译</source>
             <translation>標準翻訳</translation>
         </message>
@@ -4971,12 +5554,12 @@
             <translation>用語集</translation>
         </message>
         <message>
-            <location line="+266" />
+            <location line="+267" />
             <source>还没有字幕文档</source>
             <translation>字幕ドキュメントはまだありません</translation>
         </message>
         <message>
-            <location line="-182" />
+            <location line="-183" />
             <source>校对整篇</source>
             <translation>全文を校正</translation>
         </message>
@@ -5036,7 +5619,7 @@
             <translation>シーケンスに配置</translation>
         </message>
         <message>
-            <location line="+44" />
+            <location line="+45" />
             <source>%1–%2 帧</source>
             <translation>%1～%2フレーム</translation>
         </message>
@@ -5399,7 +5982,7 @@
     <context>
         <name>WindowTitleBar</name>
         <message>
-            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+71" />
+            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+89" />
             <source>最小化窗口</source>
             <translation>ウィンドウを最小化</translation>
         </message>
@@ -5720,7 +6303,7 @@
             <translation>設定</translation>
         </message>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-553" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-733" />
             <source>素材</source>
             <translation>メディア</translation>
         </message>
@@ -5753,7 +6336,7 @@
     <context>
         <name>WorkspacePreviewPanel</name>
         <message>
-            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+53" />
+            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+69" />
             <source>节目</source>
             <translation>プログラム</translation>
         </message>

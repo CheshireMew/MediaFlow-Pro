@@ -16,6 +16,7 @@ from mediaflow.desktop.presentation_catalogs import (
     encoder_label,
     export_recovery_configuration_label,
     no_subtitle_burn_label,
+    status_message,
     system_name,
     task_message_label,
     task_status_label,
@@ -91,25 +92,23 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         technical_labels = expected_technical_labels[language]
         assert QCoreApplication.translate("SettingsDialog", "Cookie JSON") == technical_labels[0]
         assert QCoreApplication.translate("SettingsDialog", "API 密钥") == technical_labels[1]
-        assert (
-            QCoreApplication.translate("ExportTechnicalSettings", "单声道")
-            == technical_labels[2]
-        )
-        assert (
-            QCoreApplication.translate("ExportTechnicalSettings", "立体声")
-            == technical_labels[3]
-        )
-        assert (
-            QCoreApplication.translate("ExportTechnicalSettings", "FPS 分子")
-            == technical_labels[4]
-        )
-        assert (
-            QCoreApplication.translate("ExportTechnicalSettings", "FPS 分母")
-            == technical_labels[5]
-        )
+        assert QCoreApplication.translate("ExportTechnicalSettings", "单声道") == technical_labels[2]
+        assert QCoreApplication.translate("ExportTechnicalSettings", "立体声") == technical_labels[3]
+        assert QCoreApplication.translate("ExportTechnicalSettings", "FPS 分子") == technical_labels[4]
+        assert QCoreApplication.translate("ExportTechnicalSettings", "FPS 分母") == technical_labels[5]
         expected_system = ("Video 2", "ビデオ 2")[language == "ja"]
+        expected_main_sequence = ("Main Sequence", "メインシーケンス")[language == "ja"]
         expected_export = ("Export H264", "H264 を書き出し")[language == "ja"]
         assert system_name("视频 2") == expected_system
+        assert system_name("主序列") == expected_main_sequence
+        assert status_message("项目已打开") == (
+            "Project opened" if language == "en" else "プロジェクトを開きました"
+        )
+        assert status_message("已导入 %1，共 %2 条字幕", "clip.mp4", 3) == (
+            "Imported clip.mp4 with 3 subtitles"
+            if language == "en"
+            else "clip.mp4 を読み込みました（字幕 3 件）"
+        )
         assert encoder_label("h264_software") == (
             "H.264 Software" if language == "en" else "H.264 ソフトウェア"
         )

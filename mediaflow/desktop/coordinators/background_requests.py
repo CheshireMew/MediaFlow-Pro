@@ -53,9 +53,7 @@ class BackgroundRequests(SessionCoordinator):
         if self._session.requests.shutting_down:
             return None
         worker = executor or (
-            self._project_executor
-            if kind in _PROJECT_REQUEST_KINDS
-            else self._application_executor
+            self._project_executor if kind in _PROJECT_REQUEST_KINDS else self._application_executor
         )
         future = worker.submit(operation)
         if publish_result:
@@ -202,7 +200,7 @@ class BackgroundRequests(SessionCoordinator):
             else:
                 self._session.requests.closing_project = None
                 self._session.requests.closing_project_error = ""
-                self._session._set_status(f"项目已关闭：{project_path}")
+                self._session._set_status("项目已关闭：%1", project_path)
             self._session.events.projectStateChanged.emit()
             return
         if kind != "preview":

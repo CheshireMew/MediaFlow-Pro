@@ -107,7 +107,8 @@ def test_project_workflow_skip_advances_every_optional_stage_and_stops_at_export
         ):
             assert project.active_workflow().stage == skipped_stage
             update = project.skip_workflow(run.id)
-            assert "已跳过工作流阶段" in update.status_message
+            assert update.status_source == "已跳过工作流阶段：%1"
+            assert update.status_arguments == (skipped_stage.value,)
             assert project.active_workflow().stage == expected_stage
             assert project.active_workflow().status == WorkflowStatus.AWAITING_CONFIRMATION
 
@@ -153,14 +154,17 @@ def test_failed_task_blocks_workflow_without_consuming_success_output(
         assert failed.status == TaskStatus.FAILED
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).status
-            != WorkflowStatus.BLOCKED
+            project._repository.catalog.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
         persisted = project._repository.catalog.get_workflow_run(run.id)
         assert persisted.status == WorkflowStatus.BLOCKED
         assert persisted.message_code == "workflow_task_failed"
+        committed = project.committed_task_result(task.id)
+        assert committed is not None
+        assert committed.workflow.status_source == "工作流任务失败：%1"
+        assert committed.workflow.status_arguments == ("observable workflow failure",)
 
 
 def test_cancelled_task_blocks_workflow_for_recovery_without_consuming_output(
@@ -204,8 +208,7 @@ def test_cancelled_task_blocks_workflow_for_recovery_without_consuming_output(
         assert cancelled.status == TaskStatus.CANCELLED
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).status
-            != WorkflowStatus.BLOCKED
+            project._repository.catalog.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
@@ -261,10 +264,7 @@ def test_reopen_settles_workflow_when_owner_crashed_after_persisting_failure(
         coordinator.mark_running(run.id, task_ids=[task.id])
         release.set()
         assert tasks.wait(task.id, timeout=5).status == TaskStatus.FAILED
-        assert (
-            repository.catalog.get_workflow_run(run.id).status
-            == WorkflowStatus.RUNNING
-        )
+        assert repository.catalog.get_workflow_run(run.id).status == WorkflowStatus.RUNNING
     finally:
         release.set()
         tasks.shutdown()
@@ -294,11 +294,7 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
         )
         asset = project._repository.catalog.update_asset(
             asset.model_copy(
-                update={
-                    "metadata": asset.metadata.model_copy(
-                        update={"width": 3840, "height": 2160}
-                    )
-                }
+                update={"metadata": asset.metadata.model_copy(update={"width": 3840, "height": 2160})}
             )
         )
         run = project._workflows.coordinator.begin(
@@ -323,8 +319,7 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
         project.continue_workflow(run.id)
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).status
-            != WorkflowStatus.BLOCKED
+            project._repository.catalog.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
@@ -333,9 +328,7 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
         assert failed_run.payload.stage_attempt == 1
         first_task = project.get_task(failed_run.payload.task_ids[0])
         assert first_task.status == TaskStatus.FAILED
-        assert first_task.idempotency_key == (
-            f"workflow:{run.id}:prepare_media:1:0"
-        )
+        assert first_task.idempotency_key == (f"workflow:{run.id}:prepare_media:1:0")
 
         project.continue_workflow(run.id)
         assert second_started.wait(5)
@@ -343,19 +336,13 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
         second_task = project.get_task(retried_run.payload.task_ids[0])
         assert retried_run.payload.stage_attempt == 2
         assert second_task.id != first_task.id
-        assert second_task.idempotency_key == (
-            f"workflow:{run.id}:prepare_media:2:0"
-        )
+        assert second_task.idempotency_key == (f"workflow:{run.id}:prepare_media:2:0")
 
         release_second.set()
-        assert (
-            project.wait_for_task(second_task.id, timeout=5).status
-            == TaskStatus.COMPLETED
-        )
+        assert project.wait_for_task(second_task.id, timeout=5).status == TaskStatus.COMPLETED
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).stage
-            != WorkflowStage.TRANSCRIBE
+            project._repository.catalog.get_workflow_run(run.id).stage != WorkflowStage.TRANSCRIBE
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)

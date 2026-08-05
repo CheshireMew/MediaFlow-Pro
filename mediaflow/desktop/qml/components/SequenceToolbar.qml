@@ -17,19 +17,19 @@ Item {
         + createShortButton.implicitWidth + sequenceMenuButton.implicitWidth + 8
     implicitHeight: Theme.controlHeightCompact
 
-    function sequenceDisplayName(kind, name) {
-        if (kind === "main" && name === "主序列")
-            return qsTr("主序列");
-        if (kind === "short" && name.indexOf("短视频") === 0)
-            return qsTr("短视频") + name.slice(3);
-        return (kind === "short" ? root.shortSequencePrefix : root.mainSequencePrefix) + " · " + name;
+    function sequenceDisplayName(kind, name, displayName) {
+        if (displayName !== name)
+            return displayName;
+        return (kind === "short" ? root.shortSequencePrefix : root.mainSequencePrefix)
+            + " · " + displayName;
     }
 
     function activeSequenceName() {
         for (let index = 0; index < workspaceController.sequencesModel.rowCount(); index++) {
             const sequence = workspaceController.sequencesModel.get(index);
             if (sequence.sequenceId === workspaceController.activeSequenceId)
-                return root.sequenceDisplayName(sequence.kind, sequence.name);
+                return root.sequenceDisplayName(
+                    sequence.kind, sequence.name, sequence.displayName);
         }
         return qsTr("序列");
     }
@@ -56,11 +56,12 @@ Item {
             delegate: AppButton {
                 required property string sequenceId
                 required property string name
+                required property string displayName
                 required property string kind
                 objectName: "sequenceTab_" + sequenceId
                 height: sequenceTabs.height
                 width: Math.min(180, Math.max(86, implicitWidth))
-                text: root.sequenceDisplayName(kind, name)
+                text: root.sequenceDisplayName(kind, name, displayName)
                 checkable: true
                 checked: workspaceController.activeSequenceId === sequenceId
                 quiet: !checked

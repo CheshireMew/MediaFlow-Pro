@@ -245,11 +245,7 @@ class WorkspaceController(ControllerFacet):
         project = self._session.binding.current
         release_pending = self._session.requests.closing_project is not None
         closing = self._session.requests.project_close_future is not None
-        close_failed = bool(
-            release_pending
-            and not closing
-            and self._session.requests.closing_project_error
-        )
+        close_failed = bool(release_pending and not closing and self._session.requests.closing_project_error)
         writable = bool(project and not project.read_only)
         return {
             "canEdit": writable,
@@ -374,9 +370,7 @@ class WorkspaceController(ControllerFacet):
     @report_ui_errors
     def skipWorkflow(self, run_id: str) -> None:
         self._session._require_writable()
-        self._session._apply_workflow_update(
-            self._session.binding.current.skip_workflow(run_id)
-        )
+        self._session._apply_workflow_update(self._session.binding.current.skip_workflow(run_id))
 
     @Slot(str)
     @report_ui_errors
@@ -431,7 +425,10 @@ class WorkspaceController(ControllerFacet):
             return
         candidate = self._session._api.open_project(root, writable=True)
         self._session.lifecycle.replace(candidate)
-        self._session._set_status("项目已打开" if not self.readOnly else "项目正被其他窗口使用，已只读打开")
+        if self.readOnly:
+            self._session._set_status("项目正被其他窗口使用，已只读打开")
+        else:
+            self._session._set_status("项目已打开")
 
     @Slot(str)
     @report_ui_errors
@@ -466,7 +463,7 @@ class WorkspaceController(ControllerFacet):
             raise RuntimeError("请等待当前任务完成后再创建命名版本")
         record = self._session.binding.current.create_version(name)
         self._session.events.projectStateChanged.emit()
-        self._session._set_status(f"已创建命名版本“{record.name}”")
+        self._session._set_status("已创建命名版本“%1”", record.name)
 
     @Slot(str)
     @report_ui_errors
@@ -489,7 +486,7 @@ class WorkspaceController(ControllerFacet):
         self._session.events.projectStateChanged.emit()
         self._session.events.selectionChanged.emit()
         self._session.events.historyChanged.emit()
-        self._session._set_status(f"已恢复命名版本“{record.name}”")
+        self._session._set_status("已恢复命名版本“%1”", record.name)
 
     @Slot(str)
     @report_ui_errors
@@ -574,8 +571,7 @@ class WorkspaceController(ControllerFacet):
     @Slot(int)
     def reportPreviewDroppedFrames(self, dropped_frames: int) -> None:
         if (
-            dropped_frames
-            < self._session.service_settings.preview.dropped_frame_proxy_threshold
+            dropped_frames < self._session.service_settings.preview.dropped_frame_proxy_threshold
             or not self._session.binding.current
             or not self._session.binding.timeline
             or self._session.binding.current.read_only
@@ -651,9 +647,7 @@ class WorkspaceController(ControllerFacet):
             try:
                 close_future.result(timeout=15)
             except FutureTimeoutError:
-                logger.error(
-                    "Timed out while waiting for the closing project to release resources"
-                )
+                logger.error("Timed out while waiting for the closing project to release resources")
             except Exception as error:
                 logger.exception("Failed while closing the previous project")
                 self._session.requests.project_close_future = None
@@ -663,9 +657,7 @@ class WorkspaceController(ControllerFacet):
                     try:
                         pending_project.close(timeout=15)
                     except Exception:
-                        logger.exception(
-                            "Failed to release the previous project on shutdown retry"
-                        )
+                        logger.exception("Failed to release the previous project on shutdown retry")
                     else:
                         self._session.requests.closing_project = None
                         self._session.requests.closing_project_error = ""
@@ -679,9 +671,7 @@ class WorkspaceController(ControllerFacet):
             try:
                 self._session.requests.closing_project.close(timeout=15)
             except Exception:
-                logger.exception(
-                    "Failed to release the pending project on shutdown"
-                )
+                logger.exception("Failed to release the pending project on shutdown")
             else:
                 self._session.requests.closing_project = None
                 self._session.requests.closing_project_error = ""

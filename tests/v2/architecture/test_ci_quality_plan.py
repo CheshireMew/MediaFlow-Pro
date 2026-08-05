@@ -28,6 +28,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
     ("paths", "scope", "portable"),
     (
         (("README.md",), "maintenance", False),
+        (("README.en.md", "README.ja.md", "CONTRIBUTING.md"), "maintenance", False),
         (("LICENSE", "docs/readme-preview.png"), "maintenance", False),
         ((".github/workflows/star-history.yml",), "maintenance", False),
         (("AGENTS.md", "ARCHITECTURE.md"), "maintenance", False),

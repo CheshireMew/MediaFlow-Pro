@@ -74,10 +74,7 @@ class ProjectLifecycle(SessionCoordinator):
                 self._session.binding.current.unsubscribe_task_events(
                     self._session.binding.task_subscription_token
                 )
-            if (
-                self._session.binding.current
-                and self._session.binding.project_subscription_token is not None
-            ):
+            if self._session.binding.current and self._session.binding.project_subscription_token is not None:
                 self._unsubscribe_project_events(
                     self._session.binding.current,
                     self._session.binding.project_subscription_token,
@@ -102,9 +99,7 @@ class ProjectLifecycle(SessionCoordinator):
                         previous_project_subscription,
                     )
                 if previous_workspace_subscription is not None:
-                    previous.unsubscribe_workspace_events(
-                        previous_workspace_subscription
-                    )
+                    previous.unsubscribe_workspace_events(previous_workspace_subscription)
                 self._restore_interaction(preserved_selection)
                 self._bind(previous, reset_selection=False)
             raise
@@ -117,9 +112,7 @@ class ProjectLifecycle(SessionCoordinator):
                     previous_project_subscription,
                 )
             if previous_workspace_subscription is not None:
-                previous.unsubscribe_workspace_events(
-                    previous_workspace_subscription
-                )
+                previous.unsubscribe_workspace_events(previous_workspace_subscription)
             self._dispose(previous, close_in_background=True)
         self.remember_recent(candidate.project_dir)
 
@@ -169,9 +162,7 @@ class ProjectLifecycle(SessionCoordinator):
                     parent,
                     display_name,
                     max_path_utf16_units=PROJECT_ROOT_PATH_UTF16_LIMIT,
-                    max_component_utf16_units=(
-                        PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT
-                    ),
+                    max_component_utf16_units=(PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT),
                 )
                 if not root.exists():
                     return root, display_name
@@ -192,9 +183,7 @@ class ProjectLifecycle(SessionCoordinator):
                 display_name,
                 suffix=collision_suffix,
                 max_path_utf16_units=PROJECT_ROOT_PATH_UTF16_LIMIT,
-                max_component_utf16_units=(
-                    PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT
-                ),
+                max_component_utf16_units=(PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT),
             )
             suffix += 1
         if suffix > 2:
@@ -246,12 +235,8 @@ class ProjectLifecycle(SessionCoordinator):
             # write. Replaying its journal event can erase a pending deferred
             # dataChanged notification without producing a replacement.
             return
-        if (
-            self._active_draft_path
-            and any(
-                _paths_overlap(self._active_draft_path, path)
-                for path in event.write_set
-            )
+        if self._active_draft_path and any(
+            _paths_overlap(self._active_draft_path, path) for path in event.write_set
         ):
             self._deferred_events.append(event)
             self._session._set_status("外部修改与当前输入冲突，已保护未提交内容")
@@ -264,22 +249,17 @@ class ProjectLifecycle(SessionCoordinator):
             return
         try:
             current.reload_external_changes()
-            available_sequences = {
-                item.id for item in current.list_sequences()
-            }
+            available_sequences = {item.id for item in current.list_sequences()}
             if self._session.binding.active_sequence_id not in available_sequences:
-                self._session.binding.active_sequence_id = (
-                    current.get_project().main_sequence_id
-                )
-            self._session.binding.timeline = current.timeline(
-                self._session.binding.active_sequence_id
-            )
+                self._session.binding.active_sequence_id = current.get_project().main_sequence_id
+            self._session.binding.timeline = current.timeline(self._session.binding.active_sequence_id)
             self._session.projectors.refresh_project()
             self._session.events.selectionChanged.emit()
             self._session.events.historyChanged.emit()
             self._session.projectors.timeline.schedule_preview_graph()
             self._session._set_status(
-                f"已实时同步 {event.actor.name or event.actor.kind} 的修改"
+                "已实时同步 %1 的修改",
+                event.actor.name or event.actor.kind,
             )
         except Exception as error:
             self._session.events.errorOccurred.emit(f"无法投影项目修改：{error}")
@@ -307,8 +287,7 @@ class ProjectLifecycle(SessionCoordinator):
         retained: list[ProjectChangeEvent] = []
         for event in self._deferred_events:
             if self._active_draft_path and any(
-                _paths_overlap(self._active_draft_path, path)
-                for path in event.write_set
+                _paths_overlap(self._active_draft_path, path) for path in event.write_set
             ):
                 retained.append(event)
             else:
@@ -335,16 +314,15 @@ class ProjectLifecycle(SessionCoordinator):
             self._deferred_events.clear()
             self._apply_project_event(latest)
         else:
-            self._session.binding.timeline = current.timeline(
-                self._session.binding.active_sequence_id
-            )
+            self._session.binding.timeline = current.timeline(self._session.binding.active_sequence_id)
             self._session.projectors.refresh_project()
             self._session.events.selectionChanged.emit()
             self._session.events.historyChanged.emit()
             self._session.projectors.timeline.schedule_preview_graph()
-        self._session._set_status(
-            "已保留你的修改" if resolution == "keep_local" else "已采用最新项目内容"
-        )
+        if resolution == "keep_local":
+            self._session._set_status("已保留你的修改")
+        else:
+            self._session._set_status("已采用最新项目内容")
 
     def replay_task_events(self) -> None:
         if not self._session.binding.current:
@@ -437,9 +415,7 @@ class ProjectLifecycle(SessionCoordinator):
             for path in self._session.desktop_settings.ui.recent_project_paths
             if self._recent_key(path) != project_key
         ]
-        if len(remaining) == len(
-            self._session.desktop_settings.ui.recent_project_paths
-        ):
+        if len(remaining) == len(self._session.desktop_settings.ui.recent_project_paths):
             return False
         candidate = self._session.desktop_settings.model_copy(deep=True)
         candidate.ui.recent_project_paths = remaining
@@ -458,19 +434,13 @@ class ProjectLifecycle(SessionCoordinator):
                 self._session.binding.task_subscription_token
             )
         self._session.binding.task_subscription_token = None
-        if (
-            self._session.binding.current
-            and self._session.binding.project_subscription_token is not None
-        ):
+        if self._session.binding.current and self._session.binding.project_subscription_token is not None:
             self._unsubscribe_project_events(
                 self._session.binding.current,
                 self._session.binding.project_subscription_token,
             )
         self._session.binding.project_subscription_token = None
-        if (
-            self._session.binding.current
-            and self._session.binding.workspace_subscription_token is not None
-        ):
+        if self._session.binding.current and self._session.binding.workspace_subscription_token is not None:
             self._session.binding.current.unsubscribe_workspace_events(
                 self._session.binding.workspace_subscription_token
             )
@@ -559,9 +529,7 @@ class ProjectLifecycle(SessionCoordinator):
             self._application = None
             if application is not None:
                 try:
-                    application.focusObjectChanged.disconnect(
-                        self._on_focus_object_changed
-                    )
+                    application.focusObjectChanged.disconnect(self._on_focus_object_changed)
                 except (RuntimeError, TypeError):
                     pass
 

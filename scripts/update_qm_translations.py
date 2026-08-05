@@ -1428,17 +1428,17 @@ TRANSLATIONS.update(
         "运行时工具": ("Runtime Tools", "ランタイムツール"),
         "还原窗口": ("Restore Window", "ウィンドウを元に戻す"),
         "还没有字幕": ("No subtitles yet", "字幕はまだありません"),
-    "还没有字幕文档": ("No subtitle documents yet", "字幕ドキュメントはまだありません"),
-    "还没有可翻译的字幕": (
-        "No Subtitles to Translate",
-        "翻訳できる字幕がありません",
-    ),
-    "先识别时间轴声音，或导入已有字幕，再生成译文。": (
-        "Recognize timeline speech or import subtitles before generating a translation.",
-        "翻訳を生成する前に、タイムライン音声を認識するか字幕を読み込んでください。",
-    ),
-    "手动添加候选": ("Add Candidate Manually", "候補を手動追加"),
-    "收起手动添加": ("Hide Manual Entry", "手動追加を閉じる"),
+        "还没有字幕文档": ("No subtitle documents yet", "字幕ドキュメントはまだありません"),
+        "还没有可翻译的字幕": (
+            "No Subtitles to Translate",
+            "翻訳できる字幕がありません",
+        ),
+        "先识别时间轴声音，或导入已有字幕，再生成译文。": (
+            "Recognize timeline speech or import subtitles before generating a translation.",
+            "翻訳を生成する前に、タイムライン音声を認識するか字幕を読み込んでください。",
+        ),
+        "手动添加候选": ("Add Candidate Manually", "候補を手動追加"),
+        "收起手动添加": ("Hide Manual Entry", "手動追加を閉じる"),
         "选择字幕文档并放入当前序列。": (
             "Select a subtitle document and place it in the current sequence.",
             "字幕ドキュメントを選択して現在のシーケンスに配置してください。",
@@ -1453,6 +1453,237 @@ TRANSLATIONS.update(
             "既定で字幕もダウンロードしてSRTに変換",
         ),
         "默认处理模式": ("Default Processing Mode", "既定の処理モード"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 连接测试成功": ("%1 connection test succeeded", "%1 の接続テストに成功しました"),
+        "AV1 硬件优先（自动）": ("AV1 Hardware First (Auto)", "AV1 ハードウェア優先（自動）"),
+        "Cookie 已保存到 %1": ("Cookies saved to %1", "Cookie を %1 に保存しました"),
+        "Cookie 已清除": ("Cookies cleared", "Cookie を消去しました"),
+        "H.264 硬件优先（自动）": ("H.264 Hardware First (Auto)", "H.264 ハードウェア優先（自動）"),
+        "HEVC 硬件优先（自动）": ("HEVC Hardware First (Auto)", "HEVC ハードウェア優先（自動）"),
+        "LLM 提供商已保存": ("LLM provider saved", "LLM プロバイダーを保存しました"),
+        "LLM 提供商已移除": ("LLM provider removed", "LLM プロバイダーを削除しました"),
+        "修改已应用到字幕文档": (
+            "Changes applied to the subtitle document",
+            "変更を字幕ドキュメントに適用しました",
+        ),
+        "分析期间时间线已修改，请重新运行智能入出点": (
+            "The timeline changed during analysis; run Smart In/Out again",
+            "解析中にタイムラインが変更されました。スマート入出点を再実行してください",
+        ),
+        "场景切点已写入时间线": (
+            "Scene cuts written to the timeline",
+            "シーンカットをタイムラインに書き込みました",
+        ),
+        "外部修改与当前输入冲突，已保护未提交内容": (
+            "External changes conflicted with the current input; uncommitted changes were preserved",
+            "外部変更が現在の入力と競合したため、未確定の内容を保護しました",
+        ),
+        "字幕已保存": ("Subtitle saved", "字幕を保存しました"),
+        "字幕已合并": ("Subtitles merged", "字幕を結合しました"),
+        "字幕已导出到 %1": ("Subtitles exported to %1", "字幕を %1 に書き出しました"),
+        "字幕已拆分": ("Subtitle split", "字幕を分割しました"),
+        "字幕样式预设已移除": ("Subtitle style preset removed", "字幕スタイルプリセットを削除しました"),
+        "工作流任务失败：%1": ("Workflow task failed: %1", "ワークフロータスクに失敗しました：%1"),
+        "已从时间线选区创建短视频序列": (
+            "Short sequence created from the timeline range",
+            "タイムライン範囲からショートシーケンスを作成しました",
+        ),
+        "已从最近项目中移除": ("Removed from recent projects", "最近のプロジェクトから削除しました"),
+        "已从高光创建短视频序列": (
+            "Short sequence created from the highlight",
+            "ハイライトからショートシーケンスを作成しました",
+        ),
+        "已保存字幕样式预设：%1": (
+            "Subtitle style preset saved: %1",
+            "字幕スタイルプリセットを保存しました：%1",
+        ),
+        "已保存序列字幕覆盖": ("Sequence subtitle override saved", "シーケンス字幕の上書きを保存しました"),
+        "已保留你的修改": ("Your changes were kept", "変更内容を保持しました"),
+        "已修复 %1 条重叠字幕": ("Fixed %1 overlapping subtitles", "重なっていた字幕 %1 件を修正しました"),
+        "已创建 %1 个短视频草稿": (
+            "Created %1 short-video drafts",
+            "ショート動画の下書きを %1 件作成しました",
+        ),
+        "已创建命名版本“%1”": ("Named version “%1” created", "名前付きバージョン「%1」を作成しました"),
+        "已创建复合片段": ("Compound clip created", "複合クリップを作成しました"),
+        "已创建素材文件夹：%1": ("Media folder created: %1", "素材フォルダーを作成しました：%1"),
+        "已删除 %1 条字幕": ("Deleted %1 subtitles", "字幕を %1 件削除しました"),
+        "已复制 %1 条字幕": ("Copied %1 subtitles", "字幕を %1 件コピーしました"),
+        "已实时同步 %1 的修改": ("Synced %1's changes in real time", "%1 の変更をリアルタイムで同期しました"),
+        "已导入 %1": ("Imported %1", "%1 を読み込みました"),
+        "已导入 %1 个素材": ("Imported %1 media items", "素材を %1 件読み込みました"),
+        "已导入 %1，共 %2 条字幕": ("Imported %1 with %2 subtitles", "%1 を読み込みました（字幕 %2 件）"),
+        "已导出 FCPXML：%1": ("FCPXML exported: %1", "FCPXML を書き出しました：%1"),
+        "已将 %1 放入时间轴": ("Placed %1 on the timeline", "%1 をタイムラインに配置しました"),
+        "已将当前画面保存为素材：%1": (
+            "Current frame saved as media: %1",
+            "現在のフレームを素材として保存しました：%1",
+        ),
+        "已恢复命名版本“%1”": ("Named version “%1” restored", "名前付きバージョン「%1」を復元しました"),
+        "已恢复字幕文档时间": (
+            "Subtitle document timing restored",
+            "字幕ドキュメントのタイミングを復元しました",
+        ),
+        "已放入 %1 条字幕": ("Placed %1 subtitles", "字幕を %1 件配置しました"),
+        "已更新 %1 总线": ("Updated the %1 bus", "%1 バスを更新しました"),
+        "已替换 %1 处文本": ("Replaced %1 text matches", "テキストを %1 か所置換しました"),
+        "已替换 %1 条字幕": ("Replaced %1 subtitles", "字幕を %1 件置換しました"),
+        "已替换当前匹配": ("Current match replaced", "現在の一致箇所を置換しました"),
+        "已替换素材内容，预览缓存和音频波形将重新生成": (
+            "Media content replaced; preview cache and audio waveform will be regenerated",
+            "素材を置き換えました。プレビューキャッシュと音声波形を再生成します",
+        ),
+        "已添加字幕": ("Subtitle added", "字幕を追加しました"),
+        "已添加手动高光候选": ("Manual highlight candidate added", "手動ハイライト候補を追加しました"),
+        "已清理 %1 条任务记录，任务产物仍保留": (
+            "Cleared %1 task records; task outputs were kept",
+            "タスク記録を %1 件消去しました。タスク成果物は保持されています",
+        ),
+        "已清除序列入出点": ("Sequence In/Out cleared", "シーケンスの入出点を消去しました"),
+        "已移动序列字幕": ("Sequence subtitle moved", "シーケンス字幕を移動しました"),
+        "已移除任务记录，任务产物仍保留": (
+            "Task record removed; task outputs were kept",
+            "タスク記録を削除しました。タスク成果物は保持されています",
+        ),
+        "已解除复合片段": ("Compound clip dissolved", "複合クリップを解除しました"),
+        "已解除视音频绑定；当前仅选中视频。点击空白处或按 Esc 可清除选择": (
+            "Audio and video unlinked; only video is selected. Click an empty area or press Esc to clear the selection",
+            "映像と音声のリンクを解除しました。現在は映像のみ選択されています。空白部分をクリックするか Esc キーで選択を解除できます",
+        ),
+        "已设置序列入出点：%1–%2 帧": (
+            "Sequence In/Out set: frames %1–%2",
+            "シーケンス入出点を設定しました：フレーム %1–%2",
+        ),
+        "已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏": (
+            "Sequence In/Out set: frames %1–%2; no enabled subtitles were found, so only black frames were processed",
+            "シーケンス入出点を設定しました：フレーム %1–%2。有効な字幕が見つからなかったため、黒フレームのみ処理しました",
+        ),
+        "已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏；结果已应用到原序列": (
+            "Sequence In/Out set: frames %1–%2; no enabled subtitles were found, so only black frames were processed; the result was applied to the original sequence",
+            "シーケンス入出点を設定しました：フレーム %1–%2。有効な字幕が見つからなかったため黒フレームのみ処理し、結果を元のシーケンスに適用しました",
+        ),
+        "已设置序列入出点：%1–%2 帧；结果已应用到原序列": (
+            "Sequence In/Out set: frames %1–%2; the result was applied to the original sequence",
+            "シーケンス入出点を設定しました：フレーム %1–%2。結果を元のシーケンスに適用しました",
+        ),
+        "已设置序列入点": ("Sequence In set", "シーケンス入点を設定しました"),
+        "已设置序列出点": ("Sequence Out set", "シーケンス出点を設定しました"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "已请求取消 %1 个任务": (
+            "Requested cancellation of %1 tasks",
+            "%1 件のタスクのキャンセルを要求しました",
+        ),
+        "已请求取消任务": ("Task cancellation requested", "タスクのキャンセルを要求しました"),
+        "已请求取消运行时工具操作": (
+            "Runtime tool operation cancellation requested",
+            "ランタイムツール操作のキャンセルを要求しました",
+        ),
+        "已请求暂停 %1 个任务": ("Requested pause for %1 tasks", "%1 件のタスクの一時停止を要求しました"),
+        "已请求暂停任务": ("Task pause requested", "タスクの一時停止を要求しました"),
+        "已调整序列入出点": ("Sequence In/Out adjusted", "シーケンス入出点を調整しました"),
+        "已调整序列字幕时间": (
+            "Sequence subtitle timing adjusted",
+            "シーケンス字幕のタイミングを調整しました",
+        ),
+        "已跳过工作流阶段：%1": ("Workflow stage skipped: %1", "ワークフローステージをスキップしました：%1"),
+        "已选择水印 %1": ("Watermark %1 selected", "透かし %1 を選択しました"),
+        "已采用最新项目内容": ("Latest project content applied", "プロジェクトの最新内容を採用しました"),
+        "已重新关联 %1 个素材": ("Relinked %1 media items", "素材を %1 件再リンクしました"),
+        "已重新关联 %1 个素材，仍有 %2 个未找到": (
+            "Relinked %1 media items; %2 are still missing",
+            "素材を %1 件再リンクしました。%2 件はまだ見つかっていません",
+        ),
+        "已重新创建任务": ("Task recreated", "タスクを再作成しました"),
+        "序列配置已更新": ("Sequence settings updated", "シーケンス設定を更新しました"),
+        "当前 LLM 提供商已切换": ("Active LLM provider changed", "現在の LLM プロバイダーを切り替えました"),
+        "当前工作流阶段正在运行": (
+            "The current workflow stage is already running",
+            "現在のワークフローステージは実行中です",
+        ),
+        "智能拆分完成，共拆分 %1 条": (
+            "Smart split completed; split %1 subtitles",
+            "スマート分割が完了し、字幕を %1 件分割しました",
+        ),
+        "术语已保存": ("Glossary term saved", "用語を保存しました"),
+        "术语已移除": ("Glossary term removed", "用語を削除しました"),
+        "正在关闭项目并释放文件…": (
+            "Closing the project and releasing files…",
+            "プロジェクトを閉じてファイルを解放しています…",
+        ),
+        "正在分析画面主体": ("Analyzing the visual subject", "映像の被写体を解析しています"),
+        "正在导入 %1": ("Importing %1", "%1 を読み込んでいます"),
+        "正在导入 %1 个素材": ("Importing %1 media items", "素材を %1 件読み込んでいます"),
+        "正在导入水印 %1": ("Importing watermark %1", "透かし %1 を読み込んでいます"),
+        "片段素材已替换": ("Clip media replaced", "クリップ素材を置き換えました"),
+        "画面跟踪已应用": ("Visual tracking applied", "映像トラッキングを適用しました"),
+        "短视频 %1": ("Short Video %1", "ショート動画 %1"),
+        "短视频序列已创建": ("Short sequence created", "ショートシーケンスを作成しました"),
+        "短视频序列已移除；可使用撤销恢复": (
+            "Short sequence removed; use Undo to restore it",
+            "ショートシーケンスを削除しました。元に戻す操作で復元できます",
+        ),
+        "示例项目已创建；跟随引导认识主要区域": (
+            "Sample project created; follow the tour to learn the main areas",
+            "サンプルプロジェクトを作成しました。ツアーに沿って主要エリアを確認できます",
+        ),
+        "离线素材已重新关联": ("Offline media relinked", "オフライン素材を再リンクしました"),
+        "素材文件夹已更新": ("Media folder updated", "素材フォルダーを更新しました"),
+        "视觉效果已更新": ("Visual effect updated", "映像エフェクトを更新しました"),
+        "视觉效果已添加": ("Visual effect added", "映像エフェクトを追加しました"),
+        "视觉效果已移除": ("Visual effect removed", "映像エフェクトを削除しました"),
+        "视觉效果顺序已更新": ("Visual effect order updated", "映像エフェクトの順序を更新しました"),
+        "设置已保存；界面语言将在下次启动时生效": (
+            "Settings saved; the interface language will change after restart",
+            "設定を保存しました。画面言語は次回起動時に切り替わります",
+        ),
+        "译文已保存": ("Translation saved", "翻訳を保存しました"),
+        "该域名没有已保存的 Cookie": (
+            "No cookies are saved for this domain",
+            "このドメインに保存されている Cookie はありません",
+        ),
+        "该高光区间已经位于主序列中": (
+            "This highlight range is already in the main sequence",
+            "このハイライト範囲はすでにメインシーケンスにあります",
+        ),
+        "转场已添加": ("Transition added", "トランジションを追加しました"),
+        "转录设置已更新": ("Transcription settings updated", "文字起こし設定を更新しました"),
+        "运行时工具操作已取消": (
+            "Runtime tool operation cancelled",
+            "ランタイムツール操作をキャンセルしました",
+        ),
+        "运行时工具操作已完成": ("Runtime tool operation completed", "ランタイムツール操作が完了しました"),
+        "错误详情已复制": ("Error details copied", "エラー詳細をコピーしました"),
+        "项目已保存": ("Project saved", "プロジェクトを保存しました"),
+        "项目已关闭：%1": ("Project closed: %1", "プロジェクトを閉じました：%1"),
+        "项目已创建": ("Project created", "プロジェクトを作成しました"),
+        "项目已创建，正在下载视频": (
+            "Project created; downloading video",
+            "プロジェクトを作成しました。動画をダウンロードしています",
+        ),
+        "项目已打开": ("Project opened", "プロジェクトを開きました"),
+        "项目正被其他窗口使用，已只读打开": (
+            "The project is in use by another window and was opened read-only",
+            "このプロジェクトは別のウィンドウで使用中のため、読み取り専用で開きました",
+        ),
+        "高光候选已保存": ("Highlight candidate saved", "ハイライト候補を保存しました"),
+        "高光候选已删除": ("Highlight candidate deleted", "ハイライト候補を削除しました"),
+        "高光区间已添加到主序列": (
+            "Highlight range added to the main sequence",
+            "ハイライト範囲をメインシーケンスに追加しました",
+        ),
+        "默认下载目录已更新": ("Default download folder updated", "既定のダウンロード先を更新しました"),
+        "默认项目保存目录已更新": (
+            "Default project folder updated",
+            "既定のプロジェクト保存先を更新しました",
+        ),
     }
 )
 

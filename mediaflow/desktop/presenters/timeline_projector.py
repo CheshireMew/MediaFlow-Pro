@@ -31,6 +31,7 @@ class TimelineProjector(Projector):
                 {
                     "sequenceId": sequence.id,
                     "name": sequence.name,
+                    "displayName": system_name(sequence.name),
                     "kind": sequence.kind.value,
                     "profile": f"{sequence.profile.width}×{sequence.profile.height}",
                     "colorMode": sequence.profile.color_mode.value,
@@ -112,9 +113,7 @@ class TimelineProjector(Projector):
                 "audioTrackPosition": audio_lane_positions.get(clip.id, -1),
                 "waveformReady": bool(assets[clip.asset_id].waveform_path),
                 "previewUrl": (
-                    QUrl.fromLocalFile(
-                        self._session.asset_state.thumbnail_paths[clip.asset_id]
-                    ).toString()
+                    QUrl.fromLocalFile(self._session.asset_state.thumbnail_paths[clip.asset_id]).toString()
                     if clip.asset_id in self._session.asset_state.thumbnail_paths
                     else ""
                 ),

@@ -31,12 +31,8 @@ SETTINGS_TABS = ("general", "download", "ai")
 def probe(root: Path, language: str, scale: str) -> dict:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["QT_SCALE_FACTOR"] = scale
-    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(
-        root / "settings" / "service-settings.json"
-    )
-    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(
-        root / "settings" / "desktop-settings.json"
-    )
+    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(root / "settings" / "service-settings.json")
+    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(root / "settings" / "desktop-settings.json")
     os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(root / "media")
     os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(root / "projects")
     os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(root / "editor-service")
@@ -77,6 +73,11 @@ def probe(root: Path, language: str, scale: str) -> dict:
         for child in item.childItems():
             yield child
             yield from visual_items(child)
+
+    def horizontal_bounds(item: QQuickItem, ancestor: QQuickItem) -> tuple[float, float]:
+        origin = item.mapToItem(ancestor, QPointF(0, 0))
+        return origin.x(), origin.x() + float(item.property("width"))
+
     results = []
     try:
         window = engine.rootObjects()[0]
@@ -87,6 +88,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
         minimize_button = window.findChild(QObject, "minimizeWindowButton")
         maximize_button = window.findChild(QObject, "maximizeWindowButton")
         close_button = window.findChild(QObject, "closeWindowButton")
+        status_message = window.findChild(QObject, "workspaceStatusMessage")
         if any(
             item is None
             for item in (
@@ -95,6 +97,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 minimize_button,
                 maximize_button,
                 close_button,
+                status_message,
             )
         ):
             raise RuntimeError("Custom window title bar controls were not created")
@@ -142,6 +145,26 @@ def probe(root: Path, language: str, scale: str) -> dict:
         for _ in range(12):
             QCoreApplication.processEvents()
             time.sleep(0.02)
+        expected_status = {
+            "zh_CN": "项目已打开",
+            "en": "Project opened",
+            "ja": "プロジェクトを開きました",
+        }
+        if status_message.property("text") != expected_status[language]:
+            raise RuntimeError(
+                "Runtime status did not use the active translation catalog: "
+                f"{status_message.property('text')!r}"
+            )
+        expected_sequence_name = {
+            "zh_CN": "主序列",
+            "en": "Main Sequence",
+            "ja": "メインシーケンス",
+        }
+        main_sequence = workspace_controller.sequencesModel.get(0)
+        if main_sequence.get("displayName") != expected_sequence_name[language]:
+            raise RuntimeError(
+                f"System sequence name did not use the active translation catalog: {main_sequence!r}"
+            )
         for width, height in SIZES:
             window.setWidth(width)
             window.setHeight(height)
@@ -181,8 +204,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             if any(button is None for button in compact_icon_buttons):
                 raise RuntimeError("Primary compact icon buttons were not created")
             if any(
-                int(button.property("iconSize")) > 16
-                or float(button.property("implicitWidth")) > 32
+                int(button.property("iconSize")) > 16 or float(button.property("implicitWidth")) > 32
                 for button in compact_icon_buttons
             ):
                 raise RuntimeError("Toolbar icons regressed to oversized controls")
@@ -194,11 +216,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
                     raise RuntimeError(f"Retired inspector control still exists: {retired_name}")
             tool_panel_visible = bool(tool_panel.property("visible"))
             timeline_visible = bool(timeline.property("visible"))
-            if (
-                not tool_panel_visible
-                or not timeline_visible
-                or timeline_toolbar is None
-            ):
+            if not tool_panel_visible or not timeline_visible or timeline_toolbar is None:
                 raise RuntimeError(f"A primary workspace control is hidden at {width}x{height}")
             toolbar_width = float(timeline_toolbar.property("width"))
             toolbar_content_width = float(timeline_toolbar.property("contentWidth"))
@@ -209,14 +227,10 @@ def probe(root: Path, language: str, scale: str) -> dict:
                     QCoreApplication.processEvents()
                     time.sleep(0.01)
                 if abs(float(timeline_toolbar.property("contentX")) - expected_content_x) > 2:
-                    raise RuntimeError(
-                        f"Timeline overflow controls are unreachable at {width}x{height}"
-                    )
+                    raise RuntimeError(f"Timeline overflow controls are unreachable at {width}x{height}")
                 timeline_toolbar.setProperty("contentX", 0)
             if abs(float(navigation.property("width")) - float(tool_panel.property("width"))) > 2:
-                raise RuntimeError(
-                    f"Workspace navigation does not match the tool pane at {width}x{height}"
-                )
+                raise RuntimeError(f"Workspace navigation does not match the tool pane at {width}x{height}")
             if not bool(inspector.property("visible")):
                 raise RuntimeError(f"Persistent inspector is hidden at {width}x{height}")
             gutter = float(workspace.property("workspaceGutter"))
@@ -230,12 +244,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             if (
                 abs(tool_origin.x() - gutter) > 2
                 or abs(timeline_origin.x() - gutter) > 2
-                or abs(
-                    preview_origin.x()
-                    - tool_origin.x()
-                    - float(tool_panel.property("width"))
-                    - gutter
-                )
+                or abs(preview_origin.x() - tool_origin.x() - float(tool_panel.property("width")) - gutter)
                 > 2
                 or abs(
                     inspector_origin.x()
@@ -246,11 +255,14 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 > 2
             ):
                 raise RuntimeError(f"Workspace card gutters drifted at {width}x{height}")
-            if abs(
-                float(preview_control_bar.property("y"))
-                + float(preview_control_bar.property("height"))
-                - float(preview_viewport.property("height"))
-            ) > 2:
+            if (
+                abs(
+                    float(preview_control_bar.property("y"))
+                    + float(preview_control_bar.property("height"))
+                    - float(preview_viewport.property("height"))
+                )
+                > 2
+            ):
                 raise RuntimeError(f"Preview controls are not docked at {width}x{height}")
             if (
                 not bool(project_name.property("visible"))
@@ -258,9 +270,15 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 or project_name.property("text") != "UI Matrix"
             ):
                 raise RuntimeError(f"Project name is not visible at {width}x{height}")
-            navigation_items = {
-                item.objectName(): item for item in visual_items(navigation)
-            }
+            project_left, project_right = horizontal_bounds(project_name, title_bar)
+            status_left, _status_right = horizontal_bounds(status_message, title_bar)
+            if project_right + 8 > status_left:
+                raise RuntimeError(
+                    "Title-bar project name overlaps the workspace status at "
+                    f"{width}x{height}: project={project_left:.1f}..{project_right:.1f}, "
+                    f"status starts at {status_left:.1f}"
+                )
+            navigation_items = {item.objectName(): item for item in visual_items(navigation)}
             for mode in WORKSPACE_NAVIGATION_MODE_KEYS:
                 navigation_item = navigation_items.get(f"navigationItem_{mode}")
                 if navigation_item is None or not navigation_item.isVisible():

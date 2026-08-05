@@ -104,6 +104,8 @@ def is_maintenance_path(value: str | Path) -> bool:
     suffix = item.suffix.lower()
     if path in MAINTENANCE_ROOT_FILES:
         return True
+    if len(item.parts) == 1 and suffix in MAINTENANCE_TEXT_SUFFIXES:
+        return True
     if path == ".github/workflows/star-history.yml":
         return True
     if path.startswith("archive/"):
@@ -250,6 +252,11 @@ def _write_summary(plan: QualityPlan, paths: Sequence[str]) -> None:
 def _self_test() -> None:
     cases = {
         ("README.md",): ("maintenance", False, False),
+        ("README.en.md", "README.ja.md", "CONTRIBUTING.md"): (
+            "maintenance",
+            False,
+            False,
+        ),
         ("LICENSE", "docs/demo.png"): ("maintenance", False, False),
         (".github/workflows/star-history.yml",): ("maintenance", False, False),
         ("AGENTS.md", "ARCHITECTURE.md"): ("maintenance", False, False),

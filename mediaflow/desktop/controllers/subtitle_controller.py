@@ -368,9 +368,7 @@ class SubtitleController(ControllerFacet):
         start_frame = min(duration, bounds.in_frame) if bounds else 0
         end_frame = min(duration, bounds.out_frame) if bounds else duration
         project = self._session.binding.current.get_project()
-        project_profile = self._session.binding.current.get_sequence(
-            project.main_sequence_id
-        ).profile
+        project_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
         return build_dialogue_transcription_plan(
             state,
             {asset.id: asset for asset in self._session.binding.current.list_assets()},
@@ -386,10 +384,7 @@ class SubtitleController(ControllerFacet):
         self._session._require_writable()
         if not document_id:
             raise ValueError("请先选择源字幕文档")
-        language = (
-            target_language.strip()
-            or self._session.service_settings.translation.target_language
-        )
+        language = target_language.strip() or self._session.service_settings.translation.target_language
         if mode not in {"standard", "intelligent", "proofread"}:
             raise ValueError("请选择有效的翻译模式")
         self._session.tasks.start(
@@ -573,7 +568,7 @@ class SubtitleController(ControllerFacet):
         self._session.projectors.timeline.refresh_timeline()
         self._session.projectors.timeline.refresh_preview_subtitles()
         self._session.events.projectStateChanged.emit()
-        self._session._set_status(f"已放入 {len(placements)} 条字幕")
+        self._session._set_status("已放入 %1 条字幕", len(placements))
 
     @Slot(str, str, bool)
     @report_ui_errors
@@ -647,7 +642,7 @@ class SubtitleController(ControllerFacet):
             self._session.selection.document_id,
             self._session.selection.subtitle_segment_ids,
         )
-        self._session._finish_subtitle_edit([], f"已删除 {count} 条字幕")
+        self._session._finish_subtitle_edit([], "已删除 %1 条字幕", count)
 
     @Slot()
     @report_ui_errors
@@ -681,7 +676,7 @@ class SubtitleController(ControllerFacet):
             self._session.selection.document_id,
             text_limit=text_limit,
         )
-        self._session._finish_subtitle_edit([], f"智能拆分完成，共拆分 {count} 条")
+        self._session._finish_subtitle_edit([], "智能拆分完成，共拆分 %1 条", count)
 
     @Slot()
     @report_ui_errors
@@ -689,7 +684,7 @@ class SubtitleController(ControllerFacet):
         self._session._require_writable()
         self._session._require_subtitle_document()
         count = self._session.binding.current.fix_subtitle_overlaps(self._session.selection.document_id)
-        self._session._finish_subtitle_edit([], f"已修复 {count} 条重叠字幕")
+        self._session._finish_subtitle_edit([], "已修复 %1 条重叠字幕", count)
 
     @Slot()
     @report_ui_errors
@@ -700,7 +695,10 @@ class SubtitleController(ControllerFacet):
             self._session.selection.subtitle_segment_ids,
         )
         QGuiApplication.clipboard().setText(text)
-        self._session._set_status(f"已复制 {len(self._session.selection.subtitle_segment_ids)} 条字幕")
+        self._session._set_status(
+            "已复制 %1 条字幕",
+            len(self._session.selection.subtitle_segment_ids),
+        )
 
     @Slot()
     @report_ui_errors
@@ -714,7 +712,8 @@ class SubtitleController(ControllerFacet):
         )
         self._session._finish_subtitle_edit(
             list(self._session.selection.subtitle_segment_ids),
-            f"已替换 {count} 条字幕",
+            "已替换 %1 条字幕",
+            count,
         )
 
     @Slot()
@@ -736,7 +735,7 @@ class SubtitleController(ControllerFacet):
             replacement,
             match_case=match_case,
         )
-        self._session._finish_subtitle_edit([], f"已替换 {count} 处文本")
+        self._session._finish_subtitle_edit([], "已替换 %1 处文本", count)
 
     @Slot(str, int, int, str, str, bool)
     @report_ui_errors
@@ -784,7 +783,7 @@ class SubtitleController(ControllerFacet):
         if destination.suffix.lower() != ".srt":
             destination = destination.with_suffix(".srt")
         output = self._session.binding.current.write_subtitle_srt(document_id, destination)
-        self._session._set_status(f"字幕已导出到 {output}")
+        self._session._set_status("字幕已导出到 %1", output)
 
     @Slot(int, result=str)
     def subtitleTextAtFrame(self, frame: int) -> str:
@@ -835,12 +834,17 @@ class SubtitleController(ControllerFacet):
         if track.locked:
             raise ValueError("字幕轨道已锁定")
 
-    def _finish_subtitle_placement_edit(self, placement_id: str, status: str) -> None:
+    def _finish_subtitle_placement_edit(
+        self,
+        placement_id: str,
+        status_source: str,
+        *status_arguments: object,
+    ) -> None:
         self._session.selection.subtitle_placement_id = placement_id
         self._session.projectors.timeline.refresh_preview_subtitles()
         self._select_subtitle_placement_context(placement_id)
         self._session.projectors.timeline.schedule_preview_graph()
-        self._session._set_status(status)
+        self._session._set_status(status_source, *status_arguments)
         self._session.events.historyChanged.emit()
 
     @staticmethod

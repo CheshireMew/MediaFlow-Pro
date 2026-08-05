@@ -190,10 +190,7 @@ class TimelineController(ControllerFacet):
         for asset in self._session.binding.current.list_assets():
             if asset.kind.value == "web" or asset.status.value != "online":
                 continue
-            compatible = (
-                track_kind == TrackKind.VIDEO.value
-                and asset.kind.value in {"video", "image"}
-            ) or (
+            compatible = (track_kind == TrackKind.VIDEO.value and asset.kind.value in {"video", "image"}) or (
                 track_kind == TrackKind.AUDIO.value
                 and asset.kind.value in {"video", "audio"}
                 and asset.metadata.has_audio
@@ -205,8 +202,7 @@ class TimelineController(ControllerFacet):
     @Property("QVariantList", notify=selectionChanged)
     def visualEffectOptions(self) -> list[dict]:
         return [
-            {"label": str(spec["label"]), "value": kind.value}
-            for kind, spec in VISUAL_EFFECT_SPECS.items()
+            {"label": str(spec["label"]), "value": kind.value} for kind, spec in VISUAL_EFFECT_SPECS.items()
         ]
 
     @Property("QVariantList", notify=selectionChanged)
@@ -214,9 +210,7 @@ class TimelineController(ControllerFacet):
         if not self._session.binding.timeline or not self.selectedClipId:
             return []
         clip = next(
-            item
-            for item in self._session.binding.timeline.state.clips
-            if item.id == self.selectedClipId
+            item for item in self._session.binding.timeline.state.clips if item.id == self.selectedClipId
         )
         rows = []
         for effect in clip.visual_effects:
@@ -230,8 +224,7 @@ class TimelineController(ControllerFacet):
                     "enabled": effect.enabled,
                     "parameters": dict(effect.parameters),
                     "parameterSpecs": [
-                        {"key": key, **values}
-                        for key, values in schema["parameters"].items()
+                        {"key": key, **values} for key, values in schema["parameters"].items()
                     ],
                 }
             )
@@ -240,9 +233,7 @@ class TimelineController(ControllerFacet):
     @Property("QVariantMap", notify=selectionChanged)
     def selectedClipsSummary(self) -> dict:
         rows = [
-            self._session.models.clips.get(
-                self._session.models.clips.findRow("clipId", clip_id)
-            )
+            self._session.models.clips.get(self._session.models.clips.findRow("clipId", clip_id))
             for clip_id in self._session.selection.clip_ids
         ]
         rows = [row for row in rows if row]
@@ -1062,19 +1053,21 @@ class TimelineController(ControllerFacet):
         if not self._session.binding.timeline or not self.selectedClipId:
             raise ValueError("请先选择一个片段")
         clip = next(
-            item
-            for item in self._session.binding.timeline.state.clips
-            if item.id == self.selectedClipId
+            item for item in self._session.binding.timeline.state.clips if item.id == self.selectedClipId
         )
         effect = next(item for item in clip.visual_effects if item.id == effect_id)
         return clip, effect
 
-    def _after_visual_effect_change(self, status: str) -> None:
+    def _after_visual_effect_change(
+        self,
+        status_source: str,
+        *status_arguments: object,
+    ) -> None:
         self._session.projectors.timeline.refresh_timeline()
         self._session.projectors.timeline.schedule_preview_graph()
         self._session.events.selectionChanged.emit()
         self._session.events.historyChanged.emit()
-        self._session._set_status(status)
+        self._session._set_status(status_source, *status_arguments)
 
     @Slot(float, float, int, int, float)
     @report_ui_errors

@@ -144,7 +144,7 @@ class TimelineAssetOperations(SessionCoordinator):
             self._session.events.projectStateChanged.emit()
             self._session.events.historyChanged.emit()
             self._session.events.selectionChanged.emit()
-            self._session._set_status(f"已放入 {len(placements)} 条字幕")
+            self._session._set_status("已放入 %1 条字幕", len(placements))
             return PlacedTimelineAsset(
                 track_id=subtitle_track.id,
                 end_frame=start + duration,
@@ -189,7 +189,7 @@ class TimelineAssetOperations(SessionCoordinator):
         self._session.events.selectionChanged.emit()
         self.schedule_background(asset, dropped_frames=0)
         self._session.events.historyChanged.emit()
-        self._session._set_status(f"已将 {asset.name} 放入时间轴")
+        self._session._set_status("已将 %1 放入时间轴", asset.name)
         return PlacedTimelineAsset(track_id=track.id, end_frame=clip.timeline_end)
 
     def _placement_start(self, placement: TimelinePlacement, fallback: int) -> int:
@@ -356,9 +356,16 @@ class TimelineAssetOperations(SessionCoordinator):
             self._session.events.selectionChanged.emit()
         else:
             self._session.projectors.tasks.refresh_tasks()
-        label = sources[0].name if len(sources) == 1 else f"{len(sources)} 个素材"
-        state = "正在导入" if tasks else "已导入"
-        self._session._set_status(f"{state} {label}")
+        if len(sources) == 1:
+            if tasks:
+                self._session._set_status("正在导入 %1", sources[0].name)
+            else:
+                self._session._set_status("已导入 %1", sources[0].name)
+        else:
+            if tasks:
+                self._session._set_status("正在导入 %1 个素材", len(sources))
+            else:
+                self._session._set_status("已导入 %1 个素材", len(sources))
 
     def finish_import_drop(self, task_id: str, asset_id: str) -> None:
         task_entry = self._session.asset_state.pending_import_tasks.pop(task_id, None)

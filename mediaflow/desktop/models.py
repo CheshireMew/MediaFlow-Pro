@@ -59,9 +59,7 @@ class DictListModel(QAbstractListModel):
         for row, after in enumerate(items):
             before = self._items[row]
             changed_roles = {
-                role_by_name[name]
-                for name in self._roles
-                if before.get(name) != after.get(name)
+                role_by_name[name] for name in self._roles if before.get(name) != after.get(name)
             }
             if changed_roles:
                 self._items[row] = after
@@ -168,10 +166,7 @@ class DictListModel(QAbstractListModel):
 
     def _rebuild_key_rows(self) -> None:
         key_role = self._roles[0]
-        self._key_rows = {
-            str(item[key_role]): row
-            for row, item in enumerate(self._items)
-        }
+        self._key_rows = {str(item[key_role]): row for row, item in enumerate(self._items)}
 
     @Slot(int, result="QVariantMap")
     def get(self, row: int) -> dict[str, Any]:
@@ -288,9 +283,7 @@ class AssetFilterModel(QSortFilterProxyModel):
                 expanded_corpus.update(concept)
         return all(
             any(
-                query == candidate
-                or query in candidate
-                or candidate in query
+                query == candidate or query in candidate or candidate in query
                 for candidate in expanded_corpus
             )
             or any(query in concept and bool(concept & expanded_corpus) for concept in cls._CONCEPTS)
@@ -364,7 +357,10 @@ class AssetMomentFilterModel(QSortFilterProxyModel):
 
 class SequenceListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
-        super().__init__(["sequenceId", "name", "kind", "profile", "colorMode"], parent)
+        super().__init__(
+            ["sequenceId", "name", "displayName", "kind", "profile", "colorMode"],
+            parent,
+        )
 
 
 class RecentProjectListModel(DictListModel):

@@ -206,7 +206,7 @@ class HighlightController(ControllerFacet):
         self._session.projectors.timeline.refresh_sequences()
         self._session.projectors.highlights.refresh_highlights()
         self._session.events.projectStateChanged.emit()
-        self._session._set_status(f"已创建 {len(candidates)} 个短视频草稿")
+        self._session._set_status("已创建 %1 个短视频草稿", len(candidates))
 
     @Slot(str)
     @report_ui_errors
@@ -222,20 +222,12 @@ class HighlightController(ControllerFacet):
         source_sequence = self._session.binding.current.get_sequence(self._session.binding.active_sequence_id)
         saved_preset = source_sequence.export_preset
         saved_video_preset = (
-            saved_preset
-            if (
-                saved_preset is not None
-                and saved_preset.format != ExportFormat.AUDIO
-            )
-            else None
+            saved_preset if (saved_preset is not None and saved_preset.format != ExportFormat.AUDIO) else None
         )
-        preset = (
-            saved_video_preset
-            or default_export_preset(
-                ExportFormat.H264,
-                source_sequence.profile.color_mode,
-                source_sequence.profile.fps,
-            )
+        preset = saved_video_preset or default_export_preset(
+            ExportFormat.H264,
+            source_sequence.profile.color_mode,
+            source_sequence.profile.fps,
         )
         self._session.tasks.start(
             ExportHighlightsCommand(
@@ -244,9 +236,7 @@ class HighlightController(ControllerFacet):
                 output_dir=str(output_dir),
                 preset=preset,
                 burn_subtitles=(
-                    bool(saved_video_preset.burn_subtitle_track_id)
-                    if saved_video_preset
-                    else True
+                    bool(saved_video_preset.burn_subtitle_track_id) if saved_video_preset else True
                 ),
             ),
             [candidate.asset_id for candidate in candidates],
@@ -258,8 +248,5 @@ class HighlightController(ControllerFacet):
     def exportSelectedHighlightsToDefaultLocation(self) -> None:
         self._session._require_writable()
         self.exportSelectedHighlights(
-            str(
-                self._session.binding.current.project_dir
-                / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY
-            )
+            str(self._session.binding.current.project_dir / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY)
         )

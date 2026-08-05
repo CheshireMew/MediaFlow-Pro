@@ -42,7 +42,7 @@ Rectangle {
             const sequence = workspaceController.sequencesModel.get(index);
             if (String(sequence.sequenceId)
                     === String(workspaceController.activeSequenceId))
-                return String(sequence.name);
+                return String(sequence.displayName);
         }
         return qsTr("主时间线");
     }

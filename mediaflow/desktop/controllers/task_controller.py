@@ -289,8 +289,7 @@ class TaskController(ControllerFacet):
             raise ValueError("下载编码设置无效")
         if (
             self._session.service_settings.download.resolution == selected_resolution
-            and self._session.service_settings.download.download_subtitles
-            == download_subtitles
+            and self._session.service_settings.download.download_subtitles == download_subtitles
             and self._session.service_settings.download.codec == codec
         ):
             return
@@ -404,21 +403,21 @@ class TaskController(ControllerFacet):
     def pauseAllTasks(self) -> None:
         self._session._require_writable()
         count = self._session.binding.current.pause_all_tasks()
-        self._session._set_status(f"已请求暂停 {count} 个任务")
+        self._session._set_status("已请求暂停 %1 个任务", count)
 
     @Slot()
     @report_ui_errors
     def cancelAllTasks(self) -> None:
         self._session._require_writable()
         count = self._session.binding.current.cancel_all_tasks()
-        self._session._set_status(f"已请求取消 {count} 个任务")
+        self._session._set_status("已请求取消 %1 个任务", count)
 
     @Slot()
     @report_ui_errors
     def clearTaskHistory(self) -> None:
         self._session._require_writable()
         count = self._session.binding.current.clear_task_history()
-        self._session._set_status(f"已清理 {count} 条任务记录，任务产物仍保留")
+        self._session._set_status("已清理 %1 条任务记录，任务产物仍保留", count)
         self._session.projectors.tasks.refresh_tasks()
 
     @Slot(str)

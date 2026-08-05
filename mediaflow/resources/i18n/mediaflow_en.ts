@@ -3,7 +3,7 @@
     <context>
         <name>AsrLanguageCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+203" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+201" />
             <source>语言：自动识别</source>
             <translation>Language: Auto Detect</translation>
         </message>
@@ -158,7 +158,7 @@
     <context>
         <name>AudioCatalog</name>
         <message>
-            <location line="+389" />
+            <location line="+569" />
             <source>参数均衡器</source>
             <translation>Parametric EQ</translation>
         </message>
@@ -847,7 +847,7 @@
     <context>
         <name>EncoderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-390" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-381" />
             <source>H.264 软件</source>
             <translation>H.264 Software</translation>
         </message>
@@ -866,16 +866,31 @@
             <source>ProRes 软件</source>
             <translation>ProRes Software</translation>
         </message>
+        <message>
+            <location line="+1" />
+            <source>H.264 硬件优先（自动）</source>
+            <translation>H.264 Hardware First (Auto)</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>HEVC 硬件优先（自动）</source>
+            <translation>HEVC Hardware First (Auto)</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>AV1 硬件优先（自动）</source>
+            <translation>AV1 Hardware First (Auto)</translation>
+        </message>
     </context>
     <context>
         <name>ExportCatalog</name>
         <message>
-            <location line="+6" />
+            <location line="+10" />
             <source>不烧录</source>
             <translation>Do not burn in</translation>
         </message>
         <message>
-            <location line="+213" />
+            <location line="+193" />
             <source>MP4 视频 (*.mp4)</source>
             <translation>MP4 Video (*.mp4)</translation>
         </message>
@@ -1921,7 +1936,7 @@
     <context>
         <name>LlmProviderCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+269" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+265" />
             <source>自定义 / 本地</source>
             <translation>Custom / Local</translation>
         </message>
@@ -2419,7 +2434,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>PreviewViewport</name>
         <message>
-            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+361" />
+            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+386" />
             <source>预览不可用：</source>
             <translation>Preview unavailable: </translation>
         </message>
@@ -2628,22 +2643,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Short</translation>
         </message>
         <message>
-            <location line="+11" />
-            <source>主序列</source>
-            <translation>Main Sequence</translation>
-        </message>
-        <message>
-            <location line="+2" />
-            <source>短视频</source>
-            <translation>Short Video</translation>
-        </message>
-        <message>
-            <location line="+10" />
+            <location line="+23" />
             <source>序列</source>
             <translation>Sequence</translation>
         </message>
         <message>
-            <location line="+76" />
+            <location line="+77" />
             <source>当前：%1</source>
             <translation>Current: %1</translation>
         </message>
@@ -3306,6 +3311,574 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>StatusMessageCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_catalogs.py" line="-693" />
+            <source>%1 连接测试成功</source>
+            <translation>%1 connection test succeeded</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Cookie 已保存到 %1</source>
+            <translation>Cookies saved to %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Cookie 已清除</source>
+            <translation>Cookies cleared</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>LLM 提供商已保存</source>
+            <translation>LLM provider saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>LLM 提供商已移除</source>
+            <translation>LLM provider removed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>修改已应用到字幕文档</source>
+            <translation>Changes applied to the subtitle document</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>分析期间时间线已修改，请重新运行智能入出点</source>
+            <translation>The timeline changed during analysis; run Smart In/Out again</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>场景切点已写入时间线</source>
+            <translation>Scene cuts written to the timeline</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>当前 LLM 提供商已切换</source>
+            <translation>Active LLM provider changed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>当前工作流阶段正在运行</source>
+            <translation>The current workflow stage is already running</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>短视频序列已创建</source>
+            <translation>Short sequence created</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>短视频序列已移除；可使用撤销恢复</source>
+            <translation>Short sequence removed; use Undo to restore it</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>工作流任务失败：%1</source>
+            <translation>Workflow task failed: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高光候选已保存</source>
+            <translation>Highlight candidate saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高光候选已删除</source>
+            <translation>Highlight candidate deleted</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高光区间已添加到主序列</source>
+            <translation>Highlight range added to the main sequence</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>默认下载目录已更新</source>
+            <translation>Default download folder updated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>默认项目保存目录已更新</source>
+            <translation>Default project folder updated</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>外部修改与当前输入冲突，已保护未提交内容</source>
+            <translation>External changes conflicted with the current input; uncommitted changes were preserved</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>字幕已保存</source>
+            <translation>Subtitle saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕已合并</source>
+            <translation>Subtitles merged</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕已导出到 %1</source>
+            <translation>Subtitles exported to %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕已拆分</source>
+            <translation>Subtitle split</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>字幕样式预设已移除</source>
+            <translation>Subtitle style preset removed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已从时间线选区创建短视频序列</source>
+            <translation>Short sequence created from the timeline range</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已从最近项目中移除</source>
+            <translation>Removed from recent projects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已从高光创建短视频序列</source>
+            <translation>Short sequence created from the highlight</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已保存字幕样式预设：%1</source>
+            <translation>Subtitle style preset saved: %1</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已保存序列字幕覆盖</source>
+            <translation>Sequence subtitle override saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已保留你的修改</source>
+            <translation>Your changes were kept</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已修复 %1 条重叠字幕</source>
+            <translation>Fixed %1 overlapping subtitles</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已创建 %1 个短视频草稿</source>
+            <translation>Created %1 short-video drafts</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已创建命名版本“%1”</source>
+            <translation>Named version “%1” created</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已创建复合片段</source>
+            <translation>Compound clip created</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已创建素材文件夹：%1</source>
+            <translation>Media folder created: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已删除 %1 条字幕</source>
+            <translation>Deleted %1 subtitles</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已复制 %1 条字幕</source>
+            <translation>Copied %1 subtitles</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已实时同步 %1 的修改</source>
+            <translation>Synced %1's changes in real time</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已导入 %1</source>
+            <translation>Imported %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已导入 %1 个素材</source>
+            <translation>Imported %1 media items</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已导入 %1，共 %2 条字幕</source>
+            <translation>Imported %1 with %2 subtitles</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已导出 FCPXML：%1</source>
+            <translation>FCPXML exported: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已将 %1 放入时间轴</source>
+            <translation>Placed %1 on the timeline</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已将当前画面保存为素材：%1</source>
+            <translation>Current frame saved as media: %1</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已恢复命名版本“%1”</source>
+            <translation>Named version “%1” restored</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已恢复字幕文档时间</source>
+            <translation>Subtitle document timing restored</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已放入 %1 条字幕</source>
+            <translation>Placed %1 subtitles</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已更新 %1 总线</source>
+            <translation>Updated the %1 bus</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换 %1 处文本</source>
+            <translation>Replaced %1 text matches</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换 %1 条字幕</source>
+            <translation>Replaced %1 subtitles</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换当前匹配</source>
+            <translation>Current match replaced</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已替换素材内容，预览缓存和音频波形将重新生成</source>
+            <translation>Media content replaced; preview cache and audio waveform will be regenerated</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已添加字幕</source>
+            <translation>Subtitle added</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已添加手动高光候选</source>
+            <translation>Manual highlight candidate added</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已采用最新项目内容</source>
+            <translation>Latest project content applied</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已清理 %1 条任务记录，任务产物仍保留</source>
+            <translation>Cleared %1 task records; task outputs were kept</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已设置序列入出点：%1–%2 帧</source>
+            <translation>Sequence In/Out set: frames %1–%2</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏</source>
+            <translation>Sequence In/Out set: frames %1–%2; no enabled subtitles were found, so only black frames were processed</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已设置序列入出点：%1–%2 帧；结果已应用到原序列</source>
+            <translation>Sequence In/Out set: frames %1–%2; the result was applied to the original sequence</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏；结果已应用到原序列</source>
+            <translation>Sequence In/Out set: frames %1–%2; no enabled subtitles were found, so only black frames were processed; the result was applied to the original sequence</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>已设置序列入点</source>
+            <translation>Sequence In set</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已设置序列出点</source>
+            <translation>Sequence Out set</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已移动序列字幕</source>
+            <translation>Sequence subtitle moved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已调整序列字幕时间</source>
+            <translation>Sequence subtitle timing adjusted</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已调整序列入出点</source>
+            <translation>Sequence In/Out adjusted</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已清除序列入出点</source>
+            <translation>Sequence In/Out cleared</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已移除任务记录，任务产物仍保留</source>
+            <translation>Task record removed; task outputs were kept</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已解除复合片段</source>
+            <translation>Compound clip dissolved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已解除视音频绑定；当前仅选中视频。点击空白处或按 Esc 可清除选择</source>
+            <translation>Audio and video unlinked; only video is selected. Click an empty area or press Esc to clear the selection</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已请求取消 %1 个任务</source>
+            <translation>Requested cancellation of %1 tasks</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已请求取消任务</source>
+            <translation>Task cancellation requested</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已请求取消运行时工具操作</source>
+            <translation>Runtime tool operation cancellation requested</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已请求暂停 %1 个任务</source>
+            <translation>Requested pause for %1 tasks</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已请求暂停任务</source>
+            <translation>Task pause requested</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已选择水印 %1</source>
+            <translation>Watermark %1 selected</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已重新关联 %1 个素材</source>
+            <translation>Relinked %1 media items</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已重新关联 %1 个素材，仍有 %2 个未找到</source>
+            <translation>Relinked %1 media items; %2 are still missing</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已重新创建任务</source>
+            <translation>Task recreated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已跳过工作流阶段：%1</source>
+            <translation>Workflow stage skipped: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>序列配置已更新</source>
+            <translation>Sequence settings updated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>智能拆分完成，共拆分 %1 条</source>
+            <translation>Smart split completed; split %1 subtitles</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>术语已保存</source>
+            <translation>Glossary term saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>术语已移除</source>
+            <translation>Glossary term removed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在关闭项目并释放文件…</source>
+            <translation>Closing the project and releasing files…</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>正在分析画面主体</source>
+            <translation>Analyzing the visual subject</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在导入 %1</source>
+            <translation>Importing %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在导入 %1 个素材</source>
+            <translation>Importing %1 media items</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在导入水印 %1</source>
+            <translation>Importing watermark %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>正在检测场景切点</source>
+            <translation>Detecting scene cuts</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>片段素材已替换</source>
+            <translation>Clip media replaced</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>画面跟踪已应用</source>
+            <translation>Visual tracking applied</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>离线素材已重新关联</source>
+            <translation>Offline media relinked</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>素材文件夹已更新</source>
+            <translation>Media folder updated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果已更新</source>
+            <translation>Visual effect updated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果已添加</source>
+            <translation>Visual effect added</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果已移除</source>
+            <translation>Visual effect removed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>视觉效果顺序已更新</source>
+            <translation>Visual effect order updated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>设置已保存；界面语言将在下次启动时生效</source>
+            <translation>Settings saved; the interface language will change after restart</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>示例项目已创建；跟随引导认识主要区域</source>
+            <translation>Sample project created; follow the tour to learn the main areas</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>译文已保存</source>
+            <translation>Translation saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>该域名没有已保存的 Cookie</source>
+            <translation>No cookies are saved for this domain</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>该高光区间已经位于主序列中</source>
+            <translation>This highlight range is already in the main sequence</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>转场已添加</source>
+            <translation>Transition added</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>转录设置已更新</source>
+            <translation>Transcription settings updated</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>运行时工具操作已取消</source>
+            <translation>Runtime tool operation cancelled</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>运行时工具操作已完成</source>
+            <translation>Runtime tool operation completed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>错误详情已复制</source>
+            <translation>Error details copied</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已保存</source>
+            <translation>Project saved</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已关闭：%1</source>
+            <translation>Project closed: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已创建</source>
+            <translation>Project created</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目已创建，正在下载视频</source>
+            <translation>Project created; downloading video</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>项目已打开</source>
+            <translation>Project opened</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>项目正被其他窗口使用，已只读打开</source>
+            <translation>The project is in use by another window and was opened read-only</translation>
+        </message>
+    </context>
+    <context>
         <name>SubtitlePanel</name>
         <message>
             <location filename="../../desktop/qml/SubtitlePanel.qml" line="+125" />
@@ -3598,7 +4171,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SubtitleStyleCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-110" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+408" />
             <source>经典白字</source>
             <translation>Classic White</translation>
         </message>
@@ -3626,7 +4199,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location line="-466" />
+            <location line="-649" />
+            <source>主序列</source>
+            <translation>Main Sequence</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>主总线</source>
             <translation>Master</translation>
         </message>
@@ -3647,6 +4225,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+5" />
+            <source>短视频 %1</source>
+            <translation>Short Video %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>视频 %1</source>
             <translation>Video %1</translation>
         </message>
@@ -3664,7 +4247,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TaskCatalog</name>
         <message>
-            <location line="-27" />
+            <location line="-26" />
             <source>内置 faster-whisper</source>
             <translation>Built-in faster-whisper</translation>
         </message>
@@ -3679,7 +4262,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>%1 chunks in parallel</translation>
         </message>
         <message>
-            <location line="+63" />
+            <location line="+267" />
             <source>导入素材 %1</source>
             <translation>Import Media %1</translation>
         </message>
@@ -3945,7 +4528,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Reading transcription audio metadata</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在检查音频声道</source>
             <translation>Checking audio channels</translation>
         </message>
@@ -3970,12 +4553,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Detecting silence in long audio</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在生成长音频分块</source>
             <translation>Creating long-audio chunks</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+8" />
             <source>正在保存翻译结果</source>
             <translation>Saving translation</translation>
         </message>
@@ -3990,7 +4573,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Creating SDR lightweight preview file</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在登记轻量预览文件</source>
             <translation>Registering lightweight preview file</translation>
         </message>
@@ -4005,7 +4588,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Saving audio waveform</translation>
         </message>
         <message>
-            <location line="+18" />
+            <location line="+14" />
             <source>正在处理网页素材</source>
             <translation>Processing web media</translation>
         </message>
@@ -4015,7 +4598,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Reusing existing web frames</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在复制网页素材结果</source>
             <translation>Copying web media result</translation>
         </message>
@@ -4045,7 +4628,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Saving download analysis</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="+9" />
             <source>正在保存响度结果</source>
             <translation>Saving loudness results</translation>
         </message>
@@ -4055,7 +4638,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Saving sequence in/out analysis</translation>
         </message>
         <message>
-            <location line="-97" />
+            <location line="-79" />
             <source>正在复用已有源区间转录</source>
             <translation>Reusing an existing source-range transcript</translation>
         </message>
@@ -4065,12 +4648,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Current source-audio range recognized</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="+6" />
             <source>正在并行转录长音频分块</source>
             <translation>Transcribing long-audio chunks in parallel</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>CUDA 不可用，正在切换到 CPU</source>
             <translation>CUDA is unavailable; switching to CPU</translation>
         </message>
@@ -4100,7 +4683,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Creating lightweight preview file</translation>
         </message>
         <message>
-            <location line="+5" />
+            <location line="+3" />
             <source>正在准备音频波形</source>
             <translation>Preparing audio waveform</translation>
         </message>
@@ -4145,12 +4728,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Generating final-media proof frames</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在校验成片文件</source>
             <translation>Verifying final media file</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在准备网页画面</source>
             <translation>Preparing web frames</translation>
         </message>
@@ -4160,7 +4743,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Rendering web frames</translation>
         </message>
         <message>
-            <location line="+7" />
+            <location line="+5" />
             <source>正在准备场景检测</source>
             <translation>Preparing Scene Detection</translation>
         </message>
@@ -4185,7 +4768,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Analyzing download link</translation>
         </message>
         <message>
-            <location line="+4" />
+            <location line="+2" />
             <source>正在编译音频图</source>
             <translation>Compiling audio graph</translation>
         </message>
@@ -4195,7 +4778,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Waiting for matching loudness analysis</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+1" />
             <source>正在复用响度分析结果</source>
             <translation>Reusing loudness analysis result</translation>
         </message>
@@ -4263,7 +4846,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TaskStatusCatalog</name>
         <message>
-            <location line="-157" />
+            <location line="-137" />
             <source>等待中</source>
             <translation>Pending</translation>
         </message>
@@ -4898,7 +5481,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TranslationCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="+198" />
+            <location filename="../../desktop/presentation_catalogs.py" line="+176" />
             <source>标准翻译</source>
             <translation>Standard Translation</translation>
         </message>
@@ -4971,12 +5554,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Glossary</translation>
         </message>
         <message>
-            <location line="+266" />
+            <location line="+267" />
             <source>还没有字幕文档</source>
             <translation>No subtitle documents yet</translation>
         </message>
         <message>
-            <location line="-182" />
+            <location line="-183" />
             <source>校对整篇</source>
             <translation>Proofread Entire Document</translation>
         </message>
@@ -5036,7 +5619,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Place in Sequence</translation>
         </message>
         <message>
-            <location line="+44" />
+            <location line="+45" />
             <source>%1–%2 帧</source>
             <translation>Frames %1–%2</translation>
         </message>
@@ -5399,7 +5982,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WindowTitleBar</name>
         <message>
-            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+71" />
+            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+89" />
             <source>最小化窗口</source>
             <translation>Minimize Window</translation>
         </message>
@@ -5720,7 +6303,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Settings</translation>
         </message>
         <message>
-            <location filename="../../desktop/presentation_catalogs.py" line="-553" />
+            <location filename="../../desktop/presentation_catalogs.py" line="-733" />
             <source>素材</source>
             <translation>Media</translation>
         </message>
@@ -5753,7 +6336,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WorkspacePreviewPanel</name>
         <message>
-            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+53" />
+            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+69" />
             <source>节目</source>
             <translation>Program</translation>
         </message>
