@@ -219,17 +219,18 @@ def _make_executable(path: Path | None) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _prepare_windows_preview_repository(bundle_root: Path) -> None:
-    if os.name != "nt":
-        return
-    source = bundle_root / "lib" / "mlt"
-    destination = bundle_root / "lib" / "mlt-preview"
+def _prepare_preview_repository(bundle_root: Path, contract: RuntimeContract) -> None:
+    source = bundle_root / contract.layout.mlt_repository
+    destination = bundle_root / contract.layout.mlt_preview_repository
+    if source.resolve() == destination.resolve():
+        raise RuntimeError("MLT preview repository must be isolated from the full repository")
     if not source.is_dir():
         raise FileNotFoundError(source)
+    suffix = ".dll" if contract.target.operating_system == "windows" else ".so"
     excluded = {
-        "libmltqt6.dll",
-        "libmltglaxnimate-qt6.dll",
-        "libmltopencv.dll",
+        f"libmltqt6{suffix}",
+        f"libmltglaxnimate-qt6{suffix}",
+        f"libmltopencv{suffix}",
     }
     destination.mkdir(parents=True, exist_ok=True)
     for plugin in source.iterdir():
@@ -245,10 +246,9 @@ def _prepare_bundle(runtime_root: Path, contract: RuntimeContract) -> None:
     install_root = runtime_root / "deps" / f"{bundle.provider}-{bundle.version}"
     bundle_root = contract.reviewed_bundle_directory(runtime_root)
     if bundle_root.is_dir():
-        if contract.target.operating_system == "windows":
-            _prepare_windows_preview_repository(bundle_root)
-        elif contract.target.operating_system == "macos":
+        if contract.target.operating_system == "macos":
             _prepare_macos_runtime_rpaths(bundle_root)
+        _prepare_preview_repository(bundle_root, contract)
         return
     if install_root.exists():
         raise RuntimeError(
@@ -269,10 +269,9 @@ def _prepare_bundle(runtime_root: Path, contract: RuntimeContract) -> None:
             raise RuntimeError(
                 f"Pinned {bundle.provider} archive is missing {bundle.archive_root}"
             )
-        if contract.target.operating_system == "windows":
-            _prepare_windows_preview_repository(staged_bundle)
-        elif contract.target.operating_system == "macos":
+        if contract.target.operating_system == "macos":
             _prepare_macos_runtime_rpaths(staged_bundle)
+        _prepare_preview_repository(staged_bundle, contract)
         install_root.parent.mkdir(parents=True, exist_ok=True)
         staging.replace(install_root)
     except BaseException as error:

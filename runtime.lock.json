@@ -20,7 +20,7 @@
         "mlt_library": "libmlt-7.dll",
         "mlt_root": ".",
         "mlt_repository": "lib/mlt",
-        "mlt_preview_repository": "lib/mlt-preview",
+        "mlt_preview_repository": "lib/mlt-preview-v2",
         "mlt_data": "share/mlt",
         "native_qml": "native/windows-x86_64/qml"
       },
@@ -85,7 +85,7 @@
         "mlt_library": "lib/libmlt-7.so.7",
         "mlt_root": ".",
         "mlt_repository": "lib/mlt-7",
-        "mlt_preview_repository": "lib/mlt-7",
+        "mlt_preview_repository": "lib/mlt-preview-v2",
         "mlt_data": "share/mlt-7",
         "native_qml": "native/linux-x86_64/qml"
       },
@@ -155,7 +155,7 @@
         "mlt_library": "Contents/Frameworks/libmlt-7.7.dylib",
         "mlt_root": "Contents",
         "mlt_repository": "Contents/PlugIns/mlt",
-        "mlt_preview_repository": "Contents/PlugIns/mlt",
+        "mlt_preview_repository": "Contents/PlugIns/mlt-preview-v2",
         "mlt_data": "Contents/Resources/mlt",
         "native_qml": "native/macos-arm64/qml"
       },
