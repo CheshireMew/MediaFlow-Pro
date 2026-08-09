@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from .editable_media_project_migration import (
-    migrate_project_editable_media_to_v5,
+    migrate_project_editable_media_to_v6,
 )
 from .project_snapshot_migration import migrate_version_snapshots
 
@@ -108,9 +108,10 @@ def migrate_v35_to_v36(
     chromium: Path | None,
 ) -> None:
     with workspace.transaction():
-        migrate_project_editable_media_to_v5(
+        migrate_project_editable_media_to_v6(
             workspace,
             chromium=chromium,
+            target_project_schema_version=36,
         )
 
 

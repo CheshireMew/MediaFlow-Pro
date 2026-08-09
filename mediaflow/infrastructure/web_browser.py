@@ -17,13 +17,28 @@ from mediaflow.domain.web_media import (
 
 SEEK_WEB_FRAME_SCRIPT = """
 async seconds => {
-    await window.editableMedia.ready;
-    await window.__hf.seek(seconds);
-    const root = document.querySelector("[data-composition-id]");
-    if (!root) throw new Error("Editable media composition root is missing");
-    const bounds = root.getBoundingClientRect();
-    void bounds.width;
-    void getComputedStyle(root).opacity;
+    try {
+        await window.editableMedia.ready;
+        const result = await window.__hf.seek(seconds);
+        const root = document.querySelector("[data-composition-id]");
+        if (!root) throw new Error("Editable media composition root is missing");
+        const bounds = root.getBoundingClientRect();
+        void bounds.width;
+        void getComputedStyle(root).opacity;
+        return result;
+    } catch (error) {
+        const detail = typeof error?.toJSON === "function"
+            ? error.toJSON()
+            : {
+                code: error?.code || "frame_task_failed",
+                message: error instanceof Error ? error.message : String(error),
+                seconds,
+                generation: Number(error?.generation || 0),
+                label: error?.label || null,
+                retryable: error?.retryable === true,
+            };
+        throw new Error(`__MEDIAFLOW_FRAME_ERROR__${JSON.stringify(detail)}`);
+    }
 }
 """
 
@@ -145,7 +160,7 @@ def verify_non_monotonic_seek_pixels(
         if capture_at(seconds) != references[seconds]:
             page.evaluate("() => window.__hf.seek(0)")
             raise ValueError(
-                "Editable media v5 must render identical pixels after non-monotonic frame seeks"
+                "Editable media v6 must render identical pixels after non-monotonic frame seeks"
             )
 
 
@@ -168,6 +183,10 @@ def validate_editable_media_page(
             && typeof window.editableMedia.getBounds === 'function'
             && window.__hf
             && typeof window.__hf.seek === 'function'
+            && typeof window.__hf.registerRenderer === 'function'
+            && typeof window.__hf.deferFrame === 'function'
+            && typeof window.__hf.resolveFrame === 'function'
+            && typeof window.__hf.rejectFrame === 'function'
             && window.__hf.duration > 0""",
         timeout=5000,
     )
@@ -180,7 +199,7 @@ def validate_editable_media_page(
     )
     runtime_manifest = page.evaluate("() => window.editableMedia.getManifest()")
     if parse_editable_media_manifest(runtime_manifest) != manifest:
-        raise ValueError("window.editableMedia.getManifest() must expose the imported v5 manifest")
+        raise ValueError("window.editableMedia.getManifest() must expose the imported v6 manifest")
     runtime_media_sources = page.evaluate("() => window.editableMedia.getMediaSources()")
     if WebMediaSourcesManifest.model_validate(runtime_media_sources) != media_sources:
         raise ValueError(
@@ -188,14 +207,14 @@ def validate_editable_media_page(
         )
     expected_duration = sum(item.duration_ms for item in manifest.scenes) / 1000
     frame_protocol = page.evaluate(
-        """probe => {
+        """async probe => {
             const roots = Array.from(document.querySelectorAll('[data-editable-media-root]'));
             const root = roots[0] || null;
             const compositionId = root?.dataset.compositionId || '';
             const timeline = window.__timelines?.[compositionId];
-            window.__hf.seek(probe);
+            const seekResult = await window.__hf.seek(probe);
             const seekTimeMs = window.editableMedia.getPlayback().globalTimeMs;
-            window.__hf.seek(0);
+            await window.__hf.seek(0);
             return {
                 rootCount: roots.length,
                 compositionRootCount: document.querySelectorAll(
@@ -212,6 +231,7 @@ def validate_editable_media_page(
                 } : null,
                 duration: Number(window.__hf.duration),
                 seekTimeMs,
+                seekResult,
                 timelineDuration: typeof timeline?.duration === 'function'
                     ? Number(timeline.duration())
                     : null,
@@ -236,9 +256,10 @@ def validate_editable_media_page(
         or not isinstance(root_duration, (int, float))
         or abs(root_duration - expected_duration) > 1e-9
     ):
-        raise ValueError("Editable media v5 root metadata is not synchronized")
+        raise ValueError("Editable media v6 root metadata is not synchronized")
     protocol_duration = frame_protocol.get("duration")
     seek_time_ms = frame_protocol.get("seekTimeMs")
+    seek_result = frame_protocol.get("seekResult")
     timeline_duration = frame_protocol.get("timelineDuration")
     if (
         not isinstance(protocol_duration, (int, float))
@@ -246,10 +267,14 @@ def validate_editable_media_page(
         or not isinstance(seek_time_ms, (int, float))
         or abs(seek_time_ms - min(0.5, expected_duration / 2) * 1000) > 0.5
         or frame_protocol["timelineHasSeek"] is not True
+        or not isinstance(seek_result, dict)
+        or not isinstance(seek_result.get("generation"), int)
+        or not isinstance(seek_result.get("wait_ms"), (int, float))
+        or not isinstance(seek_result.get("tasks"), list)
         or not isinstance(timeline_duration, (int, float))
         or abs(timeline_duration - expected_duration) > 1e-9
     ):
-        raise ValueError("Editable media v5 frame protocol is not deterministic")
+        raise ValueError("Editable media v6 frame protocol is not deterministic")
     selectors = {layer.id: layer.selector for layer in manifest.layers}
     counts = page.evaluate(
         """selectors => Object.fromEntries(Object.entries(selectors).map(
@@ -273,7 +298,7 @@ def validate_editable_media_page(
         "playback",
         "revision",
     }:
-        raise ValueError("window.editableMedia.getState() must return the complete v5 state")
+        raise ValueError("window.editableMedia.getState() must return the complete v6 state")
     scenes = state.get("scenes")
     scene_ids = {item.id for item in manifest.scenes}
     if not isinstance(scenes, dict) or set(scenes) != scene_ids:
@@ -292,15 +317,21 @@ def validate_editable_media_page(
         if not isinstance(scene["layers"], dict) or set(scene["layers"]) != set(selectors):
             raise ValueError(f"Editable media runtime scene layers are incomplete: {scene_id}")
     global_parameter_ids = {
-        item.id for item in manifest.parameters if item.scope == "global"
+        item.descriptor.id
+        for item in manifest.parameters
+        if item.binding.scope == "global"
     }
     scene_parameter_ids = {
-        item.id for item in manifest.parameters if item.scope == "scene"
+        item.descriptor.id
+        for item in manifest.parameters
+        if item.binding.scope == "scene"
     }
     if set(state["parameters"]) != global_parameter_ids:
         raise ValueError("Editable media runtime global parameters are incomplete")
     if set(state["parameter_bindings"]) != {
-        item.id for item in manifest.parameters if item.css_variable is not None
+        item.descriptor.id
+        for item in manifest.parameters
+        if item.binding.css_variable is not None
     }:
         raise ValueError("Editable media runtime parameter bindings are incomplete")
     if any(
@@ -310,7 +341,7 @@ def validate_editable_media_page(
         raise ValueError("Editable media runtime scene parameters are incomplete")
     first_scene = manifest.scenes[0]
     expected_parameters = {
-        item.id: item.default for item in manifest.parameters
+        item.descriptor.id: item.descriptor.default for item in manifest.parameters
     }
     expected_parameters.update(first_scene.parameters)
     if page.evaluate("() => window.editableMedia.getParameters()") != expected_parameters:
@@ -323,7 +354,7 @@ def validate_editable_media_page(
         state,
     )
     if roundtrip != state:
-        raise ValueError("window.editableMedia.setState() must round-trip the complete v5 state")
+        raise ValueError("window.editableMedia.setState() must round-trip the complete v6 state")
     for variant in manifest.variants:
         selected = page.evaluate(
             "variantId => window.editableMedia.setVariant(variantId)",

@@ -13,25 +13,30 @@ import cv2
 import numpy as np
 from playwright.sync_api import sync_playwright
 
-from mediaflow.application.web_package_files import editable_media_source_hash
+from mediaflow.application.web_package_files import (
+    editable_media_source_hash,
+    publication_receipt_json,
+)
 from mediaflow.automation.operation_registry import OPERATIONS
 from mediaflow.domain.editable_media_contract import (
     validate_editable_media_document,
 )
 from mediaflow.domain.web_media import (
     WebClipState,
+    editable_media_manifest_document,
     parse_editable_media_manifest,
     web_runtime_state,
 )
 from mediaflow.infrastructure.editable_media_project_migration import (
-    V5_RUNTIME_PATH,
-    migrate_editable_media_v4_manifest,
+    V6_RUNTIME_PATH,
+    migrate_editable_media_manifest_to_v6,
 )
 from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.web_browser import WebPackagePreviewServer
 
 FIXTURE = Path("tests/fixtures/editable-media-v4-project").resolve()
+V6_STARTER = Path("tests/fixtures/editable-media-v6/editable-media.json").resolve()
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -76,7 +81,7 @@ def _request(
 ) -> dict[str, object]:
     request: dict[str, object] = {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": operation,
         "project": str(project),
         "arguments": arguments,
@@ -121,7 +126,7 @@ def _project_web_state(project: Path) -> dict[str, object]:
         assert version is not None
         raw_manifest = json.loads(str(asset["manifest_json"]))
         manifest = (
-            migrate_editable_media_v4_manifest(raw_manifest)
+            migrate_editable_media_manifest_to_v6(raw_manifest)
             if raw_manifest["version"] == 4
             else parse_editable_media_manifest(raw_manifest)
         )
@@ -214,12 +219,13 @@ def _only_package(project: Path) -> Path:
     return packages[0]
 
 
-def test_v4_manifest_migration_preserves_steps_and_declares_v5_semantics() -> None:
+def test_v4_manifest_migration_preserves_steps_and_declares_v6_semantics() -> None:
     source = json.loads((_only_package(FIXTURE) / "editable-media.json").read_text(encoding="utf-8"))
 
-    migrated = migrate_editable_media_v4_manifest(source)
+    migrated = migrate_editable_media_manifest_to_v6(source)
 
-    assert migrated.version == 5
+    assert migrated.version == 6
+    assert migrated.frame_readiness.retry_limit == 1
     assert migrated.parameters == []
     for old_scene, scene in zip(source["scenes"], migrated.scenes, strict=True):
         assert scene.parameters == {}
@@ -235,6 +241,48 @@ def test_v4_manifest_migration_preserves_steps_and_declares_v5_semantics() -> No
         assert scene.motion.complexity == "simple"
         assert scene.motion.driver == "object"
         assert scene.motion.camera is None
+
+
+def test_v5_manifest_migration_restores_required_nullable_v6_fields() -> None:
+    source = json.loads(V6_STARTER.read_text(encoding="utf-8"))
+    source["version"] = 5
+    source.pop("frame_readiness")
+    source["parameters"] = [
+        {
+            "id": parameter["descriptor"]["id"],
+            "name": parameter["descriptor"]["label"],
+            "description": parameter["descriptor"]["description"],
+            "group": parameter["descriptor"]["group"],
+            "kind": parameter["descriptor"]["kind"],
+            "scope": parameter["binding"]["scope"],
+            "default": parameter["descriptor"]["default"],
+            "animatable": parameter["descriptor"]["timeline"] == "keyframe",
+            "control": parameter["descriptor"]["control"],
+            "unit": parameter["descriptor"].get("unit"),
+            "css_variable": parameter["binding"].get("css_variable"),
+            "constraints": {
+                **{
+                    key: value
+                    for key, value in parameter["descriptor"]["constraints"].items()
+                    if key != "choices"
+                },
+                    "choices": [
+                        choice["value"]
+                        for choice in parameter["descriptor"]["constraints"].get(
+                            "choices",
+                            [],
+                        )
+                    ],
+            },
+        }
+        for parameter in source["parameters"]
+    ]
+
+    migrated = migrate_editable_media_manifest_to_v6(source)
+    document = editable_media_manifest_document(migrated)
+
+    assert migrated.version == 6
+    assert all("camera" in scene["motion"] for scene in document["scenes"])
 
 
 def test_failed_v4_project_upgrade_rolls_back_database_and_archives_staging(
@@ -301,12 +349,194 @@ def test_failed_v4_project_upgrade_rolls_back_database_and_archives_staging(
     assert package.is_dir()
     assert editable_media_source_hash(package) == original_hash
     assert not any((project / "staging" / "web").glob("s-*"))
-    failed = list((project / "archive" / "web").glob("f-*"))
-    assert len(failed) == 1
-    assert editable_media_source_hash(failed[0]) != original_hash
+    assert not list((project / "archive" / "web").glob("f-*"))
 
 
-def test_real_v4_project_upgrades_once_and_reaches_visible_v5_output(
+def _replace_project_package_hash(
+    project: Path,
+    *,
+    asset_id: str,
+    clip_id: str,
+    source_hash: str,
+    receipt: Path,
+) -> None:
+    connection = sqlite3.connect(project / "project.mfp")
+    try:
+        connection.execute(
+            "UPDATE web_asset SET source_hash=? WHERE asset_id=?",
+            (source_hash, asset_id),
+        )
+        state_row = connection.execute(
+            "SELECT state_json FROM web_clip_state WHERE clip_id=?",
+            (clip_id,),
+        ).fetchone()
+        assert state_row is not None
+        state = json.loads(str(state_row[0]))
+        state["source_hash"] = source_hash
+        connection.execute(
+            "UPDATE web_clip_state SET state_json=? WHERE clip_id=?",
+            (json.dumps(state, ensure_ascii=False), clip_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    receipt.write_text(
+        publication_receipt_json(
+            asset_id=asset_id,
+            source_hash=source_hash,
+            token=str(payload["token"]),
+            status="committed",
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_third_party_v4_runtime_requires_republication_without_project_writes(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "third-party-v4-runtime"
+    shutil.copytree(FIXTURE, project)
+    before = _project_web_state(project)
+    package = before["package"]
+    assert isinstance(package, Path)
+    runtime = package / "editable-media-runtime.js"
+    runtime.write_bytes(runtime.read_bytes() + b"\n// third-party runtime\n")
+    source_hash = editable_media_source_hash(package)
+    receipt = next((project / "sources" / "web" / "receipts").glob("r-*.json"))
+    _replace_project_package_hash(
+        project,
+        asset_id=str(before["asset_id"]),
+        clip_id=str(before["clip_id"]),
+        source_hash=source_hash,
+        receipt=receipt,
+    )
+
+    code, result = _cli(
+        _request(
+            project,
+            "project.upgrade",
+            {},
+            request_id="third-party-v4-runtime-upgrade",
+        )
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert "Third-party editable-media v4 runtime" in json.dumps(result, ensure_ascii=False)
+    assert "republish" in json.dumps(result, ensure_ascii=False)
+    with sqlite3.connect(project / "project.mfp") as connection:
+        assert connection.execute(
+            "SELECT version FROM schema_info WHERE component='project'"
+        ).fetchone() == (35,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='editable_media_upgrade'"
+        ).fetchone() is None
+    assert editable_media_source_hash(package) == source_hash
+    assert not list((project / "staging" / "web").glob("s-*"))
+    assert not list((project / "archive" / "web").glob("f-*"))
+
+
+def test_all_legacy_web_assets_are_preflighted_before_the_first_publication(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "two-v4-assets"
+    shutil.copytree(FIXTURE, project)
+    first = _project_web_state(project)
+    first_package = first["package"]
+    assert isinstance(first_package, Path)
+    second_asset_id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    second_clip_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    second_token = "ffffffffffffffffffffffff"
+    second_package = project / "sources" / "web" / f"p-{second_token}"
+    shutil.copytree(first_package, second_package)
+    runtime = second_package / "editable-media-runtime.js"
+    runtime.write_bytes(runtime.read_bytes() + b"\n// unproven second runtime\n")
+    second_hash = editable_media_source_hash(second_package)
+    second_receipt = project / "sources" / "web" / "receipts" / f"r-{second_token}.json"
+    second_receipt.write_text(
+        publication_receipt_json(
+            asset_id=second_asset_id,
+            source_hash=second_hash,
+            token=second_token,
+            status="committed",
+        ),
+        encoding="utf-8",
+    )
+    connection = sqlite3.connect(project / "project.mfp")
+    try:
+        connection.execute(
+            """INSERT INTO asset
+               SELECT ?, project_id, name || ' 2', kind, origin, ?, managed,
+                      proxy_path, sdr_preview_proxy_path, waveform_path, status,
+                      fingerprint_json, metadata_json, created_at
+               FROM asset WHERE id=?""",
+            (
+                second_asset_id,
+                f"sources/web/p-{second_token}/index.html",
+                first["asset_id"],
+            ),
+        )
+        connection.execute(
+            """INSERT INTO web_asset(asset_id, manifest_json, source_hash)
+               SELECT ?, manifest_json, ? FROM web_asset WHERE asset_id=?""",
+            (second_asset_id, second_hash, first["asset_id"]),
+        )
+        connection.execute(
+            """INSERT INTO clip
+               SELECT ?, track_id, ?, timeline_start + duration, source_in,
+                      duration, media_kind, speed_numerator, speed_denominator,
+                      pitch_compensation, transform_json,
+                      transform_keyframes_json, audio_json
+               FROM clip WHERE id=?""",
+            (second_clip_id, second_asset_id, first["clip_id"]),
+        )
+        state_row = connection.execute(
+            "SELECT state_json, revision FROM web_clip_state WHERE clip_id=?",
+            (first["clip_id"],),
+        ).fetchone()
+        assert state_row is not None
+        state = json.loads(str(state_row[0]))
+        state["source_hash"] = second_hash
+        connection.execute(
+            "INSERT INTO web_clip_state(clip_id, state_json, revision) VALUES (?, ?, ?)",
+            (
+                second_clip_id,
+                json.dumps(state, ensure_ascii=False),
+                int(state_row[1]),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    code, result = _cli(
+        _request(
+            project,
+            "project.upgrade",
+            {},
+            request_id="two-v4-assets-preflight",
+        )
+    )
+
+    assert code == 1
+    assert "Third-party editable-media v4 runtime" in json.dumps(result, ensure_ascii=False)
+    with sqlite3.connect(project / "project.mfp") as connection:
+        assert connection.execute(
+            "SELECT version FROM schema_info WHERE component='project'"
+        ).fetchone() == (35,)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='editable_media_upgrade'"
+        ).fetchone() is None
+        assert [json.loads(row[0])["version"] for row in connection.execute(
+            "SELECT manifest_json FROM web_asset ORDER BY asset_id"
+        )] == [4, 4]
+    assert len(list((project / "sources" / "web").glob("p-*"))) == 2
+    assert not list((project / "staging" / "web").glob("s-*"))
+    assert not list((project / "archive" / "web").glob("f-*"))
+
+
+def test_real_v4_project_upgrades_once_and_reaches_visible_v6_output(
     tmp_path: Path,
 ) -> None:
     origin = json.loads((FIXTURE / "fixture-origin.json").read_text(encoding="utf-8"))
@@ -336,15 +566,15 @@ def test_real_v4_project_upgrades_once_and_reaches_visible_v5_output(
             request_id="real-v4-project-upgrade",
         )
     )
-    assert code == 0
+    assert code == 0, json.dumps(upgrade, ensure_ascii=False, indent=2)
     assert upgrade["ok"] is True
 
     after = _project_web_state(project)
     assert after["schema_version"] == PROJECT_SCHEMA_VERSION
-    assert after["raw_manifest"]["version"] == 5
+    assert after["raw_manifest"]["version"] == 6
     validate_editable_media_document(after["raw_manifest"])
     assert editable_media_source_hash(after["package"]) == after["source_hash"]
-    assert _sha256(after["package"] / "editable-media-runtime.js") == _sha256(V5_RUNTIME_PATH)
+    assert _sha256(after["package"] / "editable-media-runtime.js") == _sha256(V6_RUNTIME_PATH)
     after_pixels = _screenshots(after, after["runtime_state"])
     assert len(before_pixels) == len(after_pixels)
     for old_image, new_image in zip(before_pixels, after_pixels, strict=True):
@@ -377,7 +607,7 @@ def test_real_v4_project_upgrades_once_and_reaches_visible_v5_output(
     assert code == 0
     assert web_result["result"]["web_asset"]["source_hash"] == after["source_hash"]
 
-    output = project / "exports" / "migrated-v5-proof.mp4"
+    output = project / "exports" / "migrated-v6-proof.mp4"
     code, export = _cli(
         _request(
             project,

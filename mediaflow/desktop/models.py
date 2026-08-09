@@ -442,7 +442,7 @@ class ClipListModel(DictListModel):
                 "hasAudio",
                 "audioTrackPosition",
                 "waveformReady",
-                "previewUrl",
+                "filmstripFrames",
                 "x",
                 "y",
                 "scaleX",
@@ -693,6 +693,6 @@ class AudioEffectListModel(DictListModel):
 class AudioEffectParameterListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["key", "label", "value", "minimum", "maximum", "step", "unit", "valueType"],
+            ["key", "descriptor", "value", "options"],
             parent,
         )

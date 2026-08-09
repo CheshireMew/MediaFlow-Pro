@@ -534,6 +534,54 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
     assert len(snapshot_command["undo_actions"][0]["payload"]["source"]["clips"]) == 1
 
 
+def test_v45_adds_native_freeze_and_subtitle_style_to_project_and_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "NativeFreezeMigration"
+    with ProjectRepository.create(root, "NativeFreezeMigration") as repository:
+        version = repository.records.create_project_version("Before native freeze")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v44(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("ALTER TABLE track DROP COLUMN subtitle_style_json")
+            connection.execute("ALTER TABLE clip DROP COLUMN freeze_source_frame")
+            connection.execute(
+                "UPDATE schema_info SET version=44 WHERE component='project'"
+            )
+
+    downgrade_to_v44(snapshot_path)
+    downgrade_to_v44(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert (
+            repository._fetchone("SELECT version FROM schema_info")["version"]
+            == PROJECT_SCHEMA_VERSION
+        )
+        repository.records.restore_project_version(version.id)
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            track_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(track)")
+            }
+            clip_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(clip)")
+            }
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert "subtitle_style_json" in track_columns
+        assert "freeze_source_frame" in clip_columns
+
+
 def test_encoded_project_path_opens_through_every_read_only_database_boundary(
     tmp_path: Path,
 ) -> None:

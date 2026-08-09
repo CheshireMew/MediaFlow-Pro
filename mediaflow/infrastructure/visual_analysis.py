@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from pathlib import Path
 from typing import Literal, cast
@@ -13,6 +12,10 @@ from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.storage_names import require_windows_interop_path
+from mediaflow.domain.timebase import (
+    source_interval_for_timeline_interval,
+    timeline_offset_for_source_frame,
+)
 from mediaflow.domain.timeline import Clip, ClipTransform, ClipTransformKeyframe
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -39,9 +42,15 @@ class SceneDetectionService:
             Path(source).resolve(strict=True)
         )
         source_fps = profile.fps
-        speed = abs(clip.speed_numerator) / clip.speed_denominator
-        consumed = max(1, math.ceil(clip.duration * speed))
-        source_start = max(0, clip.source_in if clip.speed_numerator > 0 else clip.source_in - consumed + 1)
+        source_start, source_end = source_interval_for_timeline_interval(
+            clip.source_in,
+            0,
+            clip.duration,
+            clip.speed_numerator,
+            clip.speed_denominator,
+            freeze_source_frame=clip.freeze_source_frame,
+        )
+        consumed = source_end - source_start
         duration_seconds = consumed / source_fps
         if check_cancelled:
             check_cancelled()
@@ -96,12 +105,17 @@ class SceneDetectionService:
         output: list[int] = []
         for relative_seconds in seconds:
             source_frame = source_start + round(relative_seconds * source_fps)
-            source_delta = (
-                source_frame - clip.source_in
-                if clip.speed_numerator > 0
-                else clip.source_in - source_frame
-            )
-            timeline_frame = clip.timeline_start + round(source_delta / speed)
+            try:
+                local_frame = timeline_offset_for_source_frame(
+                    clip.source_in,
+                    source_frame,
+                    clip.speed_numerator,
+                    clip.speed_denominator,
+                    freeze_source_frame=clip.freeze_source_frame,
+                )
+            except ValueError:
+                continue
+            timeline_frame = clip.timeline_start + local_frame
             if clip.timeline_start < timeline_frame < clip.timeline_end:
                 output.append(timeline_frame)
         return sorted(set(output))
@@ -131,10 +145,15 @@ class SubjectMotionService:
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             if width <= 0 or height <= 0:
                 raise RuntimeError("视频素材没有可用的画面尺寸")
-            speed = abs(clip.speed_numerator) / clip.speed_denominator
-            consumed = max(1, math.ceil(clip.duration * speed))
-            low = max(0, clip.source_in if clip.speed_numerator > 0 else clip.source_in - consumed + 1)
-            high = clip.source_in + consumed - 1 if clip.speed_numerator > 0 else clip.source_in
+            low, source_end = source_interval_for_timeline_interval(
+                clip.source_in,
+                0,
+                clip.duration,
+                clip.speed_numerator,
+                clip.speed_denominator,
+                freeze_source_frame=clip.freeze_source_frame,
+            )
+            high = source_end - 1
             project_step = max(1, round(profile.fps / 5))
             source_frames = list(range(low, high + 1, project_step))
             if not source_frames or source_frames[-1] != high:

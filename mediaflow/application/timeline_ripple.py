@@ -4,7 +4,7 @@ import uuid
 
 from mediaflow.application.timeline_rules import TimelineRules
 from mediaflow.domain.project import SequenceInOut
-from mediaflow.domain.timebase import source_frames_for_timeline_frames
+from mediaflow.domain.timebase import source_frame_at_timeline_offset
 from mediaflow.domain.timeline import Clip, CompoundClip, TimelineRange, TimelineState
 from mediaflow.domain.web_media import WebClipState
 
@@ -24,15 +24,13 @@ class RippleDeletePolicy:
         duration = end - start
 
         def advanced_source_in(clip: Clip, timeline_frames: int) -> int:
-            consumed = source_frames_for_timeline_frames(
+            return source_frame_at_timeline_offset(
+                clip.source_in,
                 timeline_frames,
                 clip.speed_numerator,
                 clip.speed_denominator,
+                freeze_source_frame=clip.freeze_source_frame,
             )
-            value = clip.source_in + consumed if clip.speed_numerator > 0 else clip.source_in - consumed
-            if value < 0:
-                raise ValueError("删除范围超出了反向片段的可用源区间")
-            return value
 
         def collapse(frame: int) -> int:
             if frame < start:

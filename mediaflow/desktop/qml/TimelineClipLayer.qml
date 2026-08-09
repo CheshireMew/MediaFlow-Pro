@@ -44,7 +44,7 @@ Item {
             required property string mediaKind
             required property int audioTrackPosition
             required property bool waveformReady
-            required property string previewUrl
+            required property var filmstripFrames
             required property bool hasAudio
             required property real gainDb
             required property real pan
@@ -115,21 +115,21 @@ Item {
                 clipContentX: clipDelegate.x
                 emphasized: clipDelegate.selected
             }
-            Image {
-                anchors.fill: parent
-                visible: clipDelegate.displayedTrackKind === "video"
-                    && ["video", "image"].indexOf(clipDelegate.assetKind) >= 0
-                    && clipDelegate.previewUrl.length > 0
-                    && clipDelegate.width >= 72
-                source: clipDelegate.previewUrl
-                fillMode: Image.TileHorizontally
-                horizontalAlignment: Image.AlignLeft
-                verticalAlignment: Image.AlignVCenter
-                sourceSize.width: 78
-                sourceSize.height: clipDelegate.height
-                asynchronous: false
-                cache: true
-                opacity: clipDelegate.selected ? 0.42 : 0.3
+            Repeater {
+                model: clipDelegate.filmstripFrames
+                delegate: Image {
+                    required property var modelData
+                    x: (Number(modelData.timelineFrame) - clipDelegate.startFrame)
+                        * view.pixelsPerFrame
+                    y: 0
+                    width: 78
+                    height: clipDelegate.height
+                    source: String(modelData.url || "")
+                    fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                    cache: true
+                    opacity: clipDelegate.selected ? 0.42 : 0.3
+                }
             }
             Rectangle {
                 anchors.left: parent.left

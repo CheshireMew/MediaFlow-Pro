@@ -171,7 +171,7 @@ def _compare(reference: Path, candidate: Path, output_dir: Path) -> dict[str, An
 
     request = {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": "quality.reference.compare",
         "arguments": {
             "reference_path": str(reference),

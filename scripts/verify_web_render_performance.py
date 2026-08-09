@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -20,10 +21,12 @@ if str(ROOT) not in sys.path:
 
 from mediaflow.environment import test_run_root
 
-FIXTURE = ROOT / "tests" / "fixtures" / "editable-media-v5"
+FIXTURE = ROOT / "tests" / "fixtures" / "editable-media-v6"
 DEFAULT_RUN_ROOT = test_run_root() / "web-render-performance"
 MIN_PARALLEL_SPEEDUP = 1.35
 MIN_FRAME_PSNR_DB = 60.0
+MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT = 0.20
+MAX_BALANCED_BASELINE_REGRESSION = 0.10
 
 
 class RenderResult(TypedDict):
@@ -46,6 +49,13 @@ class RenderResult(TypedDict):
     frame_time_p95_ms: float
     browser_launches: int
     failed_render_count: int
+    work_steal_count: int
+    worker_frame_counts: list[int]
+    retry_count: int
+    page_replacement_count: int
+    browser_replacement_count: int
+    readiness_wait_seconds: float
+    timeout_labels: list[str]
 
 
 def web_render_requirements_met(
@@ -60,6 +70,8 @@ def web_render_requirements_met(
     parallel_workers: int,
     parallel_fast_capture_workers: int,
     parallel_capture_backend: str,
+    slow_modulo_seconds: float,
+    slow_dynamic_seconds: float,
 ) -> bool:
     return (
         frame_count > 0
@@ -73,7 +85,66 @@ def web_render_requirements_met(
         and parallel_workers > 1
         and parallel_fast_capture_workers == parallel_workers
         and parallel_capture_backend == "drawelement"
+        and slow_modulo_seconds > 0
+        and slow_dynamic_seconds > 0
+        and 1 - slow_dynamic_seconds / slow_modulo_seconds
+        >= MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT
     )
+
+
+def _slow_frame_scheduler_benchmark(
+    *,
+    frame_count: int = 96,
+    worker_count: int = 4,
+) -> dict[str, float | int]:
+    """Compare the removed modulo assignment with the production scheduler."""
+
+    from mediaflow.infrastructure.web_capture_engine import _FrameScheduler
+
+    durations = [0.008 if frame % worker_count == 0 else 0.0005 for frame in range(frame_count)]
+
+    def run_static() -> float:
+        barrier = threading.Barrier(worker_count)
+
+        def worker(index: int) -> None:
+            barrier.wait()
+            for frame in range(index, frame_count, worker_count):
+                time.sleep(durations[frame])
+
+        started = time.perf_counter()
+        threads = [threading.Thread(target=worker, args=(index,)) for index in range(worker_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return time.perf_counter() - started
+
+    def run_dynamic() -> tuple[float, int]:
+        scheduler = _FrameScheduler(frame_count, worker_count)
+        barrier = threading.Barrier(worker_count)
+
+        def worker(index: int) -> None:
+            barrier.wait()
+            while lease := scheduler.lease(index):
+                time.sleep(durations[lease.index])
+                scheduler.complete(index, lease.index)
+
+        started = time.perf_counter()
+        threads = [threading.Thread(target=worker, args=(index,)) for index in range(worker_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return time.perf_counter() - started, scheduler.work_steal_count
+
+    modulo_seconds = run_static()
+    dynamic_seconds, steals = run_dynamic()
+    return {
+        "modulo_seconds": modulo_seconds,
+        "dynamic_seconds": dynamic_seconds,
+        "improvement": 1 - dynamic_seconds / modulo_seconds,
+        "work_steal_count": steals,
+    }
 
 
 def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
@@ -149,6 +220,13 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
             "frame_time_p95_ms": metrics.frame_time_p95_ms,
             "browser_launches": diagnostics.browser_launches,
             "failed_render_count": diagnostics.failed_render_count,
+            "work_steal_count": metrics.work_steal_count,
+            "worker_frame_counts": list(metrics.worker_frame_counts),
+            "retry_count": metrics.retry_count,
+            "page_replacement_count": metrics.page_replacement_count,
+            "browser_replacement_count": metrics.browser_replacement_count,
+            "readiness_wait_seconds": metrics.readiness_wait_seconds,
+            "timeout_labels": list(metrics.timeout_labels),
         }
 
 
@@ -272,6 +350,15 @@ def _child_result(
         or not isinstance(payload.get("frame_time_p95_ms"), (int, float))
         or not isinstance(payload.get("browser_launches"), int)
         or not isinstance(payload.get("failed_render_count"), int)
+        or not isinstance(payload.get("work_steal_count"), int)
+        or not isinstance(payload.get("worker_frame_counts"), list)
+        or not all(isinstance(value, int) for value in payload["worker_frame_counts"])
+        or not isinstance(payload.get("retry_count"), int)
+        or not isinstance(payload.get("page_replacement_count"), int)
+        or not isinstance(payload.get("browser_replacement_count"), int)
+        or not isinstance(payload.get("readiness_wait_seconds"), (int, float))
+        or not isinstance(payload.get("timeout_labels"), list)
+        or not all(isinstance(value, str) for value in payload["timeout_labels"])
     ):
         raise RuntimeError(f"Web render worker {workers} returned incomplete metrics")
     return cast(RenderResult, payload)
@@ -284,7 +371,49 @@ def _new_run_dir(root: Path) -> Path:
     return path
 
 
-def verify(frame_count: int, run_root: Path) -> int:
+def _balanced_baseline_comparison(
+    baseline_path: Path,
+    *,
+    frame_count: int,
+    current: RenderResult,
+) -> dict[str, float | str | bool]:
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("frame_count") != frame_count:
+        raise ValueError("Web render baseline must use the same frame count")
+    baseline = payload.get("parallel")
+    if not isinstance(baseline, dict):
+        raise ValueError("Web render baseline has no parallel result")
+    if (
+        baseline.get("worker_count") != current["worker_count"]
+        or baseline.get("capture_backend") != current["capture_backend"]
+    ):
+        raise ValueError("Web render baseline must use the same worker count and backend")
+    baseline_seconds = float(baseline["seconds"])
+    baseline_p95_ms = float(baseline["frame_time_p95_ms"])
+    total_ratio = float(current["seconds"]) / baseline_seconds
+    p95_ratio = float(current["frame_time_p95_ms"]) / baseline_p95_ms
+    return {
+        "path": str(baseline_path),
+        "baseline_seconds": baseline_seconds,
+        "current_seconds": float(current["seconds"]),
+        "total_ratio": total_ratio,
+        "baseline_p95_ms": baseline_p95_ms,
+        "current_p95_ms": float(current["frame_time_p95_ms"]),
+        "p95_ratio": p95_ratio,
+        "maximum_regression": MAX_BALANCED_BASELINE_REGRESSION,
+        "passed": (
+            total_ratio <= 1 + MAX_BALANCED_BASELINE_REGRESSION
+            and p95_ratio <= 1 + MAX_BALANCED_BASELINE_REGRESSION
+        ),
+    }
+
+
+def verify(
+    frame_count: int,
+    run_root: Path,
+    *,
+    baseline_report: Path | None = None,
+) -> int:
     if frame_count < 151:
         raise ValueError("Web render verification needs at least 151 frames")
     from mediaflow.infrastructure.runtime_context import RuntimeContext
@@ -307,6 +436,16 @@ def verify(frame_count: int, run_root: Path) -> int:
         serial_cache,
         parallel_cache,
     )
+    slow_scheduler = _slow_frame_scheduler_benchmark()
+    baseline = (
+        _balanced_baseline_comparison(
+            baseline_report.resolve(strict=True),
+            frame_count=frame_count,
+            current=parallel,
+        )
+        if baseline_report is not None
+        else None
+    )
     passed = web_render_requirements_met(
         frame_count=frame_count,
         serial_seconds=float(serial["seconds"]),
@@ -318,7 +457,9 @@ def verify(frame_count: int, run_root: Path) -> int:
         parallel_workers=int(parallel["worker_count"]),
         parallel_fast_capture_workers=int(parallel["fast_capture_workers"]),
         parallel_capture_backend=parallel["capture_backend"],
-    )
+        slow_modulo_seconds=float(slow_scheduler["modulo_seconds"]),
+        slow_dynamic_seconds=float(slow_scheduler["dynamic_seconds"]),
+    ) and (baseline is None or baseline["passed"] is True)
     report = {
         "schema": "mediaflow-web-render-performance/v1",
         "status": "passed" if passed else "failed",
@@ -332,6 +473,9 @@ def verify(frame_count: int, run_root: Path) -> int:
         "speedup": float(serial["seconds"]) / float(parallel["seconds"]),
         "minimum_speedup": MIN_PARALLEL_SPEEDUP,
         "required_minimum_frame_psnr_db": MIN_FRAME_PSNR_DB,
+        "slow_frame_scheduler": slow_scheduler,
+        "minimum_slow_frame_improvement": MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT,
+        "balanced_baseline": baseline,
     }
     (run_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
@@ -346,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--frames", type=int, default=180)
     parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--baseline-report", type=Path)
     parser.add_argument("--child", action="store_true")
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--workers", type=int)
@@ -360,7 +505,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("MEDIAFLOW_WEB_RENDER_RESULT=" + json.dumps(result))
         return 0
-    return verify(arguments.frames, arguments.run_root.resolve())
+    return verify(
+        arguments.frames,
+        arguments.run_root.resolve(),
+        baseline_report=arguments.baseline_report,
+    )
 
 
 if __name__ == "__main__":

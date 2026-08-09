@@ -2543,6 +2543,27 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             mode.key: mode.panel_object_name
             for mode in WORKSPACE_MODES
         }
+        active_task_statuses = {
+            TaskStatus.PENDING.value,
+            TaskStatus.RUNNING.value,
+            TaskStatus.PAUSED.value,
+        }
+        assert _process_until(
+            lambda: all(
+                controllers.tasks.tasksModel.get(index)["status"]
+                not in active_task_statuses
+                for index in range(controllers.tasks.tasksModel.rowCount())
+            )
+            and not controllers.session.projectors.timeline._preview_timer.isActive()
+            and (
+                controllers.session.requests.preview_future is None
+                or controllers.session.requests.preview_future.done()
+            ),
+            timeout=60,
+        ), [
+            controllers.tasks.tasksModel.get(index)
+            for index in range(controllers.tasks.tasksModel.rowCount())
+        ]
         for mode in modes:
             assert QMetaObject.invokeMethod(navigation_items[f"navigationItem_{mode}"], "click")
             assert _process_until(lambda mode=mode: workspace.property("activeMode") == mode)
@@ -2656,8 +2677,23 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert preview is not None and overlay is not None
         preview.setProperty("volume", 0.35)
         assert abs(float(preview.property("volume")) - 0.35) < 0.001
+        assert _process_until(
+            lambda: preview.property("duration") > 0
+            and not preview.property("errorString"),
+            timeout=30,
+        )
         preview_viewport.seek(0)
-        assert _process_until(lambda: preview.property("position") == 0)
+        assert _process_until(
+            lambda: preview.property("position") == 0,
+            timeout=30,
+        ), {
+            "position": preview.property("position"),
+            "duration": preview.property("duration"),
+            "playing": preview.property("playing"),
+            "buffering": preview.property("buffering"),
+            "buffered_frames": preview.property("bufferedFrames"),
+            "error": preview.property("errorString"),
+        }
         assert overlay.isVisible()
         overlay.setProperty("draftX", 12.5)
         overlay.setProperty("draftY", 7.5)

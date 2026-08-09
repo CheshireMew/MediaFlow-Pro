@@ -21,10 +21,10 @@ from mediaflow.domain.task_commands import (
     TrackSubjectCommand,
 )
 from mediaflow.domain.timebase import (
-    source_frames_for_timeline_frames,
+    source_frame_at_timeline_offset,
 )
 from mediaflow.domain.timeline import ClipAudio, ClipTransform, Transition
-from mediaflow.domain.visual_effects import VISUAL_EFFECT_SPECS
+from mediaflow.domain.visual_effects import VISUAL_EFFECT_DEFINITIONS
 
 from .controller_facet import ControllerFacet, report_ui_errors
 
@@ -46,6 +46,42 @@ class TimelineController(ControllerFacet):
     @Property(QObject, constant=True)
     def clipsModel(self) -> QObject:
         return self._session.models.clips
+
+    @Slot(float, float, float, int)
+    def requestFilmstrip(
+        self,
+        visible_start_frame: float,
+        visible_end_frame: float,
+        pixels_per_frame: float,
+        height: int,
+    ) -> None:
+        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+            return
+        self._session.requests.filmstrip_id += 1
+        request_id = (
+            self._session.binding.generation,
+            self._session.requests.filmstrip_id,
+            self._session.binding.active_sequence_id,
+        )
+        previous = self._session.requests.filmstrip_future
+        if previous is not None and not previous.done():
+            previous.cancel()
+        project_dir = self._session.binding.current.project_dir
+        sequence_id = self._session.binding.active_sequence_id
+        self._session.requests.filmstrip_future = self._session.background.submit(
+            "timeline_filmstrip",
+            request_id,
+            lambda: self._session._api.timeline_filmstrip_paths(
+                project_dir,
+                sequence_id,
+                visible_start_frame=max(0, int(visible_start_frame)),
+                visible_end_frame=max(1, int(visible_end_frame + 0.999999)),
+                pixels_per_frame=float(pixels_per_frame),
+                height=max(1, int(height)),
+                request_owner=self._session.binding.current.actor_id,
+                request_generation=self._session.requests.filmstrip_id,
+            ),
+        )
 
     @Property(QObject, constant=True)
     def compoundClipsModel(self) -> QObject:
@@ -202,7 +238,8 @@ class TimelineController(ControllerFacet):
     @Property("QVariantList", notify=selectionChanged)
     def visualEffectOptions(self) -> list[dict]:
         return [
-            {"label": str(spec["label"]), "value": kind.value} for kind, spec in VISUAL_EFFECT_SPECS.items()
+            {"label": definition.label, "value": kind.value}
+            for kind, definition in VISUAL_EFFECT_DEFINITIONS.items()
         ]
 
     @Property("QVariantList", notify=selectionChanged)
@@ -214,17 +251,25 @@ class TimelineController(ControllerFacet):
         )
         rows = []
         for effect in clip.visual_effects:
-            schema = VISUAL_EFFECT_SPECS[effect.kind]
+            definition = VISUAL_EFFECT_DEFINITIONS[effect.kind]
             rows.append(
                 {
                     "effectId": effect.id,
                     "kind": effect.kind.value,
-                    "label": str(schema["label"]),
+                    "label": definition.label,
                     "position": effect.position,
                     "enabled": effect.enabled,
                     "parameters": dict(effect.parameters),
                     "parameterSpecs": [
-                        {"key": key, **values} for key, values in schema["parameters"].items()
+                        {
+                            "path": f"visual-effects.{effect.id}.{descriptor.id}",
+                            "target": "visual-effect",
+                            "source_id": descriptor.id,
+                            "descriptor": descriptor.model_dump(mode="json"),
+                            "value": effect.parameters[descriptor.id],
+                            "locked": False,
+                        }
+                        for descriptor in definition.descriptors
                     ],
                 }
             )
@@ -819,13 +864,12 @@ class TimelineController(ControllerFacet):
         source_in = clip.source_in
         if trim_left:
             delta = timeline_start - clip.timeline_start
-            source_delta = source_frames_for_timeline_frames(
+            source_in = source_frame_at_timeline_offset(
+                clip.source_in,
                 delta,
                 clip.speed_numerator,
                 clip.speed_denominator,
-            )
-            source_in = (
-                clip.source_in + source_delta if clip.speed_numerator > 0 else clip.source_in - source_delta
+                freeze_source_frame=clip.freeze_source_frame,
             )
         self._session.binding.timeline.trim_clip(
             clip_id,

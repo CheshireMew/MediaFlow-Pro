@@ -11,22 +11,23 @@ from pathlib import Path
 from mediaflow.file_digest import sha256_file
 
 PACKAGE_SOURCES = (
-    ("assets/web-media-starter", "editable-media-v5"),
+    ("assets/web-media-starter", "editable-media-v6"),
+    ("assets/react-media-starter/dist", "editable-media-v6-react-reference"),
     (
         "assets/web-card-cases/warm-paper-project-list",
-        "editable-media-v5-cases/warm-paper-project-list",
+        "editable-media-v6-cases/warm-paper-project-list",
     ),
     (
         "assets/web-card-cases/social-evidence-variants",
-        "editable-media-v5-cases/social-evidence-variants",
+        "editable-media-v6-cases/social-evidence-variants",
     ),
     (
         "assets/web-card-cases/editorial-technology-diagram-cover",
-        "editable-media-v5-cases/editorial-technology-diagram-cover",
+        "editable-media-v6-cases/editorial-technology-diagram-cover",
     ),
     (
         "assets/web-card-cases/text-card-glossary",
-        "editable-media-v5-cases/text-card-glossary",
+        "editable-media-v6-cases/text-card-glossary",
     ),
 )
 MEDIA_BUILD_CASE_SOURCES = (
@@ -35,7 +36,8 @@ MEDIA_BUILD_CASE_SOURCES = (
         "media-build-cases/segmented-video",
     ),
 )
-SCHEMA_SOURCE = "schemas/editable-media.v5.schema.json"
+SCHEMA_SOURCE = "schemas/editable-media.v6.schema.json"
+TIMELINE_SCHEMA_SOURCE = "schemas/media-timeline.v1.schema.json"
 RUNTIME_SOURCE = "assets/web-media-starter/editable-media-runtime.js"
 
 
@@ -83,8 +85,8 @@ def sync_editable_package(
     source = source.resolve(strict=True)
     destination = destination.expanduser().resolve()
     manifest = json.loads((source / "editable-media.json").read_text(encoding="utf-8"))
-    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 5:
-        raise ValueError("The producer fixture must use editable-media v5")
+    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 6:
+        raise ValueError("The producer fixture must use editable-media v6")
     files = package_files(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
@@ -109,7 +111,7 @@ def sync_editable_package(
             "protocol": "mediaflow-generated-test-fixture",
             "version": 1,
             "producer": producer,
-            "editable_media_version": 5,
+            "editable_media_version": 6,
             "files": hashes,
         }
         (staging / "fixture-origin.json").write_text(
@@ -233,20 +235,31 @@ def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
     schema_source = skill_root / SCHEMA_SOURCE
     schema_destination = sync_schema(
         schema_source,
-        destination / "editable-media-v5-contract",
+        destination / "editable-media-v6-contract",
     )
     runtime_contract = sync_runtime_contract(
         schema_source,
-        "editable-media.v5.schema.json",
+        "editable-media.v6.schema.json",
     )
     runtime_script = sync_runtime_contract(
         skill_root / RUNTIME_SOURCE,
-        "editable-media-runtime.v5.js",
+        "editable-media-runtime.v6.js",
+    )
+    timeline_schema_source = skill_root / TIMELINE_SCHEMA_SOURCE
+    timeline_schema_destination = sync_schema(
+        timeline_schema_source,
+        destination / "media-timeline-v1-contract",
+    )
+    timeline_runtime_contract = sync_runtime_contract(
+        timeline_schema_source,
+        "media-timeline.v1.schema.json",
     )
     return {
         "schema_sha256": sha256_file(schema_destination),
         "runtime_contract_sha256": sha256_file(runtime_contract),
         "runtime_script_sha256": sha256_file(runtime_script),
+        "timeline_schema_sha256": sha256_file(timeline_schema_destination),
+        "timeline_runtime_contract_sha256": sha256_file(timeline_runtime_contract),
     }
 
 
@@ -279,7 +292,7 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sync MediaFlow Pro's editable-media v5 corpus from visual-multimedia."
+        description="Sync MediaFlow Pro's editable-media v6 corpus from visual-multimedia."
     )
     parser.add_argument("visual_multimedia_root", type=Path)
     parser.add_argument(

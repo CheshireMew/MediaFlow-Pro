@@ -824,6 +824,7 @@ void MltRuntime::beginPresentation(int generation)
     m_waitingForMissingFrame = false;
     m_nextCadenceDeadlineNs = 0;
     m_cadenceClock.start();
+    setBufferState(true, 0);
     presentNextFrame();
 }
 
@@ -922,9 +923,22 @@ void MltRuntime::presentNextFrame()
     }
 
     if (!frameReady) {
+        int queuedFrames = 0;
+        {
+            const QMutexLocker locker(&m_renderedFramesMutex);
+            queuedFrames = m_renderedFrames.size();
+        }
+        setBufferState(true, queuedFrames);
         m_presentationTimer->start(1);
         return;
     }
+
+    int queuedFrames = 0;
+    {
+        const QMutexLocker locker(&m_renderedFramesMutex);
+        queuedFrames = m_renderedFrames.size();
+    }
+    setBufferState(false, queuedFrames);
 
     m_lastPresentationPosition = rendered.position;
     if (unitStep)
@@ -991,5 +1005,20 @@ void MltRuntime::setPlaying(bool playing)
     if (m_playing == playing)
         return;
     m_playing = playing;
+    if (!playing)
+        setBufferState(false, 0);
     emit playingChanged(playing, m_requestId.load(std::memory_order_acquire));
+}
+
+void MltRuntime::setBufferState(bool buffering, int bufferedFrames)
+{
+    const int boundedFrames = qMax(0, bufferedFrames);
+    if (m_buffering == buffering && m_bufferedFrames == boundedFrames)
+        return;
+    m_buffering = buffering;
+    m_bufferedFrames = boundedFrames;
+    emit bufferStateChanged(
+        buffering,
+        boundedFrames,
+        m_requestId.load(std::memory_order_acquire));
 }

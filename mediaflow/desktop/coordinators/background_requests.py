@@ -13,6 +13,7 @@ _PROJECT_REQUEST_KINDS = frozenset(
     {
         "asset_thumbnails",
         "audio_metrics",
+        "timeline_filmstrip",
         "project_close",
         "waveform",
     }
@@ -187,6 +188,24 @@ class BackgroundRequests(SessionCoordinator):
             if metrics != self._session.presentation.audio_metrics:
                 self._session.presentation.audio_metrics = metrics
             self._session.events.audioMetricsChanged.emit()
+            return
+        if kind == "timeline_filmstrip":
+            generation, filmstrip_id, sequence_id = request_id
+            if (
+                generation != self._session.binding.generation
+                or filmstrip_id != self._session.requests.filmstrip_id
+                or sequence_id != self._session.binding.active_sequence_id
+            ):
+                return
+            self._session.requests.filmstrip_future = None
+            if error:
+                logger.warning("Failed to prepare timeline filmstrip: %s", error)
+                return
+            grouped: dict[str, list[dict]] = {}
+            for item in result:
+                grouped.setdefault(str(item["clipId"]), []).append(dict(item))
+            self._session.presentation.filmstrip_frames = grouped
+            self._session.projectors.timeline.refresh_timeline(defer_clip_updates=True)
             return
         if kind == "project_close":
             close_id, project_path = request_id

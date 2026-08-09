@@ -15,22 +15,24 @@ from mediaflow.domain.web_media import (
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 PACKAGES = {
-    "starter": FIXTURES / "editable-media-v5",
-    "warm": FIXTURES / "editable-media-v5-cases" / "warm-paper-project-list",
-    "social": FIXTURES / "editable-media-v5-cases" / "social-evidence-variants",
+    "starter": FIXTURES / "editable-media-v6",
+    "react": FIXTURES / "editable-media-v6-react-reference",
+    "warm": FIXTURES / "editable-media-v6-cases" / "warm-paper-project-list",
+    "social": FIXTURES / "editable-media-v6-cases" / "social-evidence-variants",
     "technology_cover": (
         FIXTURES
-        / "editable-media-v5-cases"
+        / "editable-media-v6-cases"
         / "editorial-technology-diagram-cover"
     ),
     "text_card_glossary": (
         FIXTURES
-        / "editable-media-v5-cases"
+        / "editable-media-v6-cases"
         / "text-card-glossary"
     ),
 }
 PRODUCERS = {
     "starter": "visual-multimedia/assets/web-media-starter",
+    "react": "visual-multimedia/assets/react-media-starter/dist",
     "warm": "visual-multimedia/assets/web-card-cases/warm-paper-project-list",
     "social": "visual-multimedia/assets/web-card-cases/social-evidence-variants",
     "technology_cover": (
@@ -48,8 +50,8 @@ def test_supported_media_mime_types_do_not_depend_on_the_host_registry() -> None
     assert media_mime_type("assets/voice.wav#track=dialogue") == "audio/wav"
 CORPUS_SCHEMA = (
     FIXTURES
-    / "editable-media-v5-contract"
-    / "editable-media.v5.schema.json"
+    / "editable-media-v6-contract"
+    / "editable-media.v6.schema.json"
 )
 
 
@@ -64,11 +66,11 @@ def _sha256(path: Path) -> str:
 
 
 @pytest.mark.parametrize("name", tuple(PACKAGES))
-def test_generated_packages_match_origins_and_v5_contract(name: str) -> None:
+def test_generated_packages_match_origins_and_v6_contract(name: str) -> None:
     package = PACKAGES[name]
     origin = json.loads((package / "fixture-origin.json").read_text(encoding="utf-8"))
     assert origin["producer"] == PRODUCERS[name]
-    assert origin["editable_media_version"] == 5
+    assert origin["editable_media_version"] == 6
     assert {
         path.relative_to(package).as_posix()
         for path in package.rglob("*")
@@ -79,18 +81,20 @@ def test_generated_packages_match_origins_and_v5_contract(name: str) -> None:
         assert path.is_file()
         assert _sha256(path) == expected_hash
     manifest = parse_editable_media_manifest(_read_manifest(name))
-    assert manifest.version == 5
+    assert manifest.version == 6
 
 
-def test_mediaflow_executes_the_synced_visual_multimedia_v5_schema() -> None:
+def test_mediaflow_executes_the_synced_visual_multimedia_v6_schema() -> None:
     assert EDITABLE_MEDIA_SCHEMA_PATH.read_bytes() == CORPUS_SCHEMA.read_bytes()
 
 
-def test_rich_v5_features_are_first_class_contract_fields() -> None:
+def test_rich_v6_features_are_first_class_contract_fields() -> None:
     starter = parse_editable_media_manifest(_read_manifest("starter"))
-    parameters = {item.id: item for item in starter.parameters}
-    assert parameters["spring_strength"].control == "slider"
-    assert parameters["stagger_interval_ms"].scope == "scene"
+    parameters = {item.descriptor.id: item for item in starter.parameters}
+    assert parameters["spring_strength"].descriptor.control == "slider"
+    assert parameters["stagger_interval_ms"].binding.scope == "scene"
+    assert parameters["spring_strength"].descriptor.timeline == "keyframe"
+    assert starter.frame_readiness.retry_limit == 1
     assert starter.scenes[0].parameters["orbit_radius_px"] == 32
     assert starter.scenes[0].motion.camera is not None
     assert starter.scenes[0].steps[1].state_kind == "change"
@@ -150,7 +154,17 @@ def test_rich_v5_features_are_first_class_contract_fields() -> None:
     assert text_card_sources["sources"] == []
 
 
-def test_v5_media_sources_require_an_explicit_pipeline_binding() -> None:
+def test_v6_frame_readiness_never_exceeds_the_protocol_maximum() -> None:
+    manifest = _read_manifest("starter")
+    frame_readiness = manifest["frame_readiness"]
+    assert isinstance(frame_readiness, dict)
+    frame_readiness["maximum_timeout_ms"] = 30_001
+
+    with pytest.raises(ValueError, match="maximum_timeout_ms"):
+        parse_editable_media_manifest(manifest)
+
+
+def test_v6_media_sources_require_an_explicit_pipeline_binding() -> None:
     source_manifest = json.loads(
         (
             PACKAGES["warm"]
@@ -189,7 +203,7 @@ def test_v5_media_sources_require_an_explicit_pipeline_binding() -> None:
         ),
     ),
 )
-def test_v5_rejects_media_type_and_pipeline_mismatches(
+def test_v6_rejects_media_type_and_pipeline_mismatches(
     media_type: str,
     binding: dict[str, object],
     message: str,
@@ -229,7 +243,7 @@ def test_v5_rejects_media_type_and_pipeline_mismatches(
         ),
     ),
 )
-def test_v5_rejects_removed_data_kinds_and_non_package_paths(
+def test_v6_rejects_removed_data_kinds_and_non_package_paths(
     mutate,
     message: str,
 ) -> None:

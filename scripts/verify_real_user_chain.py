@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -40,9 +41,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_MEDIA_STARTER = Path(
     os.environ.get(
         "MEDIAFLOW_EDITABLE_MEDIA_PACKAGE",
-        ROOT / "tests" / "fixtures" / "editable-media-v5",
+        ROOT / "tests" / "fixtures" / "editable-media-v6-react-reference",
     )
 ).resolve()
+WEB_MEDIA_MANIFEST = json.loads(
+    (WEB_MEDIA_STARTER / "editable-media.json").read_text(encoding="utf-8")
+)
+WEB_SCENE_ID = str(WEB_MEDIA_MANIFEST["scenes"][0]["id"])
 
 
 class QuietFileHandler(SimpleHTTPRequestHandler):
@@ -511,7 +516,260 @@ def wait_preview_graph(
     raise TimeoutError("Preview graph was not generated")
 
 
+def wait_real_filmstrip(
+    controller: EditorControllers,
+    clip_id: str,
+    *,
+    errors: list[str],
+    timeout: float = 120,
+) -> list[dict[str, object]]:
+    state = controller.session.binding.timeline.state
+    controller.timeline.requestFilmstrip(
+        0,
+        max((clip.timeline_end for clip in state.clips), default=1),
+        6.0,
+        46,
+    )
+    deadline = time.monotonic() + timeout
+    last_frames: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        process_events(errors)
+        for index in range(controller.timeline.clipsModel.rowCount()):
+            row = controller.timeline.clipsModel.get(index)
+            if str(row["clipId"]) != clip_id:
+                continue
+            last_frames = [dict(item) for item in row.get("filmstripFrames", [])]
+            source_frames = {int(item["sourceFrame"]) for item in last_frames}
+            paths = [Path(str(item["path"])) for item in last_frames]
+            if (
+                len(last_frames) >= 2
+                and len(source_frames) >= 2
+                and all(path.is_file() and path.stat().st_size > 0 for path in paths)
+                and len({hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}) >= 2
+            ):
+                return last_frames
+    raise TimeoutError(
+        "Timeline did not expose multiple real filmstrip frames: "
+        f"{json.dumps(last_frames, ensure_ascii=False)}"
+    )
+
+
+def verify_export_video(
+    output: Path,
+    paths: RuntimePaths,
+    evidence_root: Path,
+) -> tuple[dict[str, object], list[str]]:
+    probe = subprocess.run(
+        [
+            str(paths.ffprobe),
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_format",
+            "-of",
+            "json",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if probe.returncode != 0:
+        raise RuntimeError(f"FFprobe rejected the exported video: {probe.stderr}")
+    payload = json.loads(probe.stdout)
+    streams = payload.get("streams") or []
+    video_streams = [item for item in streams if item.get("codec_type") == "video"]
+    if not video_streams:
+        raise RuntimeError("The exported React chain has no video stream")
+    duration = float((payload.get("format") or {}).get("duration") or 0)
+    if duration < 2.5:
+        raise RuntimeError(f"The exported React chain is unexpectedly short: {duration}")
+
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    frame_hashes: list[str] = []
+    for index, seconds in enumerate((0.25, 1.75), start=1):
+        frame = evidence_root / f"export-frame-{index}.png"
+        result = subprocess.run(
+            [
+                str(paths.ffmpeg),
+                "-y",
+                "-hide_banner",
+                "-v",
+                "error",
+                "-ss",
+                str(seconds),
+                "-i",
+                str(output),
+                "-frames:v",
+                "1",
+                str(frame),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0 or not frame.is_file() or frame.stat().st_size == 0:
+            raise RuntimeError(
+                f"Could not extract exported React evidence frame {index}: {result.stderr}"
+            )
+        frame_hashes.append(hashlib.sha256(frame.read_bytes()).hexdigest())
+    if len(set(frame_hashes)) != len(frame_hashes):
+        raise RuntimeError("The exported React video did not change across sampled frames")
+    return payload, frame_hashes
+
+
 def verify(project_parent: Path) -> None:
+    """Verify the deterministic React editable-media producer-to-export chain."""
+
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(
+        project_parent.resolve() / "editor-service"
+    )
+    configure_application_identity()
+    app = QGuiApplication.instance() or QGuiApplication([])
+    errors: list[str] = []
+    controller = EditorControllers()
+    paths = RuntimeContext.discover().paths
+    controller.session.events.errorOccurred.connect(errors.append)
+    try:
+        run_root = project_parent.resolve()
+        controller.workspace.createProject(
+            QUrl.fromLocalFile(str(run_root)).toString(),
+            "MediaFlow Pro React 真实链路",
+        )
+        project = controller.session.binding.current
+        if project is None:
+            raise RuntimeError("React chain project creation did not bind a project")
+        sequence_id = controller.workspace.activeSequenceId
+
+        controller.media.importFiles(
+            [QUrl.fromLocalFile(str(WEB_MEDIA_STARTER / "editable-media.json"))]
+        )
+        web_asset_id = controller.media.selectedAssetId
+        asset = project.get_asset(web_asset_id)
+        if asset.kind != AssetKind.WEB:
+            raise RuntimeError("React package was not imported as a generic web asset")
+        controller.timeline.addTrack("video")
+        web_track = [
+            track
+            for track in controller.session.binding.timeline.state.tracks
+            if track.kind == TrackKind.VIDEO
+        ][-1]
+        controller.timeline.dropAssets(
+            [web_asset_id],
+            web_track.id,
+            web_track.position,
+            0,
+            3.0,
+            0,
+            True,
+            False,
+        )
+        web_clip_id = controller.timeline.selectedClipId
+        controller.web.selectLayer("title")
+        controller.web.updateLayer("title", {"content": "Real React editable-media chain"})
+        controller.web_timeline.setDescriptorKeyframeAtFrame(
+            "layer",
+            "title.opacity",
+            0.35,
+            "ease_in_out",
+            0,
+        )
+        controller.web_timeline.setDescriptorKeyframeAtFrame(
+            "layer",
+            "title.opacity",
+            1.0,
+            "ease_out",
+            25,
+        )
+        controller.web.updateDescriptorValue("theme", "accent", "#e6007a")
+        controller.web.updateDescriptorValue("parameter", "orbit_radius", 261)
+
+        persisted = project.get_web_clip(web_clip_id)
+        if (
+            persisted.scenes[WEB_SCENE_ID].layers["title"].content
+            != "Real React editable-media chain"
+            or persisted.parameters.get("orbit_radius") != 261
+        ):
+            raise RuntimeError("Desktop React edits did not reach project state")
+        filmstrip_frames = wait_real_filmstrip(
+            controller,
+            web_clip_id,
+            errors=errors,
+        )
+        preview_graph = wait_preview_graph(controller, errors=errors)
+
+        project_root = project.project_dir
+        output = project_root / "exports" / "react-real-chain.mp4"
+        controller.export.exportSequenceWithOptions(
+            "h264",
+            QUrl.fromLocalFile(str(output)).toString(),
+            {"preset": "veryfast"},
+        )
+        wait_export(controller, output, errors=errors)
+        probe, export_frame_hashes = verify_export_video(
+            output,
+            paths,
+            project_root / "generated" / "react-chain-evidence",
+        )
+        task_count = len(project.list_tasks())
+
+        controller.workspace.closeProject()
+        wait_project_release(controller, errors=errors)
+        controller.workspace.openProject(QUrl.fromLocalFile(str(project_root)).toString())
+        reopened = controller.session.binding.current
+        if reopened is None:
+            raise RuntimeError("React chain project did not reopen")
+        reopened_web = reopened.get_web_clip(web_clip_id)
+        if (
+            reopened_web.scenes[WEB_SCENE_ID].layers["title"].content
+            != "Real React editable-media chain"
+            or reopened_web.parameters.get("orbit_radius") != 261
+        ):
+            raise RuntimeError("React editable state was not restored after reopening")
+        if len(reopened.list_tasks()) != task_count:
+            raise RuntimeError("React chain task history changed after reopening")
+        raise_ui_errors(errors)
+
+        video_stream = next(
+            item for item in probe["streams"] if item.get("codec_type") == "video"
+        )
+        report = {
+            "schema": "mediaflow-react-real-user-chain/v1",
+            "project": str(project_root),
+            "source_package": str(WEB_MEDIA_STARTER),
+            "source_package_version": WEB_MEDIA_MANIFEST["version"],
+            "asset_kind": asset.kind.value,
+            "sequence_id": sequence_id,
+            "web_clip_id": web_clip_id,
+            "web_state_revision": reopened_web.revision,
+            "orbit_radius": reopened_web.parameters["orbit_radius"],
+            "filmstrip_frame_count": len(filmstrip_frames),
+            "filmstrip_source_frames": sorted(
+                {int(item["sourceFrame"]) for item in filmstrip_frames}
+            ),
+            "preview_graph": preview_graph,
+            "export": str(output),
+            "export_size": output.stat().st_size,
+            "export_codec": video_stream.get("codec_name"),
+            "export_duration": float((probe.get("format") or {})["duration"]),
+            "export_frame_hashes": export_frame_hashes,
+            "task_count": task_count,
+            "errors": errors,
+        }
+        report_path = project_root / "generated" / "real-user-chain-report.json"
+        atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    finally:
+        try:
+            controller.shutdown()
+        finally:
+            shutdown_sync_service()
+        app.processEvents()
+
+
+def verify_workflow_chain(project_parent: Path) -> None:
     os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(
         project_parent.resolve() / "editor-service"
     )
@@ -796,17 +1054,25 @@ def verify(project_parent: Path) -> None:
             25,
         )
         controller.web.updateDescriptorValue("theme", "accent", "#e6007a")
-        controller.web.updateDescriptorValue(
-            "data",
-            "left_value",
-            '"Desktop and CLI share state"',
-        )
+        parameters = WEB_MEDIA_MANIFEST.get("parameters") or []
+        if parameters:
+            descriptor = parameters[0]["descriptor"]
+            controller.web.updateDescriptorValue(
+                "parameter",
+                str(descriptor["id"]),
+                descriptor["default"],
+            )
         persisted_web = project.get_web_clip(web_clip_id)
         if (
-            persisted_web.scenes["opening"].layers["title"].content
+            persisted_web.scenes[WEB_SCENE_ID].layers["title"].content
             != "Real editable web chain"
         ):
             raise RuntimeError("Desktop web edit did not reach project state")
+        filmstrip_frames = wait_real_filmstrip(
+            controller,
+            web_clip_id,
+            errors=errors,
+        )
         main_audio_track = next(
             track
             for track in controller.session.binding.timeline.state.tracks
@@ -913,7 +1179,7 @@ def verify(project_parent: Path) -> None:
             raise RuntimeError("Task history changed after reopening")
         reopened_web = reopened.get_web_clip(web_clip_id)
         if (
-            reopened_web.scenes["opening"].layers["title"].content
+            reopened_web.scenes[WEB_SCENE_ID].layers["title"].content
             != "Real editable web chain"
         ):
             raise RuntimeError("Editable web state was not restored after reopening")
@@ -944,6 +1210,10 @@ def verify(project_parent: Path) -> None:
             "short_export_size": short_output.stat().st_size,
             "web_clip_id": web_clip_id,
             "web_state_revision": reopened_web.revision,
+            "filmstrip_frame_count": len(filmstrip_frames),
+            "filmstrip_source_frames": sorted(
+                {int(item["sourceFrame"]) for item in filmstrip_frames}
+            ),
             "errors": errors,
         }
         report_path = project_root / "generated" / "real-user-chain-report.json"
@@ -965,12 +1235,22 @@ def verify(project_parent: Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path)
+    parser.add_argument(
+        "--include-llm-workflow",
+        action="store_true",
+        help=(
+            "also run the external download/transcription/translation/highlight/shorts chain; "
+            "this requires a configured real LLM provider"
+        ),
+    )
     arguments = parser.parse_args(argv)
     with verification_run(
         "real-user-chain",
         explicit_root=arguments.root,
     ) as run_dir:
         verify(run_dir)
+        if arguments.include_llm_workflow:
+            verify_workflow_chain(run_dir / "llm-workflow")
 
 
 if __name__ == "__main__":

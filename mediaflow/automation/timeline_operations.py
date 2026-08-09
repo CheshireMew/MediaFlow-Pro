@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 from mediaflow.automation.operation_context import OperationContext
-from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
-from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.enums import (
+    ExportFormat,
+    TrackKind,
+    TransitionKind,
+    VisualEffectKind,
+)
+from mediaflow.domain.exports import ExportPreset, SubtitleStyle
 from mediaflow.domain.task_commands import (
     BuildSequenceCommand,
     ExportSequenceCommand,
     SequenceBuildUnit,
 )
-from mediaflow.domain.timeline import ClipAddRequest, ClipAudio, ClipTransform
+from mediaflow.domain.timeline import (
+    ClipAddRequest,
+    ClipAudio,
+    ClipTransform,
+    FreezeClipAddRequest,
+)
 from mediaflow.file_digest import sha256_file
 
 
@@ -16,14 +26,41 @@ def get_timeline(context: OperationContext) -> dict:
     return {"timeline": context.project.timeline(context.sequence_id()).state}
 
 
+def inspect_portable_timeline(context: OperationContext) -> dict:
+    loaded = context.project.inspect_portable_timeline(str(context.required("timeline_path")))
+    document = loaded.document
+    return {
+        "timeline_path": str(loaded.path),
+        "timeline_sha256": loaded.sha256,
+        "project_id": document.project_id,
+        "profile": document.profile,
+        "duration_seconds": document.duration_seconds,
+        "source_count": len(document.sources),
+        "track_count": len(document.tracks),
+        "clip_count": sum(len(track.clips) for track in document.tracks),
+        "marker_count": len(document.markers),
+        "mediaflow_compatible": True,
+    }
+
+
+def import_portable_timeline(context: OperationContext) -> dict:
+    loaded, state, assets, subtitle_document_ids = context.project.import_portable_timeline(
+        str(context.required("timeline_path")),
+        sequence_id=context.sequence_id(),
+    )
+    inspected = inspect_portable_timeline(context)
+    return {
+        **inspected,
+        "timeline": state,
+        "source_assets": assets,
+        "subtitle_document_ids": subtitle_document_ids,
+    }
+
+
 def add_track(context: OperationContext) -> dict:
     track = context.project.timeline(context.sequence_id()).add_track(
         TrackKind(str(context.required("kind"))),
-        (
-            str(context.arguments["name"])
-            if context.arguments.get("name")
-            else None
-        ),
+        (str(context.arguments["name"]) if context.arguments.get("name") else None),
     )
     return {"track": track}
 
@@ -43,21 +80,28 @@ def add_clip(context: OperationContext) -> dict:
 
 def add_clips(context: OperationContext) -> dict:
     editor = context.project.timeline(context.sequence_id())
-    clips = editor.add_clips(
-        [ClipAddRequest.model_validate(value) for value in context.required("clips")]
-    )
+    clips = editor.add_clips([ClipAddRequest.model_validate(value) for value in context.required("clips")])
     return {"clips": clips}
+
+
+def add_freeze_clip(context: OperationContext) -> dict:
+    clip = context.project.timeline(context.sequence_id()).add_freeze_clip(
+        FreezeClipAddRequest(
+            track_id=str(context.required("track_id")),
+            asset_id=str(context.required("asset_id")),
+            timeline_start=int(context.required("timeline_start")),
+            source_frame=int(context.required("source_frame")),
+            duration=int(context.required("duration")),
+        )
+    )
+    return {"clip": clip}
 
 
 def move_clip(context: OperationContext) -> dict:
     clip = context.project.timeline(context.sequence_id()).move_clip(
         str(context.required("clip_id")),
         timeline_start=int(context.required("timeline_start")),
-        track_id=(
-            str(context.arguments["track_id"])
-            if context.arguments.get("track_id")
-            else None
-        ),
+        track_id=(str(context.arguments["track_id"]) if context.arguments.get("track_id") else None),
     )
     return {"clip": clip}
 
@@ -66,11 +110,7 @@ def copy_clip(context: OperationContext) -> dict:
     clip = context.project.timeline(context.sequence_id()).copy_clip(
         str(context.required("clip_id")),
         timeline_start=int(context.required("timeline_start")),
-        track_id=(
-            str(context.arguments["track_id"])
-            if context.arguments.get("track_id")
-            else None
-        ),
+        track_id=(str(context.arguments["track_id"]) if context.arguments.get("track_id") else None),
     )
     return {"clip": clip}
 
@@ -90,6 +130,64 @@ def delete_clips(context: OperationContext) -> dict:
         ripple=bool(context.arguments.get("ripple", False)),
     )
     return {"timeline": editor.state}
+
+
+def add_transition(context: OperationContext) -> dict:
+    transition = context.project.timeline(context.sequence_id()).create_transition(
+        str(context.required("left_clip_id")),
+        str(context.required("right_clip_id")),
+        TransitionKind(str(context.required("kind"))),
+        int(context.required("duration")),
+    )
+    return {"transition": transition}
+
+
+def update_transition(context: OperationContext) -> dict:
+    parameters = context.arguments.get("parameters")
+    transition = context.project.timeline(context.sequence_id()).update_transition(
+        str(context.required("transition_id")),
+        kind=TransitionKind(str(context.required("kind"))),
+        duration=int(context.required("duration")),
+        parameters=dict(parameters) if parameters is not None else None,
+    )
+    return {"transition": transition}
+
+
+def remove_transition(context: OperationContext) -> dict:
+    context.project.timeline(context.sequence_id()).remove_transition(str(context.required("transition_id")))
+    return {"removed": True}
+
+
+def add_marker(context: OperationContext) -> dict:
+    marker = context.project.timeline(context.sequence_id()).add_marker(
+        int(context.required("frame")),
+        name=str(context.arguments.get("name") or ""),
+        color=str(context.arguments.get("color") or "#4ea1ff"),
+    )
+    return {"marker": marker}
+
+
+def update_marker(context: OperationContext) -> dict:
+    marker = context.project.timeline(context.sequence_id()).update_marker(
+        str(context.required("marker_id")),
+        frame=int(context.required("frame")),
+        name=str(context.arguments.get("name") or ""),
+        color=str(context.required("color")),
+    )
+    return {"marker": marker}
+
+
+def remove_marker(context: OperationContext) -> dict:
+    context.project.timeline(context.sequence_id()).remove_marker(str(context.required("marker_id")))
+    return {"removed": True}
+
+
+def update_subtitle_track_style(context: OperationContext) -> dict:
+    track = context.project.timeline(context.sequence_id()).set_subtitle_track_style(
+        str(context.required("track_id")),
+        SubtitleStyle.model_validate(context.required("style")),
+    )
+    return {"track": track}
 
 
 def transform_clip(context: OperationContext) -> dict:
@@ -133,10 +231,7 @@ def update_clip_visual_effect(context: OperationContext) -> dict:
         clip_id,
         str(context.required("effect_id")),
         enabled=bool(context.required("enabled")),
-        parameters={
-            str(key): float(value)
-            for key, value in dict(context.required("parameters")).items()
-        },
+        parameters={str(key): float(value) for key, value in dict(context.required("parameters")).items()},
     )
     return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
 
@@ -181,9 +276,7 @@ def export_sequence(context: OperationContext) -> dict:
         sequence_id=sequence_id,
         output_path=str(context.required("output_path")),
         format=ExportFormat(str(context.arguments.get("format", "h264"))),
-        preset=(
-            ExportPreset.model_validate(preset_value) if preset_value else None
-        ),
+        preset=(ExportPreset.model_validate(preset_value) if preset_value else None),
         overwrite=bool(context.arguments.get("overwrite", False)),
     )
     return context.task_receipt(
@@ -200,15 +293,10 @@ def build_sequence(context: OperationContext) -> dict:
     sequence_id = context.sequence_id()
     command = BuildSequenceCommand(
         sequence_id=sequence_id,
-        units=[
-            SequenceBuildUnit.model_validate(value)
-            for value in context.required("units")
-        ],
+        units=[SequenceBuildUnit.model_validate(value) for value in context.required("units")],
         output_path=str(context.required("output_path")),
         format=ExportFormat(str(context.arguments.get("format", "h264"))),
-        preset=(
-            ExportPreset.model_validate(preset_value) if preset_value else None
-        ),
+        preset=(ExportPreset.model_validate(preset_value) if preset_value else None),
         overwrite=bool(context.arguments.get("overwrite", False)),
     )
     return context.task_receipt(

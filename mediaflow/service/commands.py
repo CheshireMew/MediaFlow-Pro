@@ -223,6 +223,7 @@ TIMELINE_WRITE_COMMANDS = frozenset(
         "set_primary_dialogue_track",
         "set_sequence_in_out",
         "set_sequence_profile",
+        "set_subtitle_track_style",
         "set_track_state",
         "set_web_clip_state",
         "split_clip",

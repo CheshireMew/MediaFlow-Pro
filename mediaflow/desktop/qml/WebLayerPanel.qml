@@ -304,6 +304,12 @@ Panel {
             text: qsTr("检查新版网页包")
             onClicked: rebindDialog.open()
         }
+        AppButton {
+            Layout.fillWidth: true
+            visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+            text: qsTr("复制换版检查为 CLI 请求")
+            onClicked: automationController.copyWebRebindPlanRequest()
+        }
         Text {
             Layout.fillWidth: true
             visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
@@ -356,6 +362,15 @@ Panel {
                 webDeliveryController.rebindPlan.resolutions || {}).length
                 === (webDeliveryController.rebindPlan.conflicts || []).length
             onClicked: webDeliveryController.commitRebind()
+        }
+        AppButton {
+            Layout.fillWidth: true
+            visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+            text: qsTr("复制换版提交为 CLI 请求")
+            enabled: Object.keys(
+                webDeliveryController.rebindPlan.resolutions || {}).length
+                === (webDeliveryController.rebindPlan.conflicts || []).length
+            onClicked: automationController.copyWebRebindCommitRequest()
         }
 
         Text {

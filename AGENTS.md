@@ -8,8 +8,8 @@ MediaFlow Pro 是通用的本地媒体编辑器。它正式消费 `visual-multim
 
 ## 共享边界与唯一真源
 
-- `$env:VISUAL_MULTIMEDIA_ROOT\schemas\editable-media.v5.schema.json` 是 `editable-media` v5 清单结构的唯一真源；生产者仓库位置由本机 `.env` 提供，不写死在项目规则中。
-- `tests/fixtures/editable-media-v5*` 和 `mediaflow/resources/contracts/editable-media.v5.schema.json` 是从生产者同步得到的消费快照，不是独立设计入口，禁止直接手改。
+- `$env:VISUAL_MULTIMEDIA_ROOT\schemas\editable-media.v6.schema.json` 是 `editable-media` v6 清单结构的唯一真源；生产者仓库位置由本机 `.env` 提供，不写死在项目规则中。
+- `tests/fixtures/editable-media-v6*`、`mediaflow/resources/contracts/editable-media.v6.schema.json` 和标准 runtime 是从生产者同步得到的消费快照，不是独立设计入口，禁止直接手改。
 - `scripts/sync_visual_multimedia_fixture.py` 是更新 schema、starter、真实案例和来源哈希的唯一同步入口。
 - `window.editableMedia` 是网页结构化状态入口，`window.__hf.duration/seek(seconds)` 是确定性逐帧时间入口。导入、编辑、预览、缓存和导出只能共同消费这套边界。
 - MediaFlow 的项目模型、`WebClipState`、时间线、渲染缓存和 Editor API 由本仓库负责；公开自动化能力以实际 `mediaflow-cli describe` 输出为唯一真源。
@@ -67,7 +67,7 @@ CI 的测试等级由 `scripts/ci/quality_plan.py` 唯一决定，workflow 只�
 至少运行：
 
 ```powershell
-& $env:MEDIAFLOW_PYTHON -m pytest tests\v2\domain\test_editable_media_v5_contract.py
+& $env:MEDIAFLOW_PYTHON -m pytest tests\v2\domain\test_editable_media_v6_contract.py
 ```
 
 并根据改动覆盖受影响的网页导入、项目仓储、CLI、桌面编辑、浏览器捕获、原生媒体合成、缓存、时间线、预览和导出测试。修改共享渲染或交互主链时还必须运行：

@@ -36,6 +36,26 @@ CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
         description=f"Create, inspect, version, and edit local {PRODUCT_NAME} projects.",
     ),
     CapabilityDefinition(
+        id="portable-timeline-import",
+        availability="built-in",
+        description="Inspect and import visual-multimedia portable timelines as native editable projects.",
+    ),
+    CapabilityDefinition(
+        id="native-freeze-clips",
+        availability="built-in",
+        description="Create and render non-destructive native freeze-frame clips.",
+    ),
+    CapabilityDefinition(
+        id="semantic-timeline-markers",
+        availability="built-in",
+        description="Persist semantic picture-to-voice alignment markers on editable timelines.",
+    ),
+    CapabilityDefinition(
+        id="asynchronous-project-handoff",
+        availability="built-in",
+        description="Hand projects between automation and people and inspect later human changes.",
+    ),
+    CapabilityDefinition(
         id="live-project-collaboration",
         availability="built-in",
         description="Coordinate command-line writes with an open desktop project.",
@@ -144,14 +164,10 @@ CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
 
 CAPABILITY_IDS = frozenset(item.id for item in CAPABILITY_CATALOG)
 RUNTIME_CAPABILITY_IDS = frozenset(
-    item.id
-    for item in CAPABILITY_CATALOG
-    if item.availability == "runtime-inspected"
+    item.id for item in CAPABILITY_CATALOG if item.availability == "runtime-inspected"
 )
 
-CORE_RUNTIME_CAPABILITY_IDS = frozenset(
-    {"ffmpeg", "ffprobe", "mlt", "chromium", "native-preview"}
-)
+CORE_RUNTIME_CAPABILITY_IDS = frozenset({"ffmpeg", "ffprobe", "mlt", "chromium", "native-preview"})
 RUNTIME_CAPABILITY_PROFILES = {
     "core": CORE_RUNTIME_CAPABILITY_IDS,
     "full": RUNTIME_CAPABILITY_IDS,

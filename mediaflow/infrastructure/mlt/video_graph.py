@@ -197,9 +197,7 @@ class MltVideoGraph:
         if not requested_track_id:
             return
         subtitle_tracks = [
-            track
-            for track in state.effective_tracks(TrackKind.SUBTITLE)
-            if track.id == requested_track_id
+            track for track in state.effective_tracks(TrackKind.SUBTITLE) if track.id == requested_track_id
         ]
         if not subtitle_tracks:
             raise ValueError("The selected burn-in subtitle track is missing or disabled")
@@ -212,7 +210,7 @@ class MltVideoGraph:
             for document in self.repository.subtitles.list_subtitle_documents()
             for segment in self.repository.subtitles.list_subtitle_segments(document.id)
         }
-        resolved_style = style or SubtitleStyle()
+        resolved_style = style or track.subtitle_style or SubtitleStyle()
         scale = state.sequence.profile.height / 540.0
         font_size = max(8, round(resolved_style.font_size * scale))
         outline_size = max(0, round(resolved_style.outline_size * scale))

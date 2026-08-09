@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,7 @@ SCALES = ("1", "1.5", "2")
 HOME_SIZES = ((1280, 720), (1600, 980))
 SIZES = ((1280, 720), (1920, 1080), (3840, 2160))
 SETTINGS_TABS = ("general", "download", "ai")
+UI_MATRIX_WORKERS = 3
 
 
 def probe(root: Path, language: str, scale: str) -> dict:
@@ -436,39 +438,55 @@ def probe(root: Path, language: str, scale: str) -> dict:
         QCoreApplication.processEvents()
 
 
+def _run_scenario(scenario: Path, language: str, scale: str) -> tuple[dict, float]:
+    started = time.perf_counter()
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.verify_ui_matrix",
+            "--probe",
+            "--root",
+            str(scenario),
+            "--language",
+            language,
+            "--scale",
+            scale,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"UI matrix failed for {language}/{scale}x\n{completed.stdout}\n{completed.stderr}"
+        )
+    return json.loads(completed.stdout), time.perf_counter() - started
+
+
 def orchestrate(root: Path) -> dict:
-    results = []
-    for language in LANGUAGES:
-        for scale in SCALES:
-            scenario = root / f"{language}-{scale}x"
-            scenario.mkdir()
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "scripts.verify_ui_matrix",
-                    "--probe",
-                    "--root",
-                    str(scenario),
-                    "--language",
-                    language,
-                    "--scale",
-                    scale,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-                check=False,
-            )
-            if completed.returncode != 0:
-                raise RuntimeError(
-                    f"UI matrix failed for {language}/{scale}x\n{completed.stdout}\n{completed.stderr}"
-                )
-            results.append(json.loads(completed.stdout))
+    scenarios = [
+        (root / f"{language}-{scale}x", language, scale)
+        for language in LANGUAGES
+        for scale in SCALES
+    ]
+    for scenario, _language, _scale in scenarios:
+        scenario.mkdir()
+    worker_count = min(UI_MATRIX_WORKERS, len(scenarios))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(_run_scenario, scenario, language, scale)
+            for scenario, language, scale in scenarios
+        ]
+        completed_scenarios = [future.result() for future in futures]
+    results = [result for result, _seconds in completed_scenarios]
     report = {
         "scenario_count": len(results),
+        "worker_count": worker_count,
+        "scenario_seconds": [round(seconds, 3) for _result, seconds in completed_scenarios],
         "render_count": len(results)
         * (len(HOME_SIZES) + len(SIZES) + len(WORKSPACE_MODE_KEYS) + len(SETTINGS_TABS)),
         "results": results,

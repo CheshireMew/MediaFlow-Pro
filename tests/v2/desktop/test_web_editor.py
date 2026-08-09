@@ -24,7 +24,7 @@ from mediaflow.domain.enums import TrackKind
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 
-STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v5"
+STARTER = Path(__file__).resolve().parents[2] / "fixtures" / "editable-media-v6"
 pytestmark = pytest.mark.integration
 
 
@@ -46,7 +46,7 @@ def _application() -> QGuiApplication:
     return app
 
 
-def test_unified_import_opens_the_v5_package_through_local_preview_server(
+def test_unified_import_opens_the_v6_package_through_local_preview_server(
     tmp_path: Path,
 ) -> None:
     app = _application()
@@ -54,7 +54,7 @@ def test_unified_import_opens_the_v5_package_through_local_preview_server(
     try:
         controllers.workspace.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
-            "Unified V5 Web Import",
+            "Unified V6 Web Import",
         )
         window = engine.rootObjects()[0]
         loader = window.findChild(QObject, "pageLoader")
@@ -96,7 +96,7 @@ def test_unified_import_opens_the_v5_package_through_local_preview_server(
             lambda: controllers.web.browserReady and bool(controllers.web.browserLayerSnapshot),
             15,
         )
-        assert controllers.web.manifestData["version"] == 5
+        assert controllers.web.manifestData["version"] == 6
         assert controllers.web.browserRevision == 0
         controllers.web.selectLayer("title")
         assert _process_until(
@@ -107,8 +107,8 @@ def test_unified_import_opens_the_v5_package_through_local_preview_server(
         spring = next(
             item for item in controllers.web.parameterDescriptors if item["source_id"] == "spring_strength"
         )
-        assert spring["control"] == "slider"
-        assert spring["unit"] == "ratio"
+        assert spring["descriptor"]["control"] == "slider"
+        assert spring["descriptor"]["unit"] == "ratio"
         timeline_editor = workspace.findChild(QQuickItem, "webTimelineEditor")
         assert timeline_editor is not None
         assert timeline_editor.isVisible()
@@ -148,9 +148,9 @@ def test_unified_import_opens_the_v5_package_through_local_preview_server(
 def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
     tmp_path: Path,
 ) -> None:
-    project_path = tmp_path / "Desktop V5 Web Project"
+    project_path = tmp_path / "Desktop V6 Web Project"
     api = EditorApplication()
-    with api.create_project(project_path, "Desktop V5 Web Project") as project:
+    with api.create_project(project_path, "Desktop V6 Web Project") as project:
         asset = project.import_web_package(STARTER)
         sequence_id = project.get_project().main_sequence_id
         editor = project.timeline(sequence_id)

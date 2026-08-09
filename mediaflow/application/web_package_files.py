@@ -110,6 +110,50 @@ def publication_receipt_json(
     )
 
 
+def publication_token(name: str, *, prefix: str) -> str | None:
+    if not name.startswith(prefix):
+        return None
+    token = name[len(prefix) :]
+    if len(token) != PUBLICATION_TOKEN_HEX_CHARS or any(
+        character not in "0123456789abcdef" for character in token
+    ):
+        return None
+    return token
+
+
+def read_publication_receipt(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeError) as error:
+        raise RuntimeError(f"Editable media publication receipt is invalid: {path}") from error
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "asset_id",
+        "source_hash",
+        "token",
+        "directory",
+        "status",
+    }:
+        raise RuntimeError(f"Editable media publication receipt is invalid: {path}")
+    token = payload["token"]
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != PUBLICATION_SCHEMA_VERSION
+        or not isinstance(payload["asset_id"], str)
+        or not payload["asset_id"]
+        or not isinstance(payload["source_hash"], str)
+        or len(payload["source_hash"]) != 64
+        or any(character not in "0123456789abcdef" for character in payload["source_hash"])
+        or not isinstance(token, str)
+        or payload["directory"] != f"p-{token}"
+        or payload["status"] not in {"pending", "committed"}
+        or path.name != f"r-{token}.json"
+        or publication_token(f"p-{token}", prefix="p-") is None
+    ):
+        raise RuntimeError(f"Editable media publication receipt is invalid: {path}")
+    return payload
+
+
 def is_junction(path: Path) -> bool:
     checker = getattr(path, "is_junction", None)
     return bool(checker and checker())

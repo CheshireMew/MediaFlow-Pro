@@ -20,6 +20,8 @@ class MltPreviewItem : public QQuickItem
     Q_PROPERTY(QString mltData READ mltData WRITE setMltData NOTIFY mltDataChanged)
     Q_PROPERTY(int reloadToken READ reloadToken WRITE setReloadToken NOTIFY reloadTokenChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
+    Q_PROPERTY(bool buffering READ buffering NOTIFY bufferingChanged)
+    Q_PROPERTY(int bufferedFrames READ bufferedFrames NOTIFY bufferedFramesChanged)
     Q_PROPERTY(int position READ position NOTIFY positionChanged)
     Q_PROPERTY(int duration READ duration NOTIFY durationChanged)
     Q_PROPERTY(double playbackRate READ playbackRate WRITE setPlaybackRate NOTIFY playbackRateChanged)
@@ -46,6 +48,8 @@ public:
     int reloadToken() const { return m_reloadToken; }
     void setReloadToken(int value);
     bool playing() const { return m_playing; }
+    bool buffering() const { return m_buffering; }
+    int bufferedFrames() const { return m_bufferedFrames; }
     int position() const { return m_position; }
     int duration() const { return m_duration; }
     double playbackRate() const { return m_playbackRate; }
@@ -72,6 +76,8 @@ signals:
     void mltDataChanged();
     void reloadTokenChanged();
     void playingChanged();
+    void bufferingChanged();
+    void bufferedFramesChanged();
     void positionChanged();
     void durationChanged();
     void playbackRateChanged();
@@ -124,6 +130,8 @@ private:
     QString m_mltData;
     int m_reloadToken = 0;
     bool m_playing = false;
+    bool m_buffering = false;
+    int m_bufferedFrames = 0;
     int m_position = 0;
     int m_duration = 0;
     double m_playbackRate = 1.0;

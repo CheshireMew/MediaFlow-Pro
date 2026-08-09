@@ -100,7 +100,7 @@ async def test_mcp_protocol_calls_the_real_resident_editor_service(
                 "mediaflow_workspace_command",
             }
             described = await client.call_tool("mediaflow_describe")
-            assert described.structured_content["version"] == 3
+            assert described.structured_content["version"] == 4
             execute_schema = next(
                 tool.input_schema
                 for tool in tools.tools

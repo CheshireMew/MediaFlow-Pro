@@ -4,12 +4,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from mediaflow.domain.audio import AUDIO_EFFECT_DEFINITIONS, AudioEffect
 from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
+from mediaflow.domain.editor_fields import EditorFieldValue
 from mediaflow.domain.enums import (
+    AudioEffectKind,
     ClipMediaKind,
     ColorMode,
     ExportFormat,
     SequenceKind,
+    VisualEffectKind,
     WorkflowStage,
 )
 from mediaflow.domain.exports import ExportPreset
@@ -31,8 +35,16 @@ from mediaflow.domain.task_commands import (
     WorkflowTaskLink,
 )
 from mediaflow.domain.tasks import ArtifactReference
-from mediaflow.domain.timebase import frames_to_seconds, round_fraction, seconds_to_frames
+from mediaflow.domain.timebase import (
+    frames_to_seconds,
+    round_fraction,
+    seconds_to_frames,
+    source_frame_at_timeline_offset,
+    source_interval_for_timeline_interval,
+    timeline_offset_for_source_frame,
+)
 from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
+from mediaflow.domain.visual_effects import VISUAL_EFFECT_DEFINITIONS, new_visual_effect
 
 
 def test_frame_timebase_preserves_ntsc_rate() -> None:
@@ -44,6 +56,54 @@ def test_frame_timebase_preserves_ntsc_rate() -> None:
 def test_fraction_rounding_has_one_symmetric_half_rule() -> None:
     assert round_fraction(Fraction(1, 2)) == 1
     assert round_fraction(Fraction(-1, 2)) == -1
+
+
+@pytest.mark.parametrize(
+    ("speed_numerator", "speed_denominator", "timeline_offset", "source_frame"),
+    [
+        (1, 4, 8, 102),
+        (1, 1, 8, 108),
+        (4, 1, 8, 132),
+        (-1, 4, 8, 98),
+        (-1, 1, 8, 92),
+        (-4, 1, 8, 68),
+    ],
+)
+def test_source_timeline_mapping_is_one_reversible_rational_boundary(
+    speed_numerator: int,
+    speed_denominator: int,
+    timeline_offset: int,
+    source_frame: int,
+) -> None:
+    mapped = source_frame_at_timeline_offset(
+        100,
+        timeline_offset,
+        speed_numerator,
+        speed_denominator,
+    )
+
+    assert mapped == source_frame
+    assert (
+        timeline_offset_for_source_frame(
+            100,
+            mapped,
+            speed_numerator,
+            speed_denominator,
+        )
+        == timeline_offset
+    )
+
+
+def test_source_interval_orders_reverse_and_freeze_frames() -> None:
+    assert source_interval_for_timeline_interval(100, 2, 10, -2, 1) == (82, 97)
+    assert source_interval_for_timeline_interval(
+        100,
+        2,
+        10,
+        1,
+        1,
+        freeze_source_frame=77,
+    ) == (77, 78)
     assert round_fraction(Fraction(3, 2)) == 2
     assert round_fraction(Fraction(-3, 2)) == -2
 
@@ -418,3 +478,57 @@ def test_export_preset_normalizes_integral_qvariant_numbers() -> None:
         "audio_sample_rate": 48_000,
         "audio_channels": 2,
     }
+
+
+def test_editor_field_descriptors_drive_audio_defaults_ranges_and_dynamic_choices() -> None:
+    compressor = AudioEffect(
+        bus_id="master",
+        kind=AudioEffectKind.COMPRESSOR,
+        position=0,
+    )
+    definition = AUDIO_EFFECT_DEFINITIONS[AudioEffectKind.COMPRESSOR]
+
+    assert compressor.parameters == {
+        descriptor.id: descriptor.default for descriptor in definition.descriptors
+    }
+    with pytest.raises(ValidationError, match="below minimum"):
+        AudioEffect(
+            bus_id="master",
+            kind=AudioEffectKind.COMPRESSOR,
+            position=0,
+            parameters={"ratio": 0.5},
+        )
+    channel = AUDIO_EFFECT_DEFINITIONS[AudioEffectKind.CHANNEL_MAP].descriptors[0]
+    assert [choice.value for choice in channel.constraints.choices] == [
+        "mono",
+        "stereo",
+        "5.1",
+    ]
+    ducking_driver = AUDIO_EFFECT_DEFINITIONS[AudioEffectKind.DUCKING].descriptors[0]
+    assert ducking_driver.options_source == "audio-buses"
+    assert ducking_driver.control == "select"
+    with pytest.raises(ValidationError, match="target"):
+        EditorFieldValue(
+            path="audio/driver_bus_id",
+            target="audio-effect",
+            source_id="driver_bus_id",
+            descriptor=ducking_driver,
+            value=ducking_driver.default,
+        )
+
+
+def test_visual_effects_use_the_same_descriptor_validation_and_keyframe_contract() -> None:
+    effect = new_visual_effect(VisualEffectKind.COLOR_ADJUSTMENT, 0)
+    definition = VISUAL_EFFECT_DEFINITIONS[VisualEffectKind.COLOR_ADJUSTMENT]
+
+    assert effect.parameters == {
+        descriptor.id: descriptor.default for descriptor in definition.descriptors
+    }
+    assert {descriptor.timeline for descriptor in definition.descriptors} == {"keyframe"}
+    with pytest.raises(ValidationError, match="exceeds maximum"):
+        type(effect).model_validate(
+            {
+                **effect.model_dump(mode="python"),
+                "parameters": {**effect.parameters, "saturation": 4.0},
+            }
+        )

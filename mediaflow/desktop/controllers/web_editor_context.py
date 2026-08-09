@@ -44,7 +44,7 @@ def find_web_descriptor(
     try:
         return next(
             item
-            for item in edit_document.get("descriptors", [])
+            for item in edit_document.get("fields", [])
             if item.get("target") == target and item.get("source_id") == source_id
         )
     except StopIteration as error:
@@ -52,7 +52,8 @@ def find_web_descriptor(
 
 
 def coerce_web_descriptor_value(descriptor: dict, value):
-    kind = str(descriptor.get("kind") or "string")
+    definition = descriptor.get("descriptor") or {}
+    kind = str(definition.get("kind") or "string")
     target = str(descriptor.get("target") or "")
     if target == "data" and isinstance(value, str):
         return json.loads(value)

@@ -113,39 +113,16 @@ Panel {
                     }
                     Repeater {
                         model: effectCard.modelData.parameterSpecs
-                        delegate: ColumnLayout {
+                        delegate: EditorFieldControl {
                             id: parameterRow
                             required property var modelData
                             Layout.fillWidth: true
-                            spacing: 2
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: String(parameterRow.modelData.label)
-                                    color: Theme.textMuted
-                                    font.pixelSize: Theme.fontSizeCaption
-                                }
-                                Text {
-                                    text: Number(effectCard.modelData.parameters[
-                                        parameterRow.modelData.key]).toFixed(2)
-                                    color: Theme.textMuted
-                                    font.pixelSize: Theme.fontSizeCaption
-                                }
-                            }
-                            AppSlider {
-                                Layout.fillWidth: true
-                                enabled: root.canEdit && Boolean(effectCard.modelData.enabled)
-                                from: Number(parameterRow.modelData.minimum)
-                                to: Number(parameterRow.modelData.maximum)
-                                stepSize: (to - from) / 100
-                                value: Number(effectCard.modelData.parameters[
-                                    parameterRow.modelData.key])
-                                onPressedChanged: if (!pressed)
-                                    timelineController.setSelectedClipVisualEffectParameter(
-                                        String(effectCard.modelData.effectId),
-                                        String(parameterRow.modelData.key), value)
-                            }
+                            enabled: root.canEdit && Boolean(effectCard.modelData.enabled)
+                            field: parameterRow.modelData
+                            onValueCommitted: value =>
+                                timelineController.setSelectedClipVisualEffectParameter(
+                                    String(effectCard.modelData.effectId),
+                                    String(parameterRow.modelData.source_id), value)
                         }
                     }
                 }

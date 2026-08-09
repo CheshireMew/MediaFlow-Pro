@@ -8,6 +8,7 @@ from typing import Any, Literal, cast
 from mediaflow.application.ports import (
     AnalysisTaskRuntime,
     AssetTaskRuntime,
+    DiagnosticsTaskRuntime,
     DownloadTaskRuntime,
     ExportExecutionResult,
     ExportSequenceRequest,
@@ -26,12 +27,12 @@ from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset, AssetFingerprint, ProjectProfile
 from mediaflow.domain.project_records import ExportQualityReport
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
-from mediaflow.domain.settings import AsrSettings, DownloadSettings
+from mediaflow.domain.settings import AsrSettings, DownloadSettings, ServiceSettings
 from mediaflow.domain.storage_names import (
     export_quality_directory,
     safe_child_path,
 )
-from mediaflow.domain.task_commands import SequenceBuildUnit
+from mediaflow.domain.task_commands import DiagnosticsBundleCommand, SequenceBuildUnit
 from mediaflow.domain.tasks import LoudnessTaskOutcome
 from mediaflow.domain.timeline import Clip, ClipTransformKeyframe, TimelineState
 from mediaflow.domain.web_media import (
@@ -41,6 +42,7 @@ from mediaflow.domain.web_media import (
 
 from .asr_engine import create_asr_pipeline
 from .cookie_store import CookieStore
+from .diagnostics_bundle import DiagnosticsBundleService
 from .export_quality import ExportQualityService
 from .file_fingerprint import fingerprint_file, fingerprint_matches
 from .mlt import (
@@ -556,6 +558,33 @@ class InfrastructureAnalysisTaskRuntime:
         )
 
 
+class InfrastructureDiagnosticsTaskRuntime:
+    def __init__(
+        self,
+        documents: ProjectTaskDocuments,
+        paths: RuntimePaths,
+        settings: ServiceSettings,
+    ):
+        self._service = DiagnosticsBundleService(
+            documents.project_dir,
+            paths,
+            settings,
+        )
+
+    def create_bundle(
+        self,
+        command: DiagnosticsBundleCommand,
+        *,
+        check_cancelled: CancellationCheck,
+        report: ProgressCallback,
+    ) -> tuple[Path, str, int, int]:
+        return self._service.create(
+            command,
+            check_cancelled=check_cancelled,
+            report=report,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class InfrastructureTaskRuntimes:
     web: WebTaskRuntime
@@ -564,6 +593,7 @@ class InfrastructureTaskRuntimes:
     exports: ExportTaskRuntime
     transcription: TranscriptionTaskRuntime
     analysis: AnalysisTaskRuntime
+    diagnostics: DiagnosticsTaskRuntime
 
     @classmethod
     def create(
@@ -571,6 +601,7 @@ class InfrastructureTaskRuntimes:
         documents: ProjectTaskDocuments,
         paths: RuntimePaths,
         cookies: CookieStore,
+        settings: ServiceSettings,
     ) -> InfrastructureTaskRuntimes:
         return cls(
             web=InfrastructureWebTaskRuntime(documents, paths),
@@ -582,5 +613,10 @@ class InfrastructureTaskRuntimes:
                 documents,
                 paths,
                 cookies,
+            ),
+            diagnostics=InfrastructureDiagnosticsTaskRuntime(
+                documents,
+                paths,
+                settings,
             ),
         )

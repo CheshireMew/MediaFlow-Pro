@@ -20,6 +20,35 @@ Flickable {
     contentHeight: Math.max(height, tracksColumn.height + 32)
     boundsBehavior: Flickable.StopAtBounds
 
+    function scheduleFilmstrip() {
+        filmstripRequest.restart();
+    }
+
+    onContentXChanged: scheduleFilmstrip()
+    onWidthChanged: scheduleFilmstrip()
+    Component.onCompleted: scheduleFilmstrip()
+
+    Connections {
+        target: canvas.view
+        function onPixelsPerFrameChanged() { canvas.scheduleFilmstrip(); }
+    }
+
+    Connections {
+        target: timelineController
+        function onProjectStateChanged() { canvas.scheduleFilmstrip(); }
+    }
+
+    Timer {
+        id: filmstripRequest
+        interval: 120
+        repeat: false
+        onTriggered: timelineController.requestFilmstrip(
+            canvas.contentX / Math.max(0.000001, canvas.view.pixelsPerFrame),
+            (canvas.contentX + canvas.width) / Math.max(0.000001, canvas.view.pixelsPerFrame),
+            canvas.view.pixelsPerFrame,
+            46)
+    }
+
     function dropTrackAt(dropY) {
         const trackCount = timelineController.tracksModel.rowCount();
         if (trackCount === 0)

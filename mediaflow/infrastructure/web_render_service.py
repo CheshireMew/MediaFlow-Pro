@@ -8,17 +8,21 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from mediaflow.application.ports import TimelineCompilationDocuments
-from mediaflow.application.web_package_files import web_package_root
+from mediaflow.application.web_package_files import (
+    read_publication_receipt,
+    web_package_root,
+)
 from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset, AssetFingerprint
+from mediaflow.domain.timebase import source_interval_for_timeline_interval
 from mediaflow.domain.timeline import Clip, TimelineState
 from mediaflow.domain.web_media import (
     EditableMediaManifest,
@@ -122,6 +126,52 @@ class WebNativeMediaPlan:
         }
 
 
+def slice_web_native_media_plan_for_frame(
+    plan: WebNativeMediaPlan,
+    *,
+    source_frame: int,
+    fps_numerator: int,
+    fps_denominator: int,
+) -> WebNativeMediaPlan:
+    """Project the existing native composition plan onto one browser frame."""
+
+    if source_frame < 0:
+        raise ValueError("Editable media filmstrip source frame cannot be negative")
+    if fps_numerator <= 0 or fps_denominator <= 0:
+        raise ValueError("Editable media filmstrip frame rate must be positive")
+    frame_duration_ms = Fraction(fps_denominator * 1000, fps_numerator)
+    frame_time_ms = source_frame * frame_duration_ms
+    selected: list[WebNativeVideoSegment] = []
+    for segment in plan.video_segments:
+        segment_end_ms = segment.start_ms + segment.duration_ms
+        if not segment.start_ms <= frame_time_ms < segment_end_ms:
+            continue
+        offset_ms = frame_time_ms - segment.start_ms
+        if segment.playback == "hold":
+            last_active_frame_ms = max(
+                Fraction(0),
+                segment.active_duration_ms - frame_duration_ms,
+            )
+            offset_ms = min(offset_ms, last_active_frame_ms)
+        selected.append(
+            WebNativeVideoSegment(
+                source_id=segment.source_id,
+                path=segment.path,
+                start_ms=Fraction(0),
+                duration_ms=frame_duration_ms,
+                active_duration_ms=frame_duration_ms,
+                source_in_ms=segment.source_in_ms + int(offset_ms),
+                fit=segment.fit,
+                playback=segment.playback,
+            )
+        )
+        break
+    return WebNativeMediaPlan(
+        video_segments=tuple(selected),
+        audio_segments=(),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WebRenderTarget:
     key: str
@@ -172,10 +222,7 @@ def require_committed_web_publication(
         raise RuntimeError("Editable media rendering requires an immutable managed publication")
     token = match.group(1)
     receipt_path = publication_root / "receipts" / f"r-{token}.json"
-    try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError("Editable media publication receipt is unreadable") from error
+    receipt = read_publication_receipt(receipt_path)
     expected = {
         "schema_version": 1,
         "asset_id": asset_id,
@@ -558,12 +605,15 @@ class WebRenderCache:
         animated = spec.manifest.duration_ms > 0 or any(
             scene.animations for scene in clip_state.scenes.values()
         )
-        speed = Fraction(abs(clip.speed_numerator), clip.speed_denominator)
-        consumed = max(1, -(-(clip.duration * speed.numerator) // speed.denominator))
-        frame_count = max(
-            1,
-            clip.source_in + consumed if clip.speed_numerator > 0 else clip.source_in + 1,
+        _, source_end = source_interval_for_timeline_interval(
+            clip.source_in,
+            0,
+            clip.duration,
+            clip.speed_numerator,
+            clip.speed_denominator,
+            freeze_source_frame=clip.freeze_source_frame,
         )
+        frame_count = max(1, source_end)
         package_root = web_package_root(
             self.documents.catalog.resolve_asset_path(asset),
             spec.manifest,
@@ -769,6 +819,84 @@ class WebRenderService:
             if not self._cache_is_ready(target):
                 raise RuntimeError("Editable web media renderer did not produce a cache file")
             return target.path
+        finally:
+            cache_lock.release()
+
+    def render_filmstrip_source(
+        self,
+        state: TimelineState,
+        clip_id: str,
+        source_frame: int,
+        *,
+        check_cancelled=None,
+    ) -> Path:
+        """Capture and composite exactly one requested web source frame."""
+
+        try:
+            clip = next(item for item in state.clips if item.id == clip_id)
+        except StopIteration as error:
+            raise KeyError(clip_id) from error
+        asset = self.documents.catalog.get_asset(clip.asset_id)
+        target = self.cache.target(state, clip, asset)
+        if not 0 <= source_frame < target.frame_count:
+            raise ValueError(
+                f"Editable media filmstrip frame {source_frame} is outside "
+                f"the rendered source range 0..{target.frame_count - 1}"
+            )
+        source_key = hashlib.sha256(
+            f"{target.key}:{source_frame}:{WEB_RENDERER_VERSION}:filmstrip-frame-v1".encode()
+        ).hexdigest()
+        source_path = (
+            self.paths.project_cache_dir(self.documents.project_dir)
+            / "filmstrip"
+            / "sources"
+            / source_key[:2]
+            / f"{source_key}.mkv"
+        )
+        one_frame_target = replace(
+            target,
+            key=source_key,
+            path=source_path,
+            animated=True,
+            frame_count=1,
+            has_audio=False,
+            native_media_plan=slice_web_native_media_plan_for_frame(
+                target.native_media_plan,
+                source_frame=source_frame,
+                fps_numerator=target.fps_numerator,
+                fps_denominator=target.fps_denominator,
+            ),
+        )
+        if self._cache_is_ready(one_frame_target):
+            return one_frame_target.path
+        one_frame_target.path.parent.mkdir(parents=True, exist_ok=True)
+        cache_lock = self._acquire_cache_lock(
+            one_frame_target.path.with_name(f"{one_frame_target.path.name}.lock"),
+            one_frame_target,
+            check_cancelled=check_cancelled,
+        )
+        if cache_lock is None:
+            return one_frame_target.path
+        try:
+            if self._cache_is_ready(one_frame_target):
+                return one_frame_target.path
+            spec = self.documents.web.get_web_asset_spec(asset.id)
+            clip_state = state.web_states[clip.id]
+            entry = self.documents.catalog.resolve_asset_path(asset)
+            if not entry.is_file():
+                raise FileNotFoundError(entry)
+            self._render_browser(
+                entry,
+                spec,
+                clip_state,
+                state,
+                one_frame_target,
+                check_cancelled=check_cancelled,
+                capture_start_frame=source_frame,
+            )
+            if not self._cache_is_ready(one_frame_target):
+                raise RuntimeError("Editable web filmstrip renderer did not produce a cache file")
+            return one_frame_target.path
         finally:
             cache_lock.release()
 
@@ -1144,6 +1272,7 @@ class WebRenderService:
         *,
         progress=None,
         check_cancelled=None,
+        capture_start_frame: int = 0,
     ) -> None:
         executable = self.paths.chromium
         if executable is None or not executable.is_file():
@@ -1211,6 +1340,8 @@ class WebRenderService:
                                 check_cancelled=check_cancelled,
                                 capture_mode=capture_mode,
                                 fallback_reason=fallback_reason,
+                                retry_limit=spec.manifest.frame_readiness.retry_limit,
+                                start_frame=capture_start_frame,
                             )
                         except FastCaptureFallbackRequired as error:
                             ffmpeg_pipe.abort()
@@ -1255,6 +1386,8 @@ class WebRenderService:
                                 check_cancelled=check_cancelled,
                                 capture_mode=capture_mode,
                                 fallback_reason=fallback_reason,
+                                retry_limit=spec.manifest.frame_readiness.retry_limit,
+                                start_frame=capture_start_frame,
                             )
                         except FastCaptureFallbackRequired as error:
                             fallback_reason = str(error)

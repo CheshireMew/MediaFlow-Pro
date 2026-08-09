@@ -12,6 +12,11 @@ import pytest
 import mediaflow.infrastructure.web_capture_engine as web_capture_module
 from mediaflow.application.task_service import TaskStopped
 from mediaflow.domain.enums import TaskStatus
+from mediaflow.domain.web_media import (
+    EditableMediaManifest,
+    WebClipState,
+    web_runtime_state,
+)
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.web_browser import (
     WebPackagePreviewServer,
@@ -20,11 +25,15 @@ from mediaflow.infrastructure.web_browser import (
 from mediaflow.infrastructure.web_capture_engine import (
     FastCaptureFallbackRequired,
     WebCaptureEngine,
+    _BrowserPoolGeneration,
     _compare_fast_capture,
     _fast_capture_sample_indices,
+    _FrameScheduler,
     _resolve_worker_count,
     _validate_png,
 )
+
+REACT_REFERENCE = Path("tests/fixtures/editable-media-v6-react-reference")
 
 
 class _SeekablePage:
@@ -110,6 +119,7 @@ HTMLCanvasElement.prototype.toDataURL = function (...arguments_) {
       async seek(seconds) {{
         const progress = Math.max(0, Math.min(1, seconds / 2));
         moving.style.transform = `translateX(${{Math.round(progress * 420)}}px)`;
+        return {{seconds, generation: Math.round(seconds * 1000) + 1, wait_ms: 0, tasks: []}};
       }},
     }};
     {failure_script}
@@ -150,9 +160,59 @@ def test_fast_capture_samples_cover_every_worker_and_late_frames() -> None:
     samples = _fast_capture_sample_indices(frame_count=610, worker_count=4)
 
     assert len(samples) == 10
-    assert {frame % 4 for frame in samples} == {0, 1, 2, 3}
     assert samples[0] == 0
     assert samples[-1] >= round(609 * 0.94)
+    for worker_index in range(4):
+        start = 610 * worker_index // 4
+        end = 610 * (worker_index + 1) // 4
+        assert len([frame for frame in samples if start <= frame < end]) >= 2
+
+
+def test_contiguous_scheduler_steals_tail_work_and_retries_the_same_frame() -> None:
+    scheduler = _FrameScheduler(frame_count=12, worker_count=3)
+    for expected in range(4):
+        lease = scheduler.lease(0)
+        assert lease is not None and lease.index == expected
+        scheduler.complete(0, lease.index)
+
+    stolen = scheduler.lease(0)
+    assert stolen is not None
+    assert stolen.index in {6, 7}
+    scheduler.return_frame(0, stolen.index)
+    retried = scheduler.lease(0)
+    assert retried is not None
+    assert retried.index == stolen.index
+    assert retried.attempt == 2
+    scheduler.complete(0, retried.index)
+    assert scheduler.work_steal_count == 1
+    assert scheduler.worker_frame_counts[0] == 5
+
+
+def test_contiguous_scheduler_preserves_absolute_start_frame() -> None:
+    scheduler = _FrameScheduler(frame_count=3, worker_count=1, start_frame=20)
+
+    first = scheduler.lease(0)
+    assert first is not None and (first.index, first.attempt) == (20, 1)
+    scheduler.complete(0, first.index)
+    second = scheduler.lease(0)
+    assert second is not None and (second.index, second.attempt) == (21, 1)
+    scheduler.return_frame(0, second.index)
+    retry = scheduler.lease(0)
+    assert retry is not None and (retry.index, retry.attempt) == (21, 2)
+    scheduler.complete(0, retry.index)
+    third = scheduler.lease(0)
+    assert third is not None and (third.index, third.attempt) == (22, 1)
+    scheduler.complete(0, third.index)
+    assert scheduler.lease(0) is None
+
+
+def test_browser_pool_generation_is_replaced_once_for_concurrent_failures() -> None:
+    generation = _BrowserPoolGeneration()
+
+    assert generation.current == 0
+    assert generation.invalidate(0) == 1
+    assert generation.invalidate(0) == 1
+    assert generation.invalidate(1) == 2
 
 
 def test_worker_sizing_reports_memory_as_the_real_limit(
@@ -223,6 +283,120 @@ def test_fast_capture_comparison_accepts_antialiasing_but_rejects_missing_conten
     assert antialiasing.accepted
     assert antialiasing.alpha_equal
     assert not content_loss.accepted
+
+
+@pytest.mark.integration
+def test_real_react_retryable_frame_replaces_page_and_preserves_order() -> None:
+    cv2 = pytest.importorskip("cv2")
+    numpy = pytest.importorskip("numpy")
+    manifest = EditableMediaManifest.model_validate_json(
+        (REACT_REFERENCE / "editable-media.json").read_text(encoding="utf-8")
+    )
+    runtime_state = web_runtime_state(
+        WebClipState(clip_id="react-retry-integration"),
+        manifest,
+    )
+    engine = WebCaptureEngine(RuntimeContext.discover().paths.chromium)
+    frames: list[bytes] = []
+    try:
+        with WebPackagePreviewServer(REACT_REFERENCE) as preview:
+            metrics = engine.render_frames(
+                url=preview.url_for(
+                    manifest.entry,
+                    query=(
+                        "capture=1&variant=landscape&scene=react-orbit"
+                        "&frame_delay_ms=15&fail_once_frame=2"
+                    ),
+                ),
+                allowed_origin=preview.url_for(""),
+                width=manifest.default_variant.canvas.width,
+                height=manifest.default_variant.canvas.height,
+                fps_numerator=manifest.playback.fps,
+                fps_denominator=1,
+                runtime_state=runtime_state,
+                determinism_key="real-react-retry",
+                frame_count=8,
+                on_frame=frames.append,
+                capture_mode="screenshot",
+                retry_limit=manifest.frame_readiness.retry_limit,
+            )
+    finally:
+        engine.close()
+
+    assert len(frames) == 8
+    progress_pixels = []
+    for payload in frames:
+        image = cv2.imdecode(numpy.frombuffer(payload, dtype=numpy.uint8), cv2.IMREAD_COLOR)
+        assert image is not None
+        progress = image[640:648, 74:1206]
+        accent = (
+            (progress[:, :, 0] > 180)
+            & (progress[:, :, 1] > 130)
+            & (progress[:, :, 2] > 90)
+        )
+        progress_pixels.append(int(accent.sum()))
+    assert progress_pixels == sorted(progress_pixels)
+    assert len(set(progress_pixels)) == len(progress_pixels)
+    assert metrics.retry_count == 1
+    assert metrics.page_replacement_count == 1
+    assert metrics.browser_replacement_count == 0
+    assert metrics.readiness_wait_seconds >= 0.12
+    assert metrics.worker_frame_counts == (8,)
+
+
+@pytest.mark.integration
+def test_real_browser_process_loss_replaces_the_pool_and_retries_in_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_capture_page(tmp_path / "index.html", fail_fast_capture=False)
+    monkeypatch.setenv("MEDIAFLOW_WEB_WORKERS", "1")
+    original_capture = web_capture_module._BrowserWorker._capture_screenshot
+    capture_calls = 0
+    browser_closed = threading.Event()
+
+    def close_browser_once(cdp, width: int, height: int) -> bytes:
+        nonlocal capture_calls
+        capture_calls += 1
+        # The deterministic random-seek proof uses 15 screenshots. Kill the
+        # real Chromium process on the first production frame, not the probe.
+        if capture_calls == 16:
+            browser_closed.set()
+            cdp.send("Browser.close")
+        return original_capture(cdp, width, height)
+
+    monkeypatch.setattr(
+        web_capture_module._BrowserWorker,
+        "_capture_screenshot",
+        staticmethod(close_browser_once),
+    )
+    engine = WebCaptureEngine(RuntimeContext.discover().paths.chromium)
+    frames: list[bytes] = []
+    try:
+        with WebPackagePreviewServer(tmp_path) as preview:
+            metrics = engine.render_frames(
+                url=preview.url_for("index.html"),
+                allowed_origin=preview.url_for(""),
+                width=320,
+                height=180,
+                fps_numerator=10,
+                fps_denominator=1,
+                runtime_state={"revision": 1},
+                determinism_key="real-browser-process-replacement",
+                frame_count=8,
+                on_frame=frames.append,
+                capture_mode="screenshot",
+                retry_limit=1,
+            )
+    finally:
+        engine.close()
+
+    assert browser_closed.is_set()
+    assert len(frames) == 8
+    assert metrics.retry_count == 1
+    assert metrics.browser_replacement_count == 1
+    assert metrics.page_replacement_count == 0
+    assert engine.diagnostics().browser_launches == 2
 
 
 @pytest.mark.integration

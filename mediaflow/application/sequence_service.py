@@ -14,7 +14,7 @@ from mediaflow.domain.project import Sequence
 from mediaflow.domain.subtitles import SubtitlePlacement
 from mediaflow.domain.timebase import (
     reframe_frames,
-    source_frames_for_timeline_frames,
+    source_frame_at_timeline_offset,
 )
 from mediaflow.domain.timeline import (
     Clip,
@@ -265,13 +265,12 @@ class SequenceService:
             overlap_end = min(selected.end_frame, clip.timeline_end)
             if overlap_end <= overlap_start:
                 continue
-            source_delta = source_frames_for_timeline_frames(
+            source_in = source_frame_at_timeline_offset(
+                clip.source_in,
                 overlap_start - clip.timeline_start,
                 clip.speed_numerator,
                 clip.speed_denominator,
-            )
-            source_in = (
-                clip.source_in + source_delta if clip.speed_numerator > 0 else clip.source_in - source_delta
+                freeze_source_frame=clip.freeze_source_frame,
             )
             timeline_start = overlap_start - selected.start_frame
             timeline_end = overlap_end - selected.start_frame

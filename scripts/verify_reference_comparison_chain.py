@@ -36,7 +36,7 @@ def _request(
 ) -> dict[str, object]:
     request: dict[str, object] = {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": operation,
         "arguments": arguments,
         "request_id": f"reference-chain-{operation}-{uuid.uuid4().hex}",

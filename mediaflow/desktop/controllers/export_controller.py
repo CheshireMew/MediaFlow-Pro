@@ -163,7 +163,18 @@ class ExportController(ControllerFacet):
         options: dict,
     ) -> None:
         self._session._require_exportable_sequence()
-        sequence = self._session.binding.current.get_sequence(self._session.binding.active_sequence_id)
+        output = self._next_default_output(suffix)
+        self._export_sequence_with_options(
+            format_name,
+            str(output),
+            options,
+            overwrite=False,
+        )
+
+    def _next_default_output(self, suffix: str) -> Path:
+        sequence = self._session.binding.current.get_sequence(
+            self._session.binding.active_sequence_id
+        )
         extension = "".join(character for character in suffix if character.isalnum()).lower()
         if not extension:
             raise ValueError("导出格式缺少有效的文件扩展名")
@@ -185,12 +196,7 @@ class ExportController(ControllerFacet):
             if not output.exists() and output.resolve() not in reserved_outputs:
                 break
             sequence_number += 1
-        self._export_sequence_with_options(
-            format_name,
-            str(output),
-            options,
-            overwrite=False,
-        )
+        return output
 
     @Slot(str, str, "QVariantMap")
     @report_ui_errors
@@ -217,6 +223,38 @@ class ExportController(ControllerFacet):
         overwrite: bool,
     ) -> None:
         output = self._session._local_path(path_url)
+        preset = self._preset_for_options(format_name, options)
+        if preset.burn_subtitle_track_id and preset.subtitle_style is not None:
+            self._session.binding.timeline.set_subtitle_track_style(
+                preset.burn_subtitle_track_id,
+                preset.subtitle_style,
+            )
+        self._session.binding.current.save_sequence_export_preset(
+            self._session.binding.active_sequence_id, preset
+        )
+        self._session.events.projectStateChanged.emit()
+        workflow = self._session.tasks.active_workflow()
+        workflow_link = (
+            WorkflowTaskLink(run_id=workflow.id, stage=workflow.stage)
+            if workflow and workflow.stage == WorkflowStage.EXPORT
+            else None
+        )
+        task = self._session.tasks.start(
+            ExportSequenceCommand(
+                output_path=str(output),
+                sequence_id=self._session.binding.active_sequence_id,
+                format=preset.format,
+                preset=preset,
+                overwrite=overwrite,
+                workflow=workflow_link,
+            ),
+            sequence_id=self._session.binding.active_sequence_id,
+        )
+        if task and workflow_link:
+            self._session.binding.current.attach_export_task(workflow.id, task.id)
+            self._session.events.workflowChanged.emit()
+
+    def _preset_for_options(self, format_name: str, options: dict):
         export_format = ExportFormat(format_name)
         state = self._session.binding.timeline.state
         preset = default_export_preset(
@@ -252,28 +290,6 @@ class ExportController(ControllerFacet):
             updates["subtitle_style"] = SubtitleStyle.model_validate(options["subtitleStyle"])
         if isinstance(options.get("watermark"), dict):
             updates["watermark"] = WatermarkOverlay.model_validate(options["watermark"])
-        preset = type(preset).model_validate({**preset.model_dump(mode="python"), **updates})
-        self._session.binding.current.save_sequence_export_preset(
-            self._session.binding.active_sequence_id, preset
+        return type(preset).model_validate(
+            {**preset.model_dump(mode="python"), **updates}
         )
-        self._session.events.projectStateChanged.emit()
-        workflow = self._session.tasks.active_workflow()
-        workflow_link = (
-            WorkflowTaskLink(run_id=workflow.id, stage=workflow.stage)
-            if workflow and workflow.stage == WorkflowStage.EXPORT
-            else None
-        )
-        task = self._session.tasks.start(
-            ExportSequenceCommand(
-                output_path=str(output),
-                sequence_id=self._session.binding.active_sequence_id,
-                format=export_format,
-                preset=preset,
-                overwrite=overwrite,
-                workflow=workflow_link,
-            ),
-            sequence_id=self._session.binding.active_sequence_id,
-        )
-        if task and workflow_link:
-            self._session.binding.current.attach_export_task(workflow.id, task.id)
-            self._session.events.workflowChanged.emit()

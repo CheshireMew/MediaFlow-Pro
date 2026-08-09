@@ -10,6 +10,7 @@ import sys
 import time
 import wave
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,7 @@ def execute_request(
     api = _SERVICE_API
     if api is None:
         raise RuntimeError("Editor Service test client is not bound")
-    if request.get("protocol") != "mediaflow-editor" or request.get("version") != 3:
+    if request.get("protocol") != "mediaflow-editor" or request.get("version") != 4:
         raise AssertionError("Tests must exercise the current public protocol")
     payload = api.request(
         str(request["operation"]),
@@ -73,7 +74,7 @@ def wait_for_task(project: Path, receipt: dict, *, timeout: float = 30) -> dict:
         task = execute_request(
             {
                 "protocol": "mediaflow-editor",
-                "version": 3,
+                "version": 4,
                 "operation": "task.get",
                 "project": str(project),
                 "arguments": {"task_id": task_id},
@@ -95,7 +96,7 @@ def wait_for_imported_asset(project: Path, receipt: dict) -> dict:
         inspected = execute_request(
             {
                 "protocol": "mediaflow-editor",
-                "version": 3,
+                "version": 4,
                 "operation": "project.inspect",
                 "project": str(project),
             }
@@ -213,7 +214,7 @@ def _run_cli_request(
 def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> None:
     contract = describe_contract()
     assert contract["product"] == PRODUCT_NAME
-    assert contract["version"] == 3
+    assert contract["version"] == 4
     assert contract["default_project_root"] == default_project_root()
     assert "$ref" not in json.dumps(contract)
     assert "#/$defs/" not in json.dumps(contract)
@@ -221,6 +222,13 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
         item["name"]: item
         for item in contract["operations"]
     }
+    assert contract["editor_field_catalogs"]["visual_effects"]
+    assert contract["editor_field_catalogs"]["audio_effects"]
+    assert operations["diagnostics.bundle.create"]["execution_mode"] == "task"
+    assert set(
+        operations["diagnostics.bundle.create"]["arguments_schema"]["required"]
+    ) == {"output_path"}
+    assert operations["transcript.sequence.transcribe"]["execution_mode"] == "task"
     assert set(operations["project.create"]["arguments_schema"]["required"]) == {
         "name",
         "directory_name",
@@ -305,7 +313,7 @@ def test_project_create_persists_the_explicit_public_profile(
     created = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "project.create",
             "arguments": {
                 "name": "Explicit Profile",
@@ -332,7 +340,7 @@ def test_runtime_inspection_is_projectless_and_reports_every_runtime_capability(
     inspected = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "runtime.inspect",
         }
     )
@@ -355,7 +363,7 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     created = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "project.create",
             "arguments": {
                 "name": "FCPXML CLI Project",
@@ -374,7 +382,7 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     import_receipt = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "asset.import",
             "project": str(project_path),
             "arguments": {"source": str(source)},
@@ -386,7 +394,7 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     track = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.track.add",
             "project": str(project_path),
             "arguments": {"sequence_id": sequence_id, "kind": "audio"},
@@ -396,7 +404,7 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.clip.add",
             "project": str(project_path),
             "arguments": {
@@ -418,7 +426,7 @@ def test_fcpxml_export_runs_through_the_public_cli_contract(
     exported = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "export.fcpxml",
             "project": str(project_path),
             "arguments": {
@@ -456,7 +464,7 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     replaced = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.clip.source.replace",
             "project": str(project_path),
             "arguments": {
@@ -472,7 +480,7 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     added = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.clip.effect.add",
             "project": str(project_path),
             "arguments": {
@@ -487,7 +495,7 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     updated = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.clip.effect.update",
             "project": str(project_path),
             "arguments": {
@@ -505,7 +513,7 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     removed = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.clip.effect.remove",
             "project": str(project_path),
             "arguments": {
@@ -519,7 +527,7 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     assert removed["visual_effects"] == []
 
     described = execute_request(
-        {"protocol": "mediaflow-editor", "version": 3, "operation": "describe"},
+        {"protocol": "mediaflow-editor", "version": 4, "operation": "describe"},
         application=application,
     )
     operation_names = {item["name"] for item in described["operations"]}
@@ -543,7 +551,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     created = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "project.create",
             "arguments": {
                 "name": "Headless Project",
@@ -565,7 +573,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     import_receipt = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "asset.import",
             "project": str(project_path),
             "arguments": {"source": str(source)},
@@ -577,7 +585,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     waveform_receipt = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "task.start",
             "project": str(project_path),
             "arguments": {
@@ -598,7 +606,7 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     inspected = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "project.inspect",
             "project": str(project_path),
         },
@@ -626,6 +634,54 @@ def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
     assert output["result"]["result"]["assets"][0]["id"] == asset_id
 
 
+def test_public_diagnostics_operation_persists_and_returns_a_readable_bundle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
+    created = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "project.create",
+            "arguments": {
+                "name": "Diagnostics Project",
+                "directory_name": "diagnostics-project",
+                "profile": ProjectProfile().model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
+            },
+        }
+    )
+    project_path = Path(created["path"])
+    output = (tmp_path / "diagnostics.zip").resolve()
+
+    receipt = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "diagnostics.bundle.create",
+            "project": str(project_path),
+            "arguments": {
+                "output_path": str(output),
+                "task_ids": [],
+                "overwrite": False,
+            },
+        }
+    )
+    completed = wait_for_task(project_path, receipt, timeout=60)
+
+    assert completed["status"] == "completed", completed.get("error")
+    assert completed["outcome"]["output"]["path"] == str(output)
+    assert output.is_file()
+    with zipfile.ZipFile(output) as bundle:
+        names = set(bundle.namelist())
+        manifest = json.loads(bundle.read("bundle-manifest.json"))
+    assert "project/project.mfp" in names
+    assert "environment/mediaflow-cli-describe.json" in names
+    assert manifest["schema"] == "mediaflow-diagnostics-bundle/v1"
+
+
 def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     tmp_path: Path,
     monkeypatch,
@@ -634,7 +690,7 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     application = EditorApplication()
     create_request = {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": "project.create",
         "request_id": "create-project-once",
         "arguments": {
@@ -666,7 +722,7 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     assert _SERVICE_API is not None
     add_track_request = {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": "timeline.track.add",
         "project": str(project_path),
         "request_id": "add-track-once",
@@ -684,7 +740,7 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     visible = execute_request(
         {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": "timeline.get",
             "project": str(project_path),
             "arguments": {"sequence_id": sequence_id},
@@ -935,7 +991,7 @@ def test_public_batch_clip_add_is_atomic_and_idempotent(
     assert _SERVICE_API is not None
     request = {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": "timeline.clip.batch.add",
         "project": str(project_path),
         "request_id": "batch-clips-once",

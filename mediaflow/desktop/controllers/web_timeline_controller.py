@@ -5,6 +5,11 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Property, Signal, Slot
 
+from mediaflow.domain.timebase import (
+    source_frame_at_timeline_offset,
+    timeline_offset_for_source_frame,
+)
+
 from .controller_facet import ControllerFacet, report_ui_errors
 from .web_editor_context import (
     WebEditorContext,
@@ -36,7 +41,7 @@ class WebTimelineController(ControllerFacet):
         prefix = f"{self._context.selected_layer_id}."
         return [
             dict(item)
-            for item in self._context.edit_document.get("descriptors", [])
+            for item in self._context.edit_document.get("fields", [])
             if item.get("target") == "layer" and str(item.get("source_id", "")).startswith(prefix)
         ]
 
@@ -111,11 +116,13 @@ class WebTimelineController(ControllerFacet):
             for field, track in tracks.items():
                 for keyframe in track.get("keyframes", []):
                     source_frame = round((scene_start_ms + int(keyframe["time_ms"])) * fps / 1000)
-                    speed = abs(clip.speed_numerator) / clip.speed_denominator
-                    if clip.speed_numerator > 0:
-                        local_frame = round((source_frame - clip.source_in) / speed)
-                    else:
-                        local_frame = round((clip.source_in - source_frame) / speed)
+                    local_frame = timeline_offset_for_source_frame(
+                        clip.source_in,
+                        source_frame,
+                        clip.speed_numerator,
+                        clip.speed_denominator,
+                        freeze_source_frame=clip.freeze_source_frame,
+                    )
                     frame = clip.timeline_start + local_frame
                     if clip.timeline_start <= frame < clip.timeline_end:
                         values.append(
@@ -136,11 +143,13 @@ class WebTimelineController(ControllerFacet):
         for parameter_id, track in scene.get("parameter_animations", {}).items():
             for keyframe in track.get("keyframes", []):
                 source_frame = round((scene_start_ms + int(keyframe["time_ms"])) * fps / 1000)
-                speed = abs(clip.speed_numerator) / clip.speed_denominator
-                if clip.speed_numerator > 0:
-                    local_frame = round((source_frame - clip.source_in) / speed)
-                else:
-                    local_frame = round((clip.source_in - source_frame) / speed)
+                local_frame = timeline_offset_for_source_frame(
+                    clip.source_in,
+                    source_frame,
+                    clip.speed_numerator,
+                    clip.speed_denominator,
+                    freeze_source_frame=clip.freeze_source_frame,
+                )
                 frame = clip.timeline_start + local_frame
                 if clip.timeline_start <= frame < clip.timeline_end:
                     values.append(
@@ -399,11 +408,13 @@ class WebTimelineController(ControllerFacet):
         profile = self._session.binding.timeline.state.sequence.profile
         global_time_ms = self._scene_start_ms(self._context.active_scene_id) + max(0, int(time_ms))
         source_frame = round(global_time_ms * profile.fps / 1000)
-        speed = abs(clip.speed_numerator) / clip.speed_denominator
-        if clip.speed_numerator > 0:
-            local_frame = round((source_frame - clip.source_in) / speed)
-        else:
-            local_frame = round((clip.source_in - source_frame) / speed)
+        local_frame = timeline_offset_for_source_frame(
+            clip.source_in,
+            source_frame,
+            clip.speed_numerator,
+            clip.speed_denominator,
+            freeze_source_frame=clip.freeze_source_frame,
+        )
         return max(
             clip.timeline_start,
             min(clip.timeline_end - 1, clip.timeline_start + local_frame),
@@ -466,8 +477,13 @@ class WebTimelineController(ControllerFacet):
             raise RuntimeError("No editable web clip is selected")
         profile = self._session.binding.timeline.state.sequence.profile
         local_frame = max(0, min(clip.duration - 1, int(frame) - clip.timeline_start))
-        consumed = round(local_frame * abs(clip.speed_numerator) / clip.speed_denominator)
-        source_frame = clip.source_in + consumed if clip.speed_numerator > 0 else clip.source_in - consumed
+        source_frame = source_frame_at_timeline_offset(
+            clip.source_in,
+            local_frame,
+            clip.speed_numerator,
+            clip.speed_denominator,
+            freeze_source_frame=clip.freeze_source_frame,
+        )
         return max(0, round(source_frame * 1000 / profile.fps))
 
     def _scene_time_for_frame(self, frame: int) -> tuple[str, int]:

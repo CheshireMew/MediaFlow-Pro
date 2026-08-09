@@ -235,6 +235,18 @@ AppScrollView {
                         String(asrLanguageSelect.currentValue || "auto"),
                         Number(asrParallelSelect.currentValue || 0))
                 }
+                AppButton {
+                    objectName: "copyTranscriptionCliRequestButton"
+                    Layout.fillWidth: true
+                    text: qsTr("复制当前转录为 CLI 请求")
+                    enabled: subtitleController.canTranscribeCurrentSequence
+                        && !transcriptScroll.taskActive
+                    onClicked: automationController.copyCurrentTranscriptionRequest(
+                        String(asrModelSelect.currentValue || ""),
+                        String(asrDeviceSelect.currentValue || "auto"),
+                        String(asrLanguageSelect.currentValue || "auto"),
+                        Number(asrParallelSelect.currentValue || 0))
+                }
                 Text {
                     Layout.fillWidth: true
                     visible: !subtitleController.canTranscribeCurrentSequence

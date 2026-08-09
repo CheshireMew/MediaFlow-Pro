@@ -25,7 +25,7 @@
 
 <!-- readme-header:end -->
 
-MediaFlow Pro is a project-based local video creation workstation. Give it video, audio, images, subtitles, media links, or an `editable-media` v5 web package, and it keeps asset management, transcription, editing, multitrack timelines, real-time preview, mixing, quality checks, and final export inside one portable project.
+MediaFlow Pro is a project-based local video creation workstation. Give it video, audio, images, subtitles, media links, or an `editable-media` v6 web package, and it keeps asset management, transcription, editing, multitrack timelines, real-time preview, mixing, quality checks, and final export inside one portable project.
 
 `project.mfp` is the single source of truth for project state. Preview and export are compiled from the same timeline, so the editor and the final render do not follow separate implementations.
 
@@ -43,7 +43,7 @@ MediaFlow Pro is a project-based local video creation workstation. Give it video
 | What you need to do | What MediaFlow Pro delivers |
 | --- | --- |
 | Turn footage, images, audio, and subtitles into a project you can keep revising | Portable projects, a multitrack timeline, and one preview/export path |
-| Put structured web animation and regular media on the same timeline | `editable-media` import, field editing, keyframes, package replacement, and deterministic browser rendering |
+| Put structured web animation and regular media on the same timeline | `editable-media` v6 import, unified field editing, keyframes, package replacement, true-time filmstrips, and recoverable deterministic browser rendering |
 | Edit, translate, or find highlights from a transcript | A transcription workspace and previewable, undoable CLI automation |
 | Verify that a final video meets delivery requirements | Reports for black frames, freezes, silence, loudness, duration, safe areas, and reference-video comparison |
 | Download online media and continue editing it locally | yt-dlp downloads, source inspection, project creation, and real progress reporting |
@@ -147,15 +147,15 @@ Download and optional runtime availability depends on the current source site an
 
 ## `editable-media` web packages
 
-MediaFlow Pro formally consumes generic local `editable-media` v5 packages. It does not depend on a producer repository layout or sample name. Any producer that follows the same public contract can hand structured web animation to the desktop editor.
+MediaFlow Pro formally consumes generic local `editable-media` v6 packages. It does not depend on a producer repository layout or sample name. DOM, React, and other front-end technologies are only ways to produce the package; after import they all become ordinary web assets without creating a second project state or export pipeline.
 
 - `window.editableMedia` exposes structured text, style, variants, scenes, layers, parameters, and asset slots.
-- `window.__hf.duration` and `window.__hf.seek(seconds)` provide the only deterministic frame-time boundary.
+- `window.__hf.duration`, asynchronous `window.__hf.seek(seconds)`, registered renderers, and frame tasks provide the only deterministic frame-time and readiness boundary.
 - A package explicitly declares whether media is browser-rendered, a native video underlay, or native audio. MediaFlow Pro does not infer this from file extensions.
 - The source package is never written back. Clip state, replacement history, and project references live in `project.mfp`; published project copies are immutable.
 - Browser imagery, native video, and native audio enter one cache and FFmpeg encoding pipeline consumed by preview, timeline, and export.
 
-Finalized v4 web assets in older projects are migrated to v5 as one project upgrade. The old package moves to the project-local `archive/web` for manual inspection and no longer participates in a second runtime path.
+Standard v4/v5 web assets in older projects migrate directly to v6 in one transactional project upgrade. Old packages move to project-local `archive/web` for manual inspection and no longer participate in a second runtime path. A third-party runtime that cannot be proven safe to convert stops the upgrade and must be republished.
 
 ## CLI and MCP automation
 
@@ -167,7 +167,7 @@ First inspect the operations, parameters, and runtime requirements exposed by th
 mediaflow-cli describe
 ```
 
-Then send `mediaflow-editor` v3 JSON through a file or standard input:
+Then send `mediaflow-editor` v4 JSON through a file or standard input:
 
 ```powershell
 mediaflow-cli execute --request request.json
@@ -175,6 +175,8 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
 Write requests use a stable `request_id`, the latest read `base_revision`, an `actor`, and a `client_id`. Identical retries reuse a durable receipt; stale writes on disjoint paths may rebase, while conflicting writes fail explicitly instead of silently overwriting data.
+
+Export, transcription, web-field and keyframe editing, package replacement, project handoff, and diagnostics screens can preview and copy the same executable request without starting a task or changing the project revision. `diagnostics.bundle.create` is a persistent task that produces a size-bounded diagnostic ZIP while excluding raw media and credentials.
 
 MCP-capable hosts can configure `mediaflow-mcp` as a stdio server. It shares the same Editor Service with the desktop and CLI and contains no second editing implementation. The live output of `mediaflow-cli describe` remains the source of truth for operations and parameters.
 
@@ -200,14 +202,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layers, threading, persistence bounda
 
 ## Development and verification
 
-Load the local environment and run the tests that directly cover your change first. The complete Python test entry point is:
+Load the local environment and run the tests that directly cover your change first. After they pass, use the one local quality entry point to perform the final change-scoped verification:
 
 ```powershell
 . .\scripts\load_environment.ps1
-& $env:MEDIAFLOW_PYTHON -m pytest tests\v2
+& $env:MEDIAFLOW_PYTHON -m pytest tests\v2\path\to\test_file.py
+.\scripts\run_quality.ps1
 ```
 
-Changes to the desktop, media runtime, or cross-platform boundaries also require the relevant native-preview, UI, performance, and interchange scripts. [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) is the single source of truth for CI scope; documentation-only changes do not trigger unrelated desktop or end-to-end runs.
+Do not run the unbounded `pytest tests/v2` suite directly. The local entry point and CI both consume [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py), with cross-platform source builds separated from project interchange. Documentation-only changes do not trigger unrelated desktop or end-to-end runs. Use `.\scripts\run_quality.ps1 --dry-run` to preview the exact commands.
 
 Desktop logs live at `logs/mediaflow.log` under the runtime directory, rotate at 5 MiB, and keep five backups. The short code at the end of an error dialog is written to the log unchanged; include it when reporting an issue through [GitHub Issues](https://github.com/CheshireMew/MediaFlow-Pro/issues).
 

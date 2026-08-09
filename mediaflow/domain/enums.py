@@ -98,6 +98,7 @@ class TaskKind(DomainEnum):
     HIGHLIGHT = "highlight"
     EXPORT = "export"
     WEB_RENDER = "web_render"
+    DIAGNOSTICS = "diagnostics"
 
 
 class TaskStatus(DomainEnum):

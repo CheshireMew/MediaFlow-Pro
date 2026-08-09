@@ -25,7 +25,7 @@
 
 <!-- readme-header:end -->
 
-MediaFlow Pro 是一套以项目为中心的本地视频创作工作站。把视频、音频、图片、字幕、媒体链接或 `editable-media` v5 网页包交给它，可以在同一个可移动工程里完成素材管理、转写、剪辑、多轨时间线、实时预览、混音、质量检查和最终导出。
+MediaFlow Pro 是一套以项目为中心的本地视频创作工作站。把视频、音频、图片、字幕、媒体链接或 `editable-media` v6 网页包交给它，可以在同一个可移动工程里完成素材管理、转写、剪辑、多轨时间线、实时预览、混音、质量检查和最终导出。
 
 `project.mfp` 是工程状态的唯一数据来源；预览与导出都从同一条时间线编译，避免“编辑器里看到的”和“最后导出的”走两套逻辑。
 
@@ -43,7 +43,7 @@ MediaFlow Pro 是一套以项目为中心的本地视频创作工作站。把视
 | 你要完成的事情 | MediaFlow Pro 提供的结果 |
 | --- | --- |
 | 把原片、图片、音频和字幕剪成可反复修改的视频 | 可移动项目、多轨时间线、同源预览与导出 |
-| 把结构化网页动画和普通素材放进同一条时间线 | `editable-media` 导入、字段编辑、关键帧、换版与浏览器逐帧渲染 |
+| 把结构化网页动画和普通素材放进同一条时间线 | `editable-media` v6 导入、统一字段编辑、关键帧、换版、真实时间胶片条与可恢复的浏览器逐帧渲染 |
 | 根据转录文字做剪辑、翻译或高光处理 | 转录工作区，以及可预检、可撤销的 CLI 自动化操作 |
 | 检查成片是否符合交付要求 | 黑帧、冻结、静音、响度、时长、安全区和参考视频对照报告 |
 | 下载网络媒体后继续编辑 | yt-dlp 下载、站点信息读取、项目创建与真实进度展示 |
@@ -147,15 +147,15 @@ Ubuntu / macOS：
 
 ## `editable-media` 网页包
 
-MediaFlow Pro 正式消费通用的 `editable-media` v5 本地网页包，不依赖某个生产者的仓库布局或案例名称。任何生产者只要遵循同一公开合同，都可以把结构化网页动画交给桌面端继续编辑。
+MediaFlow Pro 正式消费通用的 `editable-media` v6 本地网页包，不依赖某个生产者的仓库布局或案例名称。DOM、React 或其它前端技术都只是成品包的生产方式；导入后统一成为普通 Web 素材，不会形成第二套项目状态或导出管线。
 
 - `window.editableMedia` 提供文字、样式、变体、场景、图层、参数和素材槽等结构化状态。
-- `window.__hf.duration` 与 `window.__hf.seek(seconds)` 提供唯一的确定性逐帧时间边界。
+- `window.__hf.duration`、异步 `window.__hf.seek(seconds)`、renderer 注册和 frame task 共同提供唯一的确定性逐帧时间与准备边界。
 - 网页包明确声明素材由浏览器渲染，还是作为原生视频底层或原生音频进入合成；MediaFlow Pro 不根据扩展名猜测。
 - 原始网页包不会被回写。片段状态、换版记录和项目引用保存在 `project.mfp`，发布后的项目内网页目录保持不可变。
 - 浏览器画面、原生视频和原生音频会进入同一个缓存与 FFmpeg 编码管道，供预览、时间线和导出共同消费。
 
-历史项目中的最终版 v4 网页素材会在项目升级时一次性迁移到 v5；旧包移入项目内的 `archive/web` 供人工追溯，不再保留第二套运行分支。
+历史项目中的标准 v4/v5 网页素材会在事务性项目升级中直接迁移到 v6；旧包移入项目内的 `archive/web` 供人工追溯，不再保留第二套运行分支。无法证明可安全转换的第三方 runtime 会明确中止升级并要求重新发布。
 
 ## CLI 与 MCP 自动化
 
@@ -167,7 +167,7 @@ MediaFlow Pro 正式消费通用的 `editable-media` v5 本地网页包，不依
 mediaflow-cli describe
 ```
 
-再通过文件或标准输入发送 `mediaflow-editor` v3 JSON 请求：
+再通过文件或标准输入发送 `mediaflow-editor` v4 JSON 请求：
 
 ```powershell
 mediaflow-cli execute --request request.json
@@ -175,6 +175,8 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
 写请求使用稳定的 `request_id`、最近一次读取取得的 `base_revision`、`actor` 和 `client_id`。相同重试会复用持久化回执；不相交的过期写入可以重放，冲突写入会明确失败，不会静默覆盖。
+
+导出、转录、网页字段与关键帧、网页换版、项目交接和诊断界面可以直接预览并复制同一份可执行请求，不会因为复制而启动任务或增加项目修订。`diagnostics.bundle.create` 会作为持久任务生成有大小上限且排除原始媒体与凭据的诊断 ZIP。
 
 支持 MCP 的宿主可以把 `mediaflow-mcp` 配置为 stdio server。它与桌面端和 CLI 共用同一个 Editor Service，不包含第二套编辑实现。具体工具和参数仍以 `mediaflow-cli describe` 的实时输出为准。
 
@@ -200,14 +202,15 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 
 ## 开发与验证
 
-修改前先加载本机环境，再运行直接覆盖改动的目标测试。完整 Python 测试入口为：
+修改前先加载本机环境，并运行直接覆盖改动的目标测试。目标测试通过后，使用唯一的本地质量入口按改动范围完成最终验证：
 
 ```powershell
 . .\scripts\load_environment.ps1
-& $env:MEDIAFLOW_PYTHON -m pytest tests\v2
+& $env:MEDIAFLOW_PYTHON -m pytest tests\v2\path\to\test_file.py
+.\scripts\run_quality.ps1
 ```
 
-涉及桌面、媒体运行时或跨平台边界时，再运行对应的原生预览、UI、性能和交接脚本。CI 的检查范围由 [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) 统一决定；文档修改不会触发无关的桌面端或端到端验收。
+不要直接运行没有资源边界的整库 `pytest tests/v2`。本地入口和 CI 都由 [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) 统一决定范围，并把跨平台源码构建与项目交接分开；文档修改不会触发无关的桌面端或端到端验收。使用 `.\scripts\run_quality.ps1 --dry-run` 可以预览实际命令。
 
 桌面日志保存在运行目录的 `logs/mediaflow.log`，达到 5 MiB 后轮转并保留 5 个备份。操作失败弹窗末尾的短编号会原样写入日志，反馈问题时请一并提供该编号。问题反馈使用 [GitHub Issues](https://github.com/CheshireMew/MediaFlow-Pro/issues)。
 

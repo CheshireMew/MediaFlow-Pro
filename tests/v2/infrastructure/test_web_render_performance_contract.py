@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from scripts.verify_web_render_performance import web_render_requirements_met
+import json
+from pathlib import Path
+
+from scripts.verify_web_render_performance import (
+    _balanced_baseline_comparison,
+    web_render_requirements_met,
+)
 
 
 def _requirements(**overrides: object) -> bool:
@@ -15,6 +21,8 @@ def _requirements(**overrides: object) -> bool:
         "parallel_workers": 2,
         "parallel_fast_capture_workers": 2,
         "parallel_capture_backend": "drawelement",
+        "slow_modulo_seconds": 10.0,
+        "slow_dynamic_seconds": 7.0,
     }
     values.update(overrides)
     return web_render_requirements_met(**values)  # type: ignore[arg-type]
@@ -53,3 +61,46 @@ def test_web_render_contract_rejects_screenshot_backend_regression() -> None:
 
 def test_web_render_contract_rejects_partial_fast_worker_consensus() -> None:
     assert not _requirements(parallel_fast_capture_workers=1)
+
+
+def test_web_render_contract_rejects_insufficient_slow_frame_improvement() -> None:
+    assert not _requirements(slow_dynamic_seconds=8.5)
+
+
+def test_balanced_baseline_rejects_total_or_p95_regressions_over_ten_percent(
+    tmp_path: Path,
+) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "frame_count": 180,
+                "parallel": {
+                    "seconds": 10.0,
+                    "frame_time_p95_ms": 80.0,
+                    "worker_count": 2,
+                    "capture_backend": "drawelement",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    current = {
+        "seconds": 10.5,
+        "frame_time_p95_ms": 86.0,
+        "worker_count": 2,
+        "capture_backend": "drawelement",
+    }
+    accepted = _balanced_baseline_comparison(
+        baseline_path,
+        frame_count=180,
+        current=current,  # type: ignore[arg-type]
+    )
+    rejected = _balanced_baseline_comparison(
+        baseline_path,
+        frame_count=180,
+        current={**current, "frame_time_p95_ms": 89.0},  # type: ignore[arg-type]
+    )
+
+    assert accepted["passed"] is True
+    assert rejected["passed"] is False

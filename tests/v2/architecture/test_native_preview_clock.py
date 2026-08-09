@@ -6,6 +6,8 @@ ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_HEADER = ROOT / "mediaflow" / "desktop" / "native" / "MltRuntime.h"
 RUNTIME_SOURCE = ROOT / "mediaflow" / "desktop" / "native" / "MltRuntime.cpp"
 PREVIEW_SOURCE = ROOT / "mediaflow" / "desktop" / "native" / "MltPreviewItem.cpp"
+PREVIEW_HEADER = ROOT / "mediaflow" / "desktop" / "native" / "MltPreviewItem.h"
+PREVIEW_QML = ROOT / "mediaflow" / "desktop" / "qml" / "components" / "PreviewViewport.qml"
 
 
 def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> None:
@@ -79,3 +81,23 @@ def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> N
         "presentationDeadlineMissed",
     )
     assert all(name not in implementation for name in removed_shared_consumer_clock)
+
+
+def test_native_preview_exposes_buffering_without_clearing_play_intent() -> None:
+    runtime_header = RUNTIME_HEADER.read_text(encoding="utf-8")
+    runtime_source = RUNTIME_SOURCE.read_text(encoding="utf-8")
+    preview_header = PREVIEW_HEADER.read_text(encoding="utf-8")
+    preview_qml = PREVIEW_QML.read_text(encoding="utf-8")
+
+    assert "bufferStateChanged(bool buffering, int bufferedFrames" in runtime_header
+    assert "setBufferState(true, queuedFrames)" in runtime_source
+    assert "setBufferState(false, queuedFrames)" in runtime_source
+    missing_frame_branch = runtime_source.split("if (!frameReady)", 1)[1].split(
+        "int queuedFrames = 0", 1
+    )[0]
+    assert "setPlaying(false)" not in missing_frame_branch
+    assert "Q_PROPERTY(bool buffering" in preview_header
+    assert "Q_PROPERTY(int bufferedFrames" in preview_header
+    assert "interval: 300" in preview_qml
+    assert "visible: false" in preview_qml
+    assert "onTriggered: bufferingNotice.visible = preview.buffering" in preview_qml

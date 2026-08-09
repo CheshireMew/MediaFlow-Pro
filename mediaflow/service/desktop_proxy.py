@@ -419,6 +419,10 @@ class RemoteEditorProject:
         return self._actor.id
 
     @property
+    def actor_identity(self) -> ActorIdentity:
+        return self._actor.model_copy(deep=True)
+
+    @property
     def can_undo(self) -> bool:
         if self._can_undo is None:
             self._refresh_history_state()
@@ -934,6 +938,19 @@ class DesktopEditorApplication:
 
     def asset_thumbnail_paths(self, project_dir: str | Path, **kwargs: Any):
         return self._application_call("asset_thumbnail_paths", project_dir, **kwargs)
+
+    def timeline_filmstrip_paths(
+        self,
+        project_dir: str | Path,
+        sequence_id: str,
+        **kwargs: Any,
+    ):
+        return self._application_call(
+            "timeline_filmstrip_paths",
+            project_dir,
+            sequence_id,
+            **kwargs,
+        )
 
     def write_preview_snapshot(self, project_dir: str | Path, state, **kwargs: Any):
         return self._application_call("write_preview_snapshot", project_dir, state, **kwargs)

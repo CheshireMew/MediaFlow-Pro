@@ -46,6 +46,15 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="Read a structured JSON request from a file, or '-' for stdin.",
     )
+    batch = commands.add_parser(
+        "batch",
+        help="Execute one atomic collaboration batch through the Editor Service",
+    )
+    batch.add_argument(
+        "--request",
+        required=True,
+        help="Read {batch_id, label, requests} from a file, or '-' for stdin.",
+    )
     service = commands.add_parser("service", help="Inspect or explicitly stop the Editor Service")
     service.add_argument("action", choices=("status", "shutdown"))
     service.add_argument(
@@ -83,6 +92,26 @@ def _execute_from_args(args: argparse.Namespace) -> tuple[str | None, dict]:
         if not isinstance(result, dict):
             raise RuntimeError("Editor Service command returned an invalid result")
         return None, result
+    if args.subcommand == "batch":
+        document = _request_from_args(args)
+        batch_id = str(document.get("batch_id") or "").strip()
+        if not batch_id:
+            raise ValueError("batch_id is required")
+        requests = document.get("requests")
+        if not isinstance(requests, list) or not requests:
+            raise ValueError("requests must be a non-empty array")
+        envelopes = [AutomationRequest.model_validate(item).model_dump(mode="json") for item in requests]
+        result = call_sync(
+            "operation.execute_batch",
+            {
+                "batch_id": batch_id,
+                "label": str(document.get("label") or "Agent batch"),
+                "requests": envelopes,
+            },
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("Editor Service batch returned an invalid result")
+        return batch_id, result
     request = _request_from_args(args)
     envelope = AutomationRequest.model_validate(request)
     result = (
@@ -97,10 +126,7 @@ def _execute_from_args(args: argparse.Namespace) -> tuple[str | None, dict]:
 
 def _error_code(error: Exception) -> str:
     if isinstance(error, EditorServiceRpcError):
-        if (
-            isinstance(error.data, dict)
-            and error.data.get("type") == "ProjectUpgradeRequiredError"
-        ):
+        if isinstance(error.data, dict) and error.data.get("type") == "ProjectUpgradeRequiredError":
             return "upgrade_required"
         return {
             -32602: "invalid_request",

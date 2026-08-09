@@ -17,6 +17,7 @@ from mediaflow.application.edit_history import (
 )
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.highlight_service import HighlightService
+from mediaflow.application.portable_timeline_import import PortableTimelineImportService
 from mediaflow.application.ports import MediaProbePort
 from mediaflow.application.project_command_queue import ProjectCommandQueue
 from mediaflow.application.project_task_handlers import ProjectTaskHandlers
@@ -59,6 +60,7 @@ from mediaflow.domain.task_commands import (
 )
 from mediaflow.domain.tasks import (
     ArtifactReference,
+    DiagnosticsBundleTaskOutcome,
     DownloadAnalysisTaskOutcome,
     ExportTaskOutcome,
     ImportedAssetTaskOutcome,
@@ -93,6 +95,10 @@ from mediaflow.infrastructure.settings_repository import ServiceSettingsReposito
 from mediaflow.infrastructure.storage_paths import default_media_root
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import InfrastructureTaskRuntimes
+from mediaflow.infrastructure.timeline_filmstrip import (
+    FILMSTRIP_REQUESTS,
+    TimelineFilmstripService,
+)
 from mediaflow.infrastructure.translation_cache import TranslationCache
 from mediaflow.infrastructure.web_browser import (
     BrowserWebPackageValidator,
@@ -113,6 +119,8 @@ def _user_visible_task_artifacts(
         return tuple(item.output for item in task.outcome.files)
     if isinstance(task.outcome, SequenceBuildTaskOutcome):
         return (task.outcome.output.output,)
+    if isinstance(task.outcome, DiagnosticsBundleTaskOutcome):
+        return (task.outcome.output,)
     return tuple(task.artifacts)
 
 
@@ -288,6 +296,12 @@ class EditorProject:
             repository,
             self._subtitle_publication,
         )
+        self._portable_timelines = PortableTimelineImportService(
+            repository,
+            self._assets,
+            self._subtitle_acquisition,
+            self.timeline,
+        )
         self._subtitle_editing = SubtitleEditingService(
             repository,
             self._subtitle_publication,
@@ -331,6 +345,7 @@ class EditorProject:
                 self._repository,
                 self._paths,
                 self._cookies,
+                self._settings,
             ),
             self._subtitle_acquisition,
             self._subtitle_editing,
@@ -1336,6 +1351,16 @@ class EditorProject:
             self._timelines[sequence_id] = editor
         return editor
 
+    def inspect_portable_timeline(self, path: str | Path):
+        return self._portable_timelines.inspect(path)
+
+    def import_portable_timeline(self, path: str | Path, *, sequence_id: str):
+        self._require_writable()
+        return self._portable_timelines.import_timeline(
+            path,
+            sequence_id=sequence_id,
+        )
+
     def create_version(self, name: str):
         return self._repository.records.create_project_version(name)
 
@@ -2054,3 +2079,30 @@ class EditorApplication:
                 if thumbnail is not None:
                     thumbnails[asset.id] = str(thumbnail)
         return thumbnails
+
+    def timeline_filmstrip_paths(
+        self,
+        project_dir: str | Path,
+        sequence_id: str,
+        *,
+        visible_start_frame: int,
+        visible_end_frame: int,
+        pixels_per_frame: float,
+        height: int = 46,
+        request_owner: str | None = None,
+        request_generation: int | None = None,
+    ) -> list[dict[str, object]]:
+        resolved_project = Path(project_dir).resolve()
+        owner = request_owner or "direct"
+        generation = 0 if request_generation is None else request_generation
+        request_key = (str(resolved_project), owner, sequence_id)
+        with FILMSTRIP_REQUESTS.request(request_key, generation) as check_cancelled:
+            with ProjectRepository.open(resolved_project, writable=False) as repository:
+                return TimelineFilmstripService(repository, self._paths).render_visible(
+                    sequence_id,
+                    visible_start_frame=visible_start_frame,
+                    visible_end_frame=visible_end_frame,
+                    pixels_per_frame=pixels_per_frame,
+                    height=height,
+                    check_cancelled=check_cancelled,
+                )

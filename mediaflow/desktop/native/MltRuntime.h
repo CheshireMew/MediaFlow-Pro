@@ -48,6 +48,7 @@ signals:
     void frameReady(const QImage &image, int frame, int duration, quint64 requestId);
     void durationChanged(int duration, quint64 requestId);
     void playingChanged(bool playing, quint64 requestId);
+    void bufferStateChanged(bool buffering, int bufferedFrames, quint64 requestId);
     void errorOccurred(const QString &message, quint64 requestId);
 
 private:
@@ -172,6 +173,7 @@ private:
     void presentNextFrame();
     void deliverPresentationFrame(const QImage &image, int frame, int generation);
     void setPlaying(bool playing);
+    void setBufferState(bool buffering, int bufferedFrames);
 
     QLibrary m_library;
     QString m_runtimeRoot;
@@ -191,6 +193,8 @@ private:
     double m_rate = 1.0;
     double m_volume = 1.0;
     bool m_playing = false;
+    bool m_buffering = false;
+    int m_bufferedFrames = 0;
     bool m_sourceHdr = false;
     bool m_outputHdr = false;
     int m_previewWidth = 960;

@@ -753,6 +753,7 @@ class ProjectSessionManager:
         allowed = {
             "analyze_download_url",
             "asset_thumbnail_paths",
+            "timeline_filmstrip_paths",
             "default_media_directory",
             "discover_encoder_policy_options",
             "installed_asr_models",

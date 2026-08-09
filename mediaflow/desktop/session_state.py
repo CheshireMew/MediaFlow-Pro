@@ -130,6 +130,7 @@ class PresentationState:
         }
     )
     pending_preview_range: tuple[int, int] | None = None
+    filmstrip_frames: dict[str, list[dict]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -191,6 +192,8 @@ class AsyncRequestState:
     preview_future: Future | None = None
     encoder_id: int = 0
     audio_metrics_id: int = 0
+    filmstrip_id: int = 0
+    filmstrip_future: Future | None = None
     project_close_id: int = 0
     project_close_future: Future | None = None
     closing_project: DesktopProject | None = None

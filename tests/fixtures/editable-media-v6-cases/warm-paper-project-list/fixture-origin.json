@@ -1,0 +1,15 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/web-card-cases/warm-paper-project-list",
+  "editable_media_version": 6,
+  "files": {
+    "assets/creator-avatar.png": "255e6243648bbd731aa269c4ac5643e89a818c7ca79b334bec582584c73af91b",
+    "editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
+    "editable-media.json": "a38d152b8efec7469ac8c95de5de0ea02c858b54d8135dcdbd2891bb2ff262fe",
+    "index.html": "12ec69d79e04443acd8cddca82995c970a7c0a215e09b302dd185a06fc77a8e5",
+    "media-sources.json": "262a5ac8340290c77d2fd7c906023530a73078e3ca1f63af6fd17126569e15c0",
+    "preview.png": "3206dcdd93e077e1b694a26df062ecea3d67af3b92c7b4d184f438f74cf92154",
+    "style-profile.json": "f091dc499032b73925c0fc2589a09dfb8b2ab7c2dfa0577ea60a4c2193924d2d"
+  }
+}

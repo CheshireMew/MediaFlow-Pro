@@ -97,6 +97,16 @@ ColumnLayout {
         enabled: root.canExportSequence
         onClicked: exportFileDialogs.openFcpxmlDialog()
     }
+    AppButton {
+        objectName: "copyExportCliRequestButton"
+        Layout.fillWidth: true
+        text: qsTr("复制当前导出为 CLI 请求")
+        enabled: root.canExportSequence
+        onClicked: automationController.copyCurrentExportRequest(
+            root.selectedFormat().value,
+            root.selectedFormat().suffix,
+            exportSettings.exportOptions())
+    }
     AppScrollView {
         id: settingsScroll
         Layout.fillWidth: true

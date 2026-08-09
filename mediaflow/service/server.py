@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import psutil
-from aiohttp import WSMsgType, web
+from aiohttp import WSCloseCode, WSMsgType, web
 from pydantic import ValidationError
 
 from mediaflow.automation.contracts import describe_contract
@@ -33,6 +33,7 @@ from .workspaces import WorkspaceRegistry
 
 JSON_RPC_VERSION = "2.0"
 PRIVATE_PORT_START = 49_152
+SERVICE_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 PRIVATE_PORT_END = 65_535
 PORT_BIND_ATTEMPTS = 128
 
@@ -87,6 +88,7 @@ class EditorServiceServer:
         self._event_hub: EventHub | None = None
         self._sessions: ProjectSessionManager | None = None
         self._workspaces: WorkspaceRegistry | None = None
+        self._websockets: set[web.WebSocketResponse] = set()
         self.discovery: ServiceDiscovery | None = None
 
     async def start(self) -> ServiceDiscovery:
@@ -109,7 +111,12 @@ class EditorServiceServer:
             app.router.add_get("/health", self._health)
             app.router.add_post("/rpc", self._rpc)
             app.router.add_get("/events", self._websocket)
-            self._runner = web.AppRunner(app, access_log=None)
+            app.on_shutdown.append(self._shutdown_websockets)
+            self._runner = web.AppRunner(
+                app,
+                access_log=None,
+                shutdown_timeout=SERVICE_SHUTDOWN_TIMEOUT_SECONDS,
+            )
             await self._runner.setup()
             listener = _bind_loopback_listener()
             self._socket = listener
@@ -176,6 +183,22 @@ class EditorServiceServer:
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    async def _shutdown_websockets(self, _app: web.Application) -> None:
+        websockets = tuple(self._websockets)
+        if not websockets:
+            return
+        await asyncio.gather(
+            *(
+                websocket.close(
+                    code=WSCloseCode.GOING_AWAY,
+                    message=b"service stopping",
+                )
+                for websocket in websockets
+            ),
+            return_exceptions=True,
+        )
+        self._websockets.clear()
 
     @web.middleware
     async def _authenticate(self, request: web.Request, handler):
@@ -554,8 +577,12 @@ class EditorServiceServer:
         sessions = self._sessions
         if events is None or sessions is None:
             raise web.HTTPServiceUnavailable()
-        websocket = web.WebSocketResponse(heartbeat=20)
+        websocket = web.WebSocketResponse(
+            heartbeat=20,
+            timeout=SERVICE_SHUTDOWN_TIMEOUT_SECONDS,
+        )
         await websocket.prepare(request)
+        self._websockets.add(websocket)
         subscription, queue = events.subscribe()
         workspace_subscription: tuple[str, str] | None = None
         subscribed_project_id = ""
@@ -587,6 +614,12 @@ class EditorServiceServer:
                     ):
                         continue
                 await websocket.send_json(event.as_dict())
+                if event.type == "service.stopping":
+                    await websocket.close(
+                        code=WSCloseCode.GOING_AWAY,
+                        message=b"service stopping",
+                    )
+                    return
 
         sender = asyncio.create_task(send_events())
         await websocket.send_json(
@@ -682,4 +715,5 @@ class EditorServiceServer:
             sender.cancel()
             await asyncio.gather(sender, return_exceptions=True)
             events.unsubscribe(subscription)
+            self._websockets.discard(websocket)
         return websocket

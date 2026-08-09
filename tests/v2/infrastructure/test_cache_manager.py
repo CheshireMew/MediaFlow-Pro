@@ -32,6 +32,35 @@ def test_cache_run_owned_by_current_process_cleans_up_normally(
     assert not run.exists()
 
 
+def test_cache_run_category_is_one_direct_child_of_cache_root(
+    tmp_path: Path,
+) -> None:
+    manager = CacheManager(tmp_path / "cache")
+
+    with pytest.raises(ValueError, match="one direct child"):
+        manager.create_run("external/models")
+
+
+def test_prune_runs_does_not_walk_opaque_nested_caches(tmp_path: Path) -> None:
+    manager = CacheManager(tmp_path / "cache")
+    opaque_run = manager.root / "huggingface" / "models" / "runs" / str(uuid.uuid4())
+    opaque_run.mkdir(parents=True)
+    (opaque_run / manager.RUN_MANIFEST).write_text(
+        json.dumps(
+            {
+                "schema_version": manager.RUN_SCHEMA_VERSION,
+                "owner_pid": 2_147_483_647,
+                "created_at_ns": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager.prune_runs(max_age_seconds=0)
+
+    assert opaque_run.is_dir()
+
+
 def test_cache_run_manifest_failure_archives_unpublished_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -207,7 +207,7 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             Path(__file__).resolve().parents[3]
             / "tests"
             / "fixtures"
-            / "editable-media-v5"
+            / "editable-media-v6"
             / "editable-media.json"
         )
         controllers.media.importFiles(

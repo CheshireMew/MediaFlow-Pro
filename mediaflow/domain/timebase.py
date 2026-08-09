@@ -122,3 +122,81 @@ def source_frames_for_timeline_frames(
         raise ValueError("Speed must be non-zero and have a positive denominator")
     source = Fraction(timeline_frames * abs(speed_numerator), speed_denominator)
     return round_fraction(source)
+
+
+def source_frame_at_timeline_offset(
+    source_in: int,
+    timeline_offset: int,
+    speed_numerator: int,
+    speed_denominator: int,
+    *,
+    freeze_source_frame: int | None = None,
+) -> int:
+    """Map a clip-local timeline frame to its deterministic source frame."""
+
+    if source_in < 0 or timeline_offset < 0:
+        raise ValueError("Source and timeline frame positions cannot be negative")
+    if freeze_source_frame is not None:
+        return freeze_source_frame
+    consumed = source_frames_for_timeline_frames(
+        timeline_offset,
+        speed_numerator,
+        speed_denominator,
+    )
+    source_frame = source_in + consumed if speed_numerator > 0 else source_in - consumed
+    if source_frame < 0:
+        raise ValueError("Timeline offset maps before the beginning of the source")
+    return source_frame
+
+
+def timeline_offset_for_source_frame(
+    source_in: int,
+    source_frame: int,
+    speed_numerator: int,
+    speed_denominator: int,
+    *,
+    freeze_source_frame: int | None = None,
+) -> int:
+    """Map a source frame back to a clip-local timeline offset."""
+
+    if source_in < 0 or source_frame < 0:
+        raise ValueError("Source frame positions cannot be negative")
+    if freeze_source_frame is not None:
+        if source_frame != freeze_source_frame:
+            raise ValueError("A freeze clip only maps its frozen source frame")
+        return 0
+    delta = source_frame - source_in
+    if (speed_numerator > 0 and delta < 0) or (speed_numerator < 0 and delta > 0):
+        raise ValueError("Source frame lies outside the clip playback direction")
+    speed = Fraction(abs(speed_numerator), speed_denominator)
+    return round_fraction(Fraction(abs(delta), 1) / speed)
+
+
+def source_interval_for_timeline_interval(
+    source_in: int,
+    timeline_start_offset: int,
+    timeline_end_offset: int,
+    speed_numerator: int,
+    speed_denominator: int,
+    *,
+    freeze_source_frame: int | None = None,
+) -> tuple[int, int]:
+    """Return the half-open source interval covered by a timeline interval."""
+
+    if timeline_end_offset <= timeline_start_offset:
+        raise ValueError("Timeline interval must contain at least one frame")
+    first = source_frame_at_timeline_offset(
+        source_in,
+        timeline_start_offset,
+        speed_numerator,
+        speed_denominator,
+        freeze_source_frame=freeze_source_frame,
+    )
+    last = source_frame_at_timeline_offset(
+        source_in,
+        timeline_end_offset - 1,
+        speed_numerator,
+        speed_denominator,
+        freeze_source_frame=freeze_source_frame,
+    )
+    return min(first, last), max(first, last) + 1

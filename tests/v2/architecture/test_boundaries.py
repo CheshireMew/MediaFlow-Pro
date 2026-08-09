@@ -677,7 +677,12 @@ def test_project_migrations_are_one_continuous_registered_chain() -> None:
     assert [migration.target_version for migration in PROJECT_MIGRATIONS] == list(
         range(2, PROJECT_SCHEMA_VERSION + 1)
     )
-    assert len({migration.apply for migration in PROJECT_MIGRATIONS}) == len(PROJECT_MIGRATIONS)
+    implementations = [
+        migration.apply or migration.apply_with_runtime
+        for migration in PROJECT_MIGRATIONS
+    ]
+    assert all(implementation is not None for implementation in implementations)
+    assert len(set(implementations)) == len(PROJECT_MIGRATIONS)
     assert not (ROOT / "mediaflow" / "infrastructure" / "project_schema.py").exists()
 
 

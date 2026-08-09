@@ -54,7 +54,12 @@ from .project_migrations_v33_v40 import (
     migrate_v39_to_v40,
 )
 from .project_migrations_v40_v47 import migrate_v40_to_v41, migrate_v41_to_v42
-from .project_migrations_v42_v49 import migrate_v42_to_v43, migrate_v43_to_v44
+from .project_migrations_v42_v49 import (
+    migrate_v42_to_v43,
+    migrate_v43_to_v44,
+    migrate_v44_to_v45,
+    migrate_v45_to_v46,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +136,15 @@ PROJECT_MIGRATIONS = (
     ProjectMigration(41, 42, migrate_v41_to_v42),
     ProjectMigration(42, 43, migrate_v42_to_v43),
     ProjectMigration(43, 44, migrate_v43_to_v44),
+    ProjectMigration(44, 45, migrate_v44_to_v45),
+    ProjectMigration(
+        45,
+        46,
+        apply_with_runtime=lambda workspace, chromium: migrate_v45_to_v46(
+            workspace,
+            chromium=chromium,
+        ),
+    ),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

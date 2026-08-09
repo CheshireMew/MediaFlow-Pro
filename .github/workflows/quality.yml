@@ -33,7 +33,8 @@ jobs:
       scope: ${{ steps.plan.outputs.scope }}
       run_core: ${{ steps.plan.outputs.run_core }}
       run_full: ${{ steps.plan.outputs.run_full }}
-      run_portable: ${{ steps.plan.outputs.run_portable }}
+      run_portable_build: ${{ steps.plan.outputs.run_portable_build }}
+      run_interchange: ${{ steps.plan.outputs.run_interchange }}
       changed_count: ${{ steps.plan.outputs.changed_count }}
       reason: ${{ steps.plan.outputs.reason }}
 
@@ -145,6 +146,7 @@ jobs:
           scripts/prepare_ci_qt.py
           scripts/verify_display_capabilities.py
           scripts/verify_development_runtime.py
+          scripts/verify_desktop_cli_requests.py
           scripts/verify_license_inventory.py
           scripts/verify_performance.py
           scripts/verify_preview_performance.py
@@ -305,6 +307,7 @@ jobs:
           path: ${{ runner.temp }}\mediaflow-runtime\qt
           key: mediaflow-qt-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the native preview build
+        id: native-preview
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}\mediaflow-runtime\native
@@ -314,6 +317,7 @@ jobs:
       - name: Install the exact Qt SDK declared by the runtime lock
         run: python scripts/prepare_ci_qt.py --qt-root "$env:MEDIAFLOW_RUNTIME_DIR\qt"
       - name: Build the native preview plugin against the pinned Qt SDK
+        if: steps.native-preview.outputs.cache-hit != 'true'
         run: python scripts/build_native.py --runtime-root "$env:MEDIAFLOW_RUNTIME_DIR"
       - name: Run one deterministic reviewed-runtime shard
         run: >-
@@ -407,6 +411,7 @@ jobs:
           path: ${{ runner.temp }}\mediaflow-runtime\qt
           key: mediaflow-qt-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the native preview build
+        id: native-preview
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}\mediaflow-runtime\native
@@ -422,6 +427,7 @@ jobs:
           python scripts/prepare_ci_qt.py --qt-root (Join-Path $env:MEDIAFLOW_RUNTIME_DIR "qt")
           if ($LASTEXITCODE -ne 0) { throw "Checksum-pinned Qt SDK installation failed" }
       - name: Build the native preview plugin against the pinned Qt SDK
+        if: steps.native-preview.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           python scripts/build_native.py --runtime-root $env:MEDIAFLOW_RUNTIME_DIR
@@ -450,12 +456,13 @@ jobs:
       - name: Run each editable web desktop scenario in a fresh process
         if: matrix.scenario == 'interactive'
         run: |
-          python -m pytest tests/v2/desktop/test_web_editor.py::test_unified_import_opens_the_v5_package_through_local_preview_server
+          python -m pytest tests/v2/desktop/test_web_editor.py::test_unified_import_opens_the_v6_package_through_local_preview_server
           python -m pytest tests/v2/desktop/test_web_editor.py::test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page
       - name: Run real Chromium and native MLT integration tests
         if: matrix.scenario == 'interactive'
         run: >-
           python -m pytest
+          tests/v2/infrastructure/test_web_capture_engine.py::test_real_react_retryable_frame_replaces_page_and_preserves_order
           tests/v2/infrastructure/test_web_capture_engine.py::test_real_draw_element_failure_requires_clean_screenshot_retry
           tests/v2/integration/test_native_preview.py
       - name: Run the offline application acceptance checks
@@ -464,8 +471,9 @@ jobs:
           python -m scripts.verify_performance
           python -m scripts.verify_preview_performance --duration-seconds 20 --playback-check-seconds 5
           python -m scripts.verify_ui_matrix
+          python -m scripts.verify_desktop_cli_requests
           python -m scripts.verify_web_render_performance
-          python -m scripts.verify_reference_comparison_chain --package tests/fixtures/editable-media-v5
+          python -m scripts.verify_reference_comparison_chain --package tests/fixtures/editable-media-v6
       - name: Run the credentialed online user chain
         if: matrix.scenario == 'offline' && vars.MEDIAFLOW_RUN_ONLINE_E2E == 'true'
         env:
@@ -515,7 +523,7 @@ jobs:
     needs:
       - plan
       - preflight
-    if: needs.plan.outputs.run_portable == 'true'
+    if: needs.plan.outputs.run_portable_build == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -579,6 +587,7 @@ jobs:
           path: ${{ runner.temp }}/mediaflow-runtime/qt
           key: mediaflow-qt-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the target native preview build
+        id: native-preview
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/mediaflow-runtime/native
@@ -602,6 +611,7 @@ jobs:
       - name: Install the target Qt SDK
         run: python scripts/prepare_ci_qt.py --qt-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}/qt"
       - name: Build the native QML plugin from source
+        if: steps.native-preview.outputs.cache-hit != 'true'
         run: python scripts/build_native.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Verify the platform runtime and native QML package
         run: python scripts/verify_development_runtime.py --profile core
@@ -649,7 +659,7 @@ jobs:
         run: >-
           python -m pytest
           tests/v2/application/test_cli_process.py
-          tests/v2/infrastructure/test_web_media.py::test_v5_cli_chain
+          tests/v2/infrastructure/test_web_media.py::test_v6_cli_chain
       - name: Upload portable failure diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -667,7 +677,7 @@ jobs:
     needs:
       - plan
       - preflight
-    if: needs.plan.outputs.run_portable == 'true'
+    if: needs.plan.outputs.run_interchange == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -725,9 +735,7 @@ jobs:
           key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Install Linux libraries required by the reviewed MLT runtime
         if: runner.os == 'Linux'
-        run: |
-          python -m playwright install-deps chromium
-          sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
+        run: sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
       - name: Prepare the exact target runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Prove the producer architecture
@@ -756,7 +764,7 @@ jobs:
     needs:
       - plan
       - interchange-produce
-    if: needs.plan.outputs.run_portable == 'true'
+    if: needs.plan.outputs.run_interchange == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -826,9 +834,7 @@ jobs:
           key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Install Linux libraries required by the reviewed MLT runtime
         if: runner.os == 'Linux'
-        run: |
-          python -m playwright install-deps chromium
-          sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
+        run: sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
       - name: Prepare the exact consumer runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Download the foreign project artifact
@@ -887,7 +893,8 @@ jobs:
           INTERCHANGE_CONSUME_RESULT: ${{ needs.interchange-consume.result }}
           RUN_CORE: ${{ needs.plan.outputs.run_core }}
           RUN_FULL: ${{ needs.plan.outputs.run_full }}
-          RUN_PORTABLE: ${{ needs.plan.outputs.run_portable }}
+          RUN_PORTABLE_BUILD: ${{ needs.plan.outputs.run_portable_build }}
+          RUN_INTERCHANGE: ${{ needs.plan.outputs.run_interchange }}
         run: |
           $failures = [System.Collections.Generic.List[string]]::new()
           if ($env:PLAN_RESULT -ne "success") { $failures.Add("plan=$env:PLAN_RESULT") }
@@ -901,10 +908,10 @@ jobs:
             if ($env:FULL_RESULT -ne "success") { $failures.Add("windows-full=$env:FULL_RESULT") }
             if ($env:NATIVE_POLICY_RESULT -ne "success") { $failures.Add("native-policy=$env:NATIVE_POLICY_RESULT") }
           }
-          if ($env:RUN_PORTABLE -eq "true" -and $env:PORTABLE_RESULT -ne "success") {
+          if ($env:RUN_PORTABLE_BUILD -eq "true" -and $env:PORTABLE_RESULT -ne "success") {
             $failures.Add("portable=$env:PORTABLE_RESULT")
           }
-          if ($env:RUN_PORTABLE -eq "true") {
+          if ($env:RUN_INTERCHANGE -eq "true") {
             if ($env:INTERCHANGE_PRODUCE_RESULT -ne "success") {
               $failures.Add("interchange-produce=$env:INTERCHANGE_PRODUCE_RESULT")
             }

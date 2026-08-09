@@ -30,6 +30,8 @@ Rectangle {
     readonly property int position: preview.position
     readonly property int duration: preview.duration
     readonly property bool playing: preview.playing
+    readonly property bool buffering: preview.buffering
+    readonly property int bufferedFrames: preview.bufferedFrames
     readonly property bool playbackRequested: pendingPlaybackMode !== 0
     property alias playbackRate: preview.playbackRate
 
@@ -320,6 +322,14 @@ Rectangle {
             hdrEnabled: root.hdrEnabled
             volume: root.previewMuted ? 0.0 : root.previewVolume
             onDroppedFramesChanged: root.droppedFramesReported(droppedFrames)
+            onBufferingChanged: {
+                if (buffering) {
+                    bufferingDelay.restart();
+                } else {
+                    bufferingDelay.stop();
+                    bufferingNotice.visible = false;
+                }
+            }
             onHdrActiveChanged: root.hdrActiveReported(hdrActive)
             onDurationChanged: if (preview.duration > 0 && root.playbackRequested)
                 Qt.callLater(root.attemptPendingPlayback)
@@ -335,6 +345,35 @@ Rectangle {
                 } else if (preview.playbackRate < 0 && preview.position <= start) {
                     preview.pause();
                 }
+            }
+        }
+
+        Timer {
+            id: bufferingDelay
+            interval: 300
+            repeat: false
+            onTriggered: bufferingNotice.visible = preview.buffering
+        }
+
+        Rectangle {
+            id: bufferingNotice
+            objectName: "previewBufferingNotice"
+            anchors.centerIn: parent
+            visible: false
+            width: bufferingText.implicitWidth + 24
+            height: 34
+            radius: 17
+            color: Theme.overlay
+            border.color: Theme.borderStrong
+            z: 40
+            Text {
+                id: bufferingText
+                anchors.centerIn: parent
+                text: preview.bufferedFrames > 0
+                    ? qsTr("正在准备画面 · 已缓冲 %1 帧").arg(preview.bufferedFrames)
+                    : qsTr("正在准备画面")
+                color: Theme.textStrong
+                font.pixelSize: Theme.fontSizeCaption
             }
         }
 

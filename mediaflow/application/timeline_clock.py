@@ -246,10 +246,19 @@ def _reframe_clip(
         last_source_frame = candidate.source_in
     keyframes_by_frame = {}
     for keyframe in clip.transform_keyframes:
-        target_frame = reframe(keyframe.source_frame)
-        if first_source_frame <= target_frame <= last_source_frame:
-            keyframes_by_frame[target_frame] = keyframe.model_copy(
-                update={"source_frame": target_frame}
+        if keyframe.source_frame is not None:
+            target_frame = reframe(keyframe.source_frame)
+            if first_source_frame <= target_frame <= last_source_frame:
+                keyframes_by_frame[target_frame] = keyframe.model_copy(
+                    update={"source_frame": target_frame}
+                )
+            continue
+        if keyframe.timeline_offset is None:
+            raise RuntimeError("Transform keyframe has no time anchor")
+        target_offset = reframe(keyframe.timeline_offset)
+        if target_offset < duration:
+            keyframes_by_frame[target_offset] = keyframe.model_copy(
+                update={"timeline_offset": target_offset}
             )
     return Clip.model_validate(
         {

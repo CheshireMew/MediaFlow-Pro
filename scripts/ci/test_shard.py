@@ -30,10 +30,16 @@ def normalize_collected_node_id(node_id: str) -> str:
     return f"{source.replace('\\', '/')}::{test_id}"
 
 
+def node_matches_prefix(node_id: str, prefix: str) -> bool:
+    normalized_prefix = normalize_collected_node_id(prefix)
+    return node_id == normalized_prefix or node_id.startswith(f"{normalized_prefix}[")
+
+
 def discover_test_nodes(
     *,
     marker: str | None = None,
     excluded_files: Sequence[str] = (),
+    excluded_nodes: Sequence[str] = (),
 ) -> tuple[str, ...]:
     command = [
         sys.executable,
@@ -58,6 +64,7 @@ def discover_test_nodes(
         details = completed.stdout + completed.stderr
         raise RuntimeError(f"pytest collection failed:\n{details}")
     excluded = {path.replace("\\", "/") for path in excluded_files}
+    node_prefixes = tuple(normalize_collected_node_id(node) for node in excluded_nodes)
     nodes = set()
     for line in completed.stdout.splitlines():
         candidate = line.strip()
@@ -67,7 +74,12 @@ def discover_test_nodes(
         if normalized.startswith("tests/v2/"):
             nodes.add(normalized)
     selected = tuple(
-        sorted(node for node in nodes if source_file_for_node(node) not in excluded)
+        sorted(
+            node
+            for node in nodes
+            if source_file_for_node(node) not in excluded
+            and not any(node_matches_prefix(node, prefix) for prefix in node_prefixes)
+        )
     )
     if not selected:
         raise RuntimeError("pytest collection selected no test nodes")
@@ -141,13 +153,18 @@ def relative_nodes(
     *,
     marker: str | None = None,
     excluded_files: Sequence[str] = (),
+    excluded_nodes: Sequence[str] = (),
     timings_file: Path | None = DEFAULT_TIMINGS_FILE,
     resource_profile: str = "all",
 ) -> tuple[str, ...]:
     if not 0 <= shard_index < shard_count:
         raise ValueError(f"shard_index must be between 0 and {shard_count - 1}")
     nodes = select_resource_profile(
-        discover_test_nodes(marker=marker, excluded_files=excluded_files),
+        discover_test_nodes(
+            marker=marker,
+            excluded_files=excluded_files,
+            excluded_nodes=excluded_nodes,
+        ),
         resource_profile,
     )
     if not nodes:
@@ -209,6 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--shard-count", type=int, default=4)
     parser.add_argument("--marker")
     parser.add_argument("--exclude-file", action="append", default=[])
+    parser.add_argument("--exclude-node", action="append", default=[])
     parser.add_argument("--timings-file", type=Path, default=DEFAULT_TIMINGS_FILE)
     parser.add_argument("--resource-profile", choices=RESOURCE_PROFILES, default="all")
     parser.add_argument("--run", action="store_true")
@@ -224,6 +242,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.shard_count,
         marker=arguments.marker,
         excluded_files=arguments.exclude_file,
+        excluded_nodes=arguments.exclude_node,
         timings_file=arguments.timings_file,
         resource_profile=arguments.resource_profile,
     )

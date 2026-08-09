@@ -18,7 +18,7 @@ from mediaflow.domain.enums import (
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.project import Asset
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
-from mediaflow.domain.timebase import round_fraction
+from mediaflow.domain.timebase import timeline_offset_for_source_frame
 from mediaflow.domain.timeline import (
     Clip,
     ClipTransform,
@@ -91,6 +91,12 @@ class FcpxmlExportService:
     def validate(self, state: TimelineState) -> None:
         """Reject editing decisions that FCPXML cannot preserve faithfully."""
 
+        frozen = [clip.id for clip in state.clips if clip.freeze_source_frame is not None]
+        if frozen:
+            raise ValueError(
+                "FCPXML 交接暂时无法保证定格帧语义不变；请先把定格片段渲染为普通素材，或改为导出成片。"
+            )
+
         assets = assets_in_timeline_clock(
             self.documents.catalog,
             state.sequence,
@@ -103,38 +109,24 @@ class FcpxmlExportService:
             if left is None or right is None:
                 continue
             if left.track_id != right.track_id:
-                raise ValueError(
-                    "FCPXML 无法保留跨导出轨道的转场："
-                    f"{transition.kind.value}"
-                )
-            if (
-                transition.kind != TransitionKind.DISSOLVE
-                or transition.parameters
-            ):
+                raise ValueError(f"FCPXML 无法保留跨导出轨道的转场：{transition.kind.value}")
+            if transition.kind != TransitionKind.DISSOLVE or transition.parameters:
                 raise ValueError(
                     "FCPXML 只能可靠交接标准交叉溶解转场；"
                     f"当前转场 {transition.kind.value} 没有可确认的稳定内置效果映射"
                 )
 
         unsupported_audio: list[str] = []
-        for bus in self.documents.audio.list_audio_buses(
-            state.sequence.id
-        ):
+        for bus in self.documents.audio.list_audio_buses(state.sequence.id):
             if bus.gain_db != 0.0:
-                unsupported_audio.append(
-                    f"{bus.name} 增益 {bus.gain_db:g} dB"
-                )
+                unsupported_audio.append(f"{bus.name} 增益 {bus.gain_db:g} dB")
             enabled_effects = [
                 effect.kind.value
-                for effect in self.documents.audio.list_audio_effects(
-                    bus.id
-                )
+                for effect in self.documents.audio.list_audio_effects(bus.id)
                 if effect.enabled
             ]
             if enabled_effects:
-                unsupported_audio.append(
-                    f"{bus.name} 效果 {', '.join(enabled_effects)}"
-                )
+                unsupported_audio.append(f"{bus.name} 效果 {', '.join(enabled_effects)}")
         if unsupported_audio:
             raise ValueError(
                 f"FCPXML 没有可可靠重建 {PRODUCT_NAME} 音频总线处理的等价结构："
@@ -164,9 +156,7 @@ class FcpxmlExportService:
             width=str(profile.width),
             height=str(profile.height),
             colorSpace=(
-                "1-1-1 (Rec. 709)"
-                if profile.color_mode.value == "sdr_bt709"
-                else "9-16-9 (Rec. 2020 PQ)"
+                "1-1-1 (Rec. 709)" if profile.color_mode.value == "sdr_bt709" else "9-16-9 (Rec. 2020 PQ)"
             ),
         )
         assets = assets_in_timeline_clock(
@@ -220,22 +210,14 @@ class FcpxmlExportService:
             select_audible_sequence_audio(
                 state,
                 assets,
-                self.documents.audio.list_audio_buses(
-                    state.sequence.id
-                ),
+                self.documents.audio.list_audio_buses(state.sequence.id),
             ).track_ids
         )
         audio_tracks = [
-            track
-            for track in state.effective_tracks(TrackKind.AUDIO)
-            if track.id in audio_track_ids
+            track for track in state.effective_tracks(TrackKind.AUDIO) if track.id in audio_track_ids
         ]
-        subtitle_tracks = state.effective_tracks(
-            TrackKind.SUBTITLE
-        )
-        presentations_by_track: dict[
-            str, list[_ClipPresentation]
-        ] = {}
+        subtitle_tracks = state.effective_tracks(TrackKind.SUBTITLE)
+        presentations_by_track: dict[str, list[_ClipPresentation]] = {}
         for presentation in presentations:
             presentations_by_track.setdefault(
                 presentation.track_id,
@@ -245,11 +227,7 @@ class FcpxmlExportService:
         primary_track = next(iter(video_tracks), None)
         self._append_track_story(
             primary_spine,
-            (
-                presentations_by_track.get(primary_track.id, [])
-                if primary_track is not None
-                else []
-            ),
+            (presentations_by_track.get(primary_track.id, []) if primary_track is not None else []),
             assets,
             resource_ids,
             state,
@@ -324,17 +302,12 @@ class FcpxmlExportService:
         assets: dict[str, Asset],
     ) -> list[_ClipPresentation]:
         tracks = {track.id: track for track in state.tracks}
-        video_track_ids = {
-            track.id
-            for track in state.effective_tracks(TrackKind.VIDEO)
-        }
+        video_track_ids = {track.id for track in state.effective_tracks(TrackKind.VIDEO)}
         audio_track_ids = set(
             select_audible_sequence_audio(
                 state,
                 assets,
-                self.documents.audio.list_audio_buses(
-                    state.sequence.id
-                ),
+                self.documents.audio.list_audio_buses(state.sequence.id),
             ).track_ids
         )
         presentations: list[_ClipPresentation] = []
@@ -342,13 +315,9 @@ class FcpxmlExportService:
             track = tracks.get(clip.track_id)
             asset = assets.get(clip.asset_id)
             if track is None:
-                raise ValueError(
-                    f"Timeline references unknown track: {clip.track_id}"
-                )
+                raise ValueError(f"Timeline references unknown track: {clip.track_id}")
             if asset is None:
-                raise ValueError(
-                    f"Timeline references unknown asset: {clip.asset_id}"
-                )
+                raise ValueError(f"Timeline references unknown asset: {clip.asset_id}")
             clip.validate_source_range(
                 asset.kind,
                 asset.metadata.duration_frames,
@@ -356,10 +325,7 @@ class FcpxmlExportService:
             if clip.media_kind == ClipMediaKind.LINKED_AV:
                 linked_audio_id = track.linked_audio_track_id
                 video_enabled = track.id in video_track_ids
-                audio_enabled = (
-                    linked_audio_id is not None
-                    and linked_audio_id in audio_track_ids
-                )
+                audio_enabled = linked_audio_id is not None and linked_audio_id in audio_track_ids
                 if video_enabled:
                     presentations.append(
                         _ClipPresentation(
@@ -377,10 +343,7 @@ class FcpxmlExportService:
                             media_kind=ClipMediaKind.AUDIO_ONLY,
                         )
                     )
-            elif (
-                clip.media_kind == ClipMediaKind.VIDEO_ONLY
-                and track.id in video_track_ids
-            ):
+            elif clip.media_kind == ClipMediaKind.VIDEO_ONLY and track.id in video_track_ids:
                 presentations.append(
                     _ClipPresentation(
                         clip=clip,
@@ -388,10 +351,7 @@ class FcpxmlExportService:
                         media_kind=ClipMediaKind.VIDEO_ONLY,
                     )
                 )
-            elif (
-                clip.media_kind == ClipMediaKind.AUDIO_ONLY
-                and track.id in audio_track_ids
-            ):
+            elif clip.media_kind == ClipMediaKind.AUDIO_ONLY and track.id in audio_track_ids:
                 presentations.append(
                     _ClipPresentation(
                         clip=clip,
@@ -417,11 +377,7 @@ class FcpxmlExportService:
         for presentation in presentations:
             clip = presentation.clip
             asset = assets[clip.asset_id]
-            source_key = (
-                ("web-clip", clip.id)
-                if asset.kind == AssetKind.WEB
-                else ("asset", asset.id)
-            )
+            source_key = ("web-clip", clip.id) if asset.kind == AssetKind.WEB else ("asset", asset.id)
             resource_id = resource_by_source.get(source_key)
             if resource_id is None:
                 resource_id = f"r{next_resource_index}"
@@ -430,24 +386,12 @@ class FcpxmlExportService:
                 if asset.kind == AssetKind.WEB:
                     target = cache.target(state, clip, asset)
                     source = target.path.resolve()
-                    if (
-                        not source.is_file()
-                        or source.stat().st_size <= 0
-                    ):
-                        raise FileNotFoundError(
-                            "FCPXML 需要已生成的网页媒体缓存："
-                            f"{source}"
-                        )
+                    if not source.is_file() or source.stat().st_size <= 0:
+                        raise FileNotFoundError(f"FCPXML 需要已生成的网页媒体缓存：{source}")
                     duration_frames = target.frame_count
-                    resource_name = (
-                        f"{asset.name} · {clip.id[:8]}"
-                    )
+                    resource_name = f"{asset.name} · {clip.id[:8]}"
                 else:
-                    source = (
-                        self.documents.catalog.resolve_asset_path(
-                            asset
-                        ).resolve()
-                    )
+                    source = self.documents.catalog.resolve_asset_path(asset).resolve()
                     duration_frames = max(
                         1,
                         asset.metadata.duration_frames,
@@ -475,20 +419,13 @@ class FcpxmlExportService:
                             "format": format_id,
                         }
                     )
-                if (
-                    asset.metadata.has_audio
-                    or asset.kind == AssetKind.AUDIO
-                ):
+                if asset.metadata.has_audio or asset.kind == AssetKind.AUDIO:
                     attributes.update(
                         {
                             "hasAudio": "1",
                             "audioSources": "1",
-                            "audioChannels": str(
-                                profile.audio_channels
-                            ),
-                            "audioRate": str(
-                                profile.audio_sample_rate
-                            ),
+                            "audioChannels": str(profile.audio_channels),
+                            "audioRate": str(profile.audio_sample_rate),
                         }
                     )
                 resource = ET.SubElement(
@@ -527,8 +464,7 @@ class FcpxmlExportService:
         outgoing = {
             transition.left_clip_id: transition
             for transition in state.transitions
-            if transition.left_clip_id in presented_ids
-            and transition.right_clip_id in presented_ids
+            if transition.left_clip_id in presented_ids and transition.right_clip_id in presented_ids
         }
         cursor = 0
         for presentation in ordered:
@@ -716,9 +652,7 @@ class FcpxmlExportService:
             parent,
             "timeMap",
             frameSampling="floor",
-            preservesPitch=(
-                "1" if clip.pitch_compensation else "0"
-            ),
+            preservesPitch=("1" if clip.pitch_compensation else "0"),
         )
         source_start = Fraction(clip.source_in)
         source_end = source_start + Fraction(
@@ -762,11 +696,7 @@ class FcpxmlExportService:
         points, has_keyframes = self._transform_points(clip)
         transforms = [value for _frame, value in points]
         if any(
-            value.crop_left
-            or value.crop_top
-            or value.crop_right
-            or value.crop_bottom
-            for value in transforms
+            value.crop_left or value.crop_top or value.crop_right or value.crop_bottom for value in transforms
         ):
             crop = ET.SubElement(
                 parent,
@@ -802,11 +732,7 @@ class FcpxmlExportService:
                         state,
                     )
         if any(
-            value.x
-            or value.y
-            or value.scale_x != 1.0
-            or value.scale_y != 1.0
-            or value.rotation
+            value.x or value.y or value.scale_x != 1.0 or value.scale_y != 1.0 or value.rotation
             for value in transforms
         ):
             transform = ET.SubElement(
@@ -871,11 +797,7 @@ class FcpxmlExportService:
     ) -> None:
         profile = state.sequence.profile
         audio = clip.audio
-        if (
-            audio.gain_db != 0.0
-            or audio.fade_in_frames
-            or audio.fade_out_frames
-        ):
+        if audio.gain_db != 0.0 or audio.fade_in_frames or audio.fade_out_frames:
             amount = f"{audio.gain_db:g}dB"
             volume = ET.SubElement(
                 parent,
@@ -923,25 +845,23 @@ class FcpxmlExportService:
         self,
         clip: Clip,
     ) -> tuple[list[tuple[int, ClipTransform]], bool]:
-        speed = Fraction(
-            abs(clip.speed_numerator),
-            clip.speed_denominator,
-        )
-        points: dict[int, ClipTransform] = {
-            0: clip.transform
-        }
+        points: dict[int, ClipTransform] = {0: clip.transform}
         has_keyframes = False
         for keyframe in clip.transform_keyframes:
-            source_delta = (
-                keyframe.source_frame - clip.source_in
-                if clip.speed_numerator > 0
-                else clip.source_in - keyframe.source_frame
-            )
-            if source_delta < 0:
-                continue
-            local_frame = round_fraction(
-                Fraction(source_delta) / speed
-            )
+            if keyframe.timeline_offset is not None:
+                local_frame = keyframe.timeline_offset
+            else:
+                assert keyframe.source_frame is not None
+                try:
+                    local_frame = timeline_offset_for_source_frame(
+                        clip.source_in,
+                        keyframe.source_frame,
+                        clip.speed_numerator,
+                        clip.speed_denominator,
+                        freeze_source_frame=clip.freeze_source_frame,
+                    )
+                except ValueError:
+                    continue
             if 0 <= local_frame < clip.duration:
                 points[local_frame] = keyframe.transform
                 has_keyframes = True
@@ -981,15 +901,10 @@ class FcpxmlExportService:
         state: TimelineState,
     ) -> dict[str, str]:
         profile = state.sequence.profile
-        horizontal = (
-            transform.x * profile.width / profile.height
-        )
+        horizontal = transform.x * profile.width / profile.height
         return {
             "position": f"{horizontal:g} {-transform.y:g}",
-            "scale": (
-                f"{transform.scale_x:g} "
-                f"{transform.scale_y:g}"
-            ),
+            "scale": (f"{transform.scale_x:g} {transform.scale_y:g}"),
             "rotation": f"{-transform.rotation:g}",
         }
 
@@ -1001,12 +916,8 @@ class FcpxmlExportService:
     ) -> dict[str, str]:
         profile = state.sequence.profile
         source_width = asset.metadata.width or profile.width
-        source_height = (
-            asset.metadata.height or profile.height
-        )
-        horizontal_scale = (
-            100.0 * source_width / source_height
-        )
+        source_height = asset.metadata.height or profile.height
+        horizontal_scale = 100.0 * source_width / source_height
         return {
             "left": f"{transform.crop_left * horizontal_scale:g}",
             "top": f"{transform.crop_top * 100.0:g}",
@@ -1086,10 +997,7 @@ class FcpxmlExportService:
                         profile.fps_numerator,
                         profile.fps_denominator,
                     ),
-                    role=(
-                        "ITT Subtitles?captionFormat=ITT."
-                        f"{language or 'und'}"
-                    ),
+                    role=(f"ITT Subtitles?captionFormat=ITT.{language or 'und'}"),
                 )
                 text = ET.SubElement(caption, "text")
                 ET.SubElement(text, "text-style").text = placement.text_override or segment.text

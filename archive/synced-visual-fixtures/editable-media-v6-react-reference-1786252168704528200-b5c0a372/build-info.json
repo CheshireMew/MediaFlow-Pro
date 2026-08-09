@@ -1,0 +1,15 @@
+{
+  "protocol": "editable-media-react-build",
+  "version": 1,
+  "editable_media_version": 6,
+  "dependencies": {
+    "@vitejs/plugin-react": "5.0.2",
+    "vite": "7.1.3",
+    "typescript": "5.9.2",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "lock_sha256": "be41e40eab6aa723f788eb26c78256bb986802241dfe688a8c78829036fd021f",
+  "source_sha256": "ca456b6f7500b204c306c5b7066a9c31ce125b1266d25abde458cf9a0b6f5167",
+  "sourcemaps": true
+}

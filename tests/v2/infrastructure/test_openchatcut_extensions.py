@@ -33,6 +33,7 @@ from mediaflow.domain.timeline import (
     ClipAudio,
     ClipTransform,
     ClipTransformKeyframe,
+    FreezeClipAddRequest,
 )
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.media_probe import MediaProbe
@@ -825,6 +826,22 @@ def test_fcpxml_preflight_rejects_unreliable_transition_and_bus_processing(
             duration=4,
             parameters={},
         )
+        freeze = editor.add_freeze_clip(
+            FreezeClipAddRequest(
+                track_id=track.id,
+                asset_id=asset.id,
+                timeline_start=20,
+                source_frame=5,
+                duration=5,
+            )
+        )
+        with pytest.raises(ValueError, match="定格"):
+            FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
+                editor.state,
+                tmp_path / "unsupported-freeze.fcpxml",
+            )
+        editor.delete_clip(freeze.id)
+
         master = next(
             bus
             for bus in repository.audio.list_audio_buses(sequence_id)

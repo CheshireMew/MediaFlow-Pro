@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -233,6 +234,31 @@ class TranscribeSequenceCommand(CommandModel):
         return TaskKind.TRANSCRIBE
 
 
+class DiagnosticsBundleCommand(CommandModel):
+    command_type: Literal["diagnostics_bundle"] = "diagnostics_bundle"
+    output_path: NonEmptyText
+    task_ids: list[NonEmptyText] = Field(default_factory=list)
+    overwrite: bool = False
+
+    @field_validator("task_ids")
+    @classmethod
+    def unique_task_ids(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("Diagnostic task identifiers must be unique")
+        return values
+
+    def validate_for_execution(self) -> None:
+        output = Path(self.output_path)
+        if not output.is_absolute():
+            raise ValueError("诊断包输出路径必须是绝对路径")
+        if output.suffix.lower() != ".zip":
+            raise ValueError("诊断包输出路径必须使用 .zip 扩展名")
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.DIAGNOSTICS
+
+
 class TranslateDocumentCommand(CommandModel):
     command_type: Literal["translate_document"] = "translate_document"
     document_id: NonEmptyText
@@ -327,6 +353,7 @@ type TaskCommand = Annotated[
     | RenderWebClipCommand
     | ExportWebClipCommand
     | TranscribeSequenceCommand
+    | DiagnosticsBundleCommand
     | TranslateDocumentCommand
     | TranslateSegmentsCommand
     | AnalyzeHighlightsCommand

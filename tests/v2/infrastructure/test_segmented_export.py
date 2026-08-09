@@ -354,7 +354,7 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
             cli_output = project_root / "exports" / "public-cli.mp4"
             cli_request = {
                 "protocol": "mediaflow-editor",
-                "version": 3,
+                "version": 4,
                 "operation": "export.sequence.build",
                 "project": str(project_root),
                 "request_id": "segmented-build-public-cli",

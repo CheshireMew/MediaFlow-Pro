@@ -47,6 +47,36 @@ AppDialog {
                 }
             }
         }
+        Panel {
+            Layout.fillWidth: true
+            implicitHeight: projectTransferActions.implicitHeight + 18
+            RowLayout {
+                id: projectTransferActions
+                anchors.fill: parent
+                anchors.margins: 9
+                spacing: 7
+                AppButton {
+                    Layout.fillWidth: true
+                    text: qsTr("复制项目交接 CLI")
+                    onClicked: automationController.copyProjectHandoffRequest()
+                }
+                AppButton {
+                    Layout.fillWidth: true
+                    text: qsTr("复制诊断包 CLI")
+                    enabled: automationController.diagnosticsDefaultPath.length > 0
+                    onClicked: automationController.copyDiagnosticsBundleRequest(
+                        automationController.diagnosticsDefaultPath, [], false)
+                }
+                AppButton {
+                    Layout.fillWidth: true
+                    primary: true
+                    text: qsTr("生成诊断包")
+                    enabled: Boolean(workspaceController.actionCapabilities.canStartTasks)
+                    onClicked: automationController.createDiagnosticsBundle(
+                        automationController.diagnosticsDefaultPath, false)
+                }
+            }
+        }
         ListView {
             id: versionList
             objectName: "projectVersionList"

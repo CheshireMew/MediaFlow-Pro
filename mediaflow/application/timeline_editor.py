@@ -27,10 +27,15 @@ from mediaflow.domain.enums import (
     TransitionKind,
     VisualEffectKind,
 )
+from mediaflow.domain.exports import SubtitleStyle
 from mediaflow.domain.frame_clock import MainFrameClockSnapshot
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
-from mediaflow.domain.timebase import source_frames_for_timeline_frames
+from mediaflow.domain.timebase import (
+    source_frame_at_timeline_offset,
+    source_frames_for_timeline_frames,
+    source_interval_for_timeline_interval,
+)
 from mediaflow.domain.timeline import (
     Clip,
     ClipAddRequest,
@@ -38,6 +43,7 @@ from mediaflow.domain.timeline import (
     ClipTransform,
     ClipTransformKeyframe,
     CompoundClip,
+    FreezeClipAddRequest,
     TimelineMarker,
     TimelineMergeConflict,
     TimelineRange,
@@ -161,6 +167,24 @@ class TimelineEditor:
         self._commit("调整轨道", mutate)
         return self._track(track_id)
 
+    def set_subtitle_track_style(
+        self,
+        track_id: str,
+        style: SubtitleStyle,
+    ) -> Track:
+        source = self._track(track_id)
+        if source.kind != TrackKind.SUBTITLE:
+            raise ValueError("Subtitle styles can only be assigned to subtitle tracks")
+
+        def mutate(state: TimelineState) -> None:
+            state.tracks = [
+                track.model_copy(update={"subtitle_style": style}) if track.id == track_id else track
+                for track in state.tracks
+            ]
+
+        self._commit("调整字幕轨样式", mutate)
+        return self._track(track_id)
+
     def set_primary_dialogue_track(self, track_id: str) -> Track:
         source = self._track(track_id)
         if source.kind != TrackKind.AUDIO:
@@ -199,20 +223,12 @@ class TimelineEditor:
         project = self.repository.catalog.get_project()
         is_main_sequence = self.sequence_id == project.main_sequence_id
         source_snapshot = (
-            self.repository.timeline.capture_main_frame_clock(self.sequence_id)
-            if is_main_sequence
-            else None
+            self.repository.timeline.capture_main_frame_clock(self.sequence_id) if is_main_sequence else None
         )
-        source_state = (
-            source_snapshot.timeline
-            if source_snapshot is not None
-            else self._state
-        )
+        source_state = source_snapshot.timeline if source_snapshot is not None else self._state
         if source_snapshot is not None:
             session_state = self._snapshot(self._state)
-            session_state.sequence = session_state.sequence.model_copy(
-                update={"timeline_revision": 0}
-            )
+            session_state.sequence = session_state.sequence.model_copy(update={"timeline_revision": 0})
             if session_state != source_snapshot.timeline:
                 raise TimelineMergeConflict(
                     "main frame clock snapshot",
@@ -391,6 +407,63 @@ class TimelineEditor:
             mutate,
         )
         return [clip for clip, _, _ in prepared]
+
+    def add_freeze_clip(self, request: FreezeClipAddRequest) -> Clip:
+        track = self._track(request.track_id)
+        asset = self.repository.catalog.get_asset(request.asset_id)
+        if track.kind != TrackKind.VIDEO:
+            raise ValueError("Freeze clips require a video track")
+        if asset.kind not in {AssetKind.VIDEO, AssetKind.WEB}:
+            raise ValueError("Freeze clips require a video or rendered web source")
+        clip = Clip(
+            track_id=request.track_id,
+            asset_id=request.asset_id,
+            timeline_start=request.timeline_start,
+            source_in=request.source_frame,
+            duration=request.duration,
+            media_kind=ClipMediaKind.VIDEO_ONLY,
+            freeze_source_frame=request.source_frame,
+        )
+        clip.validate_source_range(asset.kind, asset.metadata.duration_frames)
+        web_source_hash = (
+            self.repository.web.get_web_asset_spec(asset.id).source_hash
+            if asset.kind == AssetKind.WEB
+            else None
+        )
+
+        def mutate(state: TimelineState) -> None:
+            state.clips.append(clip)
+            if web_source_hash is not None:
+                state.web_states[clip.id] = WebClipState(
+                    clip_id=clip.id,
+                    source_hash=web_source_hash,
+                )
+
+        self._commit("添加定格片段", mutate)
+        return self._clip(clip.id)
+
+    def replace_contents(
+        self,
+        destination: TimelineState,
+        *,
+        label: str = "导入可携带时间线",
+    ) -> TimelineState:
+        if destination.sequence.id != self.sequence_id:
+            raise ValueError("Timeline replacement belongs to another sequence")
+        if destination.sequence.profile != self._state.sequence.profile:
+            raise ValueError("Set the sequence profile before replacing timeline contents")
+
+        def mutate(state: TimelineState) -> None:
+            state.tracks = list(destination.tracks)
+            state.clips = list(destination.clips)
+            state.compounds = list(destination.compounds)
+            state.transitions = list(destination.transitions)
+            state.markers = list(destination.markers)
+            state.ranges = list(destination.ranges)
+            state.web_states = dict(destination.web_states)
+
+        self._commit(label, mutate, allow_locked_changes=True)
+        return self.state
 
     def move_clip(
         self,
@@ -678,9 +751,7 @@ class TimelineEditor:
                 self._ensure_linked_audio_track(state, replacement.track_id)
             clips = {item.id: item for item in state.clips}
             state.transitions = [
-                item
-                for item in state.transitions
-                if TimelineRules.transition_is_valid(item, clips)
+                item for item in state.transitions if TimelineRules.transition_is_valid(item, clips)
             ]
 
         self._commit("替换片段素材", mutate)
@@ -739,8 +810,7 @@ class TimelineEditor:
             state.clips[index] = current.model_copy(
                 update={
                     "visual_effects": [
-                        updated if item.id == effect_id else item
-                        for item in current.visual_effects
+                        updated if item.id == effect_id else item for item in current.visual_effects
                     ]
                 }
             )
@@ -765,9 +835,7 @@ class TimelineEditor:
 
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
-            state.clips[index] = state.clips[index].model_copy(
-                update={"visual_effects": effects}
-            )
+            state.clips[index] = state.clips[index].model_copy(update={"visual_effects": effects})
 
         self._commit("排序视觉效果", mutate)
         return next(item for item in self._clip(clip_id).visual_effects if item.id == effect_id)
@@ -781,9 +849,7 @@ class TimelineEditor:
 
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
-            state.clips[index] = state.clips[index].model_copy(
-                update={"visual_effects": effects}
-            )
+            state.clips[index] = state.clips[index].model_copy(update={"visual_effects": effects})
 
         self._commit("移除视觉效果", mutate)
 
@@ -794,7 +860,9 @@ class TimelineEditor:
         *,
         expected_clip: Clip | None = None,
     ) -> Clip:
-        ordered = sorted(keyframes, key=lambda item: item.source_frame)
+        if any(item.source_frame is None for item in keyframes):
+            raise ValueError("画面跟踪关键帧必须使用源帧")
+        ordered = sorted(keyframes, key=lambda item: item.source_frame or 0)
         if len({item.source_frame for item in ordered}) != len(ordered):
             raise ValueError("画面跟踪关键帧不能位于同一源帧")
 
@@ -845,9 +913,7 @@ class TimelineEditor:
                 state.clips[index] = clip.model_copy(
                     update={
                         "audio": audio,
-                        "transform": clip.transform.model_copy(
-                            update={"opacity": opacity}
-                        ),
+                        "transform": clip.transform.model_copy(update={"opacity": opacity}),
                     }
                 )
 
@@ -888,16 +954,15 @@ class TimelineEditor:
             source = state.clips[index]
             source_in = source.source_in
             if (source.speed_numerator > 0) != (speed_numerator > 0):
-                consumed = source_frames_for_timeline_frames(
+                interval = source_interval_for_timeline_interval(
+                    source.source_in,
+                    0,
                     source.duration,
                     source.speed_numerator,
                     source.speed_denominator,
+                    freeze_source_frame=source.freeze_source_frame,
                 )
-                source_in = (
-                    source.source_in + consumed - 1
-                    if speed_numerator < 0
-                    else max(0, source.source_in - consumed + 1)
-                )
+                source_in = interval[1] - 1 if speed_numerator < 0 else interval[0]
             state.clips[index] = source.model_copy(
                 update={
                     "source_in": source_in,
@@ -916,13 +981,12 @@ class TimelineEditor:
             raise ValueError("Split frame must be inside the clip")
         left_duration = split_frame - source.timeline_start
         right_duration = source.duration - left_duration
-        source_delta = source_frames_for_timeline_frames(
+        right_source_in = source_frame_at_timeline_offset(
+            source.source_in,
             left_duration,
             source.speed_numerator,
             source.speed_denominator,
-        )
-        right_source_in = (
-            source.source_in + source_delta if source.speed_numerator > 0 else source.source_in - source_delta
+            freeze_source_frame=source.freeze_source_frame,
         )
         if right_source_in < 0:
             raise ValueError("Reverse split exceeds the available source range")
@@ -1366,12 +1430,8 @@ class TimelineEditor:
                         kind=self._history_action_kind,
                         payload={
                             "mode": TIMELINE_HISTORY_MODE,
-                            "source": after_patch.model_dump(
-                                mode="json", exclude_computed_fields=True
-                            ),
-                            "destination": before_patch.model_dump(
-                                mode="json", exclude_computed_fields=True
-                            ),
+                            "source": after_patch.model_dump(mode="json", exclude_computed_fields=True),
+                            "destination": before_patch.model_dump(mode="json", exclude_computed_fields=True),
                         },
                     )
                 ],
@@ -1380,12 +1440,8 @@ class TimelineEditor:
                         kind=self._history_action_kind,
                         payload={
                             "mode": TIMELINE_HISTORY_MODE,
-                            "source": before_patch.model_dump(
-                                mode="json", exclude_computed_fields=True
-                            ),
-                            "destination": after_patch.model_dump(
-                                mode="json", exclude_computed_fields=True
-                            ),
+                            "source": before_patch.model_dump(mode="json", exclude_computed_fields=True),
+                            "destination": after_patch.model_dump(mode="json", exclude_computed_fields=True),
                         },
                     )
                 ],
@@ -1418,13 +1474,10 @@ class TimelineEditor:
         stored_sequence = self.repository.catalog.get_sequence(self.sequence_id)
         current = (
             self._state
-            if stored_sequence.timeline_revision
-            == self._state.sequence.timeline_revision
+            if stored_sequence.timeline_revision == self._state.sequence.timeline_revision
             else self.repository.timeline.load_timeline(self.sequence_id)
         )
-        merged = self._canonical_state(
-            TimelineMergePolicy.merge(source, destination, current)
-        )
+        merged = self._canonical_state(TimelineMergePolicy.merge(source, destination, current))
         if merged == current:
             return current
         self._validator.validate(merged, baseline=self._state)
@@ -1516,11 +1569,7 @@ class TimelineEditor:
         else:
             revision = self.repository.timeline.save_timeline(after)
         return self._canonical_state(after).model_copy(
-            update={
-                "sequence": after.sequence.model_copy(
-                    update={"timeline_revision": revision}
-                )
-            }
+            update={"sequence": after.sequence.model_copy(update={"timeline_revision": revision})}
         )
 
     def _track(self, track_id: str) -> Track:

@@ -298,6 +298,8 @@ ApplicationWindow {
             QCoreApplication.processEvents()
             time.sleep(0.01)
         assert "not found" in preview.property("errorString")
+        assert preview.property("buffering") is False
+        assert preview.property("bufferedFrames") == 0
         preview.setProperty("source", str(graph))
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and (
@@ -308,6 +310,22 @@ ApplicationWindow {
         assert preview.property("duration") == 25
         assert preview.property("errorString") == ""
 
+        preview.seek(0)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and preview.property("position") != 0:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        assert preview.property("position") == 0
+        buffer_states: list[tuple[bool, bool, int]] = []
+        preview.bufferingChanged.connect(
+            lambda: buffer_states.append(
+                (
+                    bool(preview.property("buffering")),
+                    bool(preview.property("playing")),
+                    int(preview.property("bufferedFrames")),
+                )
+            )
+        )
         preview.play()
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline and preview.property("position") < 5:
@@ -315,7 +333,16 @@ ApplicationWindow {
             time.sleep(0.01)
         assert preview.property("position") >= 5
         assert preview.property("droppedFrames") == 0
+        assert any(buffering for buffering, _playing, _frames in buffer_states)
+        assert all(
+            playing
+            for buffering, playing, _frames in buffer_states
+            if buffering
+        )
         preview.pause()
+        QCoreApplication.processEvents()
+        assert preview.property("buffering") is False
+        assert preview.property("bufferedFrames") == 0
         preview.setProperty("source", "")
         assert preview.property("playing") is False
         assert preview.property("position") == 0

@@ -226,7 +226,7 @@ def test_reference_comparison_runs_through_the_real_cli_process(
         json.dumps(
             {
                 "protocol": "mediaflow-editor",
-                "version": 3,
+                "version": 4,
                 "operation": "quality.reference.compare",
                 "actor": {"kind": "agent", "id": "reference-comparison-test"},
                 "client_id": "pytest-reference-comparison",

@@ -267,7 +267,7 @@ def test_visual_effect_stack_is_validated_ordered_persisted_and_undoable(
         (VisualEffectKind.COLOR_ADJUSTMENT, 1),
     ]
     assert stored.visual_effects[1].parameters["brightness"] == pytest.approx(0.15)
-    with pytest.raises(ValueError, match="outside its range"):
+    with pytest.raises(ValueError, match="exceeds maximum"):
         editor.update_clip_visual_effect(
             clip.id,
             adjustment.id,

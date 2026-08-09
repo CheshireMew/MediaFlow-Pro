@@ -5,6 +5,7 @@ from PySide6.QtCore import QObject
 from mediaflow.service.desktop_proxy import DesktopEditorApplication
 
 from .audio_controller import AudioController
+from .automation_controller import AutomationController
 from .export_controller import ExportController
 from .highlight_controller import HighlightController
 from .media_controller import MediaController
@@ -41,6 +42,14 @@ class EditorControllers:
         self.web = WebController(self.session)
         self.web_timeline = WebTimelineController(self.session, self.web)
         self.web_delivery = WebDeliveryController(self.session, self.web)
+        self.automation = AutomationController(
+            self.session,
+            export=self.export,
+            subtitles=self.subtitles,
+            web=self.web,
+            web_timeline=self.web_timeline,
+            web_delivery=self.web_delivery,
+        )
         self.session._attach_controllers(self.context_properties())
 
     def context_properties(self) -> dict[str, QObject]:
@@ -57,6 +66,7 @@ class EditorControllers:
             "webController": self.web,
             "webTimelineController": self.web_timeline,
             "webDeliveryController": self.web_delivery,
+            "automationController": self.automation,
         }
 
     def shutdown(self) -> None:

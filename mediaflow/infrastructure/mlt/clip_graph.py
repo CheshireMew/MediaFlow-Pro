@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from fractions import Fraction
 from pathlib import Path
 
 from mediaflow.domain.enums import AssetKind, ColorMode
 from mediaflow.domain.project import Asset
-from mediaflow.domain.timebase import round_fraction
+from mediaflow.domain.timebase import timeline_offset_for_source_frame
 from mediaflow.domain.timeline import Clip, ClipTransform
 from mediaflow.domain.visual_effects import visual_effect_mlt
 from mediaflow.infrastructure.mlt.graph import MltGraph
@@ -31,7 +30,7 @@ class MltClipGraph:
             else "avformat"
         )
         resource = str(source)
-        if speed != 1.0:
+        if speed != 1.0 and clip.freeze_source_frame is None:
             service = "timewarp"
             resource = f"{speed}:{source}"
         producer = ET.SubElement(
@@ -50,7 +49,20 @@ class MltClipGraph:
             MltGraph.property(producer, "warp_speed", str(speed))
             MltGraph.property(producer, "warp_resource", str(source))
             MltGraph.property(producer, "warp_pitch", "1" if clip.pitch_compensation else "0")
-        if service == "qimage":
+        if clip.freeze_source_frame is not None:
+            freeze = ET.SubElement(
+                producer,
+                "filter",
+                {
+                    "id": f"freeze_{clip.id}",
+                    "in": "0",
+                    "out": str(producer_length - 1),
+                },
+            )
+            MltGraph.property(freeze, "mlt_service", "freeze")
+            MltGraph.property(freeze, "frame", str(clip.freeze_source_frame))
+            MltGraph.property(freeze, "freeze_after", "1")
+        elif service == "qimage":
             MltGraph.property(producer, "ttl", "1")
         elif transition_tail_frames and required_length > natural_length:
             freeze = ET.SubElement(
@@ -220,17 +232,22 @@ class MltClipGraph:
             rect = rect_value(transform)
             rotation = f"{transform.rotation:g}"
             if clip.transform_keyframes:
-                speed = Fraction(abs(clip.speed_numerator), clip.speed_denominator)
                 points: dict[int, ClipTransform] = {producer_start: transform}
                 for keyframe in clip.transform_keyframes:
-                    source_delta = (
-                        keyframe.source_frame - clip.source_in
-                        if clip.speed_numerator > 0
-                        else clip.source_in - keyframe.source_frame
-                    )
-                    if source_delta < 0:
-                        continue
-                    local_frame = round_fraction(Fraction(source_delta) / speed)
+                    if keyframe.timeline_offset is not None:
+                        local_frame = keyframe.timeline_offset
+                    else:
+                        assert keyframe.source_frame is not None
+                        try:
+                            local_frame = timeline_offset_for_source_frame(
+                                clip.source_in,
+                                keyframe.source_frame,
+                                clip.speed_numerator,
+                                clip.speed_denominator,
+                                freeze_source_frame=clip.freeze_source_frame,
+                            )
+                        except ValueError:
+                            continue
                     if 0 <= local_frame < clip.duration:
                         points[producer_start + local_frame] = keyframe.transform
                 final_value = points[max(points)]

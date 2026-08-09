@@ -47,7 +47,7 @@ def test_cli_project_create_rejects_legacy_caller_owned_root_without_writing(
         json.dumps(
             {
                 "protocol": "mediaflow-editor",
-                "version": 3,
+                "version": 4,
                 "operation": "project.create",
                 "project": str(project_path),
                 "request_id": "legacy-caller-root",
@@ -122,7 +122,7 @@ def test_cli_rejects_the_removed_v2_protocol_without_creating_a_project(
 
     assert result.returncode == 1
     output = json.loads(result.stdout)
-    assert output["version"] == 3
+    assert output["version"] == 4
     assert output["error"]["code"] == "validation_error"
     assert not project_path.exists()
 
@@ -137,6 +137,6 @@ def test_cli_describe_uses_the_resident_service_contract() -> None:
     assert result.stderr == ""
     output = json.loads(result.stdout)
     assert output["protocol"] == "mediaflow-editor"
-    assert output["version"] == 3
+    assert output["version"] == 4
     assert output["result"]["transport"]["lifecycle"] == "resident-editor-service"
     assert stopped.returncode == 0

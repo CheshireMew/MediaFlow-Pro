@@ -182,13 +182,22 @@ class SequenceBuildTaskOutcome(DomainModel):
     report: ArtifactReference
 
 
+class DiagnosticsBundleTaskOutcome(DomainModel):
+    outcome_type: Literal["diagnostics_bundle"] = "diagnostics_bundle"
+    output: ArtifactReference
+    bundle_sha256: str = Field(min_length=64, max_length=64)
+    included_file_count: int = Field(ge=0)
+    skipped_item_count: int = Field(ge=0)
+
+
 TaskOutcome = Annotated[
     ImportedAssetTaskOutcome
     | DownloadAnalysisTaskOutcome
     | SequenceBoundaryTaskOutcome
     | LoudnessTaskOutcome
     | ExportTaskOutcome
-    | SequenceBuildTaskOutcome,
+    | SequenceBuildTaskOutcome
+    | DiagnosticsBundleTaskOutcome,
     Field(discriminator="outcome_type"),
 ]
 

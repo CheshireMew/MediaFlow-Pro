@@ -12,6 +12,7 @@ from mediaflow.application import web_package_contract as web_contract
 from mediaflow.application import web_package_files as web_files
 from mediaflow.application.ports import WebApplicationDocuments
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.application.web_edit_document_builder import build_web_edit_document
 from mediaflow.application.web_package_service import WebPackageService
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.web_media import (
@@ -23,14 +24,12 @@ from mediaflow.domain.web_media import (
     WebDataSnapshot,
     WebEasing,
     WebEditableField,
-    WebEditDescriptor,
     WebEditDocument,
     WebFieldConstraint,
     WebInterpolation,
     WebKeyframe,
     WebLayerOverride,
     WebParameterAnimationTrack,
-    WebParameterConstraint,
     WebRuntimePlayback,
     WebRuntimeVariant,
     WebSceneState,
@@ -69,195 +68,11 @@ class WebClipEditingService:
         )
         manifest = spec.manifest
         resolved_scene_id = self._scene_id(state, manifest, scene_id)
-        scene_definition = next(item for item in manifest.scenes if item.id == resolved_scene_id)
-        variant = manifest.variant_for(state.variant.id if state.variant is not None else None)
-        runtime = web_runtime_state(state, manifest)
-        runtime_scene = cast(
-            dict[str, object],
-            cast(dict[str, object], runtime["scenes"])[resolved_scene_id],
-        )
-        runtime_layers = cast(dict[str, dict[str, JsonValue]], runtime_scene["layers"])
-        current_scene = state.scenes.get(resolved_scene_id, WebSceneState())
-        descriptors: list[WebEditDescriptor] = []
-
-        numeric_fields = {
-            "font_size",
-            "x",
-            "y",
-            "width",
-            "height",
-            "rotation",
-            "opacity",
-            "z_index",
-            "enter_ms",
-            "exit_ms",
-            "delay_ms",
-            "duration_ms",
-        }
-        integer_fields = {
-            "z_index",
-            "enter_ms",
-            "exit_ms",
-            "delay_ms",
-            "duration_ms",
-        }
-        interval_fields = {"enter_ms", "exit_ms", "delay_ms", "duration_ms"}
-        for layer in manifest.layers:
-            defaults = manifest.layer_values_for(variant.id, layer.id)
-            values = runtime_layers[layer.id]
-            locked_fields = set(current_scene.locks.get(layer.id, ()))
-            for field in layer.editable:
-                constraint = layer.constraints.get(field, WebFieldConstraint())
-                kind = (
-                    "boolean"
-                    if field == "visible"
-                    else "integer"
-                    if field in integer_fields
-                    else "number"
-                    if field in numeric_fields
-                    else "color"
-                    if field == "color"
-                    else "string"
-                )
-                control = (
-                    "toggle"
-                    if kind == "boolean"
-                    else "color"
-                    if kind == "color"
-                    else "slider"
-                    if kind in {"number", "integer"}
-                    and (constraint.minimum is not None and constraint.maximum is not None)
-                    else "number"
-                    if kind in {"number", "integer"}
-                    else "text"
-                )
-                default_value = defaults.get(field)
-                if default_value is None:
-                    default_value = {
-                        "content": "",
-                        "color": "",
-                        "font_family": "",
-                        "image": "",
-                        "opacity": 1.0,
-                        "z_index": 0,
-                        "visible": True,
-                        "enter_ms": 0,
-                        "exit_ms": scene_definition.duration_ms,
-                        "delay_ms": 0,
-                        "duration_ms": 0,
-                    }.get(field)
-                descriptors.append(
-                    WebEditDescriptor(
-                        path=(f"scenes.{resolved_scene_id}.layers.{layer.id}.{field}"),
-                        target="layer",
-                        source_id=f"{layer.id}.{field}",
-                        label=f"{layer.name} · {field}",
-                        group=layer.name,
-                        kind=kind,
-                        control=control,
-                        value=values.get(field, cast(JsonValue, default_value)),
-                        default=cast(JsonValue, default_value),
-                        constraints=WebParameterConstraint(
-                            minimum=constraint.minimum,
-                            maximum=constraint.maximum,
-                            step=constraint.step,
-                            choices=list(constraint.choices),
-                        ),
-                        locked=field in locked_fields,
-                        animatable=field not in interval_fields,
-                        timeline=("interval" if field in interval_fields else "keyframe"),
-                    )
-                )
-
-        runtime_parameters = cast(dict[str, JsonValue], runtime["parameters"])
-        scene_parameters = cast(dict[str, JsonValue], runtime_scene["parameters"])
-        for definition in manifest.parameters:
-            values = runtime_parameters if definition.scope == "global" else scene_parameters
-            locked = (
-                definition.id in state.parameter_locks
-                if definition.scope == "global"
-                else definition.id in current_scene.parameter_locks
-            )
-            path = (
-                f"parameters.{definition.id}"
-                if definition.scope == "global"
-                else f"scenes.{resolved_scene_id}.parameters.{definition.id}"
-            )
-            descriptors.append(
-                WebEditDescriptor(
-                    path=path,
-                    target="parameter",
-                    source_id=definition.id,
-                    label=definition.name,
-                    group=definition.group or "自定义参数",
-                    kind=definition.kind,
-                    control=definition.control,
-                    value=values[definition.id],
-                    default=cast(JsonValue, definition.default),
-                    constraints=definition.constraints,
-                    unit=definition.unit,
-                    locked=locked,
-                    animatable=definition.animatable,
-                    timeline="keyframe" if definition.animatable else "none",
-                )
-            )
-
-        theme_values = cast(dict[str, JsonValue], runtime["theme"])
-        for definition in manifest.theme_variables:
-            descriptors.append(
-                WebEditDescriptor(
-                    path=f"theme.{definition.id}",
-                    target="theme",
-                    source_id=definition.id,
-                    label=definition.name,
-                    group="主题",
-                    kind=definition.kind,
-                    control=(
-                        "color"
-                        if definition.kind == "color"
-                        else "number"
-                        if definition.kind == "number"
-                        else "text"
-                    ),
-                    value=theme_values[definition.id],
-                    default=cast(JsonValue, definition.default),
-                    constraints=WebParameterConstraint(
-                        minimum=(
-                            definition.constraints.minimum if definition.constraints is not None else None
-                        ),
-                        maximum=(
-                            definition.constraints.maximum if definition.constraints is not None else None
-                        ),
-                        step=(definition.constraints.step if definition.constraints is not None else None),
-                        choices=(
-                            list(definition.constraints.choices) if definition.constraints is not None else []
-                        ),
-                    ),
-                )
-            )
-
-        data_values = cast(dict[str, JsonValue], runtime_scene["data"])
-        for definition in manifest.data_fields:
-            descriptors.append(
-                WebEditDescriptor(
-                    path=f"scenes.{resolved_scene_id}.data.{definition.id}",
-                    target="data",
-                    source_id=definition.id,
-                    label=definition.name,
-                    group="数据",
-                    kind=definition.kind,
-                    control="text",
-                    value=data_values[definition.id],
-                    default=definition.default,
-                )
-            )
-        return WebEditDocument(
+        return build_web_edit_document(
             clip_id=clip_id,
+            manifest=manifest,
+            state=state,
             scene_id=resolved_scene_id,
-            variant_id=variant.id,
-            revision=state.revision,
-            scene_duration_ms=scene_definition.duration_ms,
-            descriptors=descriptors,
         )
 
     def update_parameter(
@@ -277,12 +92,12 @@ class WebClipEditingService:
             expected_revision,
         )
         definition = spec.manifest.parameter_for(parameter_id)
-        definition.validate_value(value)
-        if definition.scope == "global":
+        definition.descriptor.validate_value(value)
+        if definition.binding.scope == "global":
             if actor == "automation" and parameter_id in current.parameter_locks:
                 raise PermissionError(f"Editable parameter is locked: {parameter_id}")
             parameters = dict(current.parameters)
-            if value == definition.default:
+            if value == definition.descriptor.default:
                 parameters.pop(parameter_id, None)
             else:
                 parameters[parameter_id] = cast(str | float | int | bool, value)
@@ -295,7 +110,7 @@ class WebClipEditingService:
                     f"Editable scene parameter is locked: {resolved_scene_id}/{parameter_id}"
                 )
             scene_definition = next(item for item in spec.manifest.scenes if item.id == resolved_scene_id)
-            base = scene_definition.parameters.get(parameter_id, definition.default)
+            base = scene_definition.parameters.get(parameter_id, definition.descriptor.default)
             parameters = dict(current_scene.parameters)
             if value == base:
                 parameters.pop(parameter_id, None)
@@ -487,7 +302,7 @@ class WebClipEditingService:
             "revision",
         }
         if set(runtime_state) != expected_keys:
-            raise ValueError("Editable media runtime state must use the complete v5 state contract")
+            raise ValueError("Editable media runtime state must use the complete v6 state contract")
         runtime_revision = runtime_state["revision"]
         if (
             not isinstance(runtime_revision, (int, float))
@@ -542,19 +357,25 @@ class WebClipEditingService:
                 theme[str(variable_id)] = cast(str | float, value)
 
         parameter_bindings = {
-            item.id: item.css_variable for item in spec.manifest.parameters if item.css_variable is not None
+            item.descriptor.id: item.binding.css_variable
+            for item in spec.manifest.parameters
+            if item.binding.css_variable is not None
         }
         if runtime_state["parameter_bindings"] != parameter_bindings:
             raise ValueError("Editable media runtime parameter bindings do not match the manifest")
         parameters_value = runtime_state["parameters"]
-        global_definitions = {item.id: item for item in spec.manifest.parameters if item.scope == "global"}
+        global_definitions = {
+            item.descriptor.id: item
+            for item in spec.manifest.parameters
+            if item.binding.scope == "global"
+        }
         if not isinstance(parameters_value, Mapping) or set(parameters_value) != set(global_definitions):
             raise ValueError("Editable media runtime parameters must contain every global parameter")
         parameters: dict[str, str | float | int | bool] = {}
         for parameter_id, value in parameters_value.items():
             definition = global_definitions[str(parameter_id)]
-            definition.validate_value(cast(JsonValue, value))
-            if value != definition.default:
+            definition.descriptor.validate_value(cast(JsonValue, value))
+            if value != definition.descriptor.default:
                 parameters[str(parameter_id)] = cast(
                     str | float | int | bool,
                     value,
@@ -664,7 +485,9 @@ class WebClipEditingService:
                     animations[str(layer_id)] = tracks
 
             scene_parameter_definitions = {
-                item.id: item for item in spec.manifest.parameters if item.scope == "scene"
+                item.descriptor.id: item
+                for item in spec.manifest.parameters
+                if item.binding.scope == "scene"
             }
             scene_parameters_value = scene_value["parameters"]
             if not isinstance(scene_parameters_value, Mapping) or set(scene_parameters_value) != set(
@@ -676,8 +499,11 @@ class WebClipEditingService:
             scene_parameters: dict[str, str | float | int | bool] = {}
             for parameter_id, value in scene_parameters_value.items():
                 parameter = scene_parameter_definitions[str(parameter_id)]
-                parameter.validate_value(cast(JsonValue, value))
-                base = definition.parameters.get(parameter.id, parameter.default)
+                parameter.descriptor.validate_value(cast(JsonValue, value))
+                base = definition.parameters.get(
+                    parameter.descriptor.id,
+                    parameter.descriptor.default,
+                )
                 if value != base:
                     scene_parameters[str(parameter_id)] = cast(
                         str | float | int | bool,
@@ -688,10 +514,12 @@ class WebClipEditingService:
             if not isinstance(parameter_animations_value, Mapping):
                 raise ValueError("Editable media runtime parameter animations must be an object")
             parameter_animations: dict[str, WebParameterAnimationTrack] = {}
-            all_parameter_definitions = {item.id: item for item in spec.manifest.parameters}
+            all_parameter_definitions = {
+                item.descriptor.id: item for item in spec.manifest.parameters
+            }
             for parameter_id, track_value in parameter_animations_value.items():
                 parameter = all_parameter_definitions.get(str(parameter_id))
-                if parameter is None or not parameter.animatable:
+                if parameter is None or parameter.descriptor.timeline != "keyframe":
                     raise ValueError(f"Editable parameter does not allow animation: {parameter_id}")
                 parameter_track = WebParameterAnimationTrack.model_validate(track_value)
                 if parameter_track.parameter_id != parameter_id:
@@ -699,7 +527,7 @@ class WebClipEditingService:
                 if parameter_track.keyframes[-1].time_ms >= definition.duration_ms:
                     raise ValueError(f"Editable parameter animation exceeds scene {current_scene_id}")
                 for keyframe in parameter_track.keyframes:
-                    parameter.validate_value(keyframe.value)
+                    parameter.descriptor.validate_value(keyframe.value)
                 parameter_animations[str(parameter_id)] = parameter_track
 
             scene_parameter_locks_value = scene_value["parameter_locks"]
@@ -956,9 +784,9 @@ class WebClipEditingService:
             expected_revision,
         )
         definition = spec.manifest.parameter_for(parameter_id)
-        if not definition.animatable:
+        if definition.descriptor.timeline != "keyframe":
             raise ValueError(f"Editable parameter is not animatable: {parameter_id}")
-        definition.validate_value(value)
+        definition.descriptor.validate_value(value)
         resolved_scene_id = self._scene_id(current, spec.manifest, scene_id)
         scene_definition = next(item for item in spec.manifest.scenes if item.id == resolved_scene_id)
         if time_ms >= scene_definition.duration_ms:
@@ -966,7 +794,7 @@ class WebClipEditingService:
         current_scene = current.scenes.get(resolved_scene_id, WebSceneState())
         locked = (
             parameter_id in current.parameter_locks
-            if definition.scope == "global"
+            if definition.binding.scope == "global"
             else parameter_id in current_scene.parameter_locks
         )
         if actor == "automation" and locked:
@@ -983,7 +811,9 @@ class WebClipEditingService:
         )
         keyframes.sort(key=lambda item: item.time_ms)
         interpolation: WebInterpolation = (
-            "continuous" if definition.kind in {"number", "integer"} else "discrete"
+            "continuous"
+            if definition.descriptor.kind in {"number", "integer"}
+            else "discrete"
         )
         animations[parameter_id] = WebParameterAnimationTrack(
             parameter_id=parameter_id,
@@ -1097,7 +927,7 @@ class WebClipEditingService:
             expected_revision,
         )
         definition = spec.manifest.parameter_for(parameter_id)
-        if definition.scope == "global":
+        if definition.binding.scope == "global":
             locks = set(current.parameter_locks)
             if locked:
                 locks.add(parameter_id)
@@ -1106,9 +936,9 @@ class WebClipEditingService:
             candidate = current.model_copy(
                 update={
                     "parameter_locks": tuple(
-                        item.id
+                        item.descriptor.id
                         for item in spec.manifest.parameters
-                        if item.scope == "global" and item.id in locks
+                        if item.binding.scope == "global" and item.descriptor.id in locks
                     )
                 }
             )
@@ -1124,9 +954,9 @@ class WebClipEditingService:
             scenes[resolved_scene_id] = current_scene.model_copy(
                 update={
                     "parameter_locks": tuple(
-                        item.id
+                        item.descriptor.id
                         for item in spec.manifest.parameters
-                        if item.scope == "scene" and item.id in locks
+                        if item.binding.scope == "scene" and item.descriptor.id in locks
                     )
                 }
             )
@@ -1370,44 +1200,10 @@ class WebClipEditingService:
             web_contract.read_media_sources(package_root, spec.manifest),
             candidate,
         )
-        self.validate_parameter_state(spec.manifest, candidate)
+        web_contract.validate_clip_state_contract(spec.manifest, candidate)
         updated = candidate.model_copy(update={"revision": current.revision + 1})
         editor.set_web_clip_state(updated, expected_revision=current.revision)
         return editor.state.web_states[current.clip_id]
-
-    @staticmethod
-    def validate_parameter_state(
-        manifest: EditableMediaManifest,
-        state: WebClipState,
-    ) -> None:
-        definitions = {item.id: item for item in manifest.parameters}
-        global_ids = {item.id for item in manifest.parameters if item.scope == "global"}
-        scene_ids = {item.id for item in manifest.parameters if item.scope == "scene"}
-        unknown_global = (set(state.parameters) | set(state.parameter_locks)) - global_ids
-        if unknown_global:
-            raise ValueError(f"Editable global parameter state is invalid: {sorted(unknown_global)}")
-        for parameter_id, value in state.parameters.items():
-            definitions[parameter_id].validate_value(cast(JsonValue, value))
-        scene_definitions = {item.id: item for item in manifest.scenes}
-        for scene_id, scene in state.scenes.items():
-            definition = scene_definitions.get(scene_id)
-            if definition is None:
-                raise ValueError(f"Editable parameter state references unknown scene: {scene_id}")
-            unknown_scene = (set(scene.parameters) | set(scene.parameter_locks)) - scene_ids
-            if unknown_scene:
-                raise ValueError(
-                    f"Editable scene parameter state is invalid: {scene_id}/{sorted(unknown_scene)}"
-                )
-            for parameter_id, value in scene.parameters.items():
-                definitions[parameter_id].validate_value(cast(JsonValue, value))
-            for parameter_id, track in scene.parameter_animations.items():
-                parameter = definitions.get(parameter_id)
-                if parameter is None or not parameter.animatable:
-                    raise ValueError(f"Editable parameter animation is invalid: {scene_id}/{parameter_id}")
-                if track.keyframes[-1].time_ms >= definition.duration_ms:
-                    raise ValueError(f"Editable parameter animation exceeds scene: {scene_id}/{parameter_id}")
-                for keyframe in track.keyframes:
-                    parameter.validate_value(keyframe.value)
 
     @staticmethod
     def validated_field_value(

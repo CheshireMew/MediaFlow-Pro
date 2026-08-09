@@ -583,58 +583,28 @@ AppScrollView {
                     delegate: ColumnLayout {
                         id: parameterDelegate
                         required property string key
-                        required property string label
-                        required property real minimum
-                        required property real maximum
-                        required property real step
-                        required property string unit
-                        required property string valueType
+                        required property var descriptor
+                        required property var value
+                        required property var options
                         required property var model
                         width: parameterList.width
-                        height: 58
+                        height: implicitHeight
                         spacing: 2
-                        RowLayout {
+                        EditorFieldControl {
                             Layout.fillWidth: true
-                            Text {
-                                Layout.fillWidth: true
-                                text: parameterDelegate.label
-                                color: Theme.text
-                                font.pixelSize: Theme.fontSizeCaption
-                            }
-                            Text {
-                                visible: parameterDelegate.valueType === "number"
-                                text: Number(parameterDelegate.model.value).toFixed(parameterDelegate.step < 1 ? 1 : 0) + " " + parameterDelegate.unit
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontSizeCaption
-                            }
-                        }
-                        AppSlider {
-                            Layout.fillWidth: true
-                            visible: parameterDelegate.valueType === "number"
-                            from: parameterDelegate.minimum
-                            to: parameterDelegate.maximum
-                            stepSize: parameterDelegate.step
-                            value: Number(parameterDelegate.model.value)
-                            onPressedChanged: if (!pressed)
-                                audioController.setAudioEffectParameter(audioController.selectedAudioEffectId, parameterDelegate.key, value)
-                        }
-                        AppComboBox {
-                            Layout.fillWidth: true
-                            visible: parameterDelegate.valueType === "layout"
-                            model: root.channelLayoutOptions
-                            textRole: "label"
-                            valueRole: "value"
-                            currentIndex: root.channelLayoutIndex(parameterDelegate.model.value)
-                            onActivated: audioController.setAudioEffectParameter(audioController.selectedAudioEffectId, parameterDelegate.key, String(currentValue))
-                        }
-                        AppComboBox {
-                            Layout.fillWidth: true
-                            visible: parameterDelegate.valueType === "bus"
-                            model: audioController.audioBusesModel
-                            textRole: "displayName"
-                            valueRole: "busId"
-                            currentIndex: audioController.audioBusesModel.findRow("busId", String(parameterDelegate.model.value))
-                            onActivated: audioController.setAudioEffectParameter(audioController.selectedAudioEffectId, parameterDelegate.key, String(currentValue))
+                            field: ({
+                                "path": "audio-effects." + audioController.selectedAudioEffectId + "." + parameterDelegate.key,
+                                "target": "audio-effect",
+                                "source_id": parameterDelegate.key,
+                                "descriptor": parameterDelegate.descriptor,
+                                "value": parameterDelegate.value,
+                                "locked": false
+                            })
+                            options: parameterDelegate.options
+                            onValueCommitted: value => audioController.setAudioEffectParameter(
+                                audioController.selectedAudioEffectId,
+                                parameterDelegate.key,
+                                value)
                         }
                     }
                 }

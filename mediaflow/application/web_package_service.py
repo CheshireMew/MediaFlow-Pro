@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
@@ -262,7 +261,7 @@ class WebPackageService:
         receipt_root = project_dir / "sources" / "web" / "receipts"
         if staging_root.is_dir():
             for staging in sorted(staging_root.iterdir()):
-                token = self._publication_token(staging.name, prefix="s-")
+                token = web_files.publication_token(staging.name, prefix="s-")
                 if token is None or not staging.is_dir():
                     continue
                 receipt = receipt_root / f"r-{token}.json"
@@ -270,7 +269,7 @@ class WebPackageService:
         if not receipt_root.is_dir():
             return
         for receipt in sorted(receipt_root.glob("r-*.json")):
-            payload = self._read_publication_receipt(receipt)
+            payload = web_files.read_publication_receipt(receipt)
             token = str(payload["token"])
             final = project_dir / "sources" / "web" / str(payload["directory"])
             if payload["status"] == "committed":
@@ -359,48 +358,3 @@ class WebPackageService:
             require_windows_interop_path(archived_receipt)
             archived_receipt.parent.mkdir(parents=True, exist_ok=True)
             receipt.replace(archived_receipt)
-
-    @staticmethod
-    def _publication_token(name: str, *, prefix: str) -> str | None:
-        if not name.startswith(prefix):
-            return None
-        token = name[len(prefix) :]
-        if len(token) != web_files.PUBLICATION_TOKEN_HEX_CHARS or any(
-            character not in "0123456789abcdef" for character in token
-        ):
-            return None
-        return token
-
-    @staticmethod
-    def _read_publication_receipt(path: Path) -> dict[str, object]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, UnicodeError) as error:
-            raise RuntimeError(f"Editable media publication receipt is invalid: {path}") from error
-        if not isinstance(payload, dict) or set(payload) != {
-            "schema_version",
-            "asset_id",
-            "source_hash",
-            "token",
-            "directory",
-            "status",
-        }:
-            raise RuntimeError(f"Editable media publication receipt is invalid: {path}")
-        token = payload["token"]
-        if (
-            type(payload["schema_version"]) is not int
-            or payload["schema_version"] != web_files.PUBLICATION_SCHEMA_VERSION
-            or not isinstance(payload["asset_id"], str)
-            or not payload["asset_id"]
-            or not isinstance(payload["source_hash"], str)
-            or len(payload["source_hash"]) != 64
-            or any(character not in "0123456789abcdef" for character in payload["source_hash"])
-            or not isinstance(token, str)
-            or payload["directory"] != f"p-{token}"
-            or payload["status"] not in {"pending", "committed"}
-            or path.name != f"r-{token}.json"
-        ):
-            raise RuntimeError(f"Editable media publication receipt is invalid: {path}")
-        if WebPackageService._publication_token(f"p-{token}", prefix="p-") is None:
-            raise RuntimeError(f"Editable media publication receipt is invalid: {path}")
-        return payload

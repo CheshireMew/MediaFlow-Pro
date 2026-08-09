@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, JsonValue, model_serializer, model_validator
 
 from mediaflow.domain.audio import AudioBus, AudioEffect
-from mediaflow.domain.enums import ExportFormat, TrackKind, VisualEffectKind
-from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.collaboration import ProjectChangeEvent
+from mediaflow.domain.enums import (
+    ExportFormat,
+    TrackKind,
+    TransitionKind,
+    VisualEffectKind,
+)
+from mediaflow.domain.exports import ExportPreset, SubtitleStyle
 from mediaflow.domain.model_base import DomainModel
+from mediaflow.domain.portable_timeline import PortableTimelineProfile
 from mediaflow.domain.project import Asset, Project, ProjectProfile, Sequence
-from mediaflow.domain.project_records import ProjectVersionRecord
+from mediaflow.domain.project_records import ExportHistoryRecord, ProjectVersionRecord
 from mediaflow.domain.reference_comparison import (
     ReferenceComparisonAcceptance,
     ReferenceComparisonResult,
 )
 from mediaflow.domain.runtime_capabilities import RuntimeInspection
+from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.domain.task_commands import SequenceBuildUnit, TaskCommand
 from mediaflow.domain.tasks import Task
@@ -23,8 +32,11 @@ from mediaflow.domain.timeline import (
     ClipAddRequest,
     ClipAudio,
     ClipTransform,
+    FreezeClipAddRequest,
+    TimelineMarker,
     TimelineState,
     Track,
+    Transition,
 )
 from mediaflow.domain.transcript_edits import (
     TranscriptEditPlan,
@@ -151,6 +163,16 @@ class ProjectVersionRestoreArguments(DomainModel):
     version_id: str = Field(min_length=1)
 
 
+class ProjectChangesListArguments(DomainModel):
+    since_revision: int = Field(ge=0)
+    actor_kind: Literal["human", "agent", "automation", "system"] | None = None
+
+
+class ProjectHandoffInspectArguments(DomainModel):
+    version_id: str | None = None
+    sequence_id: str | None = None
+
+
 class AssetImportArguments(DomainModel):
     source: str = Field(min_length=1)
     timeout: float | None = Field(default=None, gt=0)
@@ -173,6 +195,43 @@ class SequenceArguments(DomainModel):
     sequence_id: str | None = None
 
 
+class DiagnosticsBundleArguments(DomainModel):
+    output_path: str = Field(min_length=1)
+    task_ids: list[str] = Field(default_factory=list)
+    overwrite: bool = False
+
+    @model_validator(mode="after")
+    def valid_output(self) -> DiagnosticsBundleArguments:
+        output = Path(self.output_path)
+        if not output.is_absolute():
+            raise ValueError("output_path must be absolute")
+        if output.suffix.lower() != ".zip":
+            raise ValueError("output_path must use the .zip extension")
+        if len(self.task_ids) != len(set(self.task_ids)):
+            raise ValueError("task_ids must be unique")
+        return self
+
+
+class TranscriptSequenceTranscribeArguments(SequenceArguments):
+    asr: AsrSettings | None = None
+    start_frame: int | None = Field(default=None, ge=0)
+    end_frame: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> TranscriptSequenceTranscribeArguments:
+        if (
+            self.start_frame is not None
+            and self.end_frame is not None
+            and self.end_frame <= self.start_frame
+        ):
+            raise ValueError("end_frame must be after start_frame")
+        return self
+
+
+class PortableTimelineArguments(SequenceArguments):
+    timeline_path: str = Field(min_length=1)
+
+
 class TimelineTrackAddArguments(SequenceArguments):
     kind: TrackKind
     name: str | None = None
@@ -184,6 +243,10 @@ class TimelineClipAddArguments(ClipAddRequest):
 
 class TimelineClipBatchAddArguments(SequenceArguments):
     clips: list[ClipAddRequest] = Field(min_length=1, max_length=1000)
+
+
+class TimelineFreezeClipAddArguments(FreezeClipAddRequest):
+    sequence_id: str | None = None
 
 
 class TimelineClipMoveArguments(SequenceArguments):
@@ -200,6 +263,46 @@ class TimelineClipSplitArguments(SequenceArguments):
 class TimelineClipDeleteArguments(SequenceArguments):
     clip_ids: list[str] = Field(min_length=1)
     ripple: bool | None = None
+
+
+class TimelineTransitionAddArguments(SequenceArguments):
+    left_clip_id: str = Field(min_length=1)
+    right_clip_id: str = Field(min_length=1)
+    kind: TransitionKind
+    duration: int = Field(gt=0)
+
+
+class TimelineTransitionUpdateArguments(SequenceArguments):
+    transition_id: str = Field(min_length=1)
+    kind: TransitionKind
+    duration: int = Field(gt=0)
+    parameters: dict[str, JsonValue] | None = None
+
+
+class TimelineTransitionRemoveArguments(SequenceArguments):
+    transition_id: str = Field(min_length=1)
+
+
+class TimelineMarkerAddArguments(SequenceArguments):
+    frame: int = Field(ge=0)
+    name: str = ""
+    color: str = Field(default="#4ea1ff", pattern="^#[0-9a-fA-F]{6}$")
+
+
+class TimelineMarkerUpdateArguments(SequenceArguments):
+    marker_id: str = Field(min_length=1)
+    frame: int = Field(ge=0)
+    name: str = ""
+    color: str = Field(pattern="^#[0-9a-fA-F]{6}$")
+
+
+class TimelineMarkerRemoveArguments(SequenceArguments):
+    marker_id: str = Field(min_length=1)
+
+
+class SubtitleTrackStyleUpdateArguments(SequenceArguments):
+    track_id: str = Field(min_length=1)
+    style: SubtitleStyle
 
 
 class TimelineClipTransformArguments(SequenceArguments):
@@ -538,6 +641,33 @@ class ProjectVersionRestoreResult(ProjectSnapshotResult):
     restored_version: ProjectVersionRecord
 
 
+class ProjectChangeSummary(DomainModel):
+    cursor: int = Field(ge=1)
+    project_revision: int = Field(ge=0)
+    actor_kind: Literal["human", "agent", "automation", "system"]
+    actor_name: str
+    operation: str
+    summary: str
+    paths: list[str]
+
+
+class ProjectChangesListResult(DomainModel):
+    since_revision: int = Field(ge=0)
+    current_revision: int = Field(ge=0)
+    events: list[ProjectChangeEvent]
+    summaries: list[ProjectChangeSummary]
+
+
+class ProjectHandoffInspectResult(ProjectChangesListResult):
+    project_id: str
+    project_path: str
+    anchor_version: ProjectVersionRecord | None
+    offline_asset_ids: list[str]
+    latest_export: ExportHistoryRecord | None
+    export_matches_current_revision: bool
+    ready_for_handoff: bool
+
+
 class AssetListResult(DomainModel):
     assets: list[Asset]
 
@@ -554,6 +684,25 @@ class TimelineResult(DomainModel):
     timeline: TimelineState
 
 
+class PortableTimelineInspectResult(DomainModel):
+    timeline_path: str
+    timeline_sha256: str = Field(pattern="^[a-f0-9]{64}$")
+    project_id: str
+    profile: PortableTimelineProfile
+    duration_seconds: float = Field(gt=0)
+    source_count: int = Field(ge=0)
+    track_count: int = Field(gt=0)
+    clip_count: int = Field(ge=0)
+    marker_count: int = Field(ge=0)
+    mediaflow_compatible: Literal[True] = True
+
+
+class PortableTimelineImportResult(PortableTimelineInspectResult):
+    timeline: TimelineState
+    source_assets: dict[str, Asset]
+    subtitle_document_ids: list[str]
+
+
 class TrackResult(DomainModel):
     track: Track
 
@@ -564,6 +713,14 @@ class ClipResult(DomainModel):
 
 class ClipsResult(DomainModel):
     clips: list[Clip]
+
+
+class TransitionResult(DomainModel):
+    transition: Transition
+
+
+class MarkerResult(DomainModel):
+    marker: TimelineMarker
 
 
 class SubtitleDocumentWithSegments(SubtitleDocument):

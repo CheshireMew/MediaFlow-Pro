@@ -9,6 +9,7 @@ from mediaflow.application.asset_task_handlers import (
     DownloadTaskHandler,
     WebRenderTaskHandler,
 )
+from mediaflow.application.diagnostics_task_handler import DiagnosticsBundleTaskHandler
 from mediaflow.application.export_task_handlers import ExportTaskHandlers
 from mediaflow.application.highlight_service import HighlightService
 from mediaflow.application.language_task_handlers import LanguageTaskHandlers
@@ -84,6 +85,10 @@ class ProjectTaskHandlers:
             runtimes.analysis,
             settings,
         )
+        self._diagnostics = DiagnosticsBundleTaskHandler(
+            documents.project_dir,
+            runtimes.diagnostics,
+        )
 
     def register_with(self, tasks: TaskService) -> None:
         tasks.register(TaskKind.ANALYZE, self._analysis.handle)
@@ -96,4 +101,5 @@ class ProjectTaskHandlers:
         tasks.register(TaskKind.TRANSLATE, self._language.translate)
         tasks.register(TaskKind.HIGHLIGHT, self._language.highlight)
         tasks.register(TaskKind.WEB_RENDER, self._web.handle)
+        tasks.register(TaskKind.DIAGNOSTICS, self._diagnostics.handle)
         tasks.recover_claimable()

@@ -182,7 +182,7 @@ def build_mcp_server(
             "a stable request_id and the latest base_revision. Reuse the same request_id and "
             "unchanged input when retrying an uncertain result."
         ),
-        version="3",
+        version="4",
         lifespan=lifespan,
     )
 
@@ -227,7 +227,7 @@ def build_mcp_server(
     ) -> dict[str, Any]:
         request = {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": operation,
             "project": project,
             "arguments": arguments or {},
@@ -252,7 +252,7 @@ def build_mcp_server(
         name="mediaflow_execute_batch",
         description=(
             "Execute atomic project-write requests as one collaboration batch and one undo "
-            "group. Every request must use the current mediaflow-editor v3 envelope."
+            "group. Every request must use the current mediaflow-editor v4 envelope."
         ),
         annotations=ToolAnnotations(
             destructive_hint=True,

@@ -13,8 +13,10 @@ from scripts.ci.prepare_python_environment import (
     expected_state,
 )
 from scripts.ci.quality_plan import forced_plan, normalize_path, plan_for_paths
+from scripts.ci.run_quality import build_quality_stages
 from scripts.ci.test_resources import requires_reviewed_runtime, select_resource_profile
 from scripts.ci.test_shard import (
+    node_matches_prefix,
     normalize_collected_node_id,
     partition_test_nodes,
     source_file_for_node,
@@ -25,34 +27,42 @@ WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
 
 
 @pytest.mark.parametrize(
-    ("paths", "scope", "portable"),
+    ("paths", "scope", "portable_build", "interchange"),
     (
-        (("README.md",), "maintenance", False),
-        (("README.en.md", "README.ja.md", "CONTRIBUTING.md"), "maintenance", False),
-        (("LICENSE", "docs/readme-preview.png"), "maintenance", False),
-        ((".github/workflows/star-history.yml",), "maintenance", False),
-        (("AGENTS.md", "ARCHITECTURE.md"), "maintenance", False),
-        (("mediaflow/domain/projects.py",), "core", False),
-        (("mediaflow/application/task_service.py",), "core", False),
-        (("mediaflow/infrastructure/runtime_paths.py",), "full", True),
-        (("mediaflow/desktop/native/MltRuntime.cpp",), "full", True),
-        ((".github/workflows/quality.yml",), "full", True),
-        ((".env.example",), "full", True),
-        (("scripts/verify_project_interchange.py",), "full", True),
-        (("unclassified/release-input.bin",), "full", False),
+        (("README.md",), "maintenance", False, False),
+        (("README.en.md", "README.ja.md", "CONTRIBUTING.md"), "maintenance", False, False),
+        (("LICENSE", "docs/readme-preview.png"), "maintenance", False, False),
+        ((".github/workflows/star-history.yml",), "maintenance", False, False),
+        (("AGENTS.md", "ARCHITECTURE.md"), "maintenance", False, False),
+        (("mediaflow/domain/tasks.py",), "core", False, False),
+        (("mediaflow/application/task_service.py",), "core", False, False),
+        (("mediaflow/domain/project.py",), "full", False, True),
+        (("mediaflow/infrastructure/project_repository.py",), "full", False, True),
+        (("mediaflow/infrastructure/runtime_paths.py",), "full", True, False),
+        (("mediaflow/desktop/native/MltRuntime.cpp",), "full", True, False),
+        (("tests/v2/integration/test_native_preview.py",), "full", True, False),
+        ((".github/workflows/quality.yml",), "full", True, True),
+        (("scripts/ci/quality_plan.py",), "full", True, True),
+        ((".env.example",), "full", True, False),
+        (("requirements.lock",), "full", True, True),
+        (("runtime.lock.json",), "full", True, True),
+        (("scripts/verify_project_interchange.py",), "full", False, True),
+        (("unclassified/release-input.bin",), "full", False, False),
     ),
 )
 def test_quality_scope_fails_closed_without_over_testing_maintenance_changes(
     paths: tuple[str, ...],
     scope: str,
-    portable: bool,
+    portable_build: bool,
+    interchange: bool,
 ) -> None:
     plan = plan_for_paths(paths)
 
     assert plan.scope == scope
     assert plan.run_core is (scope != "maintenance")
     assert plan.run_full is (scope == "full")
-    assert plan.run_portable is portable
+    assert plan.run_portable_build is portable_build
+    assert plan.run_interchange is interchange
 
 
 def test_mixed_changes_keep_the_strongest_required_scope() -> None:
@@ -64,7 +74,9 @@ def test_mixed_changes_keep_the_strongest_required_scope() -> None:
 
 def test_empty_or_manual_full_plans_cannot_silently_skip_release_boundaries() -> None:
     assert plan_for_paths(()).scope == "full"
-    assert forced_plan("full", reason="test").run_portable is True
+    forced = forced_plan("full", reason="test")
+    assert forced.run_portable_build is True
+    assert forced.run_interchange is True
 
 
 def test_windows_paths_are_normalized_before_classification() -> None:
@@ -99,6 +111,14 @@ def test_test_node_shards_are_deterministic_disjoint_complete_and_split_large_fi
     assert normalize_collected_node_id(raw_node) == (
         r"tests/v2/test_large.py::test_case[param-\u4e2d]"
     )
+    assert node_matches_prefix(
+        "tests/v2/test_large.py::test_case[param-1]",
+        "tests/v2/test_large.py::test_case",
+    )
+    assert not node_matches_prefix(
+        "tests/v2/test_large.py::test_case_other[param-1]",
+        "tests/v2/test_large.py::test_case",
+    )
     timed = partition_test_nodes(
         nodes,
         4,
@@ -113,6 +133,7 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
         "tests/v2/domain/test_models.py::test_model",
         "tests/v2/application/test_task_service.py::test_task",
         "tests/v2/infrastructure/test_mlt_export.py::test_export",
+        "tests/v2/infrastructure/test_editable_media_v6_runtime.py::test_protocol",
         "tests/v2/desktop/test_qml_smoke.py::test_window",
     )
 
@@ -123,7 +144,83 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
     assert set(lightweight) | set(runtime) == set(nodes)
     assert requires_reviewed_runtime(nodes[2]) is True
     assert requires_reviewed_runtime(nodes[3]) is True
+    assert requires_reviewed_runtime(nodes[4]) is True
     assert requires_reviewed_runtime(nodes[0]) is False
+
+
+def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
+    tmp_path: Path,
+) -> None:
+    maintenance = build_quality_stages(
+        forced_plan("maintenance", reason="test"),
+        run_root=tmp_path,
+        max_runtime_workers=2,
+    )
+    core = build_quality_stages(
+        forced_plan("core", reason="test"),
+        run_root=tmp_path,
+        max_runtime_workers=2,
+    )
+    full = build_quality_stages(
+        forced_plan("full", reason="test"),
+        run_root=tmp_path,
+        max_runtime_workers=2,
+    )
+
+    assert [stage.name for stage in maintenance] == ["maintenance"]
+    assert [stage.name for stage in core] == [
+        "maintenance",
+        "preflight",
+        "core",
+        "core-serial",
+    ]
+    assert [stage.name for stage in full] == [
+        "maintenance",
+        "preflight",
+        "core",
+        "core-serial",
+        "runtime",
+        "interactive-verifiers",
+        "interactive-qml",
+        "interactive-chains",
+        "offline-preflight",
+        "offline-parallel",
+        "offline-final",
+    ]
+    assert next(stage for stage in core if stage.name == "core").max_workers == 2
+    runtime = next(stage for stage in full if stage.name == "runtime")
+    assert runtime.max_workers == 2
+    assert len(runtime.commands) == 4
+    interactive_qml = next(stage for stage in full if stage.name == "interactive-qml")
+    assert interactive_qml.max_workers == 1
+    assert [command.name for command in interactive_qml.commands] == [
+        "qml-project-chain"
+    ]
+    assert next(
+        stage for stage in full if stage.name == "interactive-chains"
+    ).max_workers == 2
+    assert next(
+        stage for stage in full if stage.name == "offline-parallel"
+    ).max_workers == 2
+    command_lines = [
+        command.arguments
+        for stage in full
+        for command in stage.commands
+    ]
+    assert not any(
+        arguments[:4]
+        == (
+            arguments[0],
+            "-m",
+            "pytest",
+            "tests/v2",
+        )
+        for arguments in command_lines
+        if len(arguments) >= 4
+    )
+    assert len({command.name for stage in full for command in stage.commands}) == sum(
+        len(stage.commands) for stage in full
+    )
 
 
 def test_complete_python_environment_state_rejects_a_different_lock(tmp_path: Path) -> None:
@@ -157,7 +254,9 @@ def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional()
     assert "python scripts/ci/quality_plan.py" in workflow
     assert "needs.plan.outputs.run_core == 'true'" in workflow
     assert "needs.plan.outputs.run_full == 'true'" in workflow
-    assert "needs.plan.outputs.run_portable == 'true'" in workflow
+    assert "needs.plan.outputs.run_portable_build == 'true'" in workflow
+    assert "needs.plan.outputs.run_interchange == 'true'" in workflow
+    assert "needs.plan.outputs.run_portable == 'true'" not in workflow
     assert "python -m scripts.ci.test_shard" in workflow
     assert "--marker \"not integration and not slow\"" in workflow
     assert "--resource-profile lightweight" in workflow
@@ -184,6 +283,8 @@ def test_complete_python_cache_is_reused_and_lightweight_core_has_no_media_sdk_s
     assert "mediaflow-runtime\\deps" not in core
     assert "mediaflow-runtime\\qt" not in core
     assert "mediaflow-runtime\\native" not in core
+    assert workflow.count("id: native-preview") == 3
+    assert workflow.count("if: steps.native-preview.outputs.cache-hit != 'true'") == 3
 
 
 def test_portable_native_preview_smoke_precedes_expensive_contracts() -> None:
@@ -198,13 +299,25 @@ def test_portable_native_preview_smoke_precedes_expensive_contracts() -> None:
     cli = portable.index("Run the real CLI and Chromium chains")
     assert smoke < contracts < type_check < cli
     assert portable.count("tests/v2/integration/test_native_preview.py") == 1
+    assert "needs.plan.outputs.run_portable_build == 'true'" in portable
+
+
+def test_project_interchange_has_an_independent_trigger_and_no_browser_setup() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    interchange = workflow.split("  interchange-produce:", 1)[1].split(
+        "  quality-gate:", 1
+    )[0]
+
+    assert interchange.count("needs.plan.outputs.run_interchange == 'true'") == 2
+    assert "playwright install-deps chromium" not in interchange
+    assert workflow.count("playwright install-deps chromium") == 1
 
 
 def test_browser_scenarios_and_failure_diagnostics_have_process_boundaries() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert workflow.count(
-        "test_unified_import_opens_the_v5_package_through_local_preview_server"
+        "test_unified_import_opens_the_v6_package_through_local_preview_server"
     ) == 1
     assert workflow.count(
         "test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page"

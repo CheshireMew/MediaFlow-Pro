@@ -1,0 +1,16 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/react-media-starter/dist",
+  "editable_media_version": 6,
+  "files": {
+    "assets/index-cLSZIPX4.js": "6d9ecd4c2fc334e3488a86137cd755f1029d3e89b1ce3d2eeef28676f5a8ea3d",
+    "assets/index-cLSZIPX4.js.map": "d932a24babdb82cdba23f3a8180825845c910e8790c11d3088cd83ed27b86509",
+    "assets/index-uinjwJct.css": "b0603644b2e4d19e949be1f0dbff52920f46cf78e536be448ed885e44eb28e50",
+    "build-info.json": "92e08ca5f82fb2988fcdf793d20cb86595dd13ac2901b24cb8332045f89ac3c8",
+    "editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
+    "editable-media.json": "3e4bd4cbd0d1a8cfff90ab587e0eb40e0ea5ac1dda64a92e8cdc9c2ace7ad98c",
+    "index.html": "32f1a8a850804f8c9193be5a419a913e3aad693039dc47e4e6bc22e222349986",
+    "media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce"
+  }
+}

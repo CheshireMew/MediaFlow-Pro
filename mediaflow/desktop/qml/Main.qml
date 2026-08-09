@@ -36,6 +36,8 @@ ApplicationWindow {
         options.push({label: qsTr("仅下载音频"), value: "audio"})
         return options
     }
+
+    AutomationRequestDialog { }
     function indexOfValue(model, value) {
         for (let index = 0; index < model.length; ++index) {
             if (String(model[index].value) === String(value))

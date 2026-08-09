@@ -48,7 +48,7 @@ class EditorServiceApi:
             request_id = f"{operation}-{uuid.uuid4().hex}"
         value: dict[str, Any] = {
             "protocol": "mediaflow-editor",
-            "version": 3,
+            "version": 4,
             "operation": operation,
             "arguments": arguments or {},
             "actor": self.actor,
@@ -101,7 +101,7 @@ class EditorServiceApi:
         response = execute_sync(
             {
                 "protocol": "mediaflow-editor",
-                "version": 3,
+                "version": 4,
                 "operation": "project.inspect",
                 "project": project_text,
                 "arguments": {},

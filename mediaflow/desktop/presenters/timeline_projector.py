@@ -112,11 +112,13 @@ class TimelineProjector(Projector):
                 "hasAudio": assets[clip.asset_id].metadata.has_audio,
                 "audioTrackPosition": audio_lane_positions.get(clip.id, -1),
                 "waveformReady": bool(assets[clip.asset_id].waveform_path),
-                "previewUrl": (
-                    QUrl.fromLocalFile(self._session.asset_state.thumbnail_paths[clip.asset_id]).toString()
-                    if clip.asset_id in self._session.asset_state.thumbnail_paths
-                    else ""
-                ),
+                "filmstripFrames": [
+                    {
+                        **item,
+                        "url": QUrl.fromLocalFile(str(item["path"])).toString(),
+                    }
+                    for item in self._session.presentation.filmstrip_frames.get(clip.id, [])
+                ],
                 "x": clip.transform.x,
                 "y": clip.transform.y,
                 "scaleX": clip.transform.scale_x,

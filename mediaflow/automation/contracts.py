@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from mediaflow.domain.audio import AUDIO_EFFECT_DEFINITIONS
 from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.product_identity import PRODUCT_NAME
@@ -11,14 +12,15 @@ from mediaflow.domain.runtime_capabilities import (
     CAPABILITY_CATALOG,
     CapabilityDefinition,
 )
+from mediaflow.domain.visual_effects import VISUAL_EFFECT_DEFINITIONS
 
 AUTOMATION_PROTOCOL: Literal["mediaflow-editor"] = "mediaflow-editor"
-AUTOMATION_VERSION: Literal[3] = 3
+AUTOMATION_VERSION: Literal[4] = 4
 
 
 class AutomationRequest(DomainModel):
     protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
-    version: Literal[3] = AUTOMATION_VERSION
+    version: Literal[4] = AUTOMATION_VERSION
     operation: str
     project: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -37,7 +39,7 @@ class AutomationError(DomainModel):
 
 class AutomationSuccessResponse(DomainModel):
     protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
-    version: Literal[3] = AUTOMATION_VERSION
+    version: Literal[4] = AUTOMATION_VERSION
     request_id: str | None = None
     ok: Literal[True] = True
     result: dict[str, Any]
@@ -45,7 +47,7 @@ class AutomationSuccessResponse(DomainModel):
 
 class AutomationFailureResponse(DomainModel):
     protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
-    version: Literal[3] = AUTOMATION_VERSION
+    version: Literal[4] = AUTOMATION_VERSION
     request_id: str | None = None
     ok: Literal[False] = False
     error: AutomationError
@@ -72,13 +74,14 @@ class AutomationOperationContract(DomainModel):
 class AutomationContract(DomainModel):
     product: str = PRODUCT_NAME
     protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
-    version: Literal[3] = AUTOMATION_VERSION
+    version: Literal[4] = AUTOMATION_VERSION
     default_project_root: str
     transport: AutomationTransport = Field(default_factory=AutomationTransport)
     request_schema: dict[str, Any]
     success_response_schema: dict[str, Any]
     error_response_schema: dict[str, Any]
     capabilities: list[CapabilityDefinition]
+    editor_field_catalogs: dict[str, dict[str, Any]]
     operations: list[AutomationOperationContract]
 
 
@@ -126,6 +129,16 @@ def describe_contract() -> dict[str, Any]:
         success_response_schema=inline_model_schema(AutomationSuccessResponse),
         error_response_schema=inline_model_schema(AutomationFailureResponse),
         capabilities=list(CAPABILITY_CATALOG),
+        editor_field_catalogs={
+            "visual_effects": {
+                kind.value: definition.model_dump(mode="json")
+                for kind, definition in VISUAL_EFFECT_DEFINITIONS.items()
+            },
+            "audio_effects": {
+                kind.value: definition.model_dump(mode="json")
+                for kind, definition in AUDIO_EFFECT_DEFINITIONS.items()
+            },
+        },
         operations=[
             AutomationOperationContract(
                 name=name,

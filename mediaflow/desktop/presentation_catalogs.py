@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QT_TRANSLATE_NOOP, QCoreApplication
 
 from mediaflow.application.export_catalog import available_export_variants
-from mediaflow.domain.audio import audio_effect_parameter_schema
+from mediaflow.domain.audio import AUDIO_EFFECT_DEFINITIONS
 from mediaflow.domain.audio_effect_presets import audio_effect_preset_ids
 from mediaflow.domain.effect_registry import TRANSITION_CAPABILITIES, transition_is_available
 from mediaflow.domain.enums import AudioEffectKind, ColorMode
@@ -16,6 +16,7 @@ from mediaflow.domain.task_commands import (
     AnalyzeLoudnessCommand,
     AnalyzeScenesCommand,
     AnalyzeSequenceBoundsCommand,
+    DiagnosticsBundleCommand,
     DownloadMediaCommand,
     ExportHighlightsCommand,
     ExportSequenceCommand,
@@ -341,6 +342,9 @@ def status_message(source: str, *arguments: object) -> str:
             "StatusMessageCatalog", "外部修改与当前输入冲突，已保护未提交内容"
         ),
         "字幕已保存": QCoreApplication.translate("StatusMessageCatalog", "字幕已保存"),
+        "诊断包任务已加入任务中心": QCoreApplication.translate(
+            "StatusMessageCatalog", "诊断包任务已加入任务中心"
+        ),
         "字幕已合并": QCoreApplication.translate("StatusMessageCatalog", "字幕已合并"),
         "字幕已导出到 %1": QCoreApplication.translate("StatusMessageCatalog", "字幕已导出到 %1"),
         "字幕已拆分": QCoreApplication.translate("StatusMessageCatalog", "字幕已拆分"),
@@ -564,6 +568,8 @@ def task_title(task: Task) -> str:
         return QCoreApplication.translate("TaskCatalog", "渲染网页片段")
     if isinstance(command, TranscribeSequenceCommand):
         return QCoreApplication.translate("TaskCatalog", "转录当前时间轴")
+    if isinstance(command, DiagnosticsBundleCommand):
+        return QCoreApplication.translate("TaskCatalog", "生成诊断包")
     if isinstance(command, TranslateSegmentsCommand):
         return QCoreApplication.translate("TaskCatalog", "翻译所选字幕")
     if isinstance(command, TranslateDocumentCommand):
@@ -682,6 +688,18 @@ def task_message_label(code: str) -> str:
         "web_render_cache_ready": QCoreApplication.translate("TaskMessageCatalog", "正在复用已有网页画面"),
         "web_export_copying": QCoreApplication.translate("TaskMessageCatalog", "正在复制网页素材结果"),
         "web_export_encoding": QCoreApplication.translate("TaskMessageCatalog", "正在编码网页素材"),
+        "diagnostics_collecting_project": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在收集项目诊断信息"
+        ),
+        "diagnostics_inspecting_runtime": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在检查媒体运行时"
+        ),
+        "diagnostics_probing_media": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在读取素材身份与媒体信息"
+        ),
+        "diagnostics_writing_bundle": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在写入诊断包"
+        ),
         "scene_detection_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在准备场景检测"),
         "scene_detection_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在检测场景切点"),
         "scene_detection_saving": QCoreApplication.translate("TaskMessageCatalog", "正在保存场景切点"),
@@ -821,53 +839,10 @@ def transition_options(color_mode: ColorMode) -> list[dict[str, object]]:
 
 
 def audio_effect_label(kind: AudioEffectKind) -> str:
-    labels = {
-        AudioEffectKind.PARAMETRIC_EQ: QCoreApplication.translate("AudioCatalog", "参数均衡器"),
-        AudioEffectKind.HIGH_PASS: QCoreApplication.translate("AudioCatalog", "高通"),
-        AudioEffectKind.LOW_PASS: QCoreApplication.translate("AudioCatalog", "低通"),
-        AudioEffectKind.COMPRESSOR: QCoreApplication.translate("AudioCatalog", "压缩器"),
-        AudioEffectKind.LIMITER: QCoreApplication.translate("AudioCatalog", "限制器"),
-        AudioEffectKind.NOISE_GATE: QCoreApplication.translate("AudioCatalog", "噪声门"),
-        AudioEffectKind.RNNOISE: "RNNoise",
-        AudioEffectKind.CHANNEL_MAP: QCoreApplication.translate("AudioCatalog", "声道映射"),
-        AudioEffectKind.LOUDNESS_NORMALIZE: QCoreApplication.translate("AudioCatalog", "响度标准化"),
-        AudioEffectKind.DUCKING: QCoreApplication.translate("AudioCatalog", "自动闪避"),
-    }
-    return labels[kind]
-
-
-def audio_parameter_specs(kind: AudioEffectKind) -> list[dict]:
-    labels = {
-        "low_db": QCoreApplication.translate("AudioCatalog", "低频增益"),
-        "low_mid_db": QCoreApplication.translate("AudioCatalog", "中低频增益"),
-        "high_mid_db": QCoreApplication.translate("AudioCatalog", "中高频增益"),
-        "high_db": QCoreApplication.translate("AudioCatalog", "高频增益"),
-        "frequency_hz": QCoreApplication.translate("AudioCatalog", "截止频率"),
-        "threshold_db": QCoreApplication.translate("AudioCatalog", "阈值"),
-        "ratio": QCoreApplication.translate("AudioCatalog", "压缩比"),
-        "attack_ms": QCoreApplication.translate("AudioCatalog", "启动时间"),
-        "release_ms": QCoreApplication.translate("AudioCatalog", "释放时间"),
-        "ceiling_db": QCoreApplication.translate("AudioCatalog", "上限"),
-        "mix": QCoreApplication.translate("AudioCatalog", "混合"),
-        "layout": QCoreApplication.translate("AudioCatalog", "声道布局"),
-        "target_lufs": QCoreApplication.translate("AudioCatalog", "目标响度"),
-        "true_peak_db": QCoreApplication.translate("AudioCatalog", "True Peak 上限"),
-        "driver_bus_id": QCoreApplication.translate("AudioCatalog", "驱动总线"),
-        "reduction_db": QCoreApplication.translate("AudioCatalog", "衰减量"),
-    }
-    schema = audio_effect_parameter_schema(kind)
-    return [
-        {
-            "key": key,
-            "label": labels[key],
-            "minimum": float(spec.get("minimum", 0.0)),
-            "maximum": float(spec.get("maximum", 0.0)),
-            "step": float(spec["step"]),
-            "unit": str(spec["unit"]),
-            "valueType": str(spec.get("value_type", "number")),
-        }
-        for key, spec in schema.items()
-    ]
+    return QCoreApplication.translate(
+        "AudioCatalog",
+        AUDIO_EFFECT_DEFINITIONS[kind].label,
+    )
 
 
 def audio_preset_options(kind: AudioEffectKind) -> list[dict[str, str]]:

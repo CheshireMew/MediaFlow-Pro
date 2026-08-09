@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from mediaflow.automation import diagnostics_operations as diagnostics
 from mediaflow.automation import language_audio_operations as language_audio
 from mediaflow.automation import media_quality_operations as media_quality
 from mediaflow.automation import operation_models as models
@@ -36,11 +37,7 @@ class OperationDefinition:
 
     @property
     def idempotency(self) -> IdempotencyPolicy:
-        return (
-            "optional"
-            if self.project_access in {"create", "write"}
-            else "none"
-        )
+        return "optional" if self.project_access in {"create", "write"} else "none"
 
     def validate_arguments(self, values: dict[str, Any]) -> dict[str, Any]:
         return self.arguments_model.model_validate(values).model_dump(
@@ -147,21 +144,33 @@ def _operation_write_set(operation: str, arguments: dict[str, Any]) -> list[str]
         return ["/project"]
     if operation == "project.version.create":
         return ["/project/versions"]
+    if operation.startswith("timeline.transition."):
+        transition_id = arguments.get("transition_id") or "new"
+        return [f"/sequences/{sequence}/transitions/{_path_value(transition_id)}"]
+    if operation.startswith("timeline.marker."):
+        marker_id = arguments.get("marker_id") or "new"
+        return [f"/sequences/{sequence}/markers/{_path_value(marker_id)}"]
     if operation == "asset.import":
         return ["/assets"]
     if operation == "sequence.short.create":
         return ["/sequences"]
+    if operation == "timeline.portable.import":
+        return [
+            "/assets",
+            f"/sequences/{sequence}",
+            f"/sequences/{sequence}/subtitles",
+        ]
     if operation == "timeline.track.add":
         return [f"/sequences/{sequence}/tracks"]
+    if operation == "subtitle.track.style.update":
+        return [f"/sequences/{sequence}/tracks/{_path_value(arguments.get('track_id'))}/subtitle-style"]
     if operation in {"timeline.clip.add", "timeline.clip.batch.add", "timeline.clip.copy"}:
+        return [f"/sequences/{sequence}/clips"]
+    if operation == "timeline.clip.freeze.add":
         return [f"/sequences/{sequence}/clips"]
     if operation.startswith("timeline.clip."):
         clip_ids = arguments.get("clip_ids") or [arguments.get("clip_id")]
-        roots = [
-            f"/sequences/{sequence}/clips/{_path_value(clip_id)}"
-            for clip_id in clip_ids
-            if clip_id
-        ]
+        roots = [f"/sequences/{sequence}/clips/{_path_value(clip_id)}" for clip_id in clip_ids if clip_id]
         if operation in {"timeline.clip.delete", "timeline.clip.split"}:
             return roots
         field = {
@@ -183,13 +192,15 @@ def _operation_write_set(operation: str, arguments: dict[str, Any]) -> list[str]
             f"/segments/{_path_value(arguments.get('segment_id'))}"
         )
         fields = {
-            name: value
-            for name, value in arguments.items()
-            if name not in {"document_id", "segment_id"}
+            name: value for name, value in arguments.items() if name not in {"document_id", "segment_id"}
         }
         return _field_paths(root, fields)
     if operation == "transcript.edit.apply":
         return [f"/sequences/{sequence}/transcript"]
+    if operation == "transcript.sequence.transcribe":
+        return [f"/tasks/transcript-sequence:{sequence}"]
+    if operation == "diagnostics.bundle.create":
+        return ["/tasks/diagnostics-bundle"]
     if operation == "audio.bus.update":
         root = f"/audio/buses/{_path_value(arguments.get('bus_id'))}"
         return _field_paths(root, arguments.get("changes"))
@@ -232,6 +243,7 @@ def _operation_write_set(operation: str, arguments: dict[str, Any]) -> list[str]
     if operation == "web.asset.rebind.commit":
         return [f"/assets/{_path_value(arguments.get('asset_id'))}/web-package"]
     return [f"/operations/{operation.replace('.', '/')}"]
+
 
 OPERATIONS: dict[str, OperationDefinition] = {
     "runtime.inspect": _operation(
@@ -293,6 +305,24 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.ProjectVersionRestoreResult,
         project.restore_version,
     ),
+    "project.changes.list": _read(
+        models.ProjectChangesListArguments,
+        models.ProjectChangesListResult,
+        project.list_changes,
+        capabilities=("project-editing", "asynchronous-project-handoff"),
+    ),
+    "project.handoff.inspect": _read(
+        models.ProjectHandoffInspectArguments,
+        models.ProjectHandoffInspectResult,
+        project.inspect_handoff,
+        capabilities=("project-editing", "asynchronous-project-handoff"),
+    ),
+    "diagnostics.bundle.create": _write(
+        models.DiagnosticsBundleArguments,
+        models.TaskReceiptResult,
+        diagnostics.create_bundle,
+        task_backed=True,
+    ),
     "asset.list": _read(
         models.EmptyArguments,
         models.AssetListResult,
@@ -314,6 +344,23 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.SequenceArguments,
         models.TimelineResult,
         timeline.get_timeline,
+    ),
+    "timeline.portable.inspect": _read(
+        models.PortableTimelineArguments,
+        models.PortableTimelineInspectResult,
+        timeline.inspect_portable_timeline,
+        capabilities=("project-editing", "portable-timeline-import"),
+    ),
+    "timeline.portable.import": _write(
+        models.PortableTimelineArguments,
+        models.PortableTimelineImportResult,
+        timeline.import_portable_timeline,
+        capabilities=(
+            "project-editing",
+            "portable-timeline-import",
+            "ffmpeg",
+            "ffprobe",
+        ),
     ),
     "timeline.track.add": _write(
         models.TimelineTrackAddArguments,
@@ -355,6 +402,58 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.TimelineClipDeleteArguments,
         models.TimelineResult,
         timeline.delete_clips,
+        reversible=True,
+    ),
+    "timeline.clip.freeze.add": _write(
+        models.TimelineFreezeClipAddArguments,
+        models.ClipResult,
+        timeline.add_freeze_clip,
+        reversible=True,
+        capabilities=("project-editing", "native-freeze-clips"),
+    ),
+    "timeline.transition.add": _write(
+        models.TimelineTransitionAddArguments,
+        models.TransitionResult,
+        timeline.add_transition,
+        reversible=True,
+    ),
+    "timeline.transition.update": _write(
+        models.TimelineTransitionUpdateArguments,
+        models.TransitionResult,
+        timeline.update_transition,
+        reversible=True,
+    ),
+    "timeline.transition.remove": _write(
+        models.TimelineTransitionRemoveArguments,
+        models.RemovedResult,
+        timeline.remove_transition,
+        reversible=True,
+    ),
+    "timeline.marker.add": _write(
+        models.TimelineMarkerAddArguments,
+        models.MarkerResult,
+        timeline.add_marker,
+        reversible=True,
+        capabilities=("project-editing", "semantic-timeline-markers"),
+    ),
+    "timeline.marker.update": _write(
+        models.TimelineMarkerUpdateArguments,
+        models.MarkerResult,
+        timeline.update_marker,
+        reversible=True,
+        capabilities=("project-editing", "semantic-timeline-markers"),
+    ),
+    "timeline.marker.remove": _write(
+        models.TimelineMarkerRemoveArguments,
+        models.RemovedResult,
+        timeline.remove_marker,
+        reversible=True,
+        capabilities=("project-editing", "semantic-timeline-markers"),
+    ),
+    "subtitle.track.style.update": _write(
+        models.SubtitleTrackStyleUpdateArguments,
+        models.TrackResult,
+        timeline.update_subtitle_track_style,
         reversible=True,
     ),
     "timeline.clip.transform": _write(
@@ -414,6 +513,13 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.TranscriptGetArguments,
         models.TranscriptResult,
         language_audio.get_transcript,
+    ),
+    "transcript.sequence.transcribe": _write(
+        models.TranscriptSequenceTranscribeArguments,
+        models.TaskReceiptResult,
+        language_audio.transcribe_sequence,
+        task_backed=True,
+        capabilities=("project-editing", "faster-whisper-xxl"),
     ),
     "transcript.edit.preview": _read(
         models.TranscriptEditPreviewArguments,

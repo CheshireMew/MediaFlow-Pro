@@ -36,9 +36,10 @@ class CacheManager:
             not normalized
             or category_path.is_absolute()
             or bool(category_path.drive)
+            or len(category_path.parts) != 1
             or any(part in {".", ".."} for part in category_path.parts)
         ):
-            raise ValueError("Cache category must stay inside the cache root")
+            raise ValueError("Cache category must be one direct child of the cache root")
         run_id = str(uuid.uuid4())
         run = self.root / category_path / "runs" / run_id
         self._require_managed(run.resolve())
@@ -87,7 +88,10 @@ class CacheManager:
         if not self.root.is_dir():
             return
         cutoff = time.time() - max(0, max_age_seconds)
-        for runs in self.root.rglob("runs"):
+        for category in self.root.iterdir():
+            if not category.is_dir():
+                continue
+            runs = category / "runs"
             if not runs.is_dir():
                 continue
             for candidate in runs.iterdir():
@@ -138,6 +142,38 @@ class CacheManager:
                     path.unlink(missing_ok=True)
             except OSError:
                 continue
+
+    def prune_directory_to_size(
+        self,
+        relative_directory: str | Path,
+        *,
+        maximum_bytes: int,
+    ) -> None:
+        """Evict least-recently-used regular files until a cache fits its budget."""
+
+        if maximum_bytes < 0:
+            raise ValueError("Cache size limit cannot be negative")
+        directory = (self.root / relative_directory).resolve()
+        self._require_managed(directory)
+        if not directory.is_dir():
+            return
+        entries: list[tuple[Path, int, int]] = []
+        for path in directory.rglob("*"):
+            try:
+                value = path.stat()
+            except OSError:
+                continue
+            if stat.S_ISREG(value.st_mode):
+                entries.append((path, value.st_size, value.st_atime_ns))
+        total = sum(size for _path, size, _accessed in entries)
+        for path, size, _accessed in sorted(entries, key=lambda item: item[2]):
+            if total <= maximum_bytes:
+                break
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                continue
+            total -= size
 
     def _require_managed(self, path: Path) -> None:
         root = _comparable_resolved_path(self.root)

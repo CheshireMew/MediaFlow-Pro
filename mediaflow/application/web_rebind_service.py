@@ -182,7 +182,6 @@ class WebRebindService:
                 new_media_sources,
                 state,
             )
-            self._clips.validate_parameter_state(new_manifest, state)
 
         new_has_audio = web_media_sources_have_audio(new_media_sources)
         main_profile = self.repository.catalog.get_sequence(
@@ -294,8 +293,8 @@ class WebRebindService:
         new_scenes = {item.id: item for item in new_manifest.scenes}
         new_variants = {item.id for item in new_manifest.variants}
         new_themes = {item.id: item for item in new_manifest.theme_variables}
-        old_parameters = {item.id: item for item in old_manifest.parameters}
-        new_parameters = {item.id: item for item in new_manifest.parameters}
+        old_parameters = {item.descriptor.id: item for item in old_manifest.parameters}
+        new_parameters = {item.descriptor.id: item for item in new_manifest.parameters}
         new_data = {item.id: item for item in new_manifest.data_fields}
         new_media_ids = {item.id for item in new_media_sources.sources}
         conflicts: dict[str, WebRebindConflict] = {}
@@ -385,7 +384,10 @@ class WebRebindService:
             for parameter_id in set(state.parameters) | set(state.parameter_locks):
                 path = f"{clip_root}.parameters.{parameter_id}"
                 parameter_definition = new_parameters.get(parameter_id)
-                if parameter_definition is None or parameter_definition.scope != "global":
+                if (
+                    parameter_definition is None
+                    or parameter_definition.binding.scope != "global"
+                ):
                     add(
                         path,
                         "removed-parameter",
@@ -396,7 +398,9 @@ class WebRebindService:
                     continue
                 if parameter_id in state.parameters:
                     try:
-                        parameter_definition.validate_value(cast(JsonValue, state.parameters[parameter_id]))
+                        parameter_definition.descriptor.validate_value(
+                            cast(JsonValue, state.parameters[parameter_id])
+                        )
                     except ValueError as error:
                         add(
                             path,
@@ -553,7 +557,11 @@ class WebRebindService:
                         )
                         continue
                     old_definition = old_parameters.get(parameter_id)
-                    if old_definition is not None and old_definition.scope != parameter_definition.scope:
+                    if (
+                        old_definition is not None
+                        and old_definition.binding.scope
+                        != parameter_definition.binding.scope
+                    ):
                         add(
                             parameter_root,
                             "removed-parameter",
@@ -567,7 +575,7 @@ class WebRebindService:
                         continue
                     if parameter_id in scene_state.parameters:
                         try:
-                            parameter_definition.validate_value(
+                            parameter_definition.descriptor.validate_value(
                                 cast(
                                     JsonValue,
                                     scene_state.parameters[parameter_id],
@@ -589,12 +597,12 @@ class WebRebindService:
                         path = f"{parameter_root}.animation"
                         try:
                             if (
-                                not parameter_definition.animatable
+                                parameter_definition.descriptor.timeline != "keyframe"
                                 or parameter_track.keyframes[-1].time_ms >= scene_definition.duration_ms
                             ):
                                 raise OverflowError
                             for keyframe in parameter_track.keyframes:
-                                parameter_definition.validate_value(keyframe.value)
+                                parameter_definition.descriptor.validate_value(keyframe.value)
                         except OverflowError:
                             add(
                                 path,
@@ -663,7 +671,7 @@ class WebRebindService:
         new_layers = {item.id: item for item in manifest.layers}
         new_scenes = {item.id: item for item in manifest.scenes}
         new_data_ids = {item.id for item in manifest.data_fields}
-        new_parameters = {item.id: item for item in manifest.parameters}
+        new_parameters = {item.descriptor.id: item for item in manifest.parameters}
         migrated_scenes: dict[str, WebSceneState] = {}
         for scene_id, scene_state in state.scenes.items():
             scene_root = f"{clip_root}.scenes.{scene_id}"
@@ -705,14 +713,14 @@ class WebRebindService:
                 parameter_id: value
                 for parameter_id, value in scene_state.parameters.items()
                 if parameter_id in new_parameters
-                and new_parameters[parameter_id].scope == "scene"
+                and new_parameters[parameter_id].binding.scope == "scene"
                 and f"{scene_root}.parameters.{parameter_id}" not in resolved_paths
             }
             parameter_animations = {
                 parameter_id: track
                 for parameter_id, track in scene_state.parameter_animations.items()
                 if parameter_id in new_parameters
-                and new_parameters[parameter_id].animatable
+                and new_parameters[parameter_id].descriptor.timeline == "keyframe"
                 and f"{scene_root}.parameters.{parameter_id}" not in resolved_paths
                 and f"{scene_root}.parameters.{parameter_id}.animation" not in resolved_paths
             }
@@ -720,7 +728,7 @@ class WebRebindService:
                 parameter_id
                 for parameter_id in scene_state.parameter_locks
                 if parameter_id in new_parameters
-                and new_parameters[parameter_id].scope == "scene"
+                and new_parameters[parameter_id].binding.scope == "scene"
                 and f"{scene_root}.parameters.{parameter_id}" not in resolved_paths
             )
             snapshot = WebDataSnapshot(
@@ -767,14 +775,14 @@ class WebRebindService:
                     key: value
                     for key, value in state.parameters.items()
                     if key in new_parameters
-                    and new_parameters[key].scope == "global"
+                    and new_parameters[key].binding.scope == "global"
                     and f"{clip_root}.parameters.{key}" not in resolved_paths
                 },
                 "parameter_locks": tuple(
                     key
                     for key in state.parameter_locks
                     if key in new_parameters
-                    and new_parameters[key].scope == "global"
+                    and new_parameters[key].binding.scope == "global"
                     and f"{clip_root}.parameters.{key}" not in resolved_paths
                 ),
                 "variant": WebRuntimeVariant(

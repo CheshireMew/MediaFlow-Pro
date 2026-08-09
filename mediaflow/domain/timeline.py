@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import Field, computed_field, field_validator, model_validator
 
 from .enums import AssetKind, ClipMediaKind, TrackKind, TransitionKind
+from .exports import SubtitleStyle
 from .model_base import DomainModel, new_id
 from .project import Sequence
 from .visual_effects import ClipVisualEffect
@@ -71,6 +72,13 @@ class Track(DomainModel):
     audio_bus_id: str | None = None
     linked_audio_track_id: str | None = None
     primary_dialogue: bool = False
+    subtitle_style: SubtitleStyle | None = None
+
+    @model_validator(mode="after")
+    def coherent_subtitle_style(self) -> Track:
+        if self.kind != TrackKind.SUBTITLE and self.subtitle_style is not None:
+            raise ValueError("Only subtitle tracks can carry a subtitle style")
+        return self
 
 
 class ClipAddRequest(DomainModel):
@@ -82,6 +90,14 @@ class ClipAddRequest(DomainModel):
     speed_numerator: int = 1
     speed_denominator: int = Field(default=1, gt=0)
     pitch_compensation: bool = True
+
+
+class FreezeClipAddRequest(DomainModel):
+    track_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+    timeline_start: int = Field(ge=0)
+    source_frame: int = Field(ge=0)
+    duration: int = Field(gt=0)
 
 
 class ClipTransform(DomainModel):
@@ -126,10 +142,19 @@ class ClipAudio(DomainModel):
 
 
 class ClipTransformKeyframe(DomainModel):
-    source_frame: int = Field(ge=0)
+    source_frame: int | None = Field(default=None, ge=0)
+    timeline_offset: int | None = Field(default=None, ge=0)
     transform: ClipTransform
     source: Literal["manual", "auto_reframe", "subject_tracking"] = "manual"
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def one_time_anchor(self) -> ClipTransformKeyframe:
+        if (self.source_frame is None) == (self.timeline_offset is None):
+            raise ValueError(
+                "A clip transform keyframe must use exactly one source-frame or timeline-offset anchor"
+            )
+        return self
 
 
 class Clip(DomainModel):
@@ -143,6 +168,7 @@ class Clip(DomainModel):
     speed_numerator: int = 1
     speed_denominator: int = 1
     pitch_compensation: bool = True
+    freeze_source_frame: int | None = Field(default=None, ge=0)
     transform: ClipTransform = Field(default_factory=ClipTransform)
     transform_keyframes: list[ClipTransformKeyframe] = Field(default_factory=list)
     audio: ClipAudio = Field(default_factory=ClipAudio)
@@ -159,9 +185,28 @@ class Clip(DomainModel):
         speed = abs(Fraction(self.speed_numerator, self.speed_denominator))
         if speed < Fraction(1, 4) or speed > 4:
             raise ValueError("Clip speed must be between 0.25x and 4x")
-        frames = [item.source_frame for item in self.transform_keyframes]
-        if frames != sorted(set(frames)):
-            raise ValueError("Clip transform keyframes must have unique ordered source frames")
+        if self.freeze_source_frame is not None:
+            if self.media_kind != ClipMediaKind.VIDEO_ONLY:
+                raise ValueError("Freeze clips must be video-only")
+            if self.speed_numerator != 1 or self.speed_denominator != 1:
+                raise ValueError("Freeze clips cannot change playback speed")
+        anchor_modes = {
+            "timeline" if item.timeline_offset is not None else "source" for item in self.transform_keyframes
+        }
+        if len(anchor_modes) > 1:
+            raise ValueError("Clip transform keyframes cannot mix time anchor modes")
+        frames = [
+            item.timeline_offset if item.timeline_offset is not None else item.source_frame
+            for item in self.transform_keyframes
+        ]
+        resolved_frames = [int(frame) for frame in frames if frame is not None]
+        if len(resolved_frames) != len(frames) or resolved_frames != sorted(set(resolved_frames)):
+            raise ValueError("Clip transform keyframes must have unique ordered anchors")
+        if any(
+            item.timeline_offset is not None and item.timeline_offset >= self.duration
+            for item in self.transform_keyframes
+        ):
+            raise ValueError("Timeline-anchored transform keyframes must stay inside the clip")
         effect_positions = [item.position for item in self.visual_effects]
         if effect_positions != list(range(len(self.visual_effects))):
             raise ValueError("Clip visual effect positions must be contiguous and ordered")
@@ -185,6 +230,12 @@ class Clip(DomainModel):
         presentation duration. Timed media with unknown metadata is accepted
         until probing completes, but every known duration is enforced here.
         """
+        if self.freeze_source_frame is not None:
+            if asset_kind not in {AssetKind.VIDEO, AssetKind.WEB}:
+                raise ValueError("Freeze clips require a video or rendered web source")
+            if source_duration_frames > 0 and self.freeze_source_frame >= source_duration_frames:
+                raise ValueError("Freeze frame is outside the source asset")
+            return
         maximum_duration = self.maximum_timeline_duration(
             asset_kind,
             source_duration_frames,
@@ -211,14 +262,16 @@ class Clip(DomainModel):
         for validation and frame-clock migration.
         """
 
-        if asset_kind in {AssetKind.IMAGE, AssetKind.WEB} or source_duration_frames <= 0:
+        if (
+            self.freeze_source_frame is not None
+            or asset_kind in {AssetKind.IMAGE, AssetKind.WEB}
+            or source_duration_frames <= 0
+        ):
             return None
         if self.source_in >= source_duration_frames:
             return 0
         available_source_frames = (
-            source_duration_frames - self.source_in
-            if self.speed_numerator > 0
-            else self.source_in + 1
+            source_duration_frames - self.source_in if self.speed_numerator > 0 else self.source_in + 1
         )
         speed = Fraction(abs(self.speed_numerator), self.speed_denominator)
         return available_source_frames * speed.denominator // speed.numerator

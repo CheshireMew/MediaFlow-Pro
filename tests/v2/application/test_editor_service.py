@@ -54,7 +54,7 @@ def _request(
 ) -> dict:
     return {
         "protocol": "mediaflow-editor",
-        "version": 3,
+        "version": 4,
         "operation": operation,
         "project": project,
         "arguments": arguments or {},
@@ -293,9 +293,38 @@ async def test_service_subscription_receives_stopping_before_socket_closes(
                 await websocket.send_json({"type": "service.subscribe"})
                 assert (await websocket.receive_json())["type"] == "service.subscribed"
                 stopping = asyncio.create_task(server.stop())
+                stopping_started = time.perf_counter()
                 event = await websocket.receive_json(timeout=5)
                 assert event["type"] == "service.stopping"
+                await websocket.close()
                 await stopping
+                assert time.perf_counter() - stopping_started < 2
+                stopped = True
+    finally:
+        if not stopped:
+            await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_service_shutdown_bounds_uncooperative_websocket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "projects"))
+    monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(tmp_path / "media"))
+    server = EditorServiceServer(paths=_paths(tmp_path / "service-state"))
+    discovery = await server.start()
+    headers = {"Authorization": f"Bearer {discovery.token}"}
+    stopped = False
+    try:
+        async with ClientSession(headers=headers) as session:
+            async with session.ws_connect(discovery.websocket_url) as websocket:
+                assert (await websocket.receive_json())[
+                    "type"
+                ] == "service.ready"
+                stopping_started = time.perf_counter()
+                await server.stop()
+                assert time.perf_counter() - stopping_started < 3.5
                 stopped = True
     finally:
         if not stopped:

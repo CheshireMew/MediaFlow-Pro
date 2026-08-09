@@ -282,7 +282,7 @@ def test_web_desktop_scenarios_run_in_separate_qtwebengine_processes() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     first_scenario = (
         "tests/v2/desktop/test_web_editor.py::"
-        "test_unified_import_opens_the_v5_package_through_local_preview_server"
+        "test_unified_import_opens_the_v6_package_through_local_preview_server"
     )
     second_scenario = (
         "tests/v2/desktop/test_web_editor.py::"
@@ -306,7 +306,7 @@ def test_portable_ci_builds_and_executes_linux_and_apple_silicon_chains() -> Non
     assert "python scripts/prepare_ci_qt.py" in workflow
     assert "python scripts/build_native.py" in workflow
     assert "python scripts/verify_development_runtime.py --profile core" in workflow
-    assert "tests/v2/infrastructure/test_web_media.py::test_v5_cli_chain" in workflow
+    assert "tests/v2/infrastructure/test_web_media.py::test_v6_cli_chain" in workflow
     assert "tests/v2/integration/test_native_preview.py" in workflow
     assert "Type-check on the actual target platform" in workflow
     assert "linux-x86_64" in workflow

@@ -18,7 +18,7 @@
 
 - 从根因修改唯一真源，并迁移全部生产者和消费者；不要留下长期兼容层、重复 helper 或双重运行路径。
 - `project.mfp` 是项目状态的唯一真源。缓存、代理、波形、MLT 图和分析报告应保持为可重建的派生产物。
-- `editable-media` v5 的 schema 与真实案例来自外部生产者。不要直接手改 `tests/fixtures/editable-media-v5*` 或 `mediaflow/resources/contracts/editable-media.v5.schema.json`，应使用仓库规定的同步脚本。
+- `editable-media` v6 的 schema、标准 runtime 与真实案例来自外部生产者。不要直接手改 `tests/fixtures/editable-media-v6*` 或 `mediaflow/resources/contracts/editable-media.v6.schema.json`，应使用仓库规定的同步脚本。
 - 公开自动化能力以实际 `mediaflow-cli describe` 输出为准。修改操作时同时更新实现、参数 schema、`describe`、测试和正式调用点。
 - 保留与本次任务无关的工作区修改。不要为了通过测试而 mock 掉正在验证的核心生产链。
 
@@ -31,13 +31,13 @@
 & $env:MEDIAFLOW_PYTHON -m pytest tests\v2\path\to\test_file.py
 ```
 
-完整 Python 测试入口为：
+不要直接运行没有资源边界的整库 `pytest tests/v2`。目标测试通过后，使用唯一的本地质量入口；它会读取当前改动，按维护、核心或 Windows 完整等级运行，并为并发分片建立独立测试目录：
 
 ```powershell
-& $env:MEDIAFLOW_PYTHON -m pytest tests\v2
+.\scripts\run_quality.ps1
 ```
 
-CI 的测试等级由 `scripts/ci/quality_plan.py` 决定。文档、许可证和纯元数据修改只运行维护级检查；桌面、媒体运行时、共享合同或原生插件变化需要相应的真实运行时与用户链验收。
+可使用 `.\scripts\run_quality.ps1 --dry-run` 先查看将执行的命令。入口会根据 CPU 与可用内存把运行时并发设为 1、2 或 4；也可用 `--max-runtime-workers 1` 在资源较少的机器上明确限制。CI 与本地入口共同消费 `scripts/ci/quality_plan.py`：文档、许可证和纯元数据修改只运行维护级检查；桌面与媒体运行时变化运行 Windows 完整验收；目标平台运行时和原生预览变化才运行跨平台源码构建；项目格式、迁移、仓储或交接脚本变化才运行项目交接矩阵。
 
 ## Pull Request
 

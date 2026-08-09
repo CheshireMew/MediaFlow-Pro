@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from mediaflow.desktop.presentation_catalogs import (
-    audio_effect_label,
-    audio_parameter_specs,
-    system_name,
-)
+from mediaflow.desktop.presentation_catalogs import audio_effect_label, system_name
+from mediaflow.domain.audio import audio_effect_definition
 
 from .base import Projector
 
@@ -85,13 +82,25 @@ class AudioProjector(Projector):
         except StopIteration:
             self._session.models.audio_effect_parameters.set_items([])
             return
+        buses = self._session.binding.current.list_audio_buses(
+            self._session.binding.active_sequence_id
+        )
         self._session.models.audio_effect_parameters.set_items(
             [
                 {
-                    **spec,
-                    "value": effect.parameters[spec["key"]],
+                    "key": descriptor.id,
+                    "descriptor": descriptor.model_dump(mode="json"),
+                    "value": effect.parameters[descriptor.id],
+                    "options": (
+                        [
+                            {"label": system_name(bus.name), "value": bus.id}
+                            for bus in buses
+                        ]
+                        if descriptor.options_source == "audio-buses"
+                        else []
+                    ),
                 }
-                for spec in audio_parameter_specs(effect.kind)
+                for descriptor in audio_effect_definition(effect.kind).descriptors
             ]
         )
 

@@ -1,0 +1,14 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/web-card-cases/editorial-technology-diagram-cover",
+  "editable_media_version": 6,
+  "files": {
+    "editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
+    "editable-media.json": "d4e81e55fa0738942d8dd522b56c3803ad03ce969eba19042fe345b1079ea0d2",
+    "index.html": "7def7e44d4a92d3b18e46d2a04a7a812d718e7b740f3a0e8ec3b324349ff843a",
+    "media-sources.json": "a34797c9f14ef44f1320d6ab9cbd62189cadbadc2286fd0b8a1fb4b48c6c8ef7",
+    "preview.png": "ebd54f4a01c42f2ed53ab418f6f6259cacaff12141e406e63d6f444bbc7ade02",
+    "style-profile.json": "6ef195f7597943bcd5443d0b8a517a2b6618aff709fdef3e03e1d13cf780ad00"
+  }
+}

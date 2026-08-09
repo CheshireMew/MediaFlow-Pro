@@ -119,7 +119,7 @@ class ExportPreset(DomainModel):
     gop_frames: int = Field(default=60, ge=1)
     audio_bitrate: int = Field(default=192_000, gt=0)
     burn_subtitle_track_id: str | None = None
-    subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
+    subtitle_style: SubtitleStyle | None = None
     watermark: WatermarkOverlay = Field(default_factory=WatermarkOverlay)
     advanced: dict[str, Any] = Field(default_factory=dict)
 
@@ -136,10 +136,7 @@ class ExportPreset(DomainModel):
         normalized = dict(value)
         for key in _INTEGER_ADVANCED_FIELDS:
             item = normalized.get(key)
-            if (
-                isinstance(item, float)
-                and item.is_integer()
-            ):
+            if isinstance(item, float) and item.is_integer():
                 normalized[key] = int(item)
         return normalized
 
@@ -168,47 +165,31 @@ class ExportPreset(DomainModel):
             return None
         normalized = value.strip()
         if not normalized:
-            raise ValueError(
-                "Optional export preset text cannot be blank"
-            )
+            raise ValueError("Optional export preset text cannot be blank")
         return normalized
 
     @field_validator("container")
     @classmethod
     def valid_container(cls, value: str) -> str:
         if re.fullmatch(r"[A-Za-z0-9_]+", value) is None:
-            raise ValueError(
-                "Export container must be an FFmpeg muxer name"
-            )
+            raise ValueError("Export container must be an FFmpeg muxer name")
         return value.casefold()
 
     @model_validator(mode="after")
     def coherent_media_format(self) -> ExportPreset:
         if self.format == ExportFormat.AUDIO:
             if self.encoder_policy is not None:
-                raise ValueError(
-                    "Audio-only export cannot use a video encoder policy"
-                )
+                raise ValueError("Audio-only export cannot use a video encoder policy")
             if self.pixel_format is not None:
-                raise ValueError(
-                    "Audio-only export cannot use a pixel format"
-                )
+                raise ValueError("Audio-only export cannot use a pixel format")
             if self.audio_codec is None:
-                raise ValueError(
-                    "Audio-only export requires an audio codec"
-                )
+                raise ValueError("Audio-only export requires an audio codec")
         elif self.encoder_policy is None:
             raise ValueError("Video export requires a video encoder policy")
         for key in _INTEGER_ADVANCED_FIELDS:
             value = self.advanced.get(key)
-            if value is not None and (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value <= 0
-            ):
-                raise ValueError(
-                    f"Advanced export field {key} must be a positive integer"
-                )
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                raise ValueError(f"Advanced export field {key} must be a positive integer")
         return self
 
     @property
@@ -224,8 +205,5 @@ class ExportPreset(DomainModel):
         expected = _CONTAINER_EXTENSIONS.get(self.container)
         if expected is not None and extension not in expected:
             allowed = "、".join(f".{item}" for item in expected)
-            raise ValueError(
-                "导出文件扩展名与封装格式不一致："
-                f"{self.container} 应使用 {allowed}"
-            )
+            raise ValueError(f"导出文件扩展名与封装格式不一致：{self.container} 应使用 {allowed}")
         return output

@@ -156,7 +156,7 @@ class WebController(ControllerFacet):
 
     @Property("QVariantList", notify=webStateChanged)
     def editDescriptors(self) -> list[dict]:
-        return [dict(item) for item in self._edit_document.get("descriptors", [])]
+        return [dict(item) for item in self._edit_document.get("fields", [])]
 
     @Property("QVariantList", notify=webSelectionChanged)
     def selectedLayerDescriptors(self) -> list[dict]:
@@ -166,7 +166,7 @@ class WebController(ControllerFacet):
         prefix = f"{self._selected_web_layer_id}."
         return [
             dict(item)
-            for item in self._edit_document.get("descriptors", [])
+            for item in self._edit_document.get("fields", [])
             if item.get("target") == "layer" and str(item.get("source_id", "")).startswith(prefix)
         ]
 
@@ -174,28 +174,21 @@ class WebController(ControllerFacet):
     def parameterDescriptors(self) -> list[dict]:
         return [
             dict(item)
-            for item in self._edit_document.get("descriptors", [])
+            for item in self._edit_document.get("fields", [])
             if item.get("target") == "parameter"
         ]
 
     @Property("QVariantList", notify=webStateChanged)
     def themeDescriptors(self) -> list[dict]:
         return [
-            dict(item) for item in self._edit_document.get("descriptors", []) if item.get("target") == "theme"
+            dict(item) for item in self._edit_document.get("fields", []) if item.get("target") == "theme"
         ]
 
     @Property("QVariantList", notify=webStateChanged)
     def dataDescriptors(self) -> list[dict]:
         return [
-            {
-                **dict(item),
-                "valueText": json.dumps(
-                    item.get("value"),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            }
-            for item in self._edit_document.get("descriptors", [])
+            dict(item)
+            for item in self._edit_document.get("fields", [])
             if item.get("target") == "data"
         ]
 

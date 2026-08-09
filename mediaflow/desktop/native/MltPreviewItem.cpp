@@ -140,6 +140,22 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
             emit playingChanged();
         }
     });
+    connect(
+        m_runtime,
+        &MltRuntime::bufferStateChanged,
+        this,
+        [this](bool buffering, int bufferedFrames, quint64 requestId) {
+            if (requestId != m_requestId.load(std::memory_order_acquire))
+                return;
+            if (m_buffering != buffering) {
+                m_buffering = buffering;
+                emit bufferingChanged();
+            }
+            if (m_bufferedFrames != bufferedFrames) {
+                m_bufferedFrames = bufferedFrames;
+                emit bufferedFramesChanged();
+            }
+        });
     connect(m_runtime, &MltRuntime::errorOccurred, this, &MltPreviewItem::receiveError, Qt::QueuedConnection);
     m_workerThread.setObjectName(QStringLiteral("MediaFlowMltPreview"));
     m_workerThread.start();
@@ -433,6 +449,14 @@ void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
     if (m_errorString == message)
         return;
     m_errorString = message;
+    if (m_buffering) {
+        m_buffering = false;
+        emit bufferingChanged();
+    }
+    if (m_bufferedFrames != 0) {
+        m_bufferedFrames = 0;
+        emit bufferedFramesChanged();
+    }
     emit errorStringChanged();
 }
 
@@ -464,6 +488,14 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
     if (m_playing) {
         m_playing = false;
         emit playingChanged();
+    }
+    if (m_buffering) {
+        m_buffering = false;
+        emit bufferingChanged();
+    }
+    if (m_bufferedFrames != 0) {
+        m_bufferedFrames = 0;
+        emit bufferedFramesChanged();
     }
     if (!preservePosition && m_position != 0) {
         m_position = 0;

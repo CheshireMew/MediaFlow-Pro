@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
+from .editor_fields import (
+    EditorFieldChoice,
+    EditorFieldConstraints,
+    EditorFieldDescriptor,
+)
 from .enums import AudioEffectKind
 from .model_base import DomainModel, new_id
 
@@ -27,105 +32,139 @@ class AudioBus(DomainModel):
         return value
 
 
-class ParametricEqParameters(DomainModel):
-    low_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
-    low_mid_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
-    high_mid_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
-    high_db: float = Field(default=0.0, ge=-24.0, le=24.0, json_schema_extra={"step": 0.5, "unit": "dB"})
+class AudioEffectDefinition(DomainModel):
+    label: str
+    descriptors: tuple[EditorFieldDescriptor, ...]
+
+    @model_validator(mode="after")
+    def unique_fields(self) -> AudioEffectDefinition:
+        ids = [item.id for item in self.descriptors]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Audio effect field identifiers must be unique")
+        return self
 
 
-class HighPassParameters(DomainModel):
-    frequency_hz: float = Field(
-        default=80.0, ge=20.0, le=20_000.0, json_schema_extra={"step": 10.0, "unit": "Hz"}
+def _number_field(
+    field_id: str,
+    label: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+    step: float,
+    unit: str,
+) -> EditorFieldDescriptor:
+    return EditorFieldDescriptor(
+        id=field_id,
+        label=label,
+        description="",
+        group="音频效果",
+        kind="number",
+        control="slider",
+        default=default,
+        unit=unit or None,
+        constraints=EditorFieldConstraints(
+            minimum=minimum,
+            maximum=maximum,
+            step=step,
+        ),
+        options_source=None,
+        timeline="none",
     )
 
 
-class LowPassParameters(DomainModel):
-    frequency_hz: float = Field(
-        default=16_000.0,
-        ge=20.0,
-        le=24_000.0,
-        json_schema_extra={"step": 10.0, "unit": "Hz"},
+def _choice_field(
+    field_id: str,
+    label: str,
+    default: str,
+    *,
+    choices: tuple[str, ...] = (),
+    options_source: str | None = None,
+) -> EditorFieldDescriptor:
+    return EditorFieldDescriptor(
+        id=field_id,
+        label=label,
+        description="",
+        group="音频效果",
+        kind="choice",
+        control="select",
+        default=default,
+        unit=None,
+        constraints=EditorFieldConstraints(
+            choices=[EditorFieldChoice(value=value, label=value) for value in choices],
+        ),
+        options_source=options_source,
+        timeline="none",
     )
 
 
-class CompressorParameters(DomainModel):
-    threshold_db: float = Field(
-        default=-18.0, ge=-60.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
-    )
-    ratio: float = Field(default=3.0, ge=1.0, le=20.0, json_schema_extra={"step": 0.1, "unit": ":1"})
-    attack_ms: float = Field(default=10.0, ge=0.1, le=2_000.0, json_schema_extra={"step": 1.0, "unit": "ms"})
-    release_ms: float = Field(
-        default=120.0,
-        ge=10.0,
-        le=5_000.0,
-        json_schema_extra={"step": 5.0, "unit": "ms"},
-    )
-
-
-class LimiterParameters(DomainModel):
-    ceiling_db: float = Field(default=-1.0, ge=-20.0, le=0.0, json_schema_extra={"step": 0.1, "unit": "dB"})
-
-
-class NoiseGateParameters(DomainModel):
-    threshold_db: float = Field(
-        default=-45.0, ge=-80.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
-    )
-
-
-class RnnoiseParameters(DomainModel):
-    mix: float = Field(default=1.0, ge=0.0, le=1.0, json_schema_extra={"step": 0.05, "unit": ""})
-
-
-class ChannelMapParameters(DomainModel):
-    layout: Literal["mono", "stereo", "5.1"] = Field(
-        default="stereo",
-        json_schema_extra={"step": 0.0, "unit": "", "value_type": "layout"},
-    )
-
-
-class LoudnessNormalizeParameters(DomainModel):
-    target_lufs: float = Field(
-        default=-14.0, ge=-30.0, le=-5.0, json_schema_extra={"step": 0.5, "unit": "LUFS"}
-    )
-    true_peak_db: float = Field(
-        default=-1.0, ge=-9.0, le=0.0, json_schema_extra={"step": 0.1, "unit": "dBTP"}
-    )
-
-
-class DuckingParameters(DomainModel):
-    driver_bus_id: str = Field(
-        default="",
-        json_schema_extra={"step": 0.0, "unit": "", "value_type": "bus"},
-    )
-    threshold_db: float = Field(
-        default=-24.0, ge=-60.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
-    )
-    reduction_db: float = Field(
-        default=-10.0, ge=-40.0, le=0.0, json_schema_extra={"step": 0.5, "unit": "dB"}
-    )
-    attack_ms: float = Field(default=120.0, ge=0.0, le=2_000.0, json_schema_extra={"step": 5.0, "unit": "ms"})
-    release_ms: float = Field(
-        default=300.0, ge=0.0, le=5_000.0, json_schema_extra={"step": 5.0, "unit": "ms"}
-    )
-
-
-_AUDIO_EFFECT_PARAMETER_TYPES: dict[AudioEffectKind, type[DomainModel]] = {
-    AudioEffectKind.PARAMETRIC_EQ: ParametricEqParameters,
-    AudioEffectKind.HIGH_PASS: HighPassParameters,
-    AudioEffectKind.LOW_PASS: LowPassParameters,
-    AudioEffectKind.COMPRESSOR: CompressorParameters,
-    AudioEffectKind.LIMITER: LimiterParameters,
-    AudioEffectKind.NOISE_GATE: NoiseGateParameters,
-    AudioEffectKind.RNNOISE: RnnoiseParameters,
-    AudioEffectKind.CHANNEL_MAP: ChannelMapParameters,
-    AudioEffectKind.LOUDNESS_NORMALIZE: LoudnessNormalizeParameters,
-    AudioEffectKind.DUCKING: DuckingParameters,
+AUDIO_EFFECT_DEFINITIONS: dict[AudioEffectKind, AudioEffectDefinition] = {
+    AudioEffectKind.PARAMETRIC_EQ: AudioEffectDefinition(
+        label="参数均衡器",
+        descriptors=tuple(
+            _number_field(field_id, label, 0.0, -24.0, 24.0, 0.5, "dB")
+            for field_id, label in (
+                ("low_db", "低频增益"),
+                ("low_mid_db", "中低频增益"),
+                ("high_mid_db", "中高频增益"),
+                ("high_db", "高频增益"),
+            )
+        ),
+    ),
+    AudioEffectKind.HIGH_PASS: AudioEffectDefinition(
+        label="高通",
+        descriptors=(_number_field("frequency_hz", "截止频率", 80.0, 20.0, 20_000.0, 10.0, "Hz"),),
+    ),
+    AudioEffectKind.LOW_PASS: AudioEffectDefinition(
+        label="低通",
+        descriptors=(_number_field("frequency_hz", "截止频率", 16_000.0, 20.0, 24_000.0, 10.0, "Hz"),),
+    ),
+    AudioEffectKind.COMPRESSOR: AudioEffectDefinition(
+        label="压缩器",
+        descriptors=(
+            _number_field("threshold_db", "阈值", -18.0, -60.0, 0.0, 0.5, "dB"),
+            _number_field("ratio", "压缩比", 3.0, 1.0, 20.0, 0.1, ":1"),
+            _number_field("attack_ms", "启动时间", 10.0, 0.1, 2_000.0, 1.0, "ms"),
+            _number_field("release_ms", "释放时间", 120.0, 10.0, 5_000.0, 5.0, "ms"),
+        ),
+    ),
+    AudioEffectKind.LIMITER: AudioEffectDefinition(
+        label="限制器",
+        descriptors=(_number_field("ceiling_db", "上限", -1.0, -20.0, 0.0, 0.1, "dB"),),
+    ),
+    AudioEffectKind.NOISE_GATE: AudioEffectDefinition(
+        label="噪声门",
+        descriptors=(_number_field("threshold_db", "阈值", -45.0, -80.0, 0.0, 0.5, "dB"),),
+    ),
+    AudioEffectKind.RNNOISE: AudioEffectDefinition(
+        label="RNNoise",
+        descriptors=(_number_field("mix", "混合", 1.0, 0.0, 1.0, 0.05, ""),),
+    ),
+    AudioEffectKind.CHANNEL_MAP: AudioEffectDefinition(
+        label="声道映射",
+        descriptors=(_choice_field("layout", "声道布局", "stereo", choices=("mono", "stereo", "5.1")),),
+    ),
+    AudioEffectKind.LOUDNESS_NORMALIZE: AudioEffectDefinition(
+        label="响度标准化",
+        descriptors=(
+            _number_field("target_lufs", "目标响度", -14.0, -30.0, -5.0, 0.5, "LUFS"),
+            _number_field("true_peak_db", "True Peak 上限", -1.0, -9.0, 0.0, 0.1, "dBTP"),
+        ),
+    ),
+    AudioEffectKind.DUCKING: AudioEffectDefinition(
+        label="自动闪避",
+        descriptors=(
+            _choice_field("driver_bus_id", "驱动总线", "", options_source="audio-buses"),
+            _number_field("threshold_db", "阈值", -24.0, -60.0, 0.0, 0.5, "dB"),
+            _number_field("reduction_db", "衰减量", -10.0, -40.0, 0.0, 0.5, "dB"),
+            _number_field("attack_ms", "启动时间", 120.0, 0.0, 2_000.0, 5.0, "ms"),
+            _number_field("release_ms", "释放时间", 300.0, 0.0, 5_000.0, 5.0, "ms"),
+        ),
+    ),
 }
 
 
-def audio_effect_parameter_schema(kind: AudioEffectKind) -> dict[str, dict[str, Any]]:
-    return _AUDIO_EFFECT_PARAMETER_TYPES[kind].model_json_schema()["properties"]
+def audio_effect_definition(kind: AudioEffectKind) -> AudioEffectDefinition:
+    return AUDIO_EFFECT_DEFINITIONS[kind]
 
 
 class AudioEffect(DomainModel):
@@ -138,7 +177,16 @@ class AudioEffect(DomainModel):
 
     @model_validator(mode="after")
     def validate_parameters(self) -> AudioEffect:
-        parameter_type = _AUDIO_EFFECT_PARAMETER_TYPES[self.kind]
-        validated = parameter_type.model_validate(self.parameters)
-        object.__setattr__(self, "parameters", validated.model_dump())
+        descriptors = {
+            item.id: item for item in AUDIO_EFFECT_DEFINITIONS[self.kind].descriptors
+        }
+        unknown = set(self.parameters) - set(descriptors)
+        if unknown:
+            raise ValueError(f"Unknown audio effect parameters: {sorted(unknown)}")
+        validated: dict[str, Any] = {}
+        for field_id, descriptor in descriptors.items():
+            value = self.parameters.get(field_id, descriptor.default)
+            descriptor.validate_value(value)
+            validated[field_id] = value
+        object.__setattr__(self, "parameters", validated)
         return self

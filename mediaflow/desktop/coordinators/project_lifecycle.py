@@ -474,6 +474,11 @@ class ProjectLifecycle(SessionCoordinator):
         self._session.events.downloadPlanChanged.emit()
         self._session.projectors.timeline.stop_preview()
         self._session.presentation.preview_graph_path = ""
+        self._session.presentation.filmstrip_frames.clear()
+        self._session.requests.filmstrip_id += 1
+        if self._session.requests.filmstrip_future is not None:
+            self._session.requests.filmstrip_future.cancel()
+            self._session.requests.filmstrip_future = None
         self._session.presentation.hdr_preview_active = False
         self._session.presentation.preview_subtitles = []
         self._session.presentation.preview_subtitles_by_track = {}

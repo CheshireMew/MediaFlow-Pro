@@ -10,6 +10,7 @@ from typing import Annotated, Literal, cast
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from .editable_media_contract import validate_editable_media_document
+from .editor_fields import EditorFieldDescriptor, EditorFieldValue
 from .model_base import DomainModel, now_ms
 
 WebLayerKind = Literal["text", "image", "shape", "group", "component"]
@@ -43,16 +44,7 @@ WebDataKind = Literal[
     "json",
 ]
 WebThemeKind = Literal["color", "font", "number", "string"]
-WebParameterKind = Literal[
-    "number",
-    "integer",
-    "boolean",
-    "string",
-    "color",
-    "choice",
-]
 WebParameterScope = Literal["global", "scene"]
-WebParameterControl = Literal["slider", "number", "toggle", "text", "color", "select"]
 WebInterpolation = Literal["continuous", "discrete"]
 WebEasingKind = Literal["linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic_bezier"]
 WebExportFormat = Literal["png", "gif", "alpha_video", "video", "overlay"]
@@ -221,54 +213,9 @@ class WebFieldConstraint(DomainModel):
         return self
 
 
-class WebParameterConstraint(DomainModel):
-    minimum: float | None = None
-    maximum: float | None = None
-    step: float | None = Field(default=None, gt=0)
-    choices: list[str | float | int | bool] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def ordered_range(self) -> WebParameterConstraint:
-        if (
-            self.minimum is not None
-            and self.maximum is not None
-            and self.minimum > self.maximum
-        ):
-            raise ValueError("Editable parameter minimum cannot exceed maximum")
-        return self
-
-
-def _web_parameter_value_matches(kind: WebParameterKind, value: JsonValue) -> bool:
-    if kind == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if kind == "boolean":
-        return isinstance(value, bool)
-    return isinstance(value, str)
-
-
-class WebParameterDefinition(DomainModel):
-    id: str
-    name: str
-    description: str = ""
-    group: str = ""
-    kind: WebParameterKind
+class WebParameterBinding(DomainModel):
     scope: WebParameterScope
-    default: str | float | int | bool
-    animatable: bool
-    unit: str = ""
-    control: WebParameterControl
     css_variable: str | None = None
-    constraints: WebParameterConstraint = Field(default_factory=WebParameterConstraint)
-
-    @field_validator("id", "name")
-    @classmethod
-    def non_empty_parameter_text(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Editable parameter identifiers and names cannot be empty")
-        return value
 
     @field_validator("css_variable")
     @classmethod
@@ -277,56 +224,23 @@ class WebParameterDefinition(DomainModel):
             raise ValueError("Parameter CSS variables must start with --")
         return value
 
-    @model_validator(mode="after")
-    def coherent_definition(self) -> WebParameterDefinition:
-        controls: dict[WebParameterKind, set[WebParameterControl]] = {
-            "number": {"slider", "number"},
-            "integer": {"slider", "number"},
-            "boolean": {"toggle"},
-            "string": {"text"},
-            "color": {"color"},
-            "choice": {"select"},
-        }
-        if self.control not in controls[self.kind]:
-            raise ValueError(
-                f"Editable parameter {self.id} control does not match kind {self.kind}"
-            )
-        if not _web_parameter_value_matches(self.kind, self.default):
-            raise ValueError(
-                f"Editable parameter {self.id} default does not match kind {self.kind}"
-            )
-        if self.kind == "choice":
-            if not self.constraints.choices:
-                raise ValueError(f"Choice parameter {self.id} must declare choices")
-            if self.default not in self.constraints.choices:
-                raise ValueError(f"Choice parameter {self.id} default is not a choice")
-        elif self.constraints.choices:
-            raise ValueError("Only choice parameters can declare choices")
-        if isinstance(self.default, (int, float)) and not isinstance(self.default, bool):
-            if (
-                self.constraints.minimum is not None
-                and self.default < self.constraints.minimum
-            ):
-                raise ValueError(f"Editable parameter {self.id} default is below minimum")
-            if (
-                self.constraints.maximum is not None
-                and self.default > self.constraints.maximum
-            ):
-                raise ValueError(f"Editable parameter {self.id} default exceeds maximum")
-        return self
 
-    def validate_value(self, value: JsonValue) -> None:
-        if not _web_parameter_value_matches(self.kind, value):
-            raise ValueError(
-                f"Editable parameter {self.id} value does not match kind {self.kind}"
-            )
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if self.constraints.minimum is not None and value < self.constraints.minimum:
-                raise ValueError(f"Editable parameter {self.id} is below minimum")
-            if self.constraints.maximum is not None and value > self.constraints.maximum:
-                raise ValueError(f"Editable parameter {self.id} exceeds maximum")
-        if self.constraints.choices and value not in self.constraints.choices:
-            raise ValueError(f"Editable parameter {self.id} is not an allowed choice")
+class WebParameter(DomainModel):
+    descriptor: EditorFieldDescriptor
+    binding: WebParameterBinding
+
+
+
+class WebFrameReadiness(DomainModel):
+    default_timeout_ms: int = Field(ge=100, le=30_000)
+    maximum_timeout_ms: int = Field(ge=100, le=30_000)
+    retry_limit: int = Field(ge=0, le=3)
+
+    @model_validator(mode="after")
+    def coherent_timeouts(self) -> WebFrameReadiness:
+        if self.default_timeout_ms > self.maximum_timeout_ms:
+            raise ValueError("Frame readiness default timeout cannot exceed maximum")
+        return self
 
 
 class WebComponentMetadata(DomainModel):
@@ -1014,15 +928,16 @@ class WebProductionMetadata(DomainModel):
 
 class EditableMediaManifest(DomainModel):
     protocol: Literal["editable-media"]
-    version: Literal[5]
+    version: Literal[6]
     entry: str
     media_sources: str
     playback: WebPlayback
+    frame_readiness: WebFrameReadiness
     accessibility: WebAccessibility
     layers: list[WebLayerManifest]
     component: WebComponentMetadata
     theme_variables: list[WebThemeVariable]
-    parameters: list[WebParameterDefinition]
+    parameters: list[WebParameter]
     scenes: list[WebScene]
     layout_contracts: list[WebLayoutContract]
     variants: list[WebVariant]
@@ -1178,11 +1093,13 @@ class EditableMediaManifest(DomainModel):
             raise ValueError("Editable media theme variable identifiers must be unique")
         if len({item.css_variable for item in self.theme_variables}) != len(self.theme_variables):
             raise ValueError("Editable media theme CSS variables must be unique")
-        parameter_ids = [item.id for item in self.parameters]
+        parameter_ids = [item.descriptor.id for item in self.parameters]
         if len(set(parameter_ids)) != len(parameter_ids):
             raise ValueError("Editable media parameter identifiers must be unique")
         parameter_css_variables = [
-            item.css_variable for item in self.parameters if item.css_variable is not None
+            item.binding.css_variable
+            for item in self.parameters
+            if item.binding.css_variable is not None
         ]
         if len(set(parameter_css_variables)) != len(parameter_css_variables):
             raise ValueError("Editable media parameter CSS variables must be unique")
@@ -1192,7 +1109,7 @@ class EditableMediaManifest(DomainModel):
             raise ValueError(
                 f"Editable media theme and parameter CSS variables overlap: {sorted(overlap)}"
             )
-        parameters = {item.id: item for item in self.parameters}
+        parameters = {item.descriptor.id: item for item in self.parameters}
         for scene in self.scenes:
             unknown_parameters = set(scene.parameters) - set(parameters)
             if unknown_parameters:
@@ -1202,11 +1119,11 @@ class EditableMediaManifest(DomainModel):
                 )
             for parameter_id, value in scene.parameters.items():
                 definition = parameters[parameter_id]
-                if definition.scope != "scene":
+                if definition.binding.scope != "scene":
                     raise ValueError(
                         f"Scene {scene.id} cannot override global parameter {parameter_id}"
                     )
-                definition.validate_value(value)
+                definition.descriptor.validate_value(value)
 
         unknown_variant_overrides = set(self.quality.variant_overrides) - set(variant_ids)
         if unknown_variant_overrides:
@@ -1330,9 +1247,9 @@ class EditableMediaManifest(DomainModel):
             )
         return values
 
-    def parameter_for(self, parameter_id: str) -> WebParameterDefinition:
+    def parameter_for(self, parameter_id: str) -> WebParameter:
         try:
-            return next(item for item in self.parameters if item.id == parameter_id)
+            return next(item for item in self.parameters if item.descriptor.id == parameter_id)
         except StopIteration as error:
             raise ValueError(
                 f"Editable media parameter does not exist: {parameter_id}"
@@ -1366,6 +1283,19 @@ def editable_media_manifest_document(
                 "Editable media manifest motion was not serialized"
             )
         motion.setdefault("camera", None)
+    parameters = document.get("parameters")
+    if not isinstance(parameters, list):
+        raise RuntimeError("Editable media manifest parameters were not serialized")
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            raise RuntimeError("Editable media parameter was not serialized")
+        descriptor = parameter.get("descriptor")
+        binding = parameter.get("binding")
+        if not isinstance(descriptor, dict) or not isinstance(binding, dict):
+            raise RuntimeError("Editable media parameter binding was not serialized")
+        descriptor.setdefault("unit", None)
+        descriptor.setdefault("options_source", None)
+        binding.setdefault("css_variable", None)
     validate_editable_media_document(document)
     return cast(dict[str, JsonValue], document)
 
@@ -1581,30 +1511,13 @@ class WebStateDiff(DomainModel):
     locked_paths: list[str] = Field(default_factory=list)
 
 
-class WebEditDescriptor(DomainModel):
-    path: str
-    target: Literal["layer", "parameter", "theme", "data"]
-    source_id: str
-    label: str
-    group: str
-    kind: str
-    control: str
-    value: JsonValue
-    default: JsonValue
-    constraints: WebParameterConstraint = Field(default_factory=WebParameterConstraint)
-    unit: str = ""
-    locked: bool = False
-    animatable: bool = False
-    timeline: Literal["none", "keyframe", "interval"] = "none"
-
-
 class WebEditDocument(DomainModel):
     clip_id: str
     scene_id: str
     variant_id: str
     revision: int
     scene_duration_ms: int
-    descriptors: list[WebEditDescriptor]
+    fields: list[EditorFieldValue]
 
 
 class WebRebindConflict(DomainModel):
@@ -1727,9 +1640,9 @@ def web_runtime_state(
             resolved_layers[layer.id] = values
         data = resolved_web_scene_data(state, manifest, scene.id)
         scene_parameters = {
-            item.id: item.default
+            item.descriptor.id: item.descriptor.default
             for item in manifest.parameters
-            if item.scope == "scene"
+            if item.binding.scope == "scene"
         }
         scene_parameters.update(scene.parameters)
         scene_parameters.update(current.parameters)
@@ -1759,7 +1672,9 @@ def web_runtime_state(
     theme = {item.id: item.default for item in manifest.theme_variables}
     theme.update(state.theme)
     parameters = {
-        item.id: item.default for item in manifest.parameters if item.scope == "global"
+        item.descriptor.id: item.descriptor.default
+        for item in manifest.parameters
+        if item.binding.scope == "global"
     }
     parameters.update(state.parameters)
     return {
@@ -1770,9 +1685,9 @@ def web_runtime_state(
         }),
         "parameters": cast(JsonValue, parameters),
         "parameter_bindings": cast(JsonValue, {
-            item.id: item.css_variable
+            item.descriptor.id: item.binding.css_variable
             for item in manifest.parameters
-            if item.css_variable is not None
+            if item.binding.css_variable is not None
         }),
         "parameter_locks": list(state.parameter_locks),
         "variant": cast(JsonValue, {

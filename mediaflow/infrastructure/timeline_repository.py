@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from mediaflow.application.timeline_clock import assets_in_timeline_clock
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind
+from mediaflow.domain.exports import SubtitleStyle
 from mediaflow.domain.frame_clock import (
     AssetFrameClockState,
     MainFrameClockSnapshot,
@@ -119,13 +120,8 @@ class TimelineRepository(ProjectRepositoryComponent):
     def save_timeline(self, state: TimelineState) -> int:
         existing = self._owner.catalog.get_sequence(state.sequence.id)
         project = self._owner.catalog.get_project()
-        if (
-            state.sequence.id == project.main_sequence_id
-            and state.sequence.profile != existing.profile
-        ):
-            raise RuntimeError(
-                "Main sequence profile changes must use the frame-clock transaction"
-            )
+        if state.sequence.id == project.main_sequence_id and state.sequence.profile != existing.profile:
+            raise RuntimeError("Main sequence profile changes must use the frame-clock transaction")
         return self._save_timeline(state)
 
     def _save_timeline(
@@ -144,20 +140,14 @@ class TimelineRepository(ProjectRepositoryComponent):
             raise ValueError("Timeline track positions must match their stored order")
         tracks_by_id = {track.id: track for track in state.tracks}
         linked_audio_ids = [
-            track.linked_audio_track_id
-            for track in state.tracks
-            if track.linked_audio_track_id is not None
+            track.linked_audio_track_id for track in state.tracks if track.linked_audio_track_id is not None
         ]
         if len(set(linked_audio_ids)) != len(linked_audio_ids):
             raise ValueError("An audio track can only be paired with one video track")
-        primary_dialogue_tracks = [
-            track for track in state.tracks if track.primary_dialogue
-        ]
+        primary_dialogue_tracks = [track for track in state.tracks if track.primary_dialogue]
         if len(primary_dialogue_tracks) > 1:
             raise ValueError("A sequence can only have one primary dialogue track")
-        if any(
-            track.kind != TrackKind.AUDIO for track in primary_dialogue_tracks
-        ):
+        if any(track.kind != TrackKind.AUDIO for track in primary_dialogue_tracks):
             raise ValueError("The primary dialogue track must be an audio track")
         if any(
             track.kind != TrackKind.VIDEO
@@ -181,9 +171,7 @@ class TimelineRepository(ProjectRepositoryComponent):
         compound_ids = {compound.id for compound in state.compounds}
         if any(compound.sequence_id != state.sequence.id for compound in state.compounds):
             raise ValueError("Compound clip belongs to another sequence")
-        compound_members = [
-            clip_id for compound in state.compounds for clip_id in compound.clip_ids
-        ]
+        compound_members = [clip_id for compound in state.compounds for clip_id in compound.clip_ids]
         if any(clip_id not in clip_ids for clip_id in compound_members):
             raise ValueError("Compound clip references an unknown clip")
         if len(set(compound_members)) != len(compound_members):
@@ -220,8 +208,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             if clip.media_kind == ClipMediaKind.AUDIO_ONLY:
                 if (
                     track.kind != TrackKind.AUDIO
-                    or timeline_asset.kind
-                    not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.WEB}
+                    or timeline_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.WEB}
                     or not timeline_asset.metadata.has_audio
                 ):
                     raise ValueError("Audio-only clips require an audio track and audio source")
@@ -232,13 +219,10 @@ class TimelineRepository(ProjectRepositoryComponent):
                     AssetKind.WEB,
                 }:
                     raise ValueError("Video-only clips require a video track and video source")
-            elif (
-                track.kind != TrackKind.VIDEO
-                or (
-                    timeline_asset.kind not in {AssetKind.VIDEO, AssetKind.WEB}
-                    or not timeline_asset.metadata.has_audio
-                    or track.linked_audio_track_id is None
-                )
+            elif track.kind != TrackKind.VIDEO or (
+                timeline_asset.kind not in {AssetKind.VIDEO, AssetKind.WEB}
+                or not timeline_asset.metadata.has_audio
+                or track.linked_audio_track_id is None
             ):
                 raise ValueError("Linked clips require paired video and audio tracks")
         web_clip_ids = {
@@ -248,10 +232,7 @@ class TimelineRepository(ProjectRepositoryComponent):
         }
         if set(state.web_states) != web_clip_ids:
             raise ValueError("Every web clip must have exactly one editable media state")
-        if any(
-            state.clip_id != clip_id
-            for clip_id, state in state.web_states.items()
-        ):
+        if any(state.clip_id != clip_id for clip_id, state in state.web_states.items()):
             raise ValueError("Editable media state key must match its clip identifier")
 
         with self.transaction() as connection:
@@ -388,6 +369,11 @@ class TimelineRepository(ProjectRepositoryComponent):
             audio_bus_id=row["audio_bus_id"],
             linked_audio_track_id=row["linked_audio_track_id"],
             primary_dialogue=bool(row["primary_dialogue"]),
+            subtitle_style=(
+                None
+                if row["subtitle_style_json"] is None
+                else SubtitleStyle.model_validate_json(row["subtitle_style_json"])
+            ),
         )
 
     @staticmethod
@@ -395,14 +381,16 @@ class TimelineRepository(ProjectRepositoryComponent):
         connection.execute(
             """INSERT INTO track(
                 id, sequence_id, name, kind, position, enabled, locked,
-                muted, solo, audio_bus_id, linked_audio_track_id, primary_dialogue
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                muted, solo, audio_bus_id, linked_audio_track_id, primary_dialogue,
+                subtitle_style_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, kind=excluded.kind, position=excluded.position,
                 enabled=excluded.enabled, locked=excluded.locked, muted=excluded.muted,
                 solo=excluded.solo, audio_bus_id=excluded.audio_bus_id,
                 linked_audio_track_id=excluded.linked_audio_track_id,
-                primary_dialogue=excluded.primary_dialogue""",
+                primary_dialogue=excluded.primary_dialogue,
+                subtitle_style_json=excluded.subtitle_style_json""",
             (
                 track.id,
                 track.sequence_id,
@@ -416,6 +404,7 @@ class TimelineRepository(ProjectRepositoryComponent):
                 track.audio_bus_id,
                 track.linked_audio_track_id,
                 int(track.primary_dialogue),
+                None if track.subtitle_style is None else _model_json(track.subtitle_style),
             ),
         )
 
@@ -432,6 +421,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             speed_numerator=row["speed_numerator"],
             speed_denominator=row["speed_denominator"],
             pitch_compensation=bool(row["pitch_compensation"]),
+            freeze_source_frame=row["freeze_source_frame"],
             transform=ClipTransform.model_validate_json(row["transform_json"]),
             transform_keyframes=[
                 ClipTransformKeyframe.model_validate(item)
@@ -439,8 +429,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             ],
             audio=ClipAudio.model_validate_json(row["audio_json"]),
             visual_effects=[
-                ClipVisualEffect.model_validate(item)
-                for item in json.loads(row["visual_effects_json"])
+                ClipVisualEffect.model_validate(item) for item in json.loads(row["visual_effects_json"])
             ],
         )
 
@@ -450,9 +439,10 @@ class TimelineRepository(ProjectRepositoryComponent):
             """INSERT INTO clip(
                 id, track_id, asset_id, timeline_start, source_in, duration, media_kind,
                 speed_numerator, speed_denominator, pitch_compensation,
+                freeze_source_frame,
                 transform_json, transform_keyframes_json, audio_json,
                 visual_effects_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 track_id=excluded.track_id, asset_id=excluded.asset_id,
                 timeline_start=excluded.timeline_start, source_in=excluded.source_in,
@@ -460,6 +450,7 @@ class TimelineRepository(ProjectRepositoryComponent):
                 speed_numerator=excluded.speed_numerator,
                 speed_denominator=excluded.speed_denominator,
                 pitch_compensation=excluded.pitch_compensation,
+                freeze_source_frame=excluded.freeze_source_frame,
                 transform_json=excluded.transform_json,
                 transform_keyframes_json=excluded.transform_keyframes_json,
                 audio_json=excluded.audio_json,
@@ -475,17 +466,11 @@ class TimelineRepository(ProjectRepositoryComponent):
                 clip.speed_numerator,
                 clip.speed_denominator,
                 int(clip.pitch_compensation),
+                clip.freeze_source_frame,
                 _model_json(clip.transform),
-                _json(
-                    [
-                        item.model_dump(mode="json")
-                        for item in clip.transform_keyframes
-                    ]
-                ),
+                _json([item.model_dump(mode="json") for item in clip.transform_keyframes]),
                 _model_json(clip.audio),
-                _json(
-                    [item.model_dump(mode="json") for item in clip.visual_effects]
-                ),
+                _json([item.model_dump(mode="json") for item in clip.visual_effects]),
             ),
         )
 
@@ -619,9 +604,7 @@ class TimelineRepository(ProjectRepositoryComponent):
         if sequence_id != project.main_sequence_id:
             raise ValueError("Only the main sequence owns the shared project frame clock")
         timeline = self.load_timeline(sequence_id)
-        timeline.sequence = timeline.sequence.model_copy(
-            update={"timeline_revision": 0}
-        )
+        timeline.sequence = timeline.sequence.model_copy(update={"timeline_revision": 0})
         assets = [
             AssetFrameClockState(
                 asset_id=asset.id,
@@ -631,12 +614,8 @@ class TimelineRepository(ProjectRepositoryComponent):
             )
             for asset in self._owner.catalog.list_assets()
         ]
-        segment_rows = self._fetchall(
-            "SELECT * FROM subtitle_segment ORDER BY id"
-        )
-        word_rows = self._fetchall(
-            "SELECT * FROM subtitle_word ORDER BY id"
-        )
+        segment_rows = self._fetchall("SELECT * FROM subtitle_segment ORDER BY id")
+        word_rows = self._fetchall("SELECT * FROM subtitle_word ORDER BY id")
         link_rows = self._fetchall(
             """SELECT link.*
                FROM subtitle_track_document link
@@ -656,14 +635,8 @@ class TimelineRepository(ProjectRepositoryComponent):
         return MainFrameClockSnapshot(
             timeline=timeline,
             assets=assets,
-            subtitle_segments=[
-                self._owner.subtitles._subtitle_segment_from_row(row)
-                for row in segment_rows
-            ],
-            subtitle_words=[
-                self._owner.subtitles._subtitle_word_from_row(row)
-                for row in word_rows
-            ],
+            subtitle_segments=[self._owner.subtitles._subtitle_segment_from_row(row) for row in segment_rows],
+            subtitle_words=[self._owner.subtitles._subtitle_word_from_row(row) for row in word_rows],
             highlights=sorted(
                 self._owner.highlights.list_highlights(),
                 key=lambda item: item.id,
@@ -678,10 +651,7 @@ class TimelineRepository(ProjectRepositoryComponent):
                 )
                 for row in link_rows
             ],
-            subtitle_placements=[
-                self._owner.subtitles._subtitle_placement(row)
-                for row in placement_rows
-            ],
+            subtitle_placements=[self._owner.subtitles._subtitle_placement(row) for row in placement_rows],
         )
 
     def change_main_frame_clock(
@@ -700,9 +670,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             raise ValueError("Only the main sequence owns the shared project frame clock")
         if source.timeline.sequence.profile != old_profile:
             raise ValueError("Frame-clock source profile does not match the captured snapshot")
-        stored_asset_ids = {
-            item.id for item in self._owner.catalog.list_assets()
-        }
+        stored_asset_ids = {item.id for item in self._owner.catalog.list_assets()}
         if {item.id for item in assets} != stored_asset_ids:
             raise ValueError("Frame-clock changes must include every project asset")
 
@@ -710,15 +678,11 @@ class TimelineRepository(ProjectRepositoryComponent):
             current = self.capture_main_frame_clock(project.main_sequence_id)
             self._require_snapshot_source(current, source)
             validation_assets = {asset.id: asset for asset in assets}
-            current_sequence = self._owner.catalog.get_sequence(
-                project.main_sequence_id
-            )
+            current_sequence = self._owner.catalog.get_sequence(project.main_sequence_id)
             state = state.model_copy(
                 update={
                     "sequence": state.sequence.model_copy(
-                        update={
-                            "timeline_revision": current_sequence.timeline_revision
-                        }
+                        update={"timeline_revision": current_sequence.timeline_revision}
                     )
                 }
             )
@@ -770,10 +734,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             if current == destination:
                 return current
             self._require_snapshot_source(current, source)
-            current_assets = {
-                asset.id: asset
-                for asset in self._owner.catalog.list_assets()
-            }
+            current_assets = {asset.id: asset for asset in self._owner.catalog.list_assets()}
             destination_assets = {
                 item.asset_id: current_assets[item.asset_id].model_copy(
                     update={
@@ -789,15 +750,11 @@ class TimelineRepository(ProjectRepositoryComponent):
                     "main frame clock asset set",
                     project.main_sequence_id,
                 )
-            current_sequence = self._owner.catalog.get_sequence(
-                project.main_sequence_id
-            )
+            current_sequence = self._owner.catalog.get_sequence(project.main_sequence_id)
             destination_timeline = destination.timeline.model_copy(
                 update={
                     "sequence": destination.timeline.sequence.model_copy(
-                        update={
-                            "timeline_revision": current_sequence.timeline_revision
-                        }
+                        update={"timeline_revision": current_sequence.timeline_revision}
                     )
                 }
             )
@@ -842,9 +799,7 @@ class TimelineRepository(ProjectRepositoryComponent):
                    metadata_json=? WHERE id=?""",
                 (
                     self._owner.catalog._store_optional_path(asset.proxy_path),
-                    self._owner.catalog._store_optional_path(
-                        asset.sdr_preview_proxy_path
-                    ),
+                    self._owner.catalog._store_optional_path(asset.sdr_preview_proxy_path),
                     _model_json(asset.metadata),
                     asset.asset_id,
                 ),
@@ -861,9 +816,7 @@ class TimelineRepository(ProjectRepositoryComponent):
         excluded = excluded_sequence_ids or set()
         sequence_ids = [
             str(row["id"])
-            for row in connection.execute(
-                "SELECT id FROM sequence ORDER BY position, id"
-            ).fetchall()
+            for row in connection.execute("SELECT id FROM sequence ORDER BY position, id").fetchall()
             if str(row["id"]) not in excluded
         ]
         for sequence_id in sequence_ids:
@@ -914,25 +867,16 @@ class TimelineRepository(ProjectRepositoryComponent):
         for link in source.subtitle_links:
             source_start: int | None
             source_end: int | None
-            if (
-                link.source_start_frame is not None
-                and link.source_end_frame is not None
-            ):
+            if link.source_start_frame is not None and link.source_end_frame is not None:
                 source_start, source_end = reframe_range(
                     link.source_start_frame,
                     link.source_end_frame,
                 )
             else:
                 source_start = (
-                    reframe(link.source_start_frame)
-                    if link.source_start_frame is not None
-                    else None
+                    reframe(link.source_start_frame) if link.source_start_frame is not None else None
                 )
-                source_end = (
-                    reframe(link.source_end_frame)
-                    if link.source_end_frame is not None
-                    else None
-                )
+                source_end = reframe(link.source_end_frame) if link.source_end_frame is not None else None
             connection.execute(
                 """UPDATE subtitle_track_document
                    SET offset_frames=?, source_start_frame=?, source_end_frame=?

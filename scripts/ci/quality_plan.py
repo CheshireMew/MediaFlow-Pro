@@ -48,7 +48,7 @@ CORE_FILES = {
     "mediaflow/mcp_server.py",
 }
 
-PORTABLE_PREFIXES = (
+PORTABLE_BUILD_PREFIXES = (
     "mediaflow/desktop/native/",
     "mediaflow/infrastructure/runtime_",
     "scripts/build_native",
@@ -56,7 +56,7 @@ PORTABLE_PREFIXES = (
     "scripts/prepare_runtime",
     "tests/v2/integration/test_native_preview.py",
 )
-PORTABLE_FILES = {
+PORTABLE_BUILD_FILES = {
     ".env.example",
     ".github/workflows/quality.yml",
     "mediaflow/environment.py",
@@ -65,10 +65,36 @@ PORTABLE_FILES = {
     "requirements.lock",
     "runtime.lock.json",
     "scripts/load_environment.ps1",
+    "scripts/ci/quality_plan.py",
     "scripts/prepare_ci_runtime.ps1",
-    "scripts/verify_project_interchange.py",
     "tests/v2/architecture/test_ci_runtime.py",
     "tests/v2/infrastructure/test_environment.py",
+}
+
+INTERCHANGE_PREFIXES = (
+    "mediaflow/infrastructure/project_",
+    "mediaflow/infrastructure/editable_media_project_migration",
+    "mediaflow/infrastructure/task_command_migrations",
+    "tests/v2/infrastructure/test_editable_media_project_migration.py",
+    "tests/v2/infrastructure/test_project_",
+)
+INTERCHANGE_FILES = {
+    ".github/workflows/quality.yml",
+    "mediaflow/application/edit_history.py",
+    "mediaflow/domain/project.py",
+    "mediaflow/domain/project_records.py",
+    "mediaflow/domain/timeline_history.py",
+    "mediaflow/infrastructure/audio_repository.py",
+    "mediaflow/infrastructure/highlight_repository.py",
+    "mediaflow/infrastructure/sqlite_uri.py",
+    "mediaflow/infrastructure/subtitle_repository.py",
+    "mediaflow/infrastructure/task_repository.py",
+    "mediaflow/infrastructure/timeline_repository.py",
+    "mediaflow/infrastructure/web_media_repository.py",
+    "requirements.lock",
+    "runtime.lock.json",
+    "scripts/ci/quality_plan.py",
+    "scripts/verify_project_interchange.py",
 }
 
 
@@ -77,7 +103,8 @@ class QualityPlan:
     scope: str
     run_core: bool
     run_full: bool
-    run_portable: bool
+    run_portable_build: bool
+    run_interchange: bool
     changed_count: int
     reason: str
 
@@ -122,15 +149,20 @@ def is_core_path(value: str | Path) -> bool:
     return path in CORE_FILES or path.startswith(CORE_PREFIXES)
 
 
-def is_portable_path(value: str | Path) -> bool:
+def is_portable_build_path(value: str | Path) -> bool:
     path = normalize_path(value)
-    return path in PORTABLE_FILES or path.startswith(PORTABLE_PREFIXES)
+    return path in PORTABLE_BUILD_FILES or path.startswith(PORTABLE_BUILD_PREFIXES)
+
+
+def is_interchange_path(value: str | Path) -> bool:
+    path = normalize_path(value)
+    return path in INTERCHANGE_FILES or path.startswith(INTERCHANGE_PREFIXES)
 
 
 def plan_for_paths(paths: Iterable[str | Path]) -> QualityPlan:
     changed = tuple(dict.fromkeys(normalize_path(path) for path in paths if str(path).strip()))
     if not changed:
-        return QualityPlan("full", True, True, True, 0, "empty change set fails closed")
+        return QualityPlan("full", True, True, True, True, 0, "empty change set fails closed")
     non_maintenance = tuple(path for path in changed if not is_maintenance_path(path))
     if not non_maintenance:
         return QualityPlan(
@@ -138,16 +170,24 @@ def plan_for_paths(paths: Iterable[str | Path]) -> QualityPlan:
             False,
             False,
             False,
+            False,
             len(changed),
             "all changed paths are repository documentation or metadata",
         )
-    full_paths = tuple(path for path in non_maintenance if not is_core_path(path))
+    run_portable_build = any(is_portable_build_path(path) for path in non_maintenance)
+    run_interchange = any(is_interchange_path(path) for path in non_maintenance)
+    full_paths = tuple(
+        path
+        for path in non_maintenance
+        if not is_core_path(path) or is_interchange_path(path)
+    )
     if not full_paths:
         return QualityPlan(
             "core",
             True,
             False,
-            any(is_portable_path(path) for path in non_maintenance),
+            run_portable_build,
+            run_interchange,
             len(changed),
             "changes are confined to platform-independent application contracts",
         )
@@ -155,7 +195,8 @@ def plan_for_paths(paths: Iterable[str | Path]) -> QualityPlan:
         "full",
         True,
         True,
-        any(is_portable_path(path) for path in full_paths),
+        run_portable_build,
+        run_interchange,
         len(changed),
         f"full-chain path changed: {full_paths[0]}",
     )
@@ -163,11 +204,11 @@ def plan_for_paths(paths: Iterable[str | Path]) -> QualityPlan:
 
 def forced_plan(scope: str, *, reason: str) -> QualityPlan:
     if scope == "maintenance":
-        return QualityPlan(scope, False, False, False, 0, reason)
+        return QualityPlan(scope, False, False, False, False, 0, reason)
     if scope == "core":
-        return QualityPlan(scope, True, False, False, 0, reason)
+        return QualityPlan(scope, True, False, False, False, 0, reason)
     if scope == "full":
-        return QualityPlan(scope, True, True, True, 0, reason)
+        return QualityPlan(scope, True, True, True, True, 0, reason)
     raise ValueError(f"Unsupported quality scope: {scope}")
 
 
@@ -243,41 +284,59 @@ def _write_summary(plan: QualityPlan, paths: Sequence[str]) -> None:
             "## Quality plan\n\n"
             f"- Scope: `{plan.scope}`\n"
             f"- Reason: {plan.reason}\n"
-            f"- Core / full / portable: `{plan.run_core}` / `{plan.run_full}` / "
-            f"`{plan.run_portable}`\n\n"
+            "- Core / full / portable build / interchange: "
+            f"`{plan.run_core}` / `{plan.run_full}` / "
+            f"`{plan.run_portable_build}` / `{plan.run_interchange}`\n\n"
             f"Changed paths:\n\n{preview}\n"
         )
 
 
 def _self_test() -> None:
     cases = {
-        ("README.md",): ("maintenance", False, False),
+        ("README.md",): ("maintenance", False, False, False),
         ("README.en.md", "README.ja.md", "CONTRIBUTING.md"): (
             "maintenance",
             False,
             False,
+            False,
         ),
-        ("LICENSE", "docs/demo.png"): ("maintenance", False, False),
-        (".github/workflows/star-history.yml",): ("maintenance", False, False),
-        ("AGENTS.md", "ARCHITECTURE.md"): ("maintenance", False, False),
-        ("mediaflow/domain/project.py",): ("core", True, False),
-        ("mediaflow/infrastructure/runtime_paths.py",): ("full", True, True),
-        ("mediaflow/desktop/native/MltRuntime.cpp",): ("full", True, True),
-        (".github/workflows/quality.yml",): ("full", True, True),
-        (".env.example",): ("full", True, True),
-        ("scripts/verify_project_interchange.py",): ("full", True, True),
-        ("README.md", "mediaflow/application/task_service.py"): ("core", True, False),
-        ("unexpected/build-input.bin",): ("full", True, False),
+        ("LICENSE", "docs/demo.png"): ("maintenance", False, False, False),
+        (".github/workflows/star-history.yml",): ("maintenance", False, False, False),
+        ("AGENTS.md", "ARCHITECTURE.md"): ("maintenance", False, False, False),
+        ("mediaflow/domain/project.py",): ("full", True, False, True),
+        ("mediaflow/domain/task.py",): ("core", True, False, False),
+        ("mediaflow/infrastructure/runtime_paths.py",): ("full", True, True, False),
+        ("mediaflow/desktop/native/MltRuntime.cpp",): ("full", True, True, False),
+        ("tests/v2/integration/test_native_preview.py",): ("full", True, True, False),
+        (".github/workflows/quality.yml",): ("full", True, True, True),
+        ("scripts/ci/quality_plan.py",): ("full", True, True, True),
+        (".env.example",): ("full", True, True, False),
+        ("requirements.lock",): ("full", True, True, True),
+        ("runtime.lock.json",): ("full", True, True, True),
+        ("scripts/verify_project_interchange.py",): ("full", True, False, True),
+        ("README.md", "mediaflow/application/task_service.py"): (
+            "core",
+            True,
+            False,
+            False,
+        ),
+        ("unexpected/build-input.bin",): ("full", True, False, False),
     }
     for paths, expected in cases.items():
         plan = plan_for_paths(paths)
-        actual = (plan.scope, plan.run_core, plan.run_portable)
+        actual = (
+            plan.scope,
+            plan.run_core,
+            plan.run_portable_build,
+            plan.run_interchange,
+        )
         if actual != expected:
             raise AssertionError(f"{paths}: expected {expected}, received {actual}")
     if plan_for_paths(()).scope != "full":
         raise AssertionError("An empty change set must fail closed")
-    if forced_plan("full", reason="test").run_portable is not True:
-        raise AssertionError("A forced full plan must include portable source builds")
+    forced_full = forced_plan("full", reason="test")
+    if not forced_full.run_portable_build or not forced_full.run_interchange:
+        raise AssertionError("A forced full plan must include every cross-platform boundary")
     print("quality plan self-test passed")
 
 

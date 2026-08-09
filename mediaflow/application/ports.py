@@ -33,7 +33,7 @@ from mediaflow.domain.project_records import (
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
 from mediaflow.domain.settings import AsrSettings, DownloadSettings, LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitlePlacement, SubtitleSegment, SubtitleWord
-from mediaflow.domain.task_commands import SequenceBuildUnit
+from mediaflow.domain.task_commands import DiagnosticsBundleCommand, SequenceBuildUnit
 from mediaflow.domain.tasks import LoudnessTaskOutcome, Task, TaskStopRequest
 from mediaflow.domain.timeline import (
     Clip,
@@ -203,9 +203,7 @@ class AssetDocuments(Protocol):
     def list_assets(self) -> list[Asset]: ...
     def list_asset_bins(self) -> list[AssetBin]: ...
     def create_asset_bin(self, name: str, parent_id: str | None = None) -> AssetBin: ...
-    def move_assets_to_bin(
-        self, asset_ids: list[str], bin_id: str | None
-    ) -> list[Asset]: ...
+    def move_assets_to_bin(self, asset_ids: list[str], bin_id: str | None) -> list[Asset]: ...
     def update_asset(self, asset: Asset) -> Asset: ...
     def set_asset_proxy_paths(
         self,
@@ -504,6 +502,14 @@ class TimelineEditorDocuments(
 
     @property
     def web(self) -> WebMediaDocuments: ...
+
+
+class PortableTimelineImportDocuments(
+    TimelineEditorDocuments,
+    SubtitleAcquisitionDocuments,
+    Protocol,
+):
+    project_dir: Path
 
 
 class TranscriptEditingDocuments(
@@ -993,6 +999,16 @@ class AnalysisTaskRuntime(Protocol):
     ) -> DownloadPlan: ...
 
 
+class DiagnosticsTaskRuntime(Protocol):
+    def create_bundle(
+        self,
+        command: DiagnosticsBundleCommand,
+        *,
+        check_cancelled: CancellationCheck,
+        report: ProgressCallback,
+    ) -> tuple[Path, str, int, int]: ...
+
+
 class ProjectTaskRuntimePorts(Protocol):
     """Focused technical ports assembled for one project task registry."""
 
@@ -1013,3 +1029,6 @@ class ProjectTaskRuntimePorts(Protocol):
 
     @property
     def analysis(self) -> AnalysisTaskRuntime: ...
+
+    @property
+    def diagnostics(self) -> DiagnosticsTaskRuntime: ...

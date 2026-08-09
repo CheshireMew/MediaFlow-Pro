@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import atexit
 import base64
+import json
 import math
 import os
 import queue
 import struct
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from mediaflow.infrastructure.system_resources import available_physical_memory_bytes
 from mediaflow.infrastructure.web_browser import (
@@ -30,6 +33,74 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 WebCaptureMode = Literal["auto", "screenshot"]
 WebWorkerSizingBound = Literal["worker_limit", "work", "memory", "pixels"]
+
+_RETRY_FRAME_QUERY = "__hf_retry_frame"
+_RETRY_ATTEMPT_QUERY = "__hf_retry_attempt"
+
+
+def _retry_capture_url(url: str, *, frame_index: int, attempt: int) -> str:
+    if frame_index < 0 or attempt <= 1:
+        raise ValueError("Editable media retry URL needs a frame and a later attempt")
+    parts = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key not in {_RETRY_FRAME_QUERY, _RETRY_ATTEMPT_QUERY}
+    ]
+    query.extend(
+        (
+            (_RETRY_FRAME_QUERY, str(frame_index)),
+            (_RETRY_ATTEMPT_QUERY, str(attempt)),
+        )
+    )
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def _seek_frame(page, seconds: float, frame_index: int) -> dict[str, Any]:
+    try:
+        result = page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
+    except BaseException as error:
+        marker = "__MEDIAFLOW_FRAME_ERROR__"
+        message = str(error)
+        if marker not in message:
+            raise
+        encoded = message.split(marker, 1)[1].split("\n", 1)[0]
+        try:
+            detail = json.loads(encoded)
+        except json.JSONDecodeError:
+            raise error from None
+        if not isinstance(detail, dict):
+            raise error
+        detail["frame_index"] = frame_index
+        raise WebFrameCaptureError(detail) from error
+    if not isinstance(result, dict):
+        raise RuntimeError("editable-media v6 seek did not return frame readiness details")
+    return result
+
+
+def _page_can_be_replaced(error: BaseException) -> bool:
+    message = f"{type(error).__name__}: {error}".casefold()
+    return any(
+        marker in message
+        for marker in (
+            "targetclosed",
+            "target page, context or browser has been closed",
+            "page closed",
+            "browser has been closed",
+        )
+    )
+
+
+def _browser_was_closed(error: BaseException) -> bool:
+    message = f"{type(error).__name__}: {error}".casefold()
+    return any(
+        marker in message
+        for marker in (
+            "browser has been closed",
+            "browser disconnected",
+            "browser process",
+        )
+    )
 
 _FAST_CAPTURE_COMPATIBILITY = """
 () => {
@@ -208,6 +279,13 @@ class WebCaptureMetrics:
     frame_time_p50_ms: float
     frame_time_p95_ms: float
     elapsed_seconds: float
+    work_steal_count: int
+    worker_frame_counts: tuple[int, ...]
+    retry_count: int
+    page_replacement_count: int
+    browser_replacement_count: int
+    readiness_wait_seconds: float
+    timeout_labels: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +320,11 @@ class _WorkerMetrics:
     capture_seconds: float
     queue_wait_seconds: float
     frame_times_ms: tuple[float, ...]
+    retry_count: int
+    page_replacement_count: int
+    browser_replacement_count: int
+    readiness_wait_seconds: float
+    timeout_labels: tuple[str, ...]
 
 
 class FastCaptureFallbackRequired(RuntimeError):
@@ -255,6 +338,25 @@ class FastCaptureFallbackRequired(RuntimeError):
         self.worker_index = worker_index
         self.frame_index = frame_index
         self.reason = reason
+
+
+class _FastFrameCaptureError(RuntimeError):
+    pass
+
+
+class WebFrameCaptureError(RuntimeError):
+    def __init__(self, detail: dict[str, Any]) -> None:
+        super().__init__(
+            f"frame={detail.get('frame_index', '?')}, "
+            f"label={detail.get('label') or 'unknown'}, "
+            f"code={detail.get('code') or 'frame_task_failed'}: "
+            f"{detail.get('message') or 'Editable media frame failed'}"
+        )
+        self.code = str(detail.get("code") or "frame_task_failed")
+        self.label = str(detail.get("label") or "")
+        self.retryable = detail.get("retryable") is True
+        self.seconds = float(detail.get("seconds") or 0.0)
+        self.generation = int(detail.get("generation") or 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +439,117 @@ class _CaptureModeConsensus:
         return self.all_enabled
 
 
+@dataclass(frozen=True, slots=True)
+class _FrameLease:
+    index: int
+    attempt: int
+
+
+class _FrameScheduler:
+    def __init__(self, frame_count: int, worker_count: int, *, start_frame: int = 0) -> None:
+        if frame_count <= 0 or worker_count <= 0 or start_frame < 0:
+            raise ValueError("Frame scheduler needs positive sizes and a non-negative start")
+        self._lock = threading.Lock()
+        self._start_frame = start_frame
+        self._queues = [
+            deque(
+                range(
+                    start_frame + frame_count * index // worker_count,
+                    start_frame + frame_count * (index + 1) // worker_count,
+                )
+            )
+            for index in range(worker_count)
+        ]
+        self._states = ["pending"] * frame_count
+        self._owners: list[int | None] = [None] * frame_count
+        self._attempts = [0] * frame_count
+        self._worker_counts = [0] * worker_count
+        self._work_steal_count = 0
+
+    def lease(self, worker_index: int) -> _FrameLease | None:
+        with self._lock:
+            own = self._queues[worker_index]
+            if not own:
+                victim_index, victim = max(
+                    enumerate(self._queues),
+                    key=lambda item: len(item[1]),
+                )
+                if victim_index != worker_index and victim:
+                    count = max(1, len(victim) // 2)
+                    stolen = sorted(victim.pop() for _ in range(count))
+                    own.extend(stolen)
+                    self._work_steal_count += 1
+            if not own:
+                return None
+            frame_index = own.popleft()
+            offset = self._offset(frame_index)
+            if self._states[offset] != "pending":
+                raise RuntimeError("Editable media frame scheduler state is corrupt")
+            self._states[offset] = "leased"
+            self._owners[offset] = worker_index
+            self._attempts[offset] += 1
+            return _FrameLease(frame_index, self._attempts[offset])
+
+    def return_frame(self, worker_index: int, frame_index: int) -> None:
+        with self._lock:
+            offset = self._offset(frame_index)
+            if (
+                self._states[offset] != "leased"
+                or self._owners[offset] != worker_index
+            ):
+                raise RuntimeError("Editable media frame lease cannot be returned")
+            self._states[offset] = "pending"
+            self._owners[offset] = None
+            self._queues[worker_index].appendleft(frame_index)
+
+    def complete(self, worker_index: int, frame_index: int) -> None:
+        with self._lock:
+            offset = self._offset(frame_index)
+            if (
+                self._states[offset] != "leased"
+                or self._owners[offset] != worker_index
+            ):
+                raise RuntimeError("Editable media frame lease cannot be completed")
+            self._states[offset] = "completed"
+            self._owners[offset] = None
+            self._worker_counts[worker_index] += 1
+
+    def _offset(self, frame_index: int) -> int:
+        offset = frame_index - self._start_frame
+        if not 0 <= offset < len(self._states):
+            raise ValueError(f"Frame {frame_index} is outside the scheduler range")
+        return offset
+
+    @property
+    def work_steal_count(self) -> int:
+        with self._lock:
+            return self._work_steal_count
+
+    @property
+    def worker_frame_counts(self) -> tuple[int, ...]:
+        with self._lock:
+            return tuple(self._worker_counts)
+
+
+class _BrowserPoolGeneration:
+    """Coordinate an atomic browser-pool replacement across worker threads."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._generation = 0
+
+    @property
+    def current(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def invalidate(self, observed_generation: int) -> int:
+        with self._lock:
+            if self._generation == observed_generation:
+                self._generation += 1
+            return self._generation
+
+
 @dataclass(slots=True)
 class _CaptureJob:
     url: str
@@ -346,7 +559,7 @@ class _CaptureJob:
     fps_numerator: int
     fps_denominator: int
     runtime_state: dict[str, Any]
-    frame_indices: range
+    scheduler: _FrameScheduler
     output: queue.Queue[_CapturedFrame]
     cancelled: threading.Event
     future: Future[_WorkerMetrics]
@@ -355,6 +568,7 @@ class _CaptureJob:
     capture_mode_consensus: _CaptureModeConsensus
     fast_capture_sample_indices: tuple[int, ...]
     capture_mode: WebCaptureMode
+    retry_limit: int
 
 
 class _BrowserWorker:
@@ -364,10 +578,12 @@ class _BrowserWorker:
         executable: Path,
         index: int,
         on_browser_launch: Callable[[], None],
+        browser_pool_generation: _BrowserPoolGeneration,
     ) -> None:
         self.executable = executable
         self.index = index
         self.on_browser_launch = on_browser_launch
+        self.browser_pool_generation = browser_pool_generation
         self.jobs: queue.Queue[_CaptureJob | None] = queue.Queue()
         self._state_lock = threading.Lock()
         self._active_job: _CaptureJob | None = None
@@ -394,6 +610,7 @@ class _BrowserWorker:
     def _run(self) -> None:
         playwright = None
         browser = None
+        browser_generation = -1
         startup_error: BaseException | None = None
         try:
             while True:
@@ -419,23 +636,49 @@ class _BrowserWorker:
                         except BaseException as error:
                             startup_error = error
                             raise
-                    if browser is None or not browser.is_connected():
-                        browser = playwright.chromium.launch(
-                            executable_path=str(self.executable),
-                            headless=True,
-                            args=[
-                                "--disable-renderer-backgrounding",
-                                "--disable-background-timer-throttling",
-                                "--disable-backgrounding-occluded-windows",
-                                "--disable-gpu",
-                                "--enable-features=CanvasDrawElement",
-                                "--force-color-profile=srgb",
-                                "--hide-scrollbars",
-                                "--mute-audio",
-                            ],
-                        )
-                        self.on_browser_launch()
-                    metrics = self._capture(browser, job)
+                    def replace_browser(playwright_instance=playwright):
+                        nonlocal browser, browser_generation
+                        if browser is not None:
+                            try:
+                                browser.close()
+                            except BaseException:
+                                pass
+                            browser = None
+                        while True:
+                            target_generation = self.browser_pool_generation.current
+                            candidate = playwright_instance.chromium.launch(
+                                executable_path=str(self.executable),
+                                headless=True,
+                                args=[
+                                    "--disable-renderer-backgrounding",
+                                    "--disable-background-timer-throttling",
+                                    "--disable-backgrounding-occluded-windows",
+                                    "--disable-gpu",
+                                    "--enable-features=CanvasDrawElement",
+                                    "--force-color-profile=srgb",
+                                    "--hide-scrollbars",
+                                    "--mute-audio",
+                                ],
+                            )
+                            self.on_browser_launch()
+                            if self.browser_pool_generation.current == target_generation:
+                                browser = candidate
+                                browser_generation = target_generation
+                                return browser, browser_generation
+                            candidate.close()
+
+                    if (
+                        browser is None
+                        or not browser.is_connected()
+                        or browser_generation != self.browser_pool_generation.current
+                    ):
+                        replace_browser()
+                    metrics = self._capture(
+                        browser,
+                        browser_generation,
+                        replace_browser,
+                        job,
+                    )
                 except BaseException as error:
                     job.future.set_exception(error)
                     job.cancelled.set()
@@ -462,7 +705,13 @@ class _BrowserWorker:
                 except BaseException:
                     pass
 
-    def _capture(self, browser, job: _CaptureJob) -> _WorkerMetrics:
+    def _capture(
+        self,
+        browser,
+        browser_generation: int,
+        replace_browser: Callable[[], tuple[Any, int]],
+        job: _CaptureJob,
+    ) -> _WorkerMetrics:
         context, page, cdp = self._open_capture_page(browser, job)
         if job.verifies_determinism:
             try:
@@ -518,49 +767,111 @@ class _BrowserWorker:
             capture_seconds = 0.0
             queue_wait_seconds = 0.0
             frame_times_ms: list[float] = []
-            for frame_index in job.frame_indices:
+            retry_count = 0
+            page_replacement_count = 0
+            browser_replacement_count = 0
+            readiness_wait_seconds = 0.0
+            timeout_labels: set[str] = set()
+            while True:
                 if job.cancelled.is_set():
                     break
+                if browser_generation != self.browser_pool_generation.current:
+                    context.close()
+                    browser, browser_generation = replace_browser()
+                    context, page, cdp = self._open_capture_page(browser, job)
+                    if fast_capture:
+                        page.evaluate(
+                            _INJECT_FAST_CAPTURE_CANVAS,
+                            {"width": job.width, "height": job.height},
+                        )
+                    browser_replacement_count += 1
+                lease = job.scheduler.lease(self.index)
+                if lease is None:
+                    break
+                frame_index = lease.index
                 frame_started = time.perf_counter()
                 seconds = frame_index * job.fps_denominator / job.fps_numerator
-                seek_started = time.perf_counter()
-                page.evaluate(
-                    SEEK_WEB_FRAME_SCRIPT,
-                    seconds,
-                )
-                seek_seconds += time.perf_counter() - seek_started
-                capture_started = time.perf_counter()
-                if fast_capture:
-                    try:
-                        payload = self._capture_fast(page, job.width, job.height)
-                        _validate_png(payload, job.width, job.height)
-                        reference = (
-                            fast_capture_plan.references.get(frame_index)
-                            if fast_capture_plan is not None
-                            else None
-                        )
-                        if reference is not None:
-                            comparison = _compare_fast_capture(reference, payload)
-                            if not comparison.accepted:
-                                raise RuntimeError(
-                                    "verification frame drifted from the screenshot "
-                                    f"reference; {comparison.rejection_reason()}"
-                                )
-                    except BaseException as error:
+                try:
+                    seek_started = time.perf_counter()
+                    readiness = _seek_frame(page, seconds, frame_index)
+                    seek_seconds += time.perf_counter() - seek_started
+                    readiness_wait_seconds += float(readiness.get("wait_ms") or 0.0) / 1000
+                    capture_started = time.perf_counter()
+                    if fast_capture:
+                        try:
+                            payload = self._capture_fast(page, job.width, job.height)
+                            _validate_png(payload, job.width, job.height)
+                            reference = (
+                                fast_capture_plan.references.get(frame_index)
+                                if fast_capture_plan is not None
+                                else None
+                            )
+                            if reference is not None:
+                                comparison = _compare_fast_capture(reference, payload)
+                                if not comparison.accepted:
+                                    raise RuntimeError(
+                                        "verification frame drifted from the screenshot "
+                                        f"reference; {comparison.rejection_reason()}"
+                                    )
+                        except BaseException as error:
+                            raise _FastFrameCaptureError(str(error)) from error
+                    else:
+                        payload = self._capture_screenshot(cdp, job.width, job.height)
+                    capture_seconds += time.perf_counter() - capture_started
+                    queue_wait = self._put(job, _CapturedFrame(frame_index, payload))
+                    if queue_wait is None:
+                        job.scheduler.return_frame(self.index, frame_index)
+                        break
+                    job.scheduler.complete(self.index, frame_index)
+                    captured += 1
+                    queue_wait_seconds += queue_wait
+                    frame_times_ms.append((time.perf_counter() - frame_started) * 1000)
+                except BaseException as error:
+                    job.scheduler.return_frame(self.index, frame_index)
+                    retryable = (
+                        isinstance(error, WebFrameCaptureError) and error.retryable
+                    ) or _page_can_be_replaced(error)
+                    if isinstance(error, _FastFrameCaptureError):
                         raise FastCaptureFallbackRequired(
                             worker_index=self.index,
                             frame_index=frame_index,
                             reason=str(error),
                         ) from error
-                else:
-                    payload = self._capture_screenshot(cdp, job.width, job.height)
-                capture_seconds += time.perf_counter() - capture_started
-                captured += 1
-                queue_wait = self._put(job, _CapturedFrame(frame_index, payload))
-                if queue_wait is None:
-                    break
-                queue_wait_seconds += queue_wait
-                frame_times_ms.append((time.perf_counter() - frame_started) * 1000)
+                    if not retryable or lease.attempt > job.retry_limit:
+                        raise RuntimeError(
+                            "Editable media frame capture failed: "
+                            f"frame={frame_index}, attempt={lease.attempt}, error={error}"
+                        ) from error
+                    retry_count += 1
+                    if isinstance(error, WebFrameCaptureError) and error.code == "frame_task_timeout":
+                        timeout_labels.add(error.label or "unknown")
+                    context.close()
+                    browser_connected = False
+                    try:
+                        browser_connected = browser.is_connected()
+                    except BaseException:
+                        pass
+                    if not browser_connected or _browser_was_closed(error):
+                        self.browser_pool_generation.invalidate(browser_generation)
+                    if browser_generation != self.browser_pool_generation.current:
+                        browser, browser_generation = replace_browser()
+                        browser_replacement_count += 1
+                    else:
+                        page_replacement_count += 1
+                    context, page, cdp = self._open_capture_page(
+                        browser,
+                        job,
+                        url=_retry_capture_url(
+                            job.url,
+                            frame_index=frame_index,
+                            attempt=lease.attempt + 1,
+                        ),
+                    )
+                    if fast_capture:
+                        page.evaluate(
+                            _INJECT_FAST_CAPTURE_CANVAS,
+                            {"width": job.width, "height": job.height},
+                        )
             return _WorkerMetrics(
                 captured_frames=captured,
                 fast_capture=fast_capture,
@@ -569,12 +880,17 @@ class _BrowserWorker:
                 capture_seconds=capture_seconds,
                 queue_wait_seconds=queue_wait_seconds,
                 frame_times_ms=tuple(frame_times_ms),
+                retry_count=retry_count,
+                page_replacement_count=page_replacement_count,
+                browser_replacement_count=browser_replacement_count,
+                readiness_wait_seconds=readiness_wait_seconds,
+                timeout_labels=tuple(sorted(timeout_labels)),
             )
         finally:
             context.close()
 
     @staticmethod
-    def _open_capture_page(browser, job: _CaptureJob):
+    def _open_capture_page(browser, job: _CaptureJob, *, url: str | None = None):
         context = browser.new_context(
             viewport={"width": job.width, "height": job.height},
             device_scale_factor=1,
@@ -590,7 +906,7 @@ class _BrowserWorker:
             )
             context.route("https://**/*", lambda route: route.abort())
             page = context.new_page()
-            page.goto(job.url, wait_until="load", timeout=15000)
+            page.goto(url or job.url, wait_until="load", timeout=15000)
             page.wait_for_function(
                 """() => window.editableMedia
                     && window.editableMedia.ready instanceof Promise
@@ -652,17 +968,14 @@ class _BrowserWorker:
             )
         sample_indices = job.fast_capture_sample_indices
         references: dict[int, bytes] = {}
-        screenshot_seconds = 0.0
         for frame_index in sample_indices:
             seconds = frame_index * job.fps_denominator / job.fps_numerator
-            page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
-            started = time.perf_counter()
+            _seek_frame(page, seconds, frame_index)
             references[frame_index] = self._capture_screenshot(
                 cdp,
                 job.width,
                 job.height,
             )
-            screenshot_seconds += time.perf_counter() - started
         page.evaluate(
             _INJECT_FAST_CAPTURE_CANVAS,
             {"width": job.width, "height": job.height},
@@ -674,7 +987,7 @@ class _BrowserWorker:
                 * job.fps_denominator
                 / job.fps_numerator
             )
-            page.evaluate(SEEK_WEB_FRAME_SCRIPT, warm_seconds)
+            _seek_frame(page, warm_seconds, warm_frame_index)
             warm_candidate = self._capture_fast(page, job.width, job.height)
             _validate_png(warm_candidate, job.width, job.height)
             warm_comparison = _compare_fast_capture(
@@ -683,21 +996,14 @@ class _BrowserWorker:
             )
             if not warm_comparison.accepted:
                 raise RuntimeError(warm_comparison.rejection_reason())
-            fast_capture_seconds = 0.0
             for frame_index, reference in references.items():
                 seconds = frame_index * job.fps_denominator / job.fps_numerator
-                page.evaluate(SEEK_WEB_FRAME_SCRIPT, seconds)
-                started = time.perf_counter()
+                _seek_frame(page, seconds, frame_index)
                 candidate = self._capture_fast(page, job.width, job.height)
-                fast_capture_seconds += time.perf_counter() - started
                 _validate_png(candidate, job.width, job.height)
                 comparison = _compare_fast_capture(reference, candidate)
                 if not comparison.accepted:
                     raise RuntimeError(comparison.rejection_reason())
-            if fast_capture_seconds >= screenshot_seconds:
-                raise RuntimeError(
-                    "drawElementImage was not faster than Chrome screenshot capture"
-                )
         except BaseException as error:
             page.evaluate(_REMOVE_FAST_CAPTURE_CANVAS)
             return _FastCaptureAttempt(plan=None, reason=str(error))
@@ -762,11 +1068,13 @@ class WebCaptureEngine:
         self._last_metrics: WebCaptureMetrics | None = None
         self._last_failure: WebCaptureFailure | None = None
         self._validated_render_states: set[str] = set()
+        self._browser_pool_generation = _BrowserPoolGeneration()
         self._workers = [
             _BrowserWorker(
                 executable=self.executable,
                 index=index,
                 on_browser_launch=self._record_browser_launch,
+                browser_pool_generation=self._browser_pool_generation,
             )
             for index in range(_configured_worker_limit())
         ]
@@ -788,9 +1096,15 @@ class WebCaptureEngine:
         check_cancelled: Callable[[], None] | None = None,
         capture_mode: WebCaptureMode = "auto",
         fallback_reason: str | None = None,
+        retry_limit: int = 1,
+        start_frame: int = 0,
     ) -> WebCaptureMetrics:
         if capture_mode not in {"auto", "screenshot"}:
             raise ValueError(f"Unsupported editable media capture mode: {capture_mode}")
+        if not 0 <= retry_limit <= 3:
+            raise ValueError("Editable media frame retry limit must be between 0 and 3")
+        if start_frame < 0:
+            raise ValueError("Editable media capture start frame cannot be negative")
         started = time.perf_counter()
         sizing = _resolve_worker_count(
             frame_count=frame_count,
@@ -800,19 +1114,26 @@ class WebCaptureEngine:
         )
         worker_count = sizing.workers
         cancelled = threading.Event()
-        outputs = [
-            queue.Queue[_CapturedFrame](maxsize=_FRAME_QUEUE_DEPTH)
-            for _ in range(worker_count)
-        ]
+        output = queue.Queue[_CapturedFrame](
+            maxsize=max(1, worker_count * _FRAME_QUEUE_DEPTH)
+        )
+        scheduler = _FrameScheduler(
+            frame_count,
+            worker_count,
+            start_frame=start_frame,
+        )
         futures: list[Future[_WorkerMetrics]] = []
         capture_mode_consensus = _CaptureModeConsensus(
             worker_count=worker_count,
             ready=threading.Event(),
             lock=threading.Lock(),
         )
-        fast_capture_samples = _fast_capture_sample_indices(
+        fast_capture_samples = tuple(
+            start_frame + frame
+            for frame in _fast_capture_sample_indices(
             frame_count=frame_count,
             worker_count=worker_count,
+            )
         )
         with self._lock:
             verifies_determinism = (
@@ -833,8 +1154,8 @@ class WebCaptureEngine:
                         fps_numerator=fps_numerator,
                         fps_denominator=fps_denominator,
                         runtime_state=runtime_state,
-                        frame_indices=range(worker_index, frame_count, worker_count),
-                        output=outputs[worker_index],
+                        scheduler=scheduler,
+                        output=output,
                         cancelled=cancelled,
                         future=future,
                         determinism_decision=determinism_decision,
@@ -843,29 +1164,39 @@ class WebCaptureEngine:
                         fast_capture_sample_indices=tuple(
                             frame_index
                             for frame_index in fast_capture_samples
-                            if frame_index % worker_count == worker_index
+                            if start_frame + frame_count * worker_index // worker_count
+                            <= frame_index
+                            < start_frame
+                            + frame_count * (worker_index + 1) // worker_count
                         ),
                         capture_mode=capture_mode,
+                        retry_limit=retry_limit,
                     )
                 )
             try:
-                for expected_index in range(frame_count):
+                ordered_buffer: dict[int, _CapturedFrame] = {}
+                for completed_count, expected_index in enumerate(
+                    range(start_frame, start_frame + frame_count),
+                    start=1,
+                ):
                     if check_cancelled is not None:
                         check_cancelled()
-                    output = outputs[expected_index % worker_count]
-                    item = self._next_frame(
-                        output,
-                        futures,
-                        cancelled,
-                        check_cancelled=check_cancelled,
-                    )
-                    if item.index != expected_index:
-                        raise RuntimeError(
-                            "Parallel editable media capture returned frames out of order"
+                    while expected_index not in ordered_buffer:
+                        item = self._next_frame(
+                            output,
+                            futures,
+                            cancelled,
+                            check_cancelled=check_cancelled,
                         )
+                        if item.index < expected_index or item.index in ordered_buffer:
+                            raise RuntimeError(
+                                "Parallel editable media capture returned a duplicate frame"
+                            )
+                        ordered_buffer[item.index] = item
+                    item = ordered_buffer.pop(expected_index)
                     on_frame(item.payload)
                     if on_progress is not None:
-                        on_progress(expected_index + 1)
+                        on_progress(completed_count)
                 worker_metrics = [future.result() for future in futures]
                 self._validated_render_states.add(determinism_key)
             except BaseException as error:
@@ -905,6 +1236,27 @@ class WebCaptureEngine:
             frame_time_p50_ms=_percentile(frame_times_ms, 0.50),
             frame_time_p95_ms=_percentile(frame_times_ms, 0.95),
             elapsed_seconds=time.perf_counter() - started,
+            work_steal_count=scheduler.work_steal_count,
+            worker_frame_counts=scheduler.worker_frame_counts,
+            retry_count=sum(item.retry_count for item in worker_metrics),
+            page_replacement_count=sum(
+                item.page_replacement_count for item in worker_metrics
+            ),
+            browser_replacement_count=sum(
+                item.browser_replacement_count for item in worker_metrics
+            ),
+            readiness_wait_seconds=sum(
+                item.readiness_wait_seconds for item in worker_metrics
+            ),
+            timeout_labels=tuple(
+                sorted(
+                    {
+                        label
+                        for item in worker_metrics
+                        for label in item.timeout_labels
+                    }
+                )
+            ),
         )
         with self._diagnostic_lock:
             self._render_count += 1
@@ -1056,12 +1408,10 @@ def _fast_capture_sample_indices(
         raise ValueError("Editable media capture needs positive frame and worker counts")
     samples: set[int] = set()
     for worker_index in range(min(frame_count, worker_count)):
-        local_frames = range(worker_index, frame_count, worker_count)
-        samples.add(local_frames.start)
-        samples.add(
-            local_frames.start
-            + round(max(0, len(local_frames) - 1) * 0.95) * local_frames.step
-        )
+        start = frame_count * worker_index // worker_count
+        end = frame_count * (worker_index + 1) // worker_count
+        samples.add(start)
+        samples.add(start + round(max(0, end - start - 1) * 0.95))
     target_count = min(frame_count, 4 + 2 * max(0, worker_count - 1))
     for fraction in (0.25, 0.5, 0.75, 0.95, 1.0):
         if len(samples) >= target_count:

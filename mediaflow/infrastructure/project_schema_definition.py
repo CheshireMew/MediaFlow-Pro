@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 44
+PROJECT_SCHEMA_VERSION = 46
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS track (
     solo INTEGER NOT NULL,
     audio_bus_id TEXT REFERENCES audio_bus(id) ON DELETE SET NULL,
     linked_audio_track_id TEXT REFERENCES track(id) ON DELETE SET NULL,
-    primary_dialogue INTEGER NOT NULL DEFAULT 0
+    primary_dialogue INTEGER NOT NULL DEFAULT 0,
+    subtitle_style_json TEXT
 );
 CREATE TABLE IF NOT EXISTS clip (
     id TEXT PRIMARY KEY,
@@ -105,6 +106,7 @@ CREATE TABLE IF NOT EXISTS clip (
     speed_numerator INTEGER NOT NULL,
     speed_denominator INTEGER NOT NULL,
     pitch_compensation INTEGER NOT NULL,
+    freeze_source_frame INTEGER,
     transform_json TEXT NOT NULL,
     transform_keyframes_json TEXT NOT NULL DEFAULT '[]',
     audio_json TEXT NOT NULL,
