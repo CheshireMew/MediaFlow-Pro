@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -24,6 +25,24 @@ from mediaflow.infrastructure.runtime_context import RuntimeContext
 from tests.v2.real_media import generate_real_media
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+
+def test_desktop_startup_does_not_load_opencv_into_native_preview_process() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import mediaflow.desktop.app; "
+                "assert 'cv2' not in sys.modules, "
+                "'desktop startup imported OpenCV into the native preview process'"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.fixture

@@ -1,19 +1,11 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from mediaflow.automation import diagnostics_operations as diagnostics
-from mediaflow.automation import language_audio_operations as language_audio
-from mediaflow.automation import media_quality_operations as media_quality
 from mediaflow.automation import operation_models as models
-from mediaflow.automation import project_operations as project
-from mediaflow.automation import runtime_operations as runtime
-from mediaflow.automation import speech_operations as speech
-from mediaflow.automation import task_operations as tasks
-from mediaflow.automation import timeline_operations as timeline
-from mediaflow.automation import web_operations as web
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.runtime_capabilities import CAPABILITY_IDS
@@ -23,6 +15,38 @@ ExecutionMode = Literal["atomic", "task"]
 HistoryMode = Literal["reversible", "non_undoable"]
 IdempotencyPolicy = Literal["none", "optional"]
 OperationHandler = Callable[[OperationContext], Any]
+
+
+class _LazyOperationModule:
+    """Keep operation implementations out of client and desktop processes."""
+
+    __slots__ = ("_module_name",)
+
+    def __init__(self, module_name: str) -> None:
+        self._module_name = module_name
+
+    def __getattr__(self, handler_name: str) -> OperationHandler:
+        module_name = self._module_name
+
+        def invoke(context: OperationContext) -> Any:
+            module = importlib.import_module(module_name)
+            handler: OperationHandler = getattr(module, handler_name)
+            return handler(context)
+
+        invoke.__name__ = handler_name
+        invoke.__qualname__ = f"{module_name}.{handler_name}"
+        return invoke
+
+
+diagnostics = _LazyOperationModule("mediaflow.automation.diagnostics_operations")
+language_audio = _LazyOperationModule("mediaflow.automation.language_audio_operations")
+media_quality = _LazyOperationModule("mediaflow.automation.media_quality_operations")
+project = _LazyOperationModule("mediaflow.automation.project_operations")
+runtime = _LazyOperationModule("mediaflow.automation.runtime_operations")
+speech = _LazyOperationModule("mediaflow.automation.speech_operations")
+tasks = _LazyOperationModule("mediaflow.automation.task_operations")
+timeline = _LazyOperationModule("mediaflow.automation.timeline_operations")
+web = _LazyOperationModule("mediaflow.automation.web_operations")
 
 
 @dataclass(frozen=True, slots=True)
