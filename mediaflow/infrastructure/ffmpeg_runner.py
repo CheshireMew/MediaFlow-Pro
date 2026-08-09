@@ -28,6 +28,7 @@ class FfmpegInputPipe:
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            bufsize=0,
             creationflags=creationflags,
         )
         if self._process.stdin is None or self._process.stderr is None:
@@ -50,11 +51,24 @@ class FfmpegInputPipe:
         finally:
             self._process.stderr.close()
 
-    def write(self, data: bytes) -> None:
+    def write(
+        self,
+        data: bytes,
+        *,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> None:
         if self._finished:
             raise RuntimeError("FFmpeg input pipe is already closed")
         assert self._process.stdin is not None
-        self._process.stdin.write(data)
+        payload = memoryview(data)
+        offset = 0
+        while offset < len(payload):
+            if check_cancelled is not None:
+                check_cancelled()
+            written = self._process.stdin.write(payload[offset : offset + 64 * 1024])
+            if written is None or written <= 0:
+                raise BrokenPipeError("FFmpeg input pipe stopped accepting frame data")
+            offset += written
 
     def finish(self, *, timeout: float | None = None) -> FfmpegPipeResult:
         if self._finished:

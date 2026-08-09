@@ -11,7 +11,7 @@ from mediaflow.desktop.controllers.controller_hub import EditorControllers
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 
 def test_asset_search_uses_real_linked_transcript_and_multilingual_concepts(

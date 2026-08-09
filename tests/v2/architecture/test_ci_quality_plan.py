@@ -13,7 +13,7 @@ from scripts.ci.prepare_python_environment import (
     expected_state,
 )
 from scripts.ci.quality_plan import forced_plan, normalize_path, plan_for_paths
-from scripts.ci.run_quality import build_quality_stages
+from scripts.ci.run_quality import build_quality_stages, local_changed_paths
 from scripts.ci.test_resources import requires_reviewed_runtime, select_resource_profile
 from scripts.ci.test_shard import (
     node_matches_prefix,
@@ -134,6 +134,7 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
         "tests/v2/application/test_task_service.py::test_task",
         "tests/v2/infrastructure/test_mlt_export.py::test_export",
         "tests/v2/infrastructure/test_editable_media_v6_runtime.py::test_protocol",
+        "tests/v2/application/test_portable_timeline_import.py::test_import",
         "tests/v2/desktop/test_qml_smoke.py::test_window",
     )
 
@@ -145,7 +146,12 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
     assert requires_reviewed_runtime(nodes[2]) is True
     assert requires_reviewed_runtime(nodes[3]) is True
     assert requires_reviewed_runtime(nodes[4]) is True
+    assert requires_reviewed_runtime(nodes[5]) is True
     assert requires_reviewed_runtime(nodes[0]) is False
+
+
+def test_local_changed_paths_never_selects_ignored_quality_evidence() -> None:
+    assert not any(path.startswith(".test-runs/") for path in local_changed_paths("HEAD"))
 
 
 def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
@@ -323,7 +329,7 @@ def test_browser_scenarios_and_failure_diagnostics_have_process_boundaries() -> 
         "test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page"
     ) == 1
     assert (
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
         in workflow
     )
     assert "if-no-files-found: ignore" in workflow

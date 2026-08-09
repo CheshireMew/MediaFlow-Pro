@@ -13,7 +13,7 @@ from mediaflow.desktop.session_state import (
     ProjectInteractionSnapshot,
     TimelinePlacement,
 )
-from mediaflow.domain.collaboration import ProjectChangeEvent
+from mediaflow.domain.collaboration import ProjectChangeEvent, project_write_paths_overlap
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.storage_names import (
     PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
@@ -25,16 +25,6 @@ from .base import SessionCoordinator
 
 logger = logging.getLogger(__name__)
 PROJECT_CLOSE_TIMEOUT_SECONDS = 15.0
-
-
-def _paths_overlap(left: str, right: str) -> bool:
-    normalized_left = left.rstrip("/")
-    normalized_right = right.rstrip("/")
-    return (
-        normalized_left == normalized_right
-        or normalized_left.startswith(normalized_right + "/")
-        or normalized_right.startswith(normalized_left + "/")
-    )
 
 
 class ProjectLifecycle(SessionCoordinator):
@@ -236,7 +226,8 @@ class ProjectLifecycle(SessionCoordinator):
             # dataChanged notification without producing a replacement.
             return
         if self._active_draft_path and any(
-            _paths_overlap(self._active_draft_path, path) for path in event.write_set
+            project_write_paths_overlap(self._active_draft_path, path)
+            for path in event.write_set
         ):
             self._deferred_events.append(event)
             self._session._set_status("外部修改与当前输入冲突，已保护未提交内容")
@@ -287,7 +278,8 @@ class ProjectLifecycle(SessionCoordinator):
         retained: list[ProjectChangeEvent] = []
         for event in self._deferred_events:
             if self._active_draft_path and any(
-                _paths_overlap(self._active_draft_path, path) for path in event.write_set
+                project_write_paths_overlap(self._active_draft_path, path)
+                for path in event.write_set
             ):
                 retained.append(event)
             else:
@@ -475,10 +467,7 @@ class ProjectLifecycle(SessionCoordinator):
         self._session.projectors.timeline.stop_preview()
         self._session.presentation.preview_graph_path = ""
         self._session.presentation.filmstrip_frames.clear()
-        self._session.requests.filmstrip_id += 1
-        if self._session.requests.filmstrip_future is not None:
-            self._session.requests.filmstrip_future.cancel()
-            self._session.requests.filmstrip_future = None
+        self.cancel_filmstrip(closing_project)
         self._session.presentation.hdr_preview_active = False
         self._session.presentation.preview_subtitles = []
         self._session.presentation.preview_subtitles_by_track = {}
@@ -525,6 +514,20 @@ class ProjectLifecycle(SessionCoordinator):
                 closing_project,
                 close_in_background=close_in_background,
             )
+
+    def cancel_filmstrip(self, project: DesktopProject | None = None) -> None:
+        self._session.requests.filmstrip_id += 1
+        target = project or self._session.binding.current
+        if target is not None:
+            self._session._api.cancel_timeline_filmstrip_requests(
+                target.project_dir,
+                request_owner=target.actor_id,
+                request_generation=self._session.requests.filmstrip_id,
+            )
+        future = self._session.requests.filmstrip_future
+        if future is not None:
+            future.cancel()
+            self._session.requests.filmstrip_future = None
 
     def shutdown(self) -> None:
         try:

@@ -25,6 +25,7 @@ from mediaflow.domain.collaboration import (
     ActorIdentity,
     ProjectChangeEvent,
     ProjectRevisionConflict,
+    project_write_paths_overlap,
 )
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
@@ -753,6 +754,7 @@ class ProjectSessionManager:
         allowed = {
             "analyze_download_url",
             "asset_thumbnail_paths",
+            "cancel_timeline_filmstrip_requests",
             "timeline_filmstrip_paths",
             "default_media_directory",
             "discover_encoder_policy_options",
@@ -1213,7 +1215,7 @@ class ProjectSessionManager:
                     reason="the durable event journal does not cover the stale revision",
                 )
             if any(
-                _write_paths_overlap(left, right)
+                project_write_paths_overlap(left, right)
                 for left in write_set
                 for right in event.write_set
             ):
@@ -1236,16 +1238,6 @@ class ProjectSessionManager:
                 reason="one or more fields changed after the requested base revision",
             )
         return envelope.model_copy(update={"base_revision": current}), expected
-
-
-def _write_paths_overlap(left: str, right: str) -> bool:
-    normalized_left = left.rstrip("/")
-    normalized_right = right.rstrip("/")
-    return (
-        normalized_left == normalized_right
-        or normalized_left.startswith(normalized_right + "/")
-        or normalized_right.startswith(normalized_left + "/")
-    )
 
 
 def _required_desktop_client_id(value: str) -> str:

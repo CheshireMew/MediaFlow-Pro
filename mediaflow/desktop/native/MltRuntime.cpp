@@ -933,12 +933,7 @@ void MltRuntime::presentNextFrame()
         return;
     }
 
-    int queuedFrames = 0;
-    {
-        const QMutexLocker locker(&m_renderedFramesMutex);
-        queuedFrames = m_renderedFrames.size();
-    }
-    setBufferState(false, queuedFrames);
+    setBufferState(false, 0);
 
     m_lastPresentationPosition = rendered.position;
     if (unitStep)

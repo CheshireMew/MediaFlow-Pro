@@ -82,16 +82,18 @@ _MEMORY_CACHE = _FilmstripMemoryLru(FILMSTRIP_MEMORY_LIMIT_BYTES)
 class _FilmstripRequestCoordinator:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._current: dict[tuple[str, str, str], int] = {}
+        self._current: dict[tuple[str, str], int] = {}
 
     @contextmanager
     def request(
         self,
-        key: tuple[str, str, str],
+        key: tuple[str, str],
         generation: int,
     ) -> Iterator[Callable[[], None]]:
         with self._lock:
-            self._current[key] = generation
+            current = self._current.get(key)
+            if current is None or generation > current:
+                self._current[key] = generation
 
         def check_cancelled() -> None:
             with self._lock:
@@ -99,12 +101,13 @@ class _FilmstripRequestCoordinator:
             if current != generation:
                 raise CancelledError("Timeline filmstrip request was superseded")
 
-        try:
-            yield check_cancelled
-        finally:
-            with self._lock:
-                if self._current.get(key) == generation:
-                    self._current.pop(key, None)
+        yield check_cancelled
+
+    def cancel(self, key: tuple[str, str], generation: int) -> None:
+        with self._lock:
+            current = self._current.get(key)
+            if current is None or generation > current:
+                self._current[key] = generation
 
 
 FILMSTRIP_REQUESTS = _FilmstripRequestCoordinator()

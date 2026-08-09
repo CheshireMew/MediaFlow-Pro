@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+import threading
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, wait
 
 from PySide6.QtCore import QObject, Signal, Slot
 
 from .base import SessionCoordinator
 
 logger = logging.getLogger(__name__)
+PROJECT_REQUEST_SHUTDOWN_TIMEOUT_SECONDS = 15.0
 
 _PROJECT_REQUEST_KINDS = frozenset(
     {
@@ -39,6 +41,8 @@ class BackgroundRequests(SessionCoordinator):
             max_workers=1,
             thread_name_prefix="mediaflow-preview-compile",
         )
+        self._project_futures: set[Future] = set()
+        self._project_futures_lock = threading.Lock()
         self._bridge = _BackgroundBridge(session)
         self._bridge.resultReceived.connect(self._on_result)
 
@@ -57,6 +61,10 @@ class BackgroundRequests(SessionCoordinator):
             self._project_executor if kind in _PROJECT_REQUEST_KINDS else self._application_executor
         )
         future = worker.submit(operation)
+        if worker is self._project_executor or worker is self.preview_executor:
+            with self._project_futures_lock:
+                self._project_futures.add(future)
+            future.add_done_callback(self._forget_project_future)
         if publish_result:
             future.add_done_callback(
                 lambda completed: self._publish_result(
@@ -66,6 +74,10 @@ class BackgroundRequests(SessionCoordinator):
                 )
             )
         return future
+
+    def _forget_project_future(self, future: Future) -> None:
+        with self._project_futures_lock:
+            self._project_futures.discard(future)
 
     def _publish_result(
         self,
@@ -82,9 +94,25 @@ class BackgroundRequests(SessionCoordinator):
         if not self._session.requests.shutting_down:
             self._bridge.resultReceived.emit(payload)
 
-    def shutdown_project_requests(self) -> None:
+    def shutdown_project_requests(
+        self,
+        *,
+        timeout: float = PROJECT_REQUEST_SHUTDOWN_TIMEOUT_SECONDS,
+    ) -> None:
+        if timeout < 0:
+            raise ValueError("Project request shutdown timeout cannot be negative")
         # Project readers must finish before the project session is released;
         # they may own SQLite readers or fingerprint service-owned cache files.
+        self.preview_executor.shutdown(wait=False, cancel_futures=True)
+        self._project_executor.shutdown(wait=False, cancel_futures=True)
+        with self._project_futures_lock:
+            pending = tuple(self._project_futures)
+        if pending:
+            _done, unfinished = wait(pending, timeout=timeout)
+            if unfinished:
+                raise TimeoutError(
+                    f"Timed out waiting for {len(unfinished)} project background request(s)"
+                )
         self.preview_executor.shutdown(wait=True, cancel_futures=True)
         self._project_executor.shutdown(wait=True, cancel_futures=True)
 

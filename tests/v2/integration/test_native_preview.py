@@ -21,7 +21,7 @@ from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

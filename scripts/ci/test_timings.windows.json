@@ -26,6 +26,7 @@
     "tests/v2/application/test_editor_service.py::test_desktop_session_refs_release_only_the_registered_last_client": 3.11,
     "tests/v2/application/test_mcp_server.py::test_installed_mcp_stdio_entrypoint_starts_and_uses_the_editor_service": 9.58,
     "tests/v2/application/test_mcp_server.py::test_mcp_protocol_calls_the_real_resident_editor_service": 5.082,
+    "tests/v2/application/test_portable_timeline_import.py::test_visual_multimedia_timeline_becomes_a_native_exportable_mediaflow_project": 5.63,
     "tests/v2/application/test_sample_project_service.py::test_sample_project_is_visible_through_the_real_project_and_render_boundaries": 3.042,
     "tests/v2/application/test_task_service.py::test_expired_task_recovery_stays_inside_the_project_writer": 3.686,
     "tests/v2/application/test_task_service.py::test_progress_updates_are_throttled_and_finished_future_is_released": 1.183,

@@ -51,6 +51,7 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
 ) -> None:
     app = _application()
     engine, controllers = create_engine(app)
+    shut_down = False
     try:
         controllers.workspace.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
@@ -138,8 +139,22 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
             item.get("target") == "parameter" and item.get("sourceId") == "spring_strength"
             for item in controllers.web_timeline.timelineItemsData
         )
-    finally:
+        project_dir = controllers.session.binding.current.project_dir
+        controllers.timeline.requestFilmstrip(0, state.duration_frames, 12, 46)
+        filmstrip_future = controllers.session.requests.filmstrip_future
+        assert filmstrip_future is not None
+        assert _process_until(filmstrip_future.running, 3)
+        shutdown_started = time.monotonic()
         controllers.shutdown()
+        shut_down = True
+        assert time.monotonic() - shutdown_started < 10
+        assert filmstrip_future.done()
+        filmstrip_cache = project_dir / "cache" / "filmstrip"
+        assert not list(filmstrip_cache.rglob("*.lock"))
+        assert not list(filmstrip_cache.rglob("*.filmstrip-*"))
+    finally:
+        if not shut_down:
+            controllers.shutdown()
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         QCoreApplication.processEvents()

@@ -66,10 +66,11 @@ from mediaflow.infrastructure.settings_repository import (
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from tests.v2.desktop_application_adapter import DesktopPresentationApplication
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 
-def test_deferred_model_update_is_readable_before_qml_notification(qapp) -> None:
+def test_deferred_model_update_is_readable_before_qml_notification() -> None:
+    _application = QCoreApplication.instance() or QCoreApplication([])
     model = DictListModel(["id", "value"])
     model.set_items([{"id": "row", "value": 1}])
     changes: list[tuple[int, list[int]]] = []
@@ -407,6 +408,26 @@ def test_shutdown_drains_project_readers_before_releasing_project() -> None:
     controllers.shutdown()
 
     assert events == ["project-requests", "project", "application-requests"]
+
+
+def test_project_request_shutdown_is_bounded_for_uncooperative_reader() -> None:
+    controllers = EditorControllers()
+    release = threading.Event()
+    started = threading.Event()
+    controllers.session.background.submit(
+        "timeline_filmstrip",
+        (1, 1, "sequence"),
+        lambda: (started.set(), release.wait(5)),
+        publish_result=False,
+    )
+    assert started.wait(2)
+
+    try:
+        with pytest.raises(TimeoutError, match="project background request"):
+            controllers.session.background.shutdown_project_requests(timeout=0.01)
+    finally:
+        release.set()
+        controllers.shutdown()
 
 
 def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(

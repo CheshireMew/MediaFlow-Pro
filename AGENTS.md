@@ -9,8 +9,8 @@ MediaFlow Pro 是通用的本地媒体编辑器。它正式消费 `visual-multim
 ## 共享边界与唯一真源
 
 - `$env:VISUAL_MULTIMEDIA_ROOT\schemas\editable-media.v6.schema.json` 是 `editable-media` v6 清单结构的唯一真源；生产者仓库位置由本机 `.env` 提供，不写死在项目规则中。
-- `tests/fixtures/editable-media-v6*`、`mediaflow/resources/contracts/editable-media.v6.schema.json` 和标准 runtime 是从生产者同步得到的消费快照，不是独立设计入口，禁止直接手改。
-- `scripts/sync_visual_multimedia_fixture.py` 是更新 schema、starter、真实案例和来源哈希的唯一同步入口。
+- `tests/fixtures/editable-media-v6*`、`tests/fixtures/media-timeline-v1-project`、`mediaflow/resources/contracts/editable-media.v6.schema.json` 和标准 runtime 是从生产者同步得到的消费快照，不是独立设计入口，禁止直接手改。
+- `scripts/sync_visual_multimedia_fixture.py` 是更新 schema、starter、真实案例、生产者生成的 portable timeline 和来源哈希的唯一同步入口。替换前的恢复副本只能写入 `MEDIAFLOW_TEST_ROOT`，不能写回源码仓库。
 - `window.editableMedia` 是网页结构化状态入口，`window.__hf.duration/seek(seconds)` 是确定性逐帧时间入口。导入、编辑、预览、缓存和导出只能共同消费这套边界。
 - MediaFlow 的项目模型、`WebClipState`、时间线、渲染缓存和 Editor API 由本仓库负责；公开自动化能力以实际 `mediaflow-cli describe` 输出为唯一真源。
 - visual-multimedia 只能通过公开 CLI 和通用网页包与本项目协作，不能直接读取或修改 `project.mfp`、内部数据库、缓存目录或私有 Python 类型。
@@ -62,7 +62,7 @@ CI 的测试等级由 `scripts/ci/quality_plan.py` 唯一决定，workflow 只�
 & $env:MEDIAFLOW_PYTHON scripts\sync_visual_multimedia_fixture.py $env:VISUAL_MULTIMEDIA_ROOT --destination tests\fixtures
 ```
 
-同步完成后检查 diff，确认 schema、网页包和 `fixture-origin.json` 来自当前生产者；不得保留手写 fixture 与同步结果并行。
+同步完成后检查 diff，确认 schema、网页包、portable timeline 和 `fixture-origin.json` 来自当前生产者；不得保留手写 fixture 与同步结果并行。
 
 至少运行：
 

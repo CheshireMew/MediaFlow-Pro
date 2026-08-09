@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid
 from pathlib import Path
 
+from mediaflow.environment import load_project_environment, test_run_root
 from mediaflow.file_digest import sha256_file
 
 PACKAGE_SOURCES = (
@@ -39,6 +41,7 @@ MEDIA_BUILD_CASE_SOURCES = (
 SCHEMA_SOURCE = "schemas/editable-media.v6.schema.json"
 TIMELINE_SCHEMA_SOURCE = "schemas/media-timeline.v1.schema.json"
 RUNTIME_SOURCE = "assets/web-media-starter/editable-media-runtime.js"
+PORTABLE_TIMELINE_TEST_SCRIPT = "scripts/self-test-media-timeline.mjs"
 
 
 def package_files(source: Path) -> tuple[Path, ...]:
@@ -58,11 +61,7 @@ def _publish_package(staging: Path, destination: Path) -> None:
     if destination.exists():
         if not destination.is_dir():
             raise ValueError(f"Fixture destination is not a directory: {destination}")
-        archive_root = (
-            Path(__file__).resolve().parents[1]
-            / "archive"
-            / "synced-visual-fixtures"
-        )
+        archive_root = test_run_root() / "fixture-sync-history"
         archive_root.mkdir(parents=True, exist_ok=True)
         archived = archive_root / (
             f"{destination.name}-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
@@ -76,18 +75,15 @@ def _publish_package(staging: Path, destination: Path) -> None:
         raise
 
 
-def sync_editable_package(
+def _sync_package_files(
     source: Path,
     destination: Path,
     *,
-    producer: str,
+    files: tuple[Path, ...],
+    origin_fields: dict[str, object],
 ) -> dict[str, object]:
     source = source.resolve(strict=True)
     destination = destination.expanduser().resolve()
-    manifest = json.loads((source / "editable-media.json").read_text(encoding="utf-8"))
-    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 6:
-        raise ValueError("The producer fixture must use editable-media v6")
-    files = package_files(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(
@@ -110,8 +106,7 @@ def sync_editable_package(
         origin = {
             "protocol": "mediaflow-generated-test-fixture",
             "version": 1,
-            "producer": producer,
-            "editable_media_version": 6,
+            **origin_fields,
             "files": hashes,
         }
         (staging / "fixture-origin.json").write_text(
@@ -129,6 +124,27 @@ def sync_editable_package(
     finally:
         if staging.exists():
             shutil.rmtree(staging)
+
+
+def sync_editable_package(
+    source: Path,
+    destination: Path,
+    *,
+    producer: str,
+) -> dict[str, object]:
+    source = source.resolve(strict=True)
+    manifest = json.loads((source / "editable-media.json").read_text(encoding="utf-8"))
+    if manifest.get("protocol") != "editable-media" or manifest.get("version") != 6:
+        raise ValueError("The producer fixture must use editable-media v6")
+    return _sync_package_files(
+        source,
+        destination,
+        files=package_files(source),
+        origin_fields={
+            "producer": producer,
+            "editable_media_version": 6,
+        },
+    )
 
 
 def sync_media_build_case(
@@ -138,55 +154,65 @@ def sync_media_build_case(
     producer: str,
 ) -> dict[str, object]:
     source = source.resolve(strict=True)
-    destination = destination.expanduser().resolve()
     plan = json.loads((source / "media-build-plan.json").read_text(encoding="utf-8"))
     if (
         plan.get("protocol") != "visual-multimedia-media-build-plan"
         or plan.get("version") != 1
     ):
         raise ValueError("The producer fixture must use media-build-plan v1")
-    files = package_files(source)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(
-        tempfile.mkdtemp(
-            prefix=f".{destination.name}.sync-",
-            dir=destination.parent,
-        )
-    )
-    try:
-        for source_file in files:
-            relative = source_file.relative_to(source)
-            destination_file = staging / relative
-            destination_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source_file, destination_file)
-        hashes = {
-            path.relative_to(source).as_posix(): sha256_file(
-                staging / path.relative_to(source)
-            )
-            for path in files
-        }
-        origin = {
-            "protocol": "mediaflow-generated-test-fixture",
-            "version": 1,
+    return _sync_package_files(
+        source,
+        destination,
+        files=package_files(source),
+        origin_fields={
             "producer": producer,
             "media_build_plan_version": 1,
-            "files": hashes,
-        }
-        (staging / "fixture-origin.json").write_text(
-            f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
-            encoding="utf-8",
+        },
+    )
+
+
+def sync_portable_timeline_project(skill_root: Path, destination: Path) -> dict[str, object]:
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("Node.js is required to synchronize the portable timeline fixture")
+    script = (skill_root / PORTABLE_TIMELINE_TEST_SCRIPT).resolve(strict=True)
+    completed = subprocess.run(
+        (node, str(script)),
+        cwd=skill_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "visual-multimedia portable timeline producer failed:\n"
+            f"{completed.stdout}\n{completed.stderr}"
         )
-        existing_origin = destination / "fixture-origin.json"
-        if existing_origin.is_file():
-            current = json.loads(existing_origin.read_text(encoding="utf-8"))
-            if current == origin:
-                shutil.rmtree(staging)
-                return origin
-        _publish_package(staging, destination)
-        return origin
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+    receipt = json.loads(completed.stdout)
+    if receipt.get("ok") is not True or receipt.get("source_change_observed") is not True:
+        raise ValueError("visual-multimedia portable timeline receipt is incomplete")
+    project = Path(receipt["project"]).resolve(strict=True)
+    timeline_path = (project / "media-timeline.json").resolve(strict=True)
+    timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
+    if timeline.get("protocol") != "visual-multimedia-timeline" or timeline.get("version") != 1:
+        raise ValueError("The producer fixture must use media-timeline v1")
+    files = [timeline_path]
+    for source in timeline.get("sources", ()):
+        relative = Path(source["file"])
+        source_path = (project / relative).resolve(strict=True)
+        source_path.relative_to(project)
+        files.append(source_path)
+    return _sync_package_files(
+        project,
+        destination,
+        files=tuple(files),
+        origin_fields={
+            "producer": f"visual-multimedia/{PORTABLE_TIMELINE_TEST_SCRIPT}",
+            "media_timeline_version": 1,
+        },
+    )
 
 
 def sync_schema(source: Path, destination: Path) -> Path:
@@ -281,16 +307,22 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
             producer=f"visual-multimedia/{source_relative}",
         )
     contracts = sync_contracts(skill_root, destination)
+    portable_timeline = sync_portable_timeline_project(
+        skill_root,
+        destination / "media-timeline-v1-project",
+    )
     return {
         "protocol": "mediaflow-editable-media-test-corpus",
         "version": 1,
         **contracts,
         "packages": packages,
         "media_build_cases": media_build_cases,
+        "portable_timeline": portable_timeline,
     }
 
 
 def main() -> int:
+    load_project_environment()
     parser = argparse.ArgumentParser(
         description="Sync MediaFlow Pro's editable-media v6 corpus from visual-multimedia."
     )

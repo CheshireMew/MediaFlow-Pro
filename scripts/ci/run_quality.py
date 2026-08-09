@@ -15,6 +15,7 @@ from pathlib import Path
 
 import psutil
 
+from mediaflow.environment import load_project_environment, test_run_root
 from scripts.ci.quality_plan import QualityPlan, forced_plan, plan_for_paths
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,7 @@ RUFF_TARGETS = (
     "scripts/verify_ui_matrix.py",
     "scripts/verify_web_render_performance.py",
 )
+LOCAL_EVIDENCE_PREFIXES = (".test-runs/",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +115,14 @@ def local_changed_paths(base: str) -> tuple[str, ...]:
         base,
     ).splitlines()
     untracked = _git("ls-files", "--others", "--exclude-standard").splitlines()
-    return tuple(dict.fromkeys(path for path in (*tracked, *untracked) if path.strip()))
+    return tuple(
+        dict.fromkeys(
+            path
+            for path in (*tracked, *untracked)
+            if path.strip()
+            and not path.replace("\\", "/").startswith(LOCAL_EVIDENCE_PREFIXES)
+        )
+    )
 
 
 def _shard_command(profile: str, shard_index: int, shard_count: int) -> QualityCommand:
@@ -512,6 +521,7 @@ def _print_dry_run(stages: Sequence[QualityStage], plan: QualityPlan) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    load_project_environment()
     parser = argparse.ArgumentParser(
         description="Run the one authoritative local MediaFlow quality plan",
     )
@@ -534,9 +544,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     now = datetime.now(UTC)
     stamp = now.strftime("q-%Y%m%dT%H%M%S.%fZ")
     work_stamp = now.strftime("%H%M") + f"-{os.getpid()}"
-    configured_test_root = Path(
-        os.environ.get("MEDIAFLOW_TEST_ROOT", REPOSITORY_ROOT / ".test-runs")
-    ).expanduser()
+    configured_test_root = test_run_root()
     run_root = (configured_test_root / "quality" / stamp).resolve()
     work_parent = (
         configured_test_root.parents[1]

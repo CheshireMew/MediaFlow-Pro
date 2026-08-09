@@ -15,7 +15,11 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType
 
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.timeline_snapping import snap_frame
-from mediaflow.domain.collaboration import ActorIdentity, ProjectChangeEvent
+from mediaflow.domain.collaboration import (
+    ActorIdentity,
+    ProjectChangeEvent,
+    project_write_paths_overlap,
+)
 from mediaflow.domain.enums import ClipMediaKind
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.runtime import DesktopRuntimeDescriptor
@@ -572,7 +576,7 @@ class RemoteEditorProject:
         self._pending_write = None
         with self._draft_lock:
             for path in tuple(self._drafts):
-                if any(_paths_overlap(path, changed) for changed in pending.write_set):
+                if any(project_write_paths_overlap(path, changed) for changed in pending.write_set):
                     self._drafts.pop(path, None)
         if resolution == "accept_remote":
             self.reload_external_changes()
@@ -648,7 +652,7 @@ class RemoteEditorProject:
                 draft_revisions = [
                     revision
                     for path, revision in self._drafts.items()
-                    if any(_paths_overlap(path, changed) for changed in write_set)
+                    if any(project_write_paths_overlap(path, changed) for changed in write_set)
                 ]
             if draft_revisions:
                 base_revision = min(draft_revisions)
@@ -952,6 +956,17 @@ class DesktopEditorApplication:
             **kwargs,
         )
 
+    def cancel_timeline_filmstrip_requests(
+        self,
+        project_dir: str | Path,
+        **kwargs: Any,
+    ) -> None:
+        self._application_call(
+            "cancel_timeline_filmstrip_requests",
+            project_dir,
+            **kwargs,
+        )
+
     def write_preview_snapshot(self, project_dir: str | Path, state, **kwargs: Any):
         return self._application_call("write_preview_snapshot", project_dir, state, **kwargs)
 
@@ -1068,13 +1083,3 @@ class _RemoteCookieStore:
             },
         )
         return decode_transport(value)
-
-
-def _paths_overlap(left: str, right: str) -> bool:
-    normalized_left = left.rstrip("/")
-    normalized_right = right.rstrip("/")
-    return (
-        normalized_left == normalized_right
-        or normalized_left.startswith(normalized_right + "/")
-        or normalized_right.startswith(normalized_left + "/")
-    )

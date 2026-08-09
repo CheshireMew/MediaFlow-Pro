@@ -1,44 +1,37 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
 from pathlib import Path
 
 from mediaflow.composition import EditorApplication
+from mediaflow.file_digest import sha256_file
 from tests.v2.editor_service_api import EditorServiceApi
 
+FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "media-timeline-v1-project"
 
-def _produce_real_visual_timeline() -> Path:
-    visual_root = Path(
-        os.environ.get(
-            "VISUAL_MULTIMEDIA_ROOT",
-            r"E:\Work\BaiduSyncdisk\Code\Cheshire-skill\visual-multimedia",
-        )
-    ).resolve(strict=True)
-    node = shutil.which("node")
-    if not node:
-        raise RuntimeError("The visual-multimedia producer test requires Node.js")
-    completed = subprocess.run(
-        [node, str(visual_root / "scripts" / "self-test-media-timeline.mjs")],
-        cwd=visual_root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=120,
+
+def _synced_visual_timeline() -> Path:
+    origin = json.loads((FIXTURE / "fixture-origin.json").read_text(encoding="utf-8"))
+    assert origin["protocol"] == "mediaflow-generated-test-fixture"
+    assert origin["producer"] == "visual-multimedia/scripts/self-test-media-timeline.mjs"
+    assert origin["media_timeline_version"] == 1
+    assert set(origin["files"]) | {"fixture-origin.json"} == {
+        path.relative_to(FIXTURE).as_posix()
+        for path in FIXTURE.rglob("*")
+        if path.is_file()
+    }
+    assert all(
+        sha256_file(FIXTURE / relative) == digest
+        for relative, digest in origin["files"].items()
     )
-    assert completed.returncode == 0, completed.stderr
-    receipt = json.loads(completed.stdout)
-    assert receipt["source_change_observed"] is True
-    return Path(receipt["project"]) / "media-timeline.json"
+    return FIXTURE / "media-timeline.json"
 
 
 def test_visual_multimedia_timeline_becomes_a_native_exportable_mediaflow_project(
     tmp_path: Path,
     editor_service_api: EditorServiceApi,
 ) -> None:
-    timeline_path = _produce_real_visual_timeline()
+    timeline_path = _synced_visual_timeline()
     project_path = tmp_path / "Portable native project"
     application = EditorApplication()
     with application.create_project(project_path, "Portable native project") as project:

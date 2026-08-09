@@ -18,6 +18,7 @@ RUNTIME_TEST_SOURCES = frozenset(
         "tests/v2/infrastructure/test_segmented_export.py",
         "tests/v2/infrastructure/test_web_capture_engine.py",
         "tests/v2/infrastructure/test_web_media.py",
+        "tests/v2/application/test_portable_timeline_import.py",
     }
 )
 RUNTIME_TEST_PREFIXES = ("tests/v2/desktop/", "tests/v2/integration/")

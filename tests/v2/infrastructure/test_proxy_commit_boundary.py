@@ -31,7 +31,7 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import (
     InfrastructureAssetTaskRuntime,
 )
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 
 def test_two_phase_output_set_archives_replaced_files_only_after_finalize(

@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from fractions import Fraction
+from functools import partial as bind_arguments
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -1323,7 +1324,8 @@ class WebRenderService:
 
                     fallback_reason: str | None = None
                     for capture_mode in capture_modes:
-                        ffmpeg_pipe = self.ffmpeg.open_input_pipe(command)
+                        active_pipe = self.ffmpeg.open_input_pipe(command)
+                        ffmpeg_pipe = active_pipe
                         try:
                             engine.render_frames(
                                 url=capture_url,
@@ -1335,7 +1337,10 @@ class WebRenderService:
                                 runtime_state=runtime_state,
                                 determinism_key=target.key,
                                 frame_count=target.frame_count,
-                                on_frame=ffmpeg_pipe.write,
+                                on_frame=bind_arguments(
+                                    active_pipe.write,
+                                    check_cancelled=check_cancelled,
+                                ),
                                 on_progress=report_frame,
                                 check_cancelled=check_cancelled,
                                 capture_mode=capture_mode,

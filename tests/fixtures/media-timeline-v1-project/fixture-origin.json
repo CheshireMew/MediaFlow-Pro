@@ -1,0 +1,12 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/scripts/self-test-media-timeline.mjs",
+  "media_timeline_version": 1,
+  "files": {
+    "media-timeline.json": "1a2fadbffb50aede83a273ba69d8d8172143503204fefe4a577a6d8b0290e33d",
+    "sources/moving.mp4": "094ff634dce5e4d500a6f0a5dd7431d16068d4c917b7ea47645b5de95ce5a286",
+    "sources/still.png": "993883d43655c829b0d63be3e80cc753e28ac559cff865a6b20c4d054f6eb016",
+    "sources/music.wav": "80a6226d322c91efe37a78e141bd01750482b3cc21dff13536c2ab9f458d0536"
+  }
+}

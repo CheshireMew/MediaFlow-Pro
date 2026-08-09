@@ -27,7 +27,7 @@ from scripts.verify_real_user_chain import (
     wait_downloaded_video_selection,
     wait_for_downloaded_video_placement,
 )
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 
 class _SlowFileHandler(SimpleHTTPRequestHandler):

@@ -58,9 +58,10 @@ class TimelineController(ControllerFacet):
         if not self._session.binding.current or not self._session.binding.active_sequence_id:
             return
         self._session.requests.filmstrip_id += 1
+        filmstrip_generation = self._session.requests.filmstrip_id
         request_id = (
             self._session.binding.generation,
-            self._session.requests.filmstrip_id,
+            filmstrip_generation,
             self._session.binding.active_sequence_id,
         )
         previous = self._session.requests.filmstrip_future
@@ -68,6 +69,7 @@ class TimelineController(ControllerFacet):
             previous.cancel()
         project_dir = self._session.binding.current.project_dir
         sequence_id = self._session.binding.active_sequence_id
+        request_owner = self._session.binding.current.actor_id
         self._session.requests.filmstrip_future = self._session.background.submit(
             "timeline_filmstrip",
             request_id,
@@ -78,8 +80,8 @@ class TimelineController(ControllerFacet):
                 visible_end_frame=max(1, int(visible_end_frame + 0.999999)),
                 pixels_per_frame=float(pixels_per_frame),
                 height=max(1, int(height)),
-                request_owner=self._session.binding.current.actor_id,
-                request_generation=self._session.requests.filmstrip_id,
+                request_owner=request_owner,
+                request_generation=filmstrip_generation,
             ),
         )
 

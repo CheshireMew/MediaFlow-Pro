@@ -632,6 +632,7 @@ class WorkspaceController(ControllerFacet):
 
     @Slot()
     def shutdown(self) -> None:
+        self._session.lifecycle.cancel_filmstrip()
         self._session.requests.shutting_down = True
         self._session.runtime_state.cancel.set()
         if self._session.runtime_state.thread and self._session.runtime_state.thread.is_alive():

@@ -187,8 +187,16 @@ def _remove_owned_passed_run(candidate: Path) -> None:
 @contextmanager
 def _retention_lock() -> Iterator[None]:
     lock_path = MANAGED_PYTEST_ROOT / ".retention.lock"
-    with ProcessFileLock(lock_path):
+    lock = ProcessFileLock(lock_path)
+    deadline = time.monotonic() + 60
+    while not lock.acquire():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out waiting for pytest retention lock: {lock_path}")
+        time.sleep(0.05)
+    try:
         yield
+    finally:
+        lock.release()
 
 
 def pytest_configure(config: pytest.Config) -> None:

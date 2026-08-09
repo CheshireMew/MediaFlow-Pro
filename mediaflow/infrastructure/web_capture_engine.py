@@ -10,8 +10,9 @@ import struct
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
-from concurrent.futures import Future
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, wait
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -1135,7 +1136,7 @@ class WebCaptureEngine:
             worker_count=worker_count,
             )
         )
-        with self._lock:
+        with self._render_lock(check_cancelled):
             verifies_determinism = (
                 determinism_key not in self._validated_render_states
             )
@@ -1197,7 +1198,10 @@ class WebCaptureEngine:
                     on_frame(item.payload)
                     if on_progress is not None:
                         on_progress(completed_count)
-                worker_metrics = [future.result() for future in futures]
+                worker_metrics = self._await_worker_metrics(
+                    futures,
+                    check_cancelled=check_cancelled,
+                )
                 self._validated_render_states.add(determinism_key)
             except BaseException as error:
                 cancelled.set()
@@ -1299,6 +1303,38 @@ class WebCaptureEngine:
                 message=str(error),
                 elapsed_seconds=elapsed_seconds,
             )
+
+    @contextmanager
+    def _render_lock(
+        self,
+        check_cancelled: Callable[[], None] | None,
+    ) -> Iterator[None]:
+        while True:
+            if check_cancelled is not None:
+                check_cancelled()
+            if self._lock.acquire(timeout=0.1):
+                break
+        try:
+            if check_cancelled is not None:
+                check_cancelled()
+            yield
+        finally:
+            self._lock.release()
+
+    @staticmethod
+    def _await_worker_metrics(
+        futures: list[Future[_WorkerMetrics]],
+        *,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> list[_WorkerMetrics]:
+        pending = set(futures)
+        while pending:
+            if check_cancelled is not None:
+                check_cancelled()
+            completed, pending = wait(pending, timeout=0.1)
+            for future in completed:
+                future.result()
+        return [future.result() for future in futures]
 
     @staticmethod
     def _next_frame(

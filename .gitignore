@@ -9,6 +9,7 @@ __pycache__/
 *.egg-info/
 
 # Local build and verification output
+/.test-runs/
 .pdm-build/
 .temp/
 .tmp/

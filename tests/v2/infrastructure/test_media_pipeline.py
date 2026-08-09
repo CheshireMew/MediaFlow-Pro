@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import threading
 from functools import partial
@@ -22,6 +21,7 @@ from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
+    safe_child_path,
     utf16_units,
 )
 from mediaflow.domain.task_commands import DownloadMediaCommand, GenerateWaveformCommand
@@ -41,40 +41,7 @@ from mediaflow.infrastructure.visual_analysis import (
 )
 from mediaflow.infrastructure.waveform_service import WaveformService
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
-
-
-def generate_real_media(path: Path, paths: RuntimePaths, *, width: int = 640, height: int = 360) -> None:
-    result = subprocess.run(
-        [
-            str(paths.ffmpeg),
-            "-y",
-            "-hide_banner",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            f"testsrc2=size={width}x{height}:rate=25:duration=1",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=48000:duration=1",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-shortest",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert path.is_file() and path.stat().st_size > 0
+from tests.v2.real_media import generate_real_media
 
 
 def test_native_media_services_reject_an_overlong_external_source_before_launch(
@@ -83,15 +50,14 @@ def test_native_media_services_reject_an_overlong_external_source_before_launch(
     paths = RuntimeContext.discover().paths
     short_source = tmp_path / "source.mp4"
     short_source.write_bytes(b"not launched by this boundary test")
-    deep_parent = tmp_path
-    while (
-        utf16_units(str(deep_parent / "source.mp4"))
-        <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-    ):
-        deep_parent /= "deep-native-source"
-    deep_parent.mkdir(parents=True)
-    deep_source = deep_parent / "source.mp4"
-    shutil.copy2(short_source, deep_source)
+    deep_source = safe_child_path(
+        tmp_path,
+        "deep-native-source-" * 32,
+        suffix=".mp4",
+        max_path_utf16_units=WINDOWS_INTEROP_PATH_UTF16_LIMIT + 1,
+    )
+    assert utf16_units(str(deep_source)) == WINDOWS_INTEROP_PATH_UTF16_LIMIT + 1
+    deep_source.write_bytes(short_source.read_bytes())
 
     with ProjectRepository.create(
         tmp_path / "Native Boundaries",
@@ -188,11 +154,13 @@ def test_media_probe_rejects_deep_source_before_starting_ffprobe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_parent = tmp_path / "native-source"
-    while utf16_units(str(source_parent / "source.mp4")) <= 240:
-        source_parent /= "deep-native-source"
-    source_parent.mkdir(parents=True)
-    source = source_parent / "source.mp4"
+    source = safe_child_path(
+        tmp_path,
+        "deep-native-source-" * 32,
+        suffix=".mp4",
+        max_path_utf16_units=WINDOWS_INTEROP_PATH_UTF16_LIMIT + 1,
+    )
+    assert utf16_units(str(source)) == WINDOWS_INTEROP_PATH_UTF16_LIMIT + 1
     source.write_bytes(b"not-probed")
     subprocess_started = False
 

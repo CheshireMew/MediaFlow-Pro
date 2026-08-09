@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import Field
@@ -8,6 +9,36 @@ from mediaflow.domain.model_base import DomainModel
 
 UndoGroupState = Literal["applied", "undone", "discarded"]
 ActiveUndoGroupState = Literal["applied", "undone"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectWritePath:
+    value: str
+    segments: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, value: str) -> ProjectWritePath:
+        if not isinstance(value, str):
+            raise TypeError("Project write path must be a string")
+        normalized = value.rstrip("/")
+        if not normalized:
+            if value.startswith("/"):
+                return cls(value="/", segments=())
+            raise ValueError("Project write path must be absolute")
+        if not normalized.startswith("/"):
+            raise ValueError("Project write path must be absolute")
+        segments = tuple(normalized[1:].split("/"))
+        if any(not segment or segment in {".", ".."} for segment in segments):
+            raise ValueError("Project write path contains an invalid segment")
+        return cls(value=normalized, segments=segments)
+
+    def overlaps(self, other: ProjectWritePath) -> bool:
+        shared = min(len(self.segments), len(other.segments))
+        return self.segments[:shared] == other.segments[:shared]
+
+
+def project_write_paths_overlap(left: str, right: str) -> bool:
+    return ProjectWritePath.parse(left).overlaps(ProjectWritePath.parse(right))
 
 
 class ActorIdentity(DomainModel):

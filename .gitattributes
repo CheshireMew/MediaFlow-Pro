@@ -1,6 +1,14 @@
 tests/fixtures/editable-media-v5/** -text -diff
 tests/fixtures/editable-media-v5-cases/** -text -diff
 tests/fixtures/editable-media-v4-project/** -text -diff
+tests/fixtures/editable-media-v6/** -text -diff
+tests/fixtures/editable-media-v6-cases/** -text -diff
+tests/fixtures/editable-media-v6-react-reference/** -text -diff
+tests/fixtures/editable-media-v6-contract/** -text -diff
+tests/fixtures/media-timeline-v1-contract/** -text -diff
+tests/fixtures/media-timeline-v1-project/** -text -diff
 tests/fixtures/media-build-cases/** -text -diff
+mediaflow/resources/contracts/editable-media.v6.schema.json -text -diff
+mediaflow/resources/contracts/editable-media-runtime.v6.js -text -diff
+mediaflow/resources/contracts/media-timeline.v1.schema.json -text -diff
 archive/editable-media-v4-20260731/** -text -diff
-archive/synced-visual-fixtures/** -text -diff

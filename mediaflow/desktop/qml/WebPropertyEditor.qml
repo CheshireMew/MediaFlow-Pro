@@ -93,7 +93,7 @@ ColumnLayout {
         AppIconButton {
             implicitWidth: 32
             implicitHeight: 30
-            iconName: "trash"
+            iconName: "delete"
             flat: false
             toolTipText: qsTr("移除播放头处关键帧")
             onClicked: webTimelineController.removeDescriptorKeyframeAtFrame(

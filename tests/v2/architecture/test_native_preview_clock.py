@@ -91,9 +91,10 @@ def test_native_preview_exposes_buffering_without_clearing_play_intent() -> None
 
     assert "bufferStateChanged(bool buffering, int bufferedFrames" in runtime_header
     assert "setBufferState(true, queuedFrames)" in runtime_source
-    assert "setBufferState(false, queuedFrames)" in runtime_source
+    assert "setBufferState(false, 0)" in runtime_source
+    assert "setBufferState(false, queuedFrames)" not in runtime_source
     missing_frame_branch = runtime_source.split("if (!frameReady)", 1)[1].split(
-        "int queuedFrames = 0", 1
+        "setBufferState(false, 0)", 1
     )[0]
     assert "setPlaying(false)" not in missing_frame_branch
     assert "Q_PROPERTY(bool buffering" in preview_header

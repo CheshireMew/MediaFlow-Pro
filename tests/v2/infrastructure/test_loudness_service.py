@@ -98,6 +98,12 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
             editor.sequence_id,
             payload["snapshot_hash"],
         )
+        current_metrics = LoudnessAnalysisService.read_current_metrics(
+            project_dir,
+            editor.sequence_id,
+            current_project_revision=repository.content_revision(),
+        )
+        assert current_metrics == metrics
         source_graph = repository.project_dir / payload["source_graph"]
         assert source_graph.is_file()
         assert utf16_units(str(source_graph)) <= 240
@@ -120,6 +126,14 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         )
         repository.audio.save_audio_bus(master.model_copy(update={"gain_db": -4.0}))
         current_state = repository.timeline.load_timeline(editor.sequence_id)
+        assert (
+            LoudnessAnalysisService.read_current_metrics(
+                project_dir,
+                editor.sequence_id,
+                current_project_revision=repository.content_revision(),
+            )
+            is None
+        )
         current_hash = service.snapshot_hash(current_state)
         assert current_hash != first_hash
         assert (
@@ -258,6 +272,14 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
             expected_snapshot_hash=reopened_hash,
         )
         assert reopened_metrics is not None
+        assert (
+            reopened_service.read_current_metrics(
+                project_dir,
+                editor.sequence_id,
+                current_project_revision=reopened.content_revision(),
+            )
+            == reopened_metrics
+        )
 
 
 def test_same_loudness_snapshot_has_one_real_producer_across_processes(

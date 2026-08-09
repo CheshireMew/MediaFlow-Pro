@@ -58,7 +58,7 @@ from mediaflow.infrastructure.output_reservation import (
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 
 def test_sequence_export_refuses_to_overwrite_without_explicit_permission(

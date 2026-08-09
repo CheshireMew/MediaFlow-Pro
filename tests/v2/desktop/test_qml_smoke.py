@@ -52,7 +52,7 @@ from mediaflow.infrastructure.settings_repository import (
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from mediaflow.service.client import EditorServiceRpcError, call_sync
 from tests.v2.desktop_application_adapter import DesktopPresentationApplication
-from tests.v2.infrastructure.test_media_pipeline import generate_real_media
+from tests.v2.real_media import generate_real_media
 
 
 class _OpenAITranslationFixtureHandler(BaseHTTPRequestHandler):

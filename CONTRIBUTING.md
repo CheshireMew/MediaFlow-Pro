@@ -18,7 +18,7 @@
 
 - 从根因修改唯一真源，并迁移全部生产者和消费者；不要留下长期兼容层、重复 helper 或双重运行路径。
 - `project.mfp` 是项目状态的唯一真源。缓存、代理、波形、MLT 图和分析报告应保持为可重建的派生产物。
-- `editable-media` v6 的 schema、标准 runtime 与真实案例来自外部生产者。不要直接手改 `tests/fixtures/editable-media-v6*` 或 `mediaflow/resources/contracts/editable-media.v6.schema.json`，应使用仓库规定的同步脚本。
+- `editable-media` v6 的 schema、标准 runtime、真实案例和 `media-timeline` v1 项目样例来自外部生产者。不要直接手改 `tests/fixtures/editable-media-v6*`、`tests/fixtures/media-timeline-v1-project` 或 `mediaflow/resources/contracts/editable-media.v6.schema.json`，应使用仓库规定的同步脚本。
 - 公开自动化能力以实际 `mediaflow-cli describe` 输出为准。修改操作时同时更新实现、参数 schema、`describe`、测试和正式调用点。
 - 保留与本次任务无关的工作区修改。不要为了通过测试而 mock 掉正在验证的核心生产链。
 

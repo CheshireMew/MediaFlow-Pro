@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import cast
 
 from mediaflow.atomic_file import atomic_write_text, native_temporary_sibling
 from mediaflow.domain.progress import OperationProgress
@@ -18,6 +19,7 @@ from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
 from mediaflow.infrastructure.process_observers import MeltProgressObserver
 from mediaflow.infrastructure.project_lock import ProcessFileLock
+from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
 
@@ -44,6 +46,7 @@ class LoudnessAnalysisService:
     """Measure the compiled sequence audio graph with FFmpeg EBU R128 filters."""
 
     RESULT_SCHEMA_VERSION = 1
+    CURRENT_RESULT_SCHEMA_VERSION = 1
     LOCK_WAIT_TIMEOUT_SECONDS = 10_800
 
     def __init__(self, compiler: TimelineCompiler, paths: RuntimePaths):
@@ -60,7 +63,9 @@ class LoudnessAnalysisService:
     ) -> tuple[LoudnessMetrics, Path]:
         if self.paths.melt is None:
             raise FileNotFoundError("MLT melt runtime is not installed")
-        project_dir = self.compiler.repository.project_dir
+        repository = cast(ProjectRepository, self.compiler.repository)
+        project_dir = repository.project_dir
+        analysis_revision = repository.content_revision()
         cache_dir = project_dir / "cache" / "l"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -76,6 +81,12 @@ class LoudnessAnalysisService:
             expected_snapshot_hash=snapshot_hash,
         )
         if cached is not None:
+            self._publish_current_result(
+                state,
+                snapshot_hash=snapshot_hash,
+                result_path=result_path,
+                analysis_revision=analysis_revision,
+            )
             if progress:
                 progress(OperationProgress.indeterminate("audio_analysis_cache_ready"))
             return cached, result_path
@@ -94,6 +105,12 @@ class LoudnessAnalysisService:
                 expected_snapshot_hash=snapshot_hash,
             )
             if cached is not None:
+                self._publish_current_result(
+                    state,
+                    snapshot_hash=snapshot_hash,
+                    result_path=result_path,
+                    analysis_revision=analysis_revision,
+                )
                 if progress:
                     progress(
                         OperationProgress.indeterminate(
@@ -101,7 +118,7 @@ class LoudnessAnalysisService:
                         )
                     )
                 return cached, result_path
-            return self._produce(
+            produced = self._produce(
                 state,
                 document,
                 snapshot_hash=snapshot_hash,
@@ -110,6 +127,13 @@ class LoudnessAnalysisService:
                 check_cancelled=check_cancelled,
                 progress=progress,
             )
+            self._publish_current_result(
+                state,
+                snapshot_hash=snapshot_hash,
+                result_path=produced[1],
+                analysis_revision=analysis_revision,
+            )
+            return produced
         finally:
             lock.release()
 
@@ -259,6 +283,87 @@ class LoudnessAnalysisService:
         document = self.compiler.compile(state, use_proxies=False)
         return self._snapshot_hash(document.xml, document.source_paths)
 
+    def _publish_current_result(
+        self,
+        state: TimelineState,
+        *,
+        snapshot_hash: str,
+        result_path: Path,
+        analysis_revision: int,
+    ) -> None:
+        repository = cast(ProjectRepository, self.compiler.repository)
+        if repository.content_revision() != analysis_revision:
+            return
+        persisted = repository.timeline.load_timeline(state.sequence.id)
+        if persisted.model_dump(mode="json") != state.model_dump(mode="json"):
+            return
+        receipt_path = self.current_result_path(repository.project_dir, state.sequence.id)
+        atomic_write_text(
+            receipt_path,
+            json.dumps(
+                {
+                    "schema_version": self.CURRENT_RESULT_SCHEMA_VERSION,
+                    "sequence_id": state.sequence.id,
+                    "project_revision": analysis_revision,
+                    "snapshot_hash": snapshot_hash,
+                    "result_path": result_path.relative_to(repository.project_dir).as_posix(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    @classmethod
+    def read_current_metrics(
+        cls,
+        project_dir: Path,
+        sequence_id: str,
+        *,
+        current_project_revision: int,
+    ) -> LoudnessMetrics | None:
+        project_root = project_dir.resolve()
+        receipt_path = cls.current_result_path(project_root, sequence_id)
+        if not receipt_path.is_file():
+            return None
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Loudness result receipt is unreadable: {receipt_path}") from error
+        if not isinstance(receipt, dict):
+            raise RuntimeError(f"Loudness result receipt is invalid: {receipt_path}")
+        if (
+            receipt.get("schema_version") != cls.CURRENT_RESULT_SCHEMA_VERSION
+            or receipt.get("sequence_id") != sequence_id
+        ):
+            raise RuntimeError(f"Loudness result receipt has an invalid contract: {receipt_path}")
+        revision = receipt.get("project_revision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            raise RuntimeError(f"Loudness result receipt has an invalid revision: {receipt_path}")
+        if revision != current_project_revision:
+            return None
+        snapshot_hash = receipt.get("snapshot_hash")
+        relative_result = receipt.get("result_path")
+        if (
+            not isinstance(snapshot_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", snapshot_hash)
+            or not isinstance(relative_result, str)
+            or not relative_result
+        ):
+            raise RuntimeError(f"Loudness result receipt has an invalid identity: {receipt_path}")
+        result_path = (project_root / relative_result).resolve()
+        try:
+            result_path.relative_to(project_root)
+        except ValueError as error:
+            raise RuntimeError(f"Loudness result receipt escapes the project: {receipt_path}") from error
+        metrics = cls.read_metrics(
+            result_path,
+            expected_sequence_id=sequence_id,
+            expected_snapshot_hash=snapshot_hash,
+        )
+        if metrics is None:
+            raise RuntimeError(f"Loudness result referenced by the receipt is unavailable: {result_path}")
+        return metrics
+
     def _snapshot_hash(
         self,
         xml: str,
@@ -339,6 +444,15 @@ class LoudnessAnalysisService:
             project_dir / "generated" / "a",
             f"loudness-result:{sequence_id}:{snapshot_hash}",
             namespace="la",
+            suffix=".json",
+        )
+
+    @staticmethod
+    def current_result_path(project_dir: Path, sequence_id: str) -> Path:
+        return content_addressed_child_path(
+            project_dir / "generated" / "a",
+            f"loudness-current:{sequence_id}",
+            namespace="lc",
             suffix=".json",
         )
 

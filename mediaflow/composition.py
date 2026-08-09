@@ -42,6 +42,7 @@ from mediaflow.domain.collaboration import (
     ProjectChangeEvent,
     ProjectRevisionConflict,
     ProjectUndoGroup,
+    project_write_paths_overlap,
 )
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import (
@@ -171,16 +172,6 @@ def _automation_request_input_hash(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-
-
-def _project_write_paths_overlap(left: str, right: str) -> bool:
-    normalized_left = left.rstrip("/")
-    normalized_right = right.rstrip("/")
-    return (
-        normalized_left == normalized_right
-        or normalized_left.startswith(normalized_right + "/")
-        or normalized_right.startswith(normalized_left + "/")
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,7 +538,9 @@ class EditorProject:
                     reason="the durable event journal does not cover the requested revision",
                 )
             if any(
-                _project_write_paths_overlap(left, right) for left in write_set for right in event.write_set
+                project_write_paths_overlap(left, right)
+                for left in write_set
+                for right in event.write_set
             ):
                 conflicts.append(event)
             covered_revision = event.project_revision
@@ -1427,16 +1420,10 @@ class EditorProject:
         ).snapshot_hash(state)
 
     def read_loudness_metrics(self, sequence_id: str) -> dict[str, float]:
-        snapshot_hash = self.loudness_snapshot_hash(sequence_id)
-        path = LoudnessAnalysisService.result_path(
+        metrics = LoudnessAnalysisService.read_current_metrics(
             self.project_dir,
             sequence_id,
-            snapshot_hash,
-        )
-        metrics = LoudnessAnalysisService.read_metrics(
-            path,
-            expected_sequence_id=sequence_id,
-            expected_snapshot_hash=snapshot_hash,
+            current_project_revision=self._repository.content_revision(),
         )
         return metrics.desktop_payload() if metrics is not None else {}
 
@@ -1582,16 +1569,7 @@ class EditorProject:
                         "applied_without_speech" if analysis.speech_in_frame is None else "applied"
                     )
             elif isinstance(task.outcome, LoudnessTaskOutcome):
-                current_hash = self.loudness_snapshot_hash(sequence_id)
-                audio_metrics = {}
-                if task.artifacts:
-                    metrics = LoudnessAnalysisService.read_metrics(
-                        task.artifacts[-1].resolve(self.project_dir),
-                        expected_sequence_id=sequence_id,
-                        expected_snapshot_hash=current_hash,
-                    )
-                    if metrics is not None:
-                        audio_metrics = metrics.desktop_payload()
+                audio_metrics = self.read_loudness_metrics(sequence_id)
         return ProjectTaskResult(
             workflow=workflow,
             imported_asset_id=imported_asset_id,
@@ -2095,7 +2073,7 @@ class EditorApplication:
         resolved_project = Path(project_dir).resolve()
         owner = request_owner or "direct"
         generation = 0 if request_generation is None else request_generation
-        request_key = (str(resolved_project), owner, sequence_id)
+        request_key = (str(resolved_project), owner)
         with FILMSTRIP_REQUESTS.request(request_key, generation) as check_cancelled:
             with ProjectRepository.open(resolved_project, writable=False) as repository:
                 return TimelineFilmstripService(repository, self._paths).render_visible(
@@ -2106,3 +2084,13 @@ class EditorApplication:
                     height=height,
                     check_cancelled=check_cancelled,
                 )
+
+    def cancel_timeline_filmstrip_requests(
+        self,
+        project_dir: str | Path,
+        *,
+        request_owner: str,
+        request_generation: int,
+    ) -> None:
+        request_key = (str(Path(project_dir).resolve()), request_owner)
+        FILMSTRIP_REQUESTS.cancel(request_key, request_generation)

@@ -233,7 +233,7 @@ jobs:
           --durations=25
       - name: Upload core-test failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: core-${{ matrix.shard }}-${{ github.run_attempt }}
           if-no-files-found: ignore
@@ -335,7 +335,7 @@ jobs:
           --durations=25
       - name: Upload reviewed-runtime failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-${{ matrix.shard }}-${{ github.run_attempt }}
           if-no-files-found: ignore
@@ -482,7 +482,7 @@ jobs:
         run: python -m scripts.verify_real_user_chain
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-${{ matrix.scenario }}-${{ github.run_attempt }}
           if-no-files-found: ignore
@@ -662,7 +662,7 @@ jobs:
           tests/v2/infrastructure/test_web_media.py::test_v6_cli_chain
       - name: Upload portable failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: portable-${{ runner.os }}-${{ runner.arch }}-${{ github.run_attempt }}
           if-no-files-found: ignore
@@ -752,7 +752,7 @@ jobs:
           --bundle "${{ runner.temp }}/interchange-bundle"
           --work-root "${{ runner.temp }}/interchange-producer-work"
       - name: Upload the platform project artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: interchange-${{ matrix.target }}
           path: ${{ runner.temp }}/interchange-bundle
@@ -838,7 +838,7 @@ jobs:
       - name: Prepare the exact consumer runtime
         run: python scripts/prepare_runtime.py --runtime-root "${{ env.MEDIAFLOW_RUNTIME_DIR }}"
       - name: Download the foreign project artifact
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: interchange-${{ matrix.producer }}
           path: ${{ runner.temp }}/interchange-bundle
@@ -851,7 +851,7 @@ jobs:
           --work-root "${{ runner.temp }}/interchange-consumer-work"
       - name: Upload interchange diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: interchange-result-${{ matrix.producer }}-to-${{ matrix.consumer }}-${{ github.run_attempt }}
           if-no-files-found: ignore

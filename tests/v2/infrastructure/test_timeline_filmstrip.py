@@ -188,7 +188,7 @@ def test_web_native_plan_slice_uses_requested_frame_and_frozen_tail(tmp_path: Pa
 
 def test_new_filmstrip_generation_cancels_unclaimed_work() -> None:
     coordinator = _FilmstripRequestCoordinator()
-    key = ("project", "desktop-actor", "sequence")
+    key = ("project", "desktop-actor")
 
     with coordinator.request(key, 1) as first:
         first()
@@ -196,3 +196,18 @@ def test_new_filmstrip_generation_cancels_unclaimed_work() -> None:
             with pytest.raises(CancelledError, match="superseded"):
                 first()
             second()
+
+
+def test_owner_cancellation_rejects_running_and_late_filmstrip_work() -> None:
+    coordinator = _FilmstripRequestCoordinator()
+    key = ("project", "desktop-actor")
+
+    with coordinator.request(key, 4) as running:
+        coordinator.cancel(key, 5)
+        with pytest.raises(CancelledError, match="superseded"):
+            running()
+    with coordinator.request(key, 4) as late:
+        with pytest.raises(CancelledError, match="superseded"):
+            late()
+    with coordinator.request(key, 6) as reopened:
+        reopened()

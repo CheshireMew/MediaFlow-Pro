@@ -1,0 +1,225 @@
+{
+  "protocol": "visual-multimedia-timeline",
+  "version": 1,
+  "project_id": "portable-timeline-real-chain",
+  "profile": {
+    "width": 640,
+    "height": 360,
+    "frame_rate": 24,
+    "sample_rate": 48000,
+    "channel_layout": "stereo",
+    "background": "#101820",
+    "duration_seconds": 6
+  },
+  "sources": [
+    {
+      "id": "moving",
+      "kind": "video",
+      "file": "sources/moving.mp4",
+      "sha256": "094ff634dce5e4d500a6f0a5dd7431d16068d4c917b7ea47645b5de95ce5a286",
+      "duration_seconds": 3
+    },
+    {
+      "id": "still",
+      "kind": "image",
+      "file": "sources/still.png",
+      "sha256": "993883d43655c829b0d63be3e80cc753e28ac559cff865a6b20c4d054f6eb016"
+    },
+    {
+      "id": "music",
+      "kind": "audio",
+      "file": "sources/music.wav",
+      "sha256": "80a6226d322c91efe37a78e141bd01750482b3cc21dff13536c2ab9f458d0536",
+      "duration_seconds": 6
+    }
+  ],
+  "tracks": [
+    {
+      "id": "main-video",
+      "kind": "video",
+      "name": "主画面",
+      "muted": false,
+      "clips": [
+        {
+          "id": "moving-opening",
+          "type": "media",
+          "source_id": "moving",
+          "timeline_start_seconds": 0,
+          "source_in_seconds": 0,
+          "duration_seconds": 2,
+          "speed": 1,
+          "placement": {
+            "fit": "cover",
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 360
+          },
+          "opacity": 1,
+          "audio_enabled": false,
+          "fade_in": {
+            "kind": "none",
+            "duration_seconds": 0
+          },
+          "fade_out": {
+            "kind": "fade",
+            "duration_seconds": 0.15
+          }
+        },
+        {
+          "id": "held-action",
+          "type": "freeze",
+          "source_id": "moving",
+          "timeline_start_seconds": 2,
+          "source_time_seconds": 1.25,
+          "duration_seconds": 1,
+          "placement": {
+            "fit": "cover",
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 360
+          },
+          "opacity": 1,
+          "fade_in": {
+            "kind": "fade",
+            "duration_seconds": 0.1
+          },
+          "fade_out": {
+            "kind": "fade",
+            "duration_seconds": 0.1
+          }
+        },
+        {
+          "id": "still-ending",
+          "type": "media",
+          "source_id": "still",
+          "timeline_start_seconds": 3,
+          "source_in_seconds": 0,
+          "duration_seconds": 3,
+          "speed": 1,
+          "placement": {
+            "fit": "contain",
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 360
+          },
+          "opacity": 1,
+          "audio_enabled": false,
+          "fade_in": {
+            "kind": "fade",
+            "duration_seconds": 0.15
+          },
+          "fade_out": {
+            "kind": "none",
+            "duration_seconds": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "music-track",
+      "kind": "audio",
+      "name": "背景音乐",
+      "muted": false,
+      "clips": [
+        {
+          "id": "music-bed",
+          "type": "media",
+          "source_id": "music",
+          "timeline_start_seconds": 0,
+          "source_in_seconds": 0,
+          "duration_seconds": 6,
+          "speed": 1,
+          "gain_db": -12,
+          "fade_in": {
+            "kind": "fade",
+            "duration_seconds": 0.2
+          },
+          "fade_out": {
+            "kind": "fade",
+            "duration_seconds": 0.3
+          }
+        }
+      ]
+    },
+    {
+      "id": "zh-captions",
+      "kind": "subtitle",
+      "name": "中文字幕",
+      "muted": false,
+      "clips": [
+        {
+          "id": "zh-1",
+          "type": "caption",
+          "timeline_start_seconds": 0.25,
+          "duration_seconds": 1.4,
+          "text": "本地时间线可以独立完成剪辑",
+          "style_id": "zh",
+          "language": "zh-CN"
+        }
+      ]
+    },
+    {
+      "id": "en-captions",
+      "kind": "subtitle",
+      "name": "英文字幕",
+      "muted": false,
+      "clips": [
+        {
+          "id": "en-1",
+          "type": "caption",
+          "timeline_start_seconds": 0.25,
+          "duration_seconds": 1.4,
+          "text": "A portable timeline remains editable.",
+          "style_id": "en",
+          "language": "en"
+        }
+      ]
+    }
+  ],
+  "subtitle_styles": [
+    {
+      "id": "zh",
+      "font_family": "Microsoft YaHei",
+      "font_size": 30,
+      "primary_color": "#FFFFFF",
+      "outline_color": "#000000",
+      "outline_width": 2,
+      "margin_vertical": 50,
+      "alignment": 2,
+      "bold": true,
+      "italic": false
+    },
+    {
+      "id": "en",
+      "font_family": "Arial",
+      "font_size": 18,
+      "primary_color": "#E8E8E8",
+      "outline_color": "#000000",
+      "outline_width": 1,
+      "margin_vertical": 22,
+      "alignment": 2,
+      "bold": false,
+      "italic": false
+    }
+  ],
+  "markers": [
+    {
+      "id": "run",
+      "time_seconds": 0,
+      "label": "动态画面"
+    },
+    {
+      "id": "freeze",
+      "time_seconds": 2,
+      "label": "定格"
+    },
+    {
+      "id": "still",
+      "time_seconds": 3,
+      "label": "静止素材"
+    }
+  ]
+}
