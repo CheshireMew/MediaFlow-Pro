@@ -1,26 +1,9 @@
-# ruff: noqa: E402
-
 import os
 import subprocess
-import sys
 import time
-import traceback
 from pathlib import Path
 
 import pytest
-
-_CV2_IMPORT_STACK: list[str] = []
-
-
-class _Cv2ImportTracer:
-    def find_spec(self, fullname, path, target=None):
-        if fullname == "cv2" and not _CV2_IMPORT_STACK:
-            _CV2_IMPORT_STACK.extend(traceback.format_stack(limit=40))
-        return None
-
-
-_cv2_import_tracer = _Cv2ImportTracer()
-sys.meta_path.insert(0, _cv2_import_tracer)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -98,13 +81,6 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
         app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
         engine.addImportPath(str(paths.native_qml))
-        if sys.platform == "darwin":
-            cv2_module = sys.modules.get("cv2")
-            print(
-                "CV2_NATIVE_PREVIEW_IMPORT_TRACE",
-                getattr(cv2_module, "__file__", None),
-                "".join(_CV2_IMPORT_STACK),
-            )
         engine.loadData(
             b"""
 import QtQuick

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 import uuid
 from collections.abc import Iterator
@@ -12,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -24,7 +26,9 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.environment import test_run_root
 from mediaflow.infrastructure.project_lock import ProcessFileLock
-from tests.v2.editor_service_api import EditorServiceApi
+
+if TYPE_CHECKING:
+    from tests.v2.editor_service_api import EditorServiceApi
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
@@ -422,11 +426,15 @@ def isolated_storage_paths(
     try:
         yield path
     finally:
-        EditorServiceApi.shutdown()
+        api_module = sys.modules.get("tests.v2.editor_service_api")
+        if api_module is not None:
+            api_module.EditorServiceApi.shutdown()
 
 
 @pytest.fixture
 def editor_service_api() -> Iterator[EditorServiceApi]:
+    from tests.v2.editor_service_api import EditorServiceApi
+
     api = EditorServiceApi()
     try:
         yield api
