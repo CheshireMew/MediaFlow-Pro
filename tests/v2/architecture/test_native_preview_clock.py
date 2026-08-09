@@ -103,3 +103,21 @@ def test_native_preview_exposes_buffering_without_clearing_play_intent() -> None
     assert "interval: 300" in preview_qml
     assert "visible: false" in preview_qml
     assert "onTriggered: bufferingNotice.visible = preview.buffering" in preview_qml
+
+
+def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -> None:
+    preview_header = PREVIEW_HEADER.read_text(encoding="utf-8")
+    preview_source = PREVIEW_SOURCE.read_text(encoding="utf-8")
+
+    assert "QQueue<PendingFrame> m_pendingFrames" in preview_header
+    assert "MaxPendingPlaybackFrames = 60" in preview_header
+    assert "std::atomic<bool> m_queuePlaybackFrames" in preview_header
+    assert "m_queuePlaybackFrames.store(true" in preview_source
+    queue_boundary = preview_source.split("void MltPreviewItem::queueFrame", 1)[1].split(
+        "void MltPreviewItem::deliverPendingFrame", 1
+    )[0]
+    assert "if (!m_queuePlaybackFrames.load" in queue_boundary
+    assert "m_pendingFrames.clear()" in queue_boundary
+    assert "m_pendingFrames.size() >= MaxPendingPlaybackFrames" in queue_boundary
+    assert "m_pendingFrames.enqueue" in queue_boundary
+    assert "m_pendingFrame = image" not in preview_source

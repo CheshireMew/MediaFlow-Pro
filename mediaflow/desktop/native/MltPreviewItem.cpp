@@ -134,6 +134,7 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
     connect(m_runtime, &MltRuntime::playingChanged, this, [this](bool value, quint64 requestId) {
         if (requestId != m_requestId.load(std::memory_order_acquire))
             return;
+        m_queuePlaybackFrames.store(value, std::memory_order_release);
         if (m_playing != value) {
             m_playing = value;
             m_lastPlaybackFrame = -1;
@@ -277,6 +278,7 @@ void MltPreviewItem::setHdrEnabled(bool value)
 void MltPreviewItem::play()
 {
     clearError();
+    m_queuePlaybackFrames.store(true, std::memory_order_release);
     emit playRequested(m_requestId.load(std::memory_order_acquire));
 }
 
@@ -287,6 +289,7 @@ void MltPreviewItem::playRange(int startFrame, int endFrame)
     m_seekPending = false;
     m_seekRetryAttempts = 0;
     m_seekRetryTimer.stop();
+    m_queuePlaybackFrames.store(true, std::memory_order_release);
     emit playRangeRequested(
         startFrame,
         endFrame,
@@ -369,10 +372,13 @@ void MltPreviewItem::queueFrame(
     bool scheduleDelivery = false;
     {
         const QMutexLocker locker(&m_frameMutex);
-        m_pendingFrame = image;
-        m_pendingPosition = frame;
-        m_pendingDuration = duration;
-        m_pendingRequestId = requestId;
+        if (!m_queuePlaybackFrames.load(std::memory_order_acquire)) {
+            m_pendingFrames.clear();
+        } else {
+            while (m_pendingFrames.size() >= MaxPendingPlaybackFrames)
+                m_pendingFrames.dequeue();
+        }
+        m_pendingFrames.enqueue(PendingFrame{image, frame, duration, requestId});
         if (!m_frameDeliveryScheduled) {
             m_frameDeliveryScheduled = true;
             scheduleDelivery = true;
@@ -381,62 +387,69 @@ void MltPreviewItem::queueFrame(
     if (scheduleDelivery) {
         QMetaObject::invokeMethod(
             this,
-            &MltPreviewItem::deliverLatestFrame,
+            &MltPreviewItem::deliverPendingFrame,
             Qt::QueuedConnection);
     }
 }
 
-void MltPreviewItem::deliverLatestFrame()
+void MltPreviewItem::deliverPendingFrame()
 {
-    QImage image;
-    int frame = 0;
-    int duration = 0;
-    quint64 requestId = 0;
+    PendingFrame pending;
+    bool scheduleNext = false;
     {
         const QMutexLocker locker(&m_frameMutex);
-        image = m_pendingFrame;
-        frame = m_pendingPosition;
-        duration = m_pendingDuration;
-        requestId = m_pendingRequestId;
-        m_frameDeliveryScheduled = false;
+        if (m_pendingFrames.isEmpty()) {
+            m_frameDeliveryScheduled = false;
+            return;
+        }
+        pending = m_pendingFrames.dequeue();
+        scheduleNext = !m_pendingFrames.isEmpty();
+        if (!scheduleNext)
+            m_frameDeliveryScheduled = false;
     }
-    if (requestId != m_requestId.load(std::memory_order_acquire))
+    if (scheduleNext) {
+        QMetaObject::invokeMethod(
+            this,
+            &MltPreviewItem::deliverPendingFrame,
+            Qt::QueuedConnection);
+    }
+    if (pending.requestId != m_requestId.load(std::memory_order_acquire))
         return;
     if (m_playing && qFuzzyCompare(qAbs(m_playbackRate), 1.0)) {
-        int dropped = image.isNull() ? 1 : 0;
+        int dropped = pending.image.isNull() ? 1 : 0;
         if (m_lastPlaybackFrame >= 0) {
             const int direction = m_playbackRate < 0.0 ? -1 : 1;
-            const int advance = (frame - m_lastPlaybackFrame) * direction;
+            const int advance = (pending.position - m_lastPlaybackFrame) * direction;
             if (advance > 1)
                 dropped += advance - 1;
         }
-        m_lastPlaybackFrame = frame;
+        m_lastPlaybackFrame = pending.position;
         if (dropped > 0) {
             m_droppedFrames += dropped;
             emit droppedFramesChanged();
         }
     }
-    if (m_position != frame) {
-        m_position = frame;
+    if (m_position != pending.position) {
+        m_position = pending.position;
         emit positionChanged();
     }
-    const int expectedFrame = qBound(0, m_requestedPosition, qMax(0, duration - 1));
-    if (!m_seekPending || frame == expectedFrame) {
-        m_requestedPosition = frame;
+    const int expectedFrame = qBound(0, m_requestedPosition, qMax(0, pending.duration - 1));
+    if (!m_seekPending || pending.position == expectedFrame) {
+        m_requestedPosition = pending.position;
         m_seekPending = false;
         m_seekRetryAttempts = 0;
         m_seekRetryTimer.stop();
     }
-    if (m_duration != duration) {
-        m_duration = duration;
+    if (m_duration != pending.duration) {
+        m_duration = pending.duration;
         emit durationChanged();
     }
-    if (!image.isNull()) {
+    if (!pending.image.isNull()) {
         {
             const QMutexLocker locker(&m_frameMutex);
-            if (requestId != m_requestId.load(std::memory_order_acquire))
+            if (pending.requestId != m_requestId.load(std::memory_order_acquire))
                 return;
-            m_frame = image;
+            m_frame = pending.image;
         }
         update();
     }
@@ -446,6 +459,7 @@ void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
 {
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
+    m_queuePlaybackFrames.store(false, std::memory_order_release);
     if (m_errorString == message)
         return;
     m_errorString = message;
@@ -480,11 +494,10 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
     {
         const QMutexLocker locker(&m_frameMutex);
         m_frame = QImage();
-        m_pendingFrame = QImage();
-        m_pendingPosition = 0;
-        m_pendingDuration = 0;
-        m_pendingRequestId = 0;
+        m_pendingFrames.clear();
+        m_frameDeliveryScheduled = false;
     }
+    m_queuePlaybackFrames.store(false, std::memory_order_release);
     if (m_playing) {
         m_playing = false;
         emit playingChanged();

@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QMutex>
+#include <QQueue>
 #include <QQuickItem>
 #include <QThread>
 #include <QTimer>
@@ -112,10 +113,20 @@ protected:
 
 private slots:
     void queueFrame(const QImage &image, int frame, int duration, quint64 requestId);
-    void deliverLatestFrame();
+    void deliverPendingFrame();
     void receiveError(const QString &message, quint64 requestId);
 
 private:
+    static constexpr qsizetype MaxPendingPlaybackFrames = 60;
+
+    struct PendingFrame
+    {
+        QImage image;
+        int position = 0;
+        int duration = 0;
+        quint64 requestId = 0;
+    };
+
     quint64 beginRequest(bool preservePosition);
     void resetPresentationState(bool preservePosition);
     void clearError();
@@ -141,18 +152,16 @@ private:
     bool m_hdrEnabled = false;
     bool m_hdrActive = false;
     QImage m_frame;
-    QImage m_pendingFrame;
-    int m_pendingPosition = 0;
-    int m_pendingDuration = 0;
+    QQueue<PendingFrame> m_pendingFrames;
     int m_requestedPosition = 0;
     int m_lastPlaybackFrame = -1;
     bool m_seekPending = false;
     int m_seekRetryAttempts = 0;
     QTimer m_seekRetryTimer;
-    quint64 m_pendingRequestId = 0;
     bool m_frameDeliveryScheduled = false;
     bool m_openScheduled = false;
     std::atomic<quint64> m_requestId{0};
+    std::atomic<bool> m_queuePlaybackFrames{false};
     QMutex m_frameMutex;
     QThread m_workerThread;
     MltRuntime *m_runtime = nullptr;
