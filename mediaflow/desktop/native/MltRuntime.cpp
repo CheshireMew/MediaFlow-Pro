@@ -567,7 +567,7 @@ bool MltRuntime::startPlaybackConsumer()
 
     const int bufferFrames = qBound(24, qRound(m_fps), 60);
     MltProperties previewProperties = m_api.consumerProperties(m_previewConsumer);
-    m_api.propertiesSetInt(previewProperties, "real_time", -1);
+    m_api.propertiesSetInt(previewProperties, "real_time", 0);
     m_api.propertiesSetInt(previewProperties, "buffer", bufferFrames);
     m_api.propertiesSetInt(previewProperties, "prefill", qMin(4, bufferFrames));
     m_api.propertiesSetInt(previewProperties, "video_off", 0);

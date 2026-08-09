@@ -358,9 +358,16 @@ ApplicationWindow {
             for buffering, playing, _frames in buffer_states
             if buffering
         )
+        pause_started = time.monotonic()
         preview.pause()
-        QCoreApplication.processEvents()
+        while time.monotonic() - pause_started < 0.5 and (
+            preview.property("playing") or preview.property("buffering")
+        ):
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        assert preview.property("playing") is False
         assert preview.property("buffering") is False
+        assert time.monotonic() - pause_started < 0.5
         assert preview.property("bufferedFrames") == 0
         preview.setProperty("source", "")
         assert preview.property("playing") is False
