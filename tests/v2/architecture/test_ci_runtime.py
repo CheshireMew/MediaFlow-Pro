@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -189,7 +190,29 @@ def test_native_preview_consumes_explicit_runtime_paths_without_layout_guesses()
     assert '"install_name_tool", "-add_rpath"' in runtime_preparation
     assert '"@loader_path/../../Frameworks"' in runtime_preparation
     assert '["codesign", "--force", "--sign", "-"' in runtime_preparation
+    assert '"libmltopencv.dll"' in runtime_preparation
     assert runtime_preparation.count("_prepare_macos_runtime_rpaths(") == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows preview repository layout")
+def test_windows_preview_repository_omits_process_conflicting_plugins(tmp_path: Path) -> None:
+    repository = tmp_path / "lib" / "mlt"
+    repository.mkdir(parents=True)
+    for name in (
+        "libmltavformat.dll",
+        "libmltqt6.dll",
+        "libmltglaxnimate-qt6.dll",
+        "libmltopencv.dll",
+    ):
+        (repository / name).write_bytes(name.encode("ascii"))
+
+    prepare_runtime._prepare_windows_preview_repository(tmp_path)
+
+    preview_repository = tmp_path / "lib" / "mlt-preview"
+    assert (preview_repository / "libmltavformat.dll").read_bytes() == b"libmltavformat.dll"
+    assert not (preview_repository / "libmltqt6.dll").exists()
+    assert not (preview_repository / "libmltglaxnimate-qt6.dll").exists()
+    assert not (preview_repository / "libmltopencv.dll").exists()
 
 
 def test_macos_runtime_repairs_framework_and_mlt_plugin_rpaths(

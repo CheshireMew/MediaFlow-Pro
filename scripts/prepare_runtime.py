@@ -226,7 +226,11 @@ def _prepare_windows_preview_repository(bundle_root: Path) -> None:
     destination = bundle_root / "lib" / "mlt-preview"
     if not source.is_dir():
         raise FileNotFoundError(source)
-    excluded = {"libmltqt6.dll", "libmltglaxnimate-qt6.dll"}
+    excluded = {
+        "libmltqt6.dll",
+        "libmltglaxnimate-qt6.dll",
+        "libmltopencv.dll",
+    }
     destination.mkdir(parents=True, exist_ok=True)
     for plugin in source.iterdir():
         if not plugin.is_file() or plugin.name in excluded:

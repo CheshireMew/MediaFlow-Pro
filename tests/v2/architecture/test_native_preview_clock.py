@@ -22,6 +22,7 @@ def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> N
     assert "m_videoProfile" not in runtime_header
     assert 'factoryConsumer(m_previewProfile, "sdl2_audio"' in runtime_source
     assert 'factoryConsumer(m_previewProfile, "rtaudio"' in runtime_source
+    assert '"libmltqt6:libmltglaxnimate-qt6:libmltopencv"' in runtime_source
     assert 'factoryConsumer(m_videoProfile, "null"' not in runtime_source
     assert 'propertiesSetInt(previewProperties, "video_off", 0)' in runtime_source
     assert 'propertiesSetInt(previewProperties, "width", m_previewWidth)' in runtime_source

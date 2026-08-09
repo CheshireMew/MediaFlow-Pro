@@ -282,7 +282,7 @@ void MltRuntime::openGraph(
     const ScopedEnvironmentVariable dataEnvironment("MLT_DATA", encodedData);
     const ScopedEnvironmentVariable repositoryDeny(
         "MLT_REPOSITORY_DENY",
-        QByteArrayLiteral("libmltqt6:libmltglaxnimate-qt6"));
+        QByteArrayLiteral("libmltqt6:libmltglaxnimate-qt6:libmltopencv"));
     if (!loadApi(mltLibrary))
         return;
 
