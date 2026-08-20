@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import BinaryIO
 
@@ -35,6 +36,27 @@ class ProcessFileLock:
             return False
         self._stream = stream
         return True
+
+    def acquire_until(
+        self,
+        *,
+        timeout_seconds: float,
+        retry_interval_seconds: float = 0.01,
+    ) -> bool:
+        """Wait for a contended process lock until the bounded deadline."""
+
+        if timeout_seconds < 0:
+            raise ValueError("Lock timeout cannot be negative")
+        if retry_interval_seconds <= 0:
+            raise ValueError("Lock retry interval must be positive")
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if self.acquire():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(retry_interval_seconds, remaining))
 
     def release(self) -> None:
         stream = self._stream
