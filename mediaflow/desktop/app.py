@@ -7,6 +7,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, cast
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
@@ -71,10 +72,11 @@ def _qml_dll_search_path():
     if sys.platform != "win32":
         yield
         return
-    from ctypes import WinDLL, create_unicode_buffer
+    import ctypes
 
-    kernel32 = WinDLL("kernel32", use_last_error=True)
-    previous = create_unicode_buffer(32768)
+    windows_ctypes = cast(Any, ctypes)
+    kernel32 = windows_ctypes.WinDLL("kernel32", use_last_error=True)
+    previous = ctypes.create_unicode_buffer(32768)
     previous_length = kernel32.GetDllDirectoryW(len(previous), previous)
     import PySide6
 
