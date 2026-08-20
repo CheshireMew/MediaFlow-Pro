@@ -13,9 +13,11 @@ from typing import Any
 import psutil
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.infrastructure.project_lock import ProcessFileLock
 
 GIB = 1024**3
 PROJECT_CACHE_OWNER_FILENAME = ".mediaflow-storage-owner.json"
+PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS = 15.0
 PROJECT_CACHE_MAX_BYTES_VARIABLE = "MEDIAFLOW_PROJECT_CACHE_MAX_BYTES"
 PROJECT_CACHES_MAX_BYTES_VARIABLE = "MEDIAFLOW_PROJECT_CACHES_MAX_BYTES"
 TEST_ARTIFACT_MAX_BYTES_VARIABLE = "MEDIAFLOW_TEST_ARTIFACT_MAX_BYTES"
@@ -302,20 +304,26 @@ def register_project_cache_owner(
         "project_path": str(project),
         "project_identity": identity,
     }
-    manifest = root / PROJECT_CACHE_OWNER_FILENAME
-    if manifest.is_file():
-        try:
-            existing = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"Invalid project cache owner manifest: {manifest}") from error
-        if existing != payload:
-            raise RuntimeError(f"Project cache owner mismatch: {manifest}")
-        return payload
     root.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(
-        manifest,
-        json.dumps(payload, ensure_ascii=False, indent=2),
-    )
+    manifest = root / PROJECT_CACHE_OWNER_FILENAME
+    lock = ProcessFileLock(manifest.with_suffix(f"{manifest.suffix}.lock"))
+    if not lock.acquire_until(timeout_seconds=PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS):
+        raise RuntimeError(f"Timed out registering project cache owner: {manifest}")
+    try:
+        if manifest.is_file():
+            try:
+                existing = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"Invalid project cache owner manifest: {manifest}") from error
+            if existing != payload:
+                raise RuntimeError(f"Project cache owner mismatch: {manifest}")
+            return payload
+        atomic_write_text(
+            manifest,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
+    finally:
+        lock.release()
     return payload
 
 

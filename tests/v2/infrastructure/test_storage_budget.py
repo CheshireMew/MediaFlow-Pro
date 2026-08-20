@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -110,7 +113,7 @@ def test_project_cache_owner_makes_hashed_storage_attributable(tmp_path: Path) -
             "project_exists": True,
             "owner_status": "known",
             "bytes": report["projects"][0]["bytes"],
-            "files": 1,
+            "files": 2,
         }
     ]
 
@@ -132,6 +135,64 @@ def test_project_cache_owner_accepts_case_sensitive_identity(tmp_path: Path) -> 
 
     assert owner["project_identity"] == identity
     assert owner["project_path"] == str(project.resolve())
+
+
+def test_project_cache_owner_registration_serializes_concurrent_writers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "Concurrent Project"
+    project.mkdir()
+    identity = storage_budget.project_cache_identity(
+        project,
+        case_sensitive_paths=False,
+    )
+    cache_root = tmp_path / "runtime" / "cache" / "projects" / identity
+    original_atomic_write = storage_budget.atomic_write_text
+    starting = threading.Barrier(2)
+    write_count = 0
+    count_lock = threading.Lock()
+
+    def delayed_atomic_write(
+        destination: str | Path,
+        content: str,
+        *,
+        encoding: str = "utf-8",
+        durable: bool = False,
+        mode: int | None = None,
+    ) -> Path:
+        nonlocal write_count
+        with count_lock:
+            write_count += 1
+        time.sleep(0.1)
+        return original_atomic_write(
+            destination,
+            content,
+            encoding=encoding,
+            durable=durable,
+            mode=mode,
+        )
+
+    monkeypatch.setattr(storage_budget, "atomic_write_text", delayed_atomic_write)
+
+    def register() -> dict[str, object]:
+        starting.wait(timeout=5)
+        return storage_budget.register_project_cache_owner(
+            cache_root,
+            project,
+            case_sensitive_paths=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owners = list(pool.map(lambda _index: register(), range(2)))
+
+    assert owners[0] == owners[1]
+    assert write_count == 1
+    assert json.loads(
+        (cache_root / storage_budget.PROJECT_CACHE_OWNER_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    ) == owners[0]
 
 
 def test_project_cache_gate_also_enforces_all_projects_total(
