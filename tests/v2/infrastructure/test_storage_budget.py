@@ -95,7 +95,11 @@ def test_project_cache_owner_makes_hashed_storage_attributable(tmp_path: Path) -
     projects_root = tmp_path / "runtime" / "cache" / "projects"
     cache_root = projects_root / identity
 
-    owner = storage_budget.register_project_cache_owner(cache_root, project)
+    owner = storage_budget.register_project_cache_owner(
+        cache_root,
+        project,
+        case_sensitive_paths=False,
+    )
     report = storage_budget.project_cache_inventory(projects_root)
 
     assert owner["project_path"] == str(project.resolve())
@@ -109,6 +113,25 @@ def test_project_cache_owner_makes_hashed_storage_attributable(tmp_path: Path) -
             "files": 1,
         }
     ]
+
+
+def test_project_cache_owner_accepts_case_sensitive_identity(tmp_path: Path) -> None:
+    project = tmp_path / "Project A"
+    project.mkdir()
+    identity = storage_budget.project_cache_identity(
+        project,
+        case_sensitive_paths=True,
+    )
+    cache_root = tmp_path / "runtime" / "cache" / "projects" / identity
+
+    owner = storage_budget.register_project_cache_owner(
+        cache_root,
+        project,
+        case_sensitive_paths=True,
+    )
+
+    assert owner["project_identity"] == identity
+    assert owner["project_path"] == str(project.resolve())
 
 
 def test_project_cache_gate_also_enforces_all_projects_total(

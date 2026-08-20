@@ -270,14 +270,29 @@ def directory_inventory(root: str | Path) -> dict[str, Any]:
     }
 
 
+def project_cache_identity(
+    project_dir: str | Path,
+    *,
+    case_sensitive_paths: bool,
+) -> str:
+    normalized = str(Path(project_dir).expanduser().resolve())
+    if not case_sensitive_paths:
+        normalized = normalized.casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+
+
 def register_project_cache_owner(
     cache_root: str | Path,
     project_dir: str | Path,
+    *,
+    case_sensitive_paths: bool,
 ) -> dict[str, object]:
     root = Path(cache_root).expanduser().resolve()
     project = Path(project_dir).expanduser().resolve()
-    normalized = str(project).casefold()
-    identity = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    identity = project_cache_identity(
+        project,
+        case_sensitive_paths=case_sensitive_paths,
+    )
     if root.name.casefold() != identity:
         raise RuntimeError(
             f"Project cache root identity does not match its project path: {root}"

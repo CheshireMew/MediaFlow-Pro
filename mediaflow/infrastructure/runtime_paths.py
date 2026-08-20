@@ -16,6 +16,7 @@ from mediaflow.infrastructure.runtime_contract import (
     RuntimeContract,
     load_runtime_contract,
 )
+from mediaflow.infrastructure.storage_budget import project_cache_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -124,10 +125,10 @@ class RuntimePaths:
     def project_cache_dir(self, project_dir: str | Path) -> Path:
         """Return the machine-local cache root for one project location."""
 
-        normalized = str(Path(project_dir).expanduser().resolve())
-        if not self.target.case_sensitive_paths:
-            normalized = normalized.casefold()
-        identity = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+        identity = project_cache_identity(
+            project_dir,
+            case_sensitive_paths=self.target.case_sensitive_paths,
+        )
         return self.runtime_dir / "cache" / "projects" / identity
 
     def mlt_environment(self) -> dict[str, str]:
