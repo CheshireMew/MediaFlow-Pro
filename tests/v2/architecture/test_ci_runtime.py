@@ -304,6 +304,7 @@ def test_quality_workflow_provisions_and_exercises_every_media_runtime() -> None
             "MEDIAFLOW_MEDIA_ROOT",
             "MEDIAFLOW_TEST_ROOT",
             "MEDIAFLOW_TEST_FIXTURE_ROOT",
+            "MEDIAFLOW_MINIMUM_FREE_BYTES",
             "PYTHONUTF8",
         )
     )

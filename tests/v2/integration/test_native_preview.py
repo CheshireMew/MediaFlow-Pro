@@ -606,7 +606,10 @@ ApplicationWindow {
         preview.setProperty("mltData", str(paths.mlt_data))
         preview.setProperty("source", str(graph))
 
-        deadline = time.monotonic() + 10
+        # The HDR graph performs one-time zscale/plugin initialization before
+        # publishing its first frame, which can exceed 10 seconds on a loaded
+        # Windows runner even though the preview completes normally.
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline and preview.property("duration") <= 0:
             QCoreApplication.processEvents()
             time.sleep(0.01)

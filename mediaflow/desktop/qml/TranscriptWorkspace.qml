@@ -9,6 +9,7 @@ ColumnLayout {
     objectName: "transcriptWorkspace"
     property int playheadFrame: 0
     property bool playbackActive: false
+    readonly property bool modalOpen: translationPanel.modalOpen
     signal importRequested
     signal seekRequested(int frame)
 
@@ -53,6 +54,7 @@ ColumnLayout {
             onSeekRequested: function (frame) { root.seekRequested(frame); }
         }
         TranslationPanel {
+            id: translationPanel
             objectName: "translationSectionPanel"
             sectionIndex: Math.max(0, transcriptTabs.currentIndex - 2)
             showSectionTabs: false

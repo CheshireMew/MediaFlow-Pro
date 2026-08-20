@@ -24,11 +24,16 @@ Rectangle {
         || focusedItem instanceof TextEdit
     readonly property bool modalOpen: workspaceChrome.modalOpen
         || Boolean(mediaPanelLoader.item && mediaPanelLoader.item.modalOpen)
+        || Boolean(highlightPanelLoader.item && highlightPanelLoader.item.modalOpen)
+        || Boolean(transcriptPanelLoader.item && transcriptPanelLoader.item.modalOpen)
+        || Boolean(exportPanelLoader.item && exportPanelLoader.item.modalOpen)
+        || timeline.modalOpen
         || Boolean(taskCenterPanelLoader.item
             && taskCenterPanelLoader.item.modalOpen)
         || Boolean(root.Window.window
             && (root.Window.window.downloadPlanVisible
-                || root.Window.window.projectVersionsVisible))
+                || root.Window.window.projectVersionsVisible
+                || root.Window.window.shortcutReferenceVisible))
     readonly property bool shortcutsEnabled: !root.textInputActive
         && !previewPanel.webInputActive
         && !root.modalOpen
@@ -272,6 +277,7 @@ Rectangle {
                                 }
                             }
                             Loader {
+                                id: transcriptPanelLoader
                                 property string panelObjectName: "transcriptWorkspace"
                                 active: root.activeMode === "transcript"
                                     || status === Loader.Ready
@@ -285,6 +291,7 @@ Rectangle {
                                 }
                             }
                             Loader {
+                                id: highlightPanelLoader
                                 property string panelObjectName: "highlightPanel"
                                 active: root.activeMode === "highlight"
                                     || status === Loader.Ready
@@ -299,6 +306,7 @@ Rectangle {
                                 sourceComponent: AudioPanel {}
                             }
                             Loader {
+                                id: exportPanelLoader
                                 property string panelObjectName: "exportPanel"
                                 active: root.activeMode === "export"
                                     || status === Loader.Ready

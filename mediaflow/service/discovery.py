@@ -103,7 +103,11 @@ class ServiceDiscovery(DomainModel):
     def belongs_to_live_process(self) -> bool:
         try:
             process = psutil.Process(self.pid)
-            return process.is_running() and abs(process.create_time() - self.process_started_at) < 0.01
+            return (
+                process.is_running()
+                and process.status() not in {psutil.STATUS_DEAD, psutil.STATUS_ZOMBIE}
+                and abs(process.create_time() - self.process_started_at) < 0.01
+            )
         except (psutil.Error, OSError):
             return False
 

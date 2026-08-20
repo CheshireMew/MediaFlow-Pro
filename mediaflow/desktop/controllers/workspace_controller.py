@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QUrl, Signal
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from mediaflow.desktop.presentation_workspace import workspace_mode_catalog
 
@@ -23,6 +23,7 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
     previewRangeRequested = Signal(int, int)
     errorOccurred = Signal(str)
     errorReferenceChanged = Signal()
+    errorHistoryChanged = Signal()
     collaborationConflictChanged = Signal()
 
     @Property(list, constant=True)
@@ -284,6 +285,15 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
     @Property(str, notify=errorReferenceChanged)
     def lastErrorId(self) -> str:
         return self._session.state.presentation.last_error_id
+
+    @Property(list, notify=errorHistoryChanged)
+    def recentErrors(self) -> list[dict]:
+        return list(self._session.state.presentation.recent_errors)
+
+    @Slot()
+    def clearErrorHistory(self) -> None:
+        self._session.state.presentation.recent_errors.clear()
+        self._session.updates.commit(error_history=True)
 
     @Property(dict, notify=collaborationConflictChanged)
     def collaborationConflict(self) -> dict:

@@ -34,7 +34,14 @@ SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS = 15.0
 def _started_process_exit(pid: int) -> int | None:
     with _started_processes_lock:
         process = _started_processes.get(pid)
-    return process.poll() if process is not None else None
+    if process is None:
+        return None
+    exit_code = process.poll()
+    if exit_code is not None:
+        with _started_processes_lock:
+            if _started_processes.get(pid) is process:
+                _started_processes.pop(pid, None)
+    return exit_code
 
 
 class EditorServiceClient:
@@ -354,7 +361,11 @@ def shutdown_sync_service() -> None:
     if discovery is None:
         return
     deadline = time.monotonic() + SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS
-    while discovery.belongs_to_live_process():
+    while True:
+        if _started_process_exit(discovery.pid) is not None:
+            return
+        if not discovery.belongs_to_live_process():
+            return
         if time.monotonic() >= deadline:
             raise EditorServiceUnavailable(
                 f"Editor Service process {discovery.pid} did not stop within "

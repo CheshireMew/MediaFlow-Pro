@@ -9,7 +9,12 @@ Item {
     objectName: "taskCenterPanel"
     readonly property bool canManageTasks:
         mediaflow.workspaceViewController.actionCapabilities.canManageTasks
-    readonly property bool modalOpen: cancelAllDialog.opened
+    readonly property bool modalOpen: cancelAllDialog.opened || errorHistoryDialog.opened
+
+    ErrorHistoryDialog {
+        id: errorHistoryDialog
+        anchors.centerIn: parent
+    }
 
     AppDialog {
         id: cancelAllDialog
@@ -32,16 +37,28 @@ Item {
         anchors.fill: parent
         spacing: 10
 
-        Text {
-            objectName: "taskActivitySummary"
+        RowLayout {
             Layout.fillWidth: true
-            text: mediaflow.taskController.pausedTaskCount > 0
-                ? qsTr("进行中 %1 · 已暂停 %2")
-                    .arg(mediaflow.taskController.inFlightTaskCount)
-                    .arg(mediaflow.taskController.pausedTaskCount)
-                : qsTr("进行中 %1").arg(mediaflow.taskController.inFlightTaskCount)
-            color: Theme.textMuted
-            font.pixelSize: Theme.fontSizeCaption
+            Text {
+                objectName: "taskActivitySummary"
+                Layout.fillWidth: true
+                text: mediaflow.taskController.pausedTaskCount > 0
+                    ? qsTr("进行中 %1 · 已暂停 %2")
+                        .arg(mediaflow.taskController.inFlightTaskCount)
+                        .arg(mediaflow.taskController.pausedTaskCount)
+                    : qsTr("进行中 %1").arg(mediaflow.taskController.inFlightTaskCount)
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeCaption
+            }
+            AppButton {
+                objectName: "openErrorHistoryButton"
+                visible: mediaflow.workspaceViewController.recentErrors.length > 0
+                text: qsTr("错误记录 %1").arg(
+                    mediaflow.workspaceViewController.recentErrors.length)
+                compact: true
+                danger: true
+                onClicked: errorHistoryDialog.open()
+            }
         }
 
         RowLayout {

@@ -322,6 +322,7 @@ Flickable {
                 required property int endFrame
                 required property string name
                 required property string rangeColor
+                objectName: "timelineRange"
                 x: startFrame * view.pixelsPerFrame
                 width: Math.max(2, (endFrame - startFrame) * view.pixelsPerFrame)
                 height: rangeLayer.height
@@ -343,12 +344,10 @@ Flickable {
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: function (mouse) {
+                        mediaflow.timelineViewController.selectTimelineRange(rangeId)
+                        view.seekToFrame(startFrame)
                         if (mouse.button === Qt.RightButton && view.canEdit)
-                            mediaflow.timelineStructureController.removeTimelineRange(rangeId);
-                        else {
-                            mediaflow.timelineViewController.selectTimelineRange(rangeId);
-                            view.seekToFrame(startFrame);
-                        }
+                            view.openTimelineItemContextMenu("range", rangeId, name)
                     }
                 }
             }

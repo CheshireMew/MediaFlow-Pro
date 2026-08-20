@@ -652,7 +652,7 @@ class GlossaryTermListModel(DictListModel):
 class LlmProviderListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["providerId", "name", "baseUrl", "apiKey", "model", "enabled", "active"],
+            ["providerId", "name", "baseUrl", "apiKey", "model", "providerEnabled", "active"],
             parent,
         )
 

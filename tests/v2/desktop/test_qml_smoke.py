@@ -642,9 +642,7 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
         export_button = window.findChild(QQuickItem, "titleExportButton")
         minimize_button = window.findChild(QQuickItem, "minimizeWindowButton")
         assert title_bar is not None and export_button is not None and minimize_button is not None
-        export_right = export_button.mapToItem(
-            title_bar, QPointF(export_button.width(), 0)
-        ).x()
+        export_right = export_button.mapToItem(title_bar, QPointF(export_button.width(), 0)).x()
         minimize_left = minimize_button.mapToItem(title_bar, QPointF(0, 0)).x()
         assert minimize_left - export_right >= 8
 
@@ -728,6 +726,18 @@ def test_settings_exposes_selectable_external_speech_components(
         )
         workspace = page_loader.property("item")
         assert workspace is not None
+        controllers.settings.saveLlmProvider(
+            "",
+            "Disabled test provider",
+            "https://example.invalid/v1",
+            "",
+            "test-model",
+            False,
+        )
+        assert controllers.settings.llmProvidersModel.rowCount() == 1, {
+            "errors": controllers.workspace.recentErrors,
+            "settings": controllers.settings.settingsData,
+        }
         dialog = workspace.findChild(QObject, "settingsDialog")
         tabs = workspace.findChild(QQuickItem, "settingsTabs")
         xxl = workspace.findChild(QQuickItem, "selectFasterWhisperDownload")
@@ -743,6 +753,9 @@ def test_settings_exposes_selectable_external_speech_components(
             QQuickItem,
             "installSpeakerClusteringButton",
         )
+        settings_close = workspace.findChild(QQuickItem, "settingsCloseButton")
+        cookie_json = workspace.findChild(QQuickItem, "cookieJsonField")
+        discard_dialog = workspace.findChild(QObject, "discardSettingsDraftDialog")
         assert all(
             item is not None
             for item in (
@@ -755,9 +768,25 @@ def test_settings_exposes_selectable_external_speech_components(
                 model_directory_field,
                 diarization_python_field,
                 speaker_clustering_install,
+                settings_close,
+                cookie_json,
+                discard_dialog,
             )
         )
         assert QMetaObject.invokeMethod(dialog, "open")
+        tabs.setProperty("currentIndex", 2)
+        assert _process_until(
+            lambda: any(
+                item.objectName() == "llmProviderRow" and item.isVisible()
+                for item in _visual_items(window.contentItem())
+            )
+        )
+        disabled_provider_row = next(
+            item
+            for item in _visual_items(window.contentItem())
+            if item.objectName() == "llmProviderRow" and item.isVisible()
+        )
+        assert disabled_provider_row.isEnabled() is True
         tabs.setProperty("currentIndex", 1)
         assert _process_until(lambda: xxl.isVisible() and gpt.isVisible())
         assert "Faster-Whisper XXL" in str(xxl.property("text"))
@@ -765,7 +794,14 @@ def test_settings_exposes_selectable_external_speech_components(
         assert download.property("enabled") is False
         xxl.setProperty("checked", True)
         assert _process_until(lambda: download.property("enabled") is True)
-        dialog.close()
+        cookie_json.setProperty("text", '[{"name":"unsaved-session"}]')
+        assert QMetaObject.invokeMethod(settings_close, "click")
+        assert _process_until(
+            lambda: dialog.property("visible") is True and discard_dialog.property("visible") is True
+        )
+        discard_action = discard_dialog.findChild(QQuickItem, "confirmationActionButton")
+        assert discard_action is not None and QMetaObject.invokeMethod(discard_action, "click")
+        assert _process_until(lambda: dialog.property("visible") is False)
     finally:
         controllers.shutdown()
         engine.deleteLater()
@@ -2528,6 +2564,66 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.timeline_view.timelineRangesModel.rowCount() == 0
         controllers.timeline_structure.redo()
         assert controllers.timeline_view.timelineRangesModel.rowCount() == 1
+        marker_id = controllers.timeline_view.timelineMarkersModel.get(0)["markerId"]
+        range_id = controllers.timeline_view.timelineRangesModel.get(0)["rangeId"]
+
+        def timeline_visual(object_name: str, role: str, item_id: str) -> QQuickItem | None:
+            return next(
+                (
+                    item
+                    for item in _visual_items(root_window.contentItem())
+                    if item.objectName() == object_name and item.property(role) == item_id
+                ),
+                None,
+            )
+
+        assert _process_until(
+            lambda: timeline_visual("timelineMarker", "markerId", marker_id) is not None
+            and timeline_visual("timelineRange", "rangeId", range_id) is not None
+        )
+        marker_item = timeline_visual("timelineMarker", "markerId", marker_id)
+        range_item = timeline_visual("timelineRange", "rangeId", range_id)
+        timeline_item_menu = root_window.findChild(QObject, "timelineItemContextMenu")
+        assert marker_item is not None and range_item is not None and timeline_item_menu is not None
+        controllers.timeline_view.clearSelection()
+        marker_point = marker_item.mapToScene(QPointF(1, 8))
+        QTest.mouseClick(
+            root_window,
+            Qt.RightButton,
+            Qt.NoModifier,
+            QPoint(round(marker_point.x()), round(marker_point.y())),
+        )
+        assert _process_until(lambda: timeline_item_menu.property("visible") is True)
+        assert controllers.timeline_view.timelineMarkersModel.rowCount() == 1
+        assert controllers.timeline_view.selectedMarkerId == marker_id
+        assert controllers.timeline_view.selectedRangeId == ""
+        assert QMetaObject.invokeMethod(timeline_item_menu, "close")
+        range_point = range_item.mapToScene(
+            QPointF(max(1, range_item.width() / 2), max(1, range_item.height() / 2))
+        )
+        QTest.mouseClick(
+            root_window,
+            Qt.RightButton,
+            Qt.NoModifier,
+            QPoint(round(range_point.x()), round(range_point.y())),
+        )
+        assert _process_until(lambda: timeline_item_menu.property("visible") is True)
+        assert controllers.timeline_view.timelineRangesModel.rowCount() == 1
+        assert controllers.timeline_view.selectedMarkerId == ""
+        assert controllers.timeline_view.selectedRangeId == range_id
+        assert QMetaObject.invokeMethod(timeline_item_menu, "close")
+        controllers.timeline_structure.renameTimelineMarker(marker_id, "章节点")
+        controllers.timeline_structure.renameTimelineRange(range_id, "精选区间")
+        assert controllers.timeline_view.timelineMarkersModel.get(0)["name"] == "章节点"
+        assert controllers.timeline_view.timelineRangesModel.get(0)["name"] == "精选区间"
+        controllers.timeline_structure.removeTimelineMarker(marker_id)
+        controllers.timeline_structure.removeTimelineRange(range_id)
+        assert controllers.timeline_view.timelineMarkersModel.rowCount() == 0
+        assert controllers.timeline_view.timelineRangesModel.rowCount() == 0
+        controllers.timeline_structure.undo()
+        controllers.timeline_structure.undo()
+        assert controllers.timeline_view.timelineMarkersModel.get(0)["name"] == "章节点"
+        assert controllers.timeline_view.timelineRangesModel.get(0)["name"] == "精选区间"
         QCoreApplication.processEvents()
 
         controllers.workspace_sequence.updateSequenceProfile(1080, 1920, 30, 1, "sdr_bt709", 2)
@@ -2635,9 +2731,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             )
         )
         assert all(
-            button.width() <= 40
-            and button.height() <= 38
-            and button.property("usesLucideIcon") is True
+            button.width() <= 40 and button.height() <= 38 and button.property("usesLucideIcon") is True
             for button in (minimize_button, maximize_button, close_button)
         )
         assert product_name is not None
@@ -2921,9 +3015,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         workflow_continue = workspace.findChild(QQuickItem, "workflowContinue")
         workflow_skip = workspace.findChild(QQuickItem, "workflowSkip")
         workflow_cancel = workspace.findChild(QQuickItem, "workflowCancel")
+        workflow_compact_menu = workspace.findChild(QQuickItem, "workflowCompactMenuButton")
+        workflow_compact_skip = workspace.findChild(QQuickItem, "workflowCompactSkip")
         assert workflow_banner is not None and workflow_banner.isVisible()
         assert workflow_continue is not None and workflow_continue.isVisible()
         assert workflow_skip is not None and workflow_cancel is not None
+        assert workflow_compact_menu is not None and workflow_compact_skip is not None
         assert workflow_mode is None
         workflow_run_id = controllers.workspace.workflowRunId
         assert workflow_run_id
@@ -2960,8 +3057,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
 
         assert _process_until(waveform_is_visible)
         assert len(visible_peaks) <= 30
-        assert workflow_skip.isVisible()
-        assert QMetaObject.invokeMethod(workflow_skip, "click")
+        if workflow_skip.isVisible():
+            assert not workflow_compact_menu.isVisible()
+            assert QMetaObject.invokeMethod(workflow_skip, "click")
+        else:
+            assert workflow_banner.property("compactLayout") is True
+            assert workflow_compact_menu.isVisible()
+            assert QMetaObject.invokeMethod(workflow_compact_menu, "click")
+            assert _process_until(workflow_compact_skip.isVisible)
+            assert QMetaObject.invokeMethod(workflow_compact_skip, "click")
         assert _process_until(
             lambda: controllers.workspace.workflowStage == "translate"
             and controllers.workspace.workflowStatus == "awaiting_confirmation"

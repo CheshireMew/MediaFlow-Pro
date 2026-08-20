@@ -21,6 +21,7 @@ Rectangle {
     border.color: mediaflow.workspaceViewController.workflowStatus === "blocked"
         ? Theme.warning : Theme.borderStrong
     clip: true
+    readonly property bool compactLayout: width < 620
 
     Rectangle {
         anchors.left: parent.left
@@ -89,6 +90,7 @@ Rectangle {
         spacing: 8
 
         Rectangle {
+            visible: !root.compactLayout
             Layout.preferredWidth: 3
             Layout.preferredHeight: 32
             radius: 2
@@ -102,9 +104,14 @@ Rectangle {
             iconName: root.stageIcon(mediaflow.workspaceViewController.workflowStage)
             iconColor: mediaflow.workspaceViewController.workflowStatus === "blocked"
                 ? Theme.warning : Theme.accentHover
+            ToolTip.visible: root.compactLayout && workflowIconHover.hovered
+            ToolTip.text: root.stageLabel(mediaflow.workspaceViewController.workflowStage)
+                + " · " + root.message(mediaflow.workspaceViewController.workflowMessageCode)
+            HoverHandler { id: workflowIconHover }
         }
 
         ColumnLayout {
+            visible: !root.compactLayout
             Layout.fillWidth: true
             spacing: 2
             Text {
@@ -131,7 +138,7 @@ Rectangle {
             objectName: "workflowLanguage"
             visible: mediaflow.workspaceViewController.workflowStage === "translate"
             enabled: root.canAct
-            Layout.preferredWidth: 150
+            Layout.preferredWidth: root.compactLayout ? 120 : 150
             textRole: "label"
             valueRole: "value"
             model: [
@@ -185,7 +192,7 @@ Rectangle {
         AppButton {
             objectName: "workflowSkip"
             compact: true
-            visible: root.canSkip
+            visible: root.canSkip && !root.compactLayout
             enabled: root.canAct
             text: qsTr("跳过")
             onClicked: mediaflow.workspaceWorkflowController.skipWorkflow(
@@ -195,11 +202,43 @@ Rectangle {
         AppButton {
             objectName: "workflowCancel"
             compact: true
+            visible: !root.compactLayout
             enabled: root.canAct
             danger: true
             text: qsTr("取消")
             onClicked: mediaflow.workspaceWorkflowController.cancelWorkflow(
                 mediaflow.workspaceViewController.workflowRunId)
+        }
+
+        AppIconButton {
+            id: compactWorkflowMenuButton
+            objectName: "workflowCompactMenuButton"
+            visible: root.compactLayout
+            compact: true
+            iconName: "more"
+            flat: true
+            Accessible.name: qsTr("更多工作流操作")
+            toolTipText: Accessible.name
+            AppMenu {
+                id: compactWorkflowMenu
+                y: compactWorkflowMenuButton.height + 4
+                AppMenuItem {
+                    objectName: "workflowCompactSkip"
+                    visible: root.canSkip
+                    text: qsTr("跳过当前阶段")
+                    enabled: root.canAct
+                    onTriggered: mediaflow.workspaceWorkflowController.skipWorkflow(
+                        mediaflow.workspaceViewController.workflowRunId)
+                }
+                AppMenuSeparator { visible: root.canSkip }
+                AppMenuItem {
+                    text: qsTr("取消工作流")
+                    enabled: root.canAct
+                    onTriggered: mediaflow.workspaceWorkflowController.cancelWorkflow(
+                        mediaflow.workspaceViewController.workflowRunId)
+                }
+            }
+            onClicked: compactWorkflowMenu.open()
         }
     }
 }

@@ -367,6 +367,13 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
         self._session.updates.commit(selection=True)
 
     @Slot(str)
+    def selectTimelineMarker(self, marker_id: str) -> None:
+        self._session.state.selection.marker_id = marker_id
+        self._session.state.selection.range_id = ""
+        self._session.updates.commit(selection=True)
+
+    @Slot(str)
     def selectTimelineRange(self, range_id: str) -> None:
+        self._session.state.selection.marker_id = ""
         self._session.state.selection.range_id = range_id
         self._session.updates.commit(selection=True)

@@ -22,6 +22,7 @@ Item {
             required property int frame
             required property string name
             required property string markerColor
+            objectName: "timelineMarker"
             readonly property color effectiveMarkerColor:
                 markerColor.length > 0 ? markerColor : Theme.marker
             x: frame * view.pixelsPerFrame
@@ -63,10 +64,10 @@ Item {
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: function (mouse) {
+                    mediaflow.timelineViewController.selectTimelineMarker(markerId)
+                    view.seekToFrame(frame)
                     if (mouse.button === Qt.RightButton && view.canEdit)
-                        mediaflow.timelineStructureController.removeTimelineMarker(markerId);
-                    else
-                        view.seekToFrame(frame);
+                        view.openTimelineItemContextMenu("marker", markerId, name)
                 }
             }
         }

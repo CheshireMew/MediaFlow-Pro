@@ -7,6 +7,19 @@ import "components"
 AppScrollView {
     id: page
     property var settingsDialog
+    property bool providerStateLoaded: false
+    property string loadedProviderName: ""
+    property string loadedProviderBaseUrl: ""
+    property string loadedProviderApiKey: ""
+    property string loadedProviderModel: ""
+    property bool loadedProviderEnabled: true
+    readonly property bool providerDirty: providerStateLoaded
+        && (llmName.text !== loadedProviderName
+            || llmBaseUrl.text !== loadedProviderBaseUrl
+            || llmApiKey.text !== loadedProviderApiKey
+            || llmModel.text !== loadedProviderModel
+            || llmEnabled.checked !== loadedProviderEnabled)
+    readonly property bool modalOpen: providerActionDialog.opened
     readonly property var selectedLlmPreset: {
         const index = llmPreset.currentIndex
         return index >= 0 && index < settingsDialog.llmProviderPresets.length
@@ -19,12 +32,13 @@ AppScrollView {
     }
 
     function loadLlmProvider() {
+        page.providerStateLoaded = false
         var data = mediaflow.settingsController.selectedLlmProviderData
         llmName.text = data.name || ""
         llmBaseUrl.text = data.baseUrl || ""
         llmApiKey.text = data.apiKey || ""
         llmModel.text = data.model || ""
-        llmEnabled.checked = data.providerId ? Boolean(data.enabled) : true
+        llmEnabled.checked = data.providerId ? Boolean(data.providerEnabled) : true
         var matched = -1
         var customIndex = -1
         const normalized = String(data.baseUrl || "").replace(/\/+$/, "")
@@ -42,6 +56,38 @@ AppScrollView {
         providerReasoning.checked = Boolean(
             preset && preset.reasoningModel
             && data.model === preset.reasoningModel)
+        Qt.callLater(function() {
+            page.loadedProviderName = llmName.text
+            page.loadedProviderBaseUrl = llmBaseUrl.text
+            page.loadedProviderApiKey = llmApiKey.text
+            page.loadedProviderModel = llmModel.text
+            page.loadedProviderEnabled = llmEnabled.checked
+            page.providerStateLoaded = true
+        })
+    }
+
+    function discardProviderChanges() {
+        loadLlmProvider()
+    }
+
+    function requestProviderSelection(providerId) {
+        if (!providerDirty) {
+            mediaflow.settingsController.selectLlmProvider(providerId)
+            return
+        }
+        providerActionDialog.request(
+            "select:" + String(providerId),
+            qsTr("放弃未保存的提供商更改？"),
+            qsTr("名称、服务地址、密钥或模型的未保存更改会丢失。"),
+            qsTr("放弃并切换"))
+    }
+
+    function requestProviderRemoval(providerId) {
+        providerActionDialog.request(
+            "remove:" + String(providerId),
+            qsTr("移除这个 LLM 提供商？"),
+            qsTr("提供商配置和已保存的 API 密钥会永久移除，无法撤销。"),
+            qsTr("永久移除"))
     }
 
     function applyLlmPreset() {
@@ -53,6 +99,16 @@ AppScrollView {
         providerReasoning.checked = false
         llmModel.text = preset.standardModel
     }
+    AppConfirmationDialog {
+        id: providerActionDialog
+        onConfirmed: function (actionId) {
+            if (actionId.indexOf("remove:") === 0) {
+                mediaflow.settingsController.removeLlmProvider(actionId.slice(7))
+            } else if (actionId.indexOf("select:") === 0) {
+                mediaflow.settingsController.selectLlmProvider(actionId.slice(7))
+            }
+        }
+    }
     clip: true
     ColumnLayout {
         width: page.availableWidth
@@ -63,7 +119,7 @@ AppScrollView {
             Item { Layout.fillWidth: true }
             AppButton {
                 text: qsTr("新增提供商")
-                onClicked: mediaflow.settingsController.selectLlmProvider("")
+                onClicked: page.requestProviderSelection("")
             }
         }
         ListView {
@@ -78,8 +134,9 @@ AppScrollView {
                 required property string name
                 required property string baseUrl
                 required property string model
-                required property bool enabled
                 required property bool active
+                required property bool providerEnabled
+                objectName: "llmProviderRow"
                 width: providerList.width
                 height: 56
                 radius: Theme.radiusSmall
@@ -97,13 +154,13 @@ AppScrollView {
                         Text { Layout.fillWidth: true; text: model + " · " + baseUrl; color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption; elide: Text.ElideMiddle }
                     }
                     Text { visible: active; text: qsTr("当前"); color: Theme.accentHover; font.pixelSize: Theme.fontSizeCaption }
-                    Text { visible: !enabled; text: qsTr("已停用"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
+                    Text { visible: !providerEnabled; text: qsTr("已停用"); color: Theme.textMuted; font.pixelSize: Theme.fontSizeCaption }
                 }
                 MouseArea {
                     id: providerMouse
                     anchors.fill: parent
                     hoverEnabled: true
-                    onClicked: mediaflow.settingsController.selectLlmProvider(providerId)
+                    onClicked: page.requestProviderSelection(providerId)
                 }
             }
         }
@@ -175,12 +232,15 @@ AppScrollView {
                     AppButton {
                         text: qsTr("移除")
                         enabled: mediaflow.settingsController.selectedLlmProviderId.length > 0
-                        onClicked: mediaflow.settingsController.removeLlmProvider(mediaflow.settingsController.selectedLlmProviderId)
+                        onClicked: page.requestProviderRemoval(
+                            mediaflow.settingsController.selectedLlmProviderId)
                     }
                     Item { Layout.fillWidth: true }
                     AppButton {
                         text: qsTr("保存")
-                        enabled: llmBaseUrl.text.trim().length > 0 && llmModel.text.trim().length > 0
+                        enabled: page.providerDirty
+                            && llmBaseUrl.text.trim().length > 0
+                            && llmModel.text.trim().length > 0
                         onClicked: mediaflow.settingsController.saveLlmProvider(
                             mediaflow.settingsController.selectedLlmProviderId,
                             llmName.text, llmBaseUrl.text, llmApiKey.text,

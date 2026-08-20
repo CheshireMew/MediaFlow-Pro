@@ -12,6 +12,7 @@ Rectangle {
     required property string activeMode
     required property var exportPreviewOptions
     property string previewMode: "program"
+    readonly property bool compactSourceActions: width < 620
     readonly property var sourceMonitor: mediaflow.mediaController.sourceMonitorData
     readonly property alias viewport: previewViewport
     readonly property bool webInputActive: Boolean(
@@ -74,12 +75,18 @@ Rectangle {
                 }
                 AppButton {
                     objectName: "sourceMonitorTab"
-                    text: root.sourceMonitor.assetId
+                    text: root.compactSourceActions ? qsTr("源") : root.sourceMonitor.assetId
                         ? qsTr("源 · %1").arg(root.sourceMonitor.name) : qsTr("源")
                     quiet: root.previewMode !== "source"
                     primary: root.previewMode === "source"
                     compact: true
+                    Layout.preferredWidth: root.compactSourceActions ? 56
+                        : Math.min(220, implicitWidth)
+                    Layout.maximumWidth: root.compactSourceActions ? 56 : 220
                     enabled: Boolean(root.sourceMonitor.assetId)
+                    ToolTip.visible: root.compactSourceActions && hovered
+                        && Boolean(root.sourceMonitor.assetId)
+                    ToolTip.text: qsTr("源 · %1").arg(root.sourceMonitor.name)
                     onClicked: root.previewMode = "source"
                 }
                 Item { Layout.fillWidth: true }
@@ -93,7 +100,7 @@ Rectangle {
                 }
                 AppButton {
                     objectName: "sourceMarkInButton"
-                    visible: root.previewMode === "source"
+                    visible: root.previewMode === "source" && !root.compactSourceActions
                     text: qsTr("入点 %1").arg(root.sourceMonitor.inFrame || 0)
                     compact: true
                     quiet: true
@@ -101,7 +108,7 @@ Rectangle {
                 }
                 AppButton {
                     objectName: "sourceMarkOutButton"
-                    visible: root.previewMode === "source"
+                    visible: root.previewMode === "source" && !root.compactSourceActions
                     text: qsTr("出点 %1").arg(root.sourceMonitor.outFrame || 0)
                     compact: true
                     quiet: true
@@ -109,7 +116,7 @@ Rectangle {
                 }
                 AppButton {
                     objectName: "sourceCaptureFrameButton"
-                    visible: root.previewMode === "source"
+                    visible: root.previewMode === "source" && !root.compactSourceActions
                     text: qsTr("截帧")
                     compact: true
                     quiet: true
@@ -127,6 +134,38 @@ Rectangle {
                         root.timelineView.visiblePlayheadFrame,
                         root.timelineView.pixelsPerFrame,
                         root.timelineView.snapEnabled)
+                }
+                AppIconButton {
+                    id: sourceActionsMenuButton
+                    objectName: "sourceActionsMenuButton"
+                    visible: root.previewMode === "source" && root.compactSourceActions
+                    iconName: "more"
+                    compact: true
+                    flat: true
+                    Accessible.name: qsTr("更多源监视器操作")
+                    toolTipText: Accessible.name
+
+                    AppMenu {
+                        id: sourceActionsMenu
+                        y: sourceActionsMenuButton.height + 4
+                        AppMenuItem {
+                            text: qsTr("设置入点：%1").arg(root.sourceMonitor.inFrame || 0)
+                            onTriggered: mediaflow.mediaController.setSourceInFrame(
+                                previewViewport.position)
+                        }
+                        AppMenuItem {
+                            text: qsTr("设置出点：%1").arg(root.sourceMonitor.outFrame || 0)
+                            onTriggered: mediaflow.mediaController.setSourceOutFrame(
+                                previewViewport.position)
+                        }
+                        AppMenuItem {
+                            text: qsTr("截取当前帧")
+                            enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                            onTriggered: mediaflow.mediaController.captureSourceFrame(
+                                previewViewport.position)
+                        }
+                    }
+                    onClicked: sourceActionsMenu.open()
                 }
             }
 

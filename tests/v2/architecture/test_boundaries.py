@@ -243,9 +243,7 @@ def test_workflow_service_dispatches_to_complete_stage_registry() -> None:
 def test_task_service_is_a_composed_facade_without_polling_or_worker_ownership() -> None:
     service_path = ROOT / "mediaflow" / "application" / "task_service.py"
     service = _class(service_path, "TaskService")
-    methods = {
-        node.name for node in service.body if isinstance(node, ast.FunctionDef)
-    }
+    methods = {node.name for node in service.body if isinstance(node, ast.FunctionDef)}
     assert methods.isdisjoint(
         {
             "_run",
@@ -263,9 +261,7 @@ def test_task_service_is_a_composed_facade_without_polling_or_worker_ownership()
         "task_lifecycle.py",
         "task_persistence.py",
         "task_waiter.py",
-    } <= {
-        path.name for path in (ROOT / "mediaflow" / "application").glob("task_*.py")
-    }
+    } <= {path.name for path in (ROOT / "mediaflow" / "application").glob("task_*.py")}
     wait_method = next(
         node for node in service.body if isinstance(node, ast.FunctionDef) and node.name == "wait"
     )
@@ -351,8 +347,7 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         if any(
             isinstance(node, ast.ClassDef)
             and any(
-                isinstance(base, ast.Name) and base.id == "ProjectRepositoryComponent"
-                for base in node.bases
+                isinstance(base, ast.Name) and base.id == "ProjectRepositoryComponent" for base in node.bases
             )
             for node in tree.body
         ):
@@ -595,7 +590,6 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
         assert f'text: qsTr("{redundant_title}")' not in panel_source
     assert "TaskDrawer" not in workspace
 
-
     assert not (qml_root / "TaskDrawer.qml").exists()
     transcript_panel = (qml_root / "TranscriptPanel.qml").read_text(encoding="utf-8")
     assert "transcribeTimelineButton" in transcript_panel
@@ -690,14 +684,11 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
         "ExportWatermarkSettings",
     ):
         assert (qml_root / "components" / f"{component}.qml").is_file()
-    task_presentation = (ROOT / "mediaflow" / "desktop" / "presentation_tasks.py").read_text(
-        encoding="utf-8"
-    )
+    task_presentation = (ROOT / "mediaflow" / "desktop" / "presentation_tasks.py").read_text(encoding="utf-8")
     assert "准备流畅预览" in task_presentation
     assert "准备音频波形" in task_presentation
     assert '"生成代理"' not in task_presentation
     assert '"生成波形"' not in task_presentation
-
 
 
 def test_desktop_qml_uses_one_root_and_focused_workspace_boundaries() -> None:
@@ -708,8 +699,7 @@ def test_desktop_qml_uses_one_root_and_focused_workspace_boundaries() -> None:
     }
 
     qml_source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (ROOT / "mediaflow" / "desktop" / "qml").rglob("*.qml")
+        path.read_text(encoding="utf-8") for path in (ROOT / "mediaflow" / "desktop" / "qml").rglob("*.qml")
     )
     assert "workspaceController" not in qml_source
     for controller in (
@@ -729,9 +719,9 @@ def test_desktop_qml_uses_one_root_and_focused_workspace_boundaries() -> None:
     main_qml = (ROOT / "mediaflow" / "desktop" / "qml" / "Main.qml").read_text(encoding="utf-8")
     assert "target: mediaflow.taskController" in main_qml
     assert "function onDownloadPlanChanged()" in main_qml
-    web_editor_canvas = (
-        ROOT / "mediaflow" / "desktop" / "qml" / "WebEditorCanvas.qml"
-    ).read_text(encoding="utf-8")
+    web_editor_canvas = (ROOT / "mediaflow" / "desktop" / "qml" / "WebEditorCanvas.qml").read_text(
+        encoding="utf-8"
+    )
     assert 'WebChannel.id: "mediaflowWebController"' in web_editor_canvas
     assert "channel.objects.mediaflowWebController" in web_editor_canvas
     assert "channel.objects.mediaflow.webController" not in web_editor_canvas
@@ -752,9 +742,9 @@ def test_desktop_qml_uses_one_root_and_focused_workspace_boundaries() -> None:
             "shutdown",
         }
     )
-    facet_source = (
-        ROOT / "mediaflow" / "desktop" / "controllers" / "controller_facet.py"
-    ).read_text(encoding="utf-8")
+    facet_source = (ROOT / "mediaflow" / "desktop" / "controllers" / "controller_facet.py").read_text(
+        encoding="utf-8"
+    )
     assert "ProjectSession" not in facet_source
 
     direct_event_emits = []
@@ -773,12 +763,10 @@ def test_settings_dialog_uses_the_typed_backend_draft() -> None:
         qml_root / "SettingsMediaPage.qml",
         qml_root / "SettingsAiPage.qml",
     )
-    qml_source = "\n".join(
-        path.read_text(encoding="utf-8") for path in settings_files
+    qml_source = "\n".join(path.read_text(encoding="utf-8") for path in settings_files)
+    controller_source = (ROOT / "mediaflow" / "desktop" / "controllers" / "settings_controller.py").read_text(
+        encoding="utf-8"
     )
-    controller_source = (
-        ROOT / "mediaflow" / "desktop" / "controllers" / "settings_controller.py"
-    ).read_text(encoding="utf-8")
     for removed_qml_path in (
         "settingsPayload",
         "settingsBaseline",
@@ -790,18 +778,14 @@ def test_settings_dialog_uses_the_typed_backend_draft() -> None:
     assert "def saveSettings(" not in controller_source
     assert "SettingsDraft(" in controller_source
     draft_fields = set(re.findall(r'updateDraft\("([^"]+)"', qml_source))
-    form_fields = {
-        field.alias or name for name, field in SettingsForm.model_fields.items()
-    }
+    form_fields = {field.alias or name for name, field in SettingsForm.model_fields.items()}
     assert draft_fields == form_fields
     assert len(settings_files[0].read_text(encoding="utf-8").splitlines()) <= 170
-    assert all(
-        len(path.read_text(encoding="utf-8").splitlines()) <= 500
-        for path in settings_files[1:]
-    )
+    assert all(len(path.read_text(encoding="utf-8").splitlines()) <= 500 for path in settings_files[1:])
     ai_source = settings_files[-1].read_text(encoding="utf-8")
-    assert "required property bool enabled" in ai_source
-    assert "visible: !enabled" in ai_source
+    assert "required property bool providerEnabled" in ai_source
+    assert "required property bool enabled" not in ai_source
+    assert "visible: !providerEnabled" in ai_source
     assert "model.enabled" not in ai_source
     for model_id in ("deepseek-chat", "deepseek-reasoner"):
         assert model_id not in ai_source
@@ -989,8 +973,7 @@ def test_audited_long_operations_remain_small_or_delegate_to_focused_components(
         functions = [
             node
             for node in ast.walk(_tree(path))
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == function_name
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name
         ]
         assert len(functions) == 1
         function = functions[0]
@@ -1053,9 +1036,7 @@ def test_desktop_transport_uses_one_typed_command_registry() -> None:
     assert all(isinstance(value, DesktopCommand) for value in DESKTOP_COMMANDS.values())
     assert all(key == (value.target, value.name) for key, value in DESKTOP_COMMANDS.items())
     assert all(desktop_command(*key) is value for key, value in DESKTOP_COMMANDS.items())
-    assert len({value.schema_id for value in DESKTOP_COMMANDS.values()}) == len(
-        DESKTOP_COMMANDS
-    )
+    assert len({value.schema_id for value in DESKTOP_COMMANDS.values()}) == len(DESKTOP_COMMANDS)
     assert all(value.request_model is not None for value in DESKTOP_COMMANDS.values())
     assert all(value.result_model is not None for value in DESKTOP_COMMANDS.values())
     assert all(
@@ -1247,11 +1228,7 @@ def test_ffmpeg_and_ffprobe_processes_have_one_execution_boundary() -> None:
             continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
-        parents = {
-            child: parent
-            for parent in ast.walk(tree)
-            for child in ast.iter_child_nodes(parent)
-        }
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
 
         def runner_owns_reference(
             node: ast.Attribute,
@@ -1271,10 +1248,7 @@ def test_ffmpeg_and_ffprobe_processes_have_one_execution_boundary() -> None:
         imports_process_runner = any(
             isinstance(node, ast.ImportFrom)
             and node.module == "mediaflow.infrastructure.subprocess_runner"
-            and any(
-                alias.name in {"run_cancellable", "run_cancellable_streaming"}
-                for alias in node.names
-            )
+            and any(alias.name in {"run_cancellable", "run_cancellable_streaming"} for alias in node.names)
             for node in ast.walk(tree)
         )
         references_media_executable = any(

@@ -15,13 +15,14 @@ ColumnLayout {
     readonly property bool canStartTasks: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
     readonly property bool canExportSequence: root.canStartTasks
         && mediaflow.exportController.canExportSequence
+    readonly property bool canExportCurrentSettings: root.canExportSequence
+        && exportSettings.selectedEncoderAvailable
+    readonly property bool modalOpen: exportSettings.modalOpen
     signal previewConfigurationChanged(var options)
     spacing: 10
-
     function selectedFormat() {
         return exportTarget.selectedFormat
     }
-
     function restorePreset() {
         const value = mediaflow.exportController.exportPresetData
         if (!value || !value.format)
@@ -65,7 +66,7 @@ ColumnLayout {
         id: exportFileDialogs
         format: root.selectedFormat()
         options: exportSettings.exportOptions()
-        actionsEnabled: root.canExportSequence
+        actionsEnabled: root.canExportCurrentSettings
     }
 
     ExportSequenceSummary {
@@ -76,17 +77,19 @@ ColumnLayout {
         Layout.fillWidth: true
         formats: root.formats
         taskActive: root.taskActive
-        actionsEnabled: root.canExportSequence
+        actionsEnabled: root.canExportCurrentSettings
+        blockedReason: root.canExportSequence && !exportSettings.selectedEncoderAvailable
+            ? qsTr("当前编码器不可用。请切换到软件编码器或其它可用编码器。") : ""
         defaultDirectory: mediaflow.exportController.defaultExportDirectory
         onExportRequested: {
-            if (root.canExportSequence)
+            if (root.canExportCurrentSettings)
                 mediaflow.exportController.exportSequenceToDefaultLocation(
                     root.selectedFormat().value,
                     root.selectedFormat().suffix,
                     exportSettings.exportOptions());
         }
         onSaveAsRequested: {
-            if (root.canExportSequence)
+            if (root.canExportCurrentSettings)
                 exportFileDialogs.openSequenceDialog();
         }
     }

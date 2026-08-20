@@ -40,6 +40,7 @@ Rectangle {
     readonly property Item focusedItem: root.Window.window ? root.Window.window.activeFocusItem : null
     readonly property bool textInputActive: focusedItem instanceof TextInput || focusedItem instanceof TextEdit
     readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+    readonly property bool modalOpen: timelineItemActions.modalOpen
     readonly property int visiblePlayheadFrame: playheadScrubbing || playheadSeekPending ? interactivePlayheadFrame : Math.min(playheadFrame, maxPlayheadFrame)
     signal seekRequested(int frame)
     signal editProfileRequested
@@ -225,6 +226,10 @@ Rectangle {
         clipContextMenu.popup();
     }
 
+    function openTimelineItemContextMenu(kind, itemId, itemName) {
+        timelineItemActions.open(kind, itemId, itemName)
+    }
+
     AppMenu {
         id: clipContextMenu
         objectName: "timelineClipContextMenu"
@@ -256,6 +261,12 @@ Rectangle {
             enabled: root.canEdit && mediaflow.timelineViewController.selectedClipIds.length > 0
             onTriggered: mediaflow.timelineClipController.deleteSelectedClips(true)
         }
+    }
+
+    TimelineItemMenu {
+        id: timelineItemActions
+        anchors.fill: parent
+        canEdit: root.canEdit
     }
 
     onPlayheadFrameChanged: {

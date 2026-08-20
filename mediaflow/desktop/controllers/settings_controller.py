@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
@@ -13,6 +14,15 @@ from mediaflow.desktop.presentation_asr import (
     asr_parallel_options,
 )
 from mediaflow.desktop.presentation_subtitles import built_in_subtitle_style_presets
+from mediaflow.desktop.runtime_directory_management import (
+    cancel_pending_runtime_directory_change,
+    current_runtime_directory,
+    runtime_directory_info,
+    runtime_directory_is_managed_externally,
+    schedule_runtime_directory_change,
+    validate_existing_runtime_directory,
+    validate_runtime_change_destination,
+)
 from mediaflow.desktop.settings_draft import SettingsDraft
 from mediaflow.domain.exports import SubtitleStyle
 from mediaflow.domain.settings import (
@@ -32,10 +42,12 @@ class SettingsController(ControllerFacet[SettingsControllerScope]):
     settingsChanged = Signal()
     downloadPlanChanged = Signal()
     runtimeToolsChanged = Signal()
+    runtimeDirectoryChanged = Signal()
     errorOccurred = Signal(str)
 
     def __init__(self, session: SettingsControllerScope):
         super().__init__(session)
+        self._startup_language = session.state.desktop_settings.ui.language
         self._settings_draft = SettingsDraft(
             self,
             read_current=self._current_settings_form,
@@ -110,6 +122,14 @@ class SettingsController(ControllerFacet[SettingsControllerScope]):
     def runtimeToolStatus(self) -> dict:
         return self._session.state.runtime_state.status
 
+    @Property(dict, notify=runtimeDirectoryChanged)
+    def runtimeDirectoryInfo(self) -> dict:
+        return runtime_directory_info(current_runtime_directory())
+
+    @Property(bool, notify=settingsChanged)
+    def languageRestartRequired(self) -> bool:
+        return self._session.state.desktop_settings.ui.language != self._startup_language
+
     @Property(str, notify=settingsChanged)
     def defaultTranslationLanguage(self) -> str:
         return self._session.state.service_settings.translation.target_language
@@ -139,6 +159,32 @@ class SettingsController(ControllerFacet[SettingsControllerScope]):
             "设置已保存；界面语言将在下次启动时生效",
         )
         self._session.projectors.workspace.refresh_runtime_tool_status()
+
+    @Slot(str, bool, result=bool)
+    @report_ui_errors
+    def scheduleRuntimeDirectoryChange(self, destination: str, migrate_existing: bool) -> bool:
+        if runtime_directory_is_managed_externally():
+            raise RuntimeError("运行环境目录由 MEDIAFLOW_RUNTIME_DIR 或开发环境配置管理，请修改对应配置")
+        target = validate_runtime_change_destination(
+            current_runtime_directory(),
+            Path(destination),
+            migrate_existing=migrate_existing,
+        )
+        if not migrate_existing:
+            validate_existing_runtime_directory(target)
+        schedule_runtime_directory_change(target, migrate_existing=migrate_existing)
+        self.runtimeDirectoryChanged.emit()
+        if migrate_existing:
+            self._session._set_status("已安排在下次启动时迁移并切换运行环境目录")
+        else:
+            self._session._set_status("已安排在下次启动时切换运行环境目录")
+        return True
+
+    @Slot()
+    def cancelRuntimeDirectoryChange(self) -> None:
+        cancel_pending_runtime_directory_change()
+        self.runtimeDirectoryChanged.emit()
+        self._session._set_status("已取消运行环境目录变更")
 
     def _installed_asr_models(self) -> frozenset[str]:
         return self._session._api.installed_asr_models()
@@ -408,9 +454,9 @@ class SettingsController(ControllerFacet[SettingsControllerScope]):
         self._session.state.download.cookie_status = self._session._api.cookies.status(domain)
         self._session.updates.commit(settings=True)
 
-    @Slot(str, str)
+    @Slot(str, str, result=bool)
     @report_ui_errors
-    def saveManagedCookies(self, domain: str, json_text: str) -> None:
+    def saveManagedCookies(self, domain: str, json_text: str) -> bool:
         payload = json.loads(json_text)
         cookies = payload.get("cookies") if isinstance(payload, dict) else payload
         if not isinstance(cookies, list) or not all(isinstance(item, dict) for item in cookies):
@@ -419,6 +465,7 @@ class SettingsController(ControllerFacet[SettingsControllerScope]):
         self._session.state.download.cookie_status = self._session._api.cookies.status(domain)
         self._session.updates.commit(settings=True)
         self._session._set_status("Cookie 已保存到 %1", path)
+        return True
 
     @Slot(str)
     @report_ui_errors

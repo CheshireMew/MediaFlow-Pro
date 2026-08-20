@@ -10,6 +10,7 @@ Rectangle {
     required property var hostWindow
     property var workspaceItem: null
     signal exportRequested
+    signal shortcutReferenceRequested
     implicitHeight: 48
     color: Theme.surfaceSunken
 
@@ -79,6 +80,7 @@ Rectangle {
             Layout.preferredWidth: implicitWidth
             Layout.maximumWidth: implicitWidth
             onExportRequested: root.exportRequested()
+            onShortcutReferenceRequested: root.shortcutReferenceRequested()
         }
         RowLayout {
             id: windowControls
@@ -95,7 +97,7 @@ Rectangle {
             WindowControlButton {
                 objectName: "maximizeWindowButton"
                 iconName: root.hostWindow.visibility === Window.Maximized
-                    ? "window-restore" : "window-maximize"
+                    ? "restore" : "maximize"
                 Accessible.name: root.hostWindow.visibility === Window.Maximized
                     ? qsTr("还原窗口") : qsTr("最大化窗口")
                 toolTipText: Accessible.name

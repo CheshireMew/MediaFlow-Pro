@@ -2489,6 +2489,197 @@ TRANSLATIONS.update(
     }
 )
 
+TRANSLATIONS.update(
+    {
+        "LLM 提供商或 Cookie 表单中仍有未保存内容。关闭后这些内容会丢失。": (
+            "The LLM provider or cookie form still has unsaved content. Closing will discard it.",
+            "LLM プロバイダーまたは Cookie フォームに未保存の内容があります。閉じると破棄されます。",
+        ),
+        "上一帧 / 下一帧": ("Previous / next frame", "前 / 次のフレーム"),
+        "下次启动将切换到：%1": ("Will switch on next launch to: %1", "次回起動時に次へ切り替えます：%1"),
+        "下次启动将迁移到：%1": ("Will migrate on next launch to: %1", "次回起動時に次へ移行します：%1"),
+        "仅切换": ("Switch only", "切り替えのみ"),
+        "任务中心，%1 条错误记录": ("Task Center, %1 error records", "タスクセンター、エラー記録 %1 件"),
+        "保存的 Cookie 会永久移除，之后下载可能需要重新登录并导出 Cookie。": (
+            "Saved cookies will be permanently removed. Future downloads may require signing in and exporting cookies again.",
+            "保存済み Cookie は完全に削除されます。今後のダウンロードでは再ログインして Cookie を再エクスポートする必要があります。",
+        ),
+        "保存项目状态": ("Save project state", "プロジェクト状態を保存"),
+        "全选 / 清除选择": ("Select all / clear selection", "すべて選択 / 選択解除"),
+        "分割所选片段": ("Split selected clip", "選択クリップを分割"),
+        "切换到软件编码器": ("Switch to software encoder", "ソフトウェアエンコーダーに切り替え"),
+        "切换吸附": ("Toggle snapping", "スナップ切り替え"),
+        "切换完成前会继续使用当前目录。": (
+            "The current directory remains in use until the switch completes.",
+            "切り替えが完了するまでは現在のディレクトリを使用します。",
+        ),
+        "删除 / 波纹删除": ("Delete / ripple delete", "削除 / リップル削除"),
+        "删除标记（可撤销）": ("Delete marker (undoable)", "マーカーを削除（元に戻せます）"),
+        "删除这个高光候选？": ("Delete this highlight candidate?", "このハイライト候補を削除しますか？"),
+        "删除选区（可撤销）": ("Delete range (undoable)", "範囲を削除（元に戻せます）"),
+        "前往任务中心": ("Go to Task Center", "タスクセンターへ"),
+        "反向播放 / 暂停 / 正向播放": ("Reverse / pause / forward playback", "逆再生 / 一時停止 / 順再生"),
+        "取消变更": ("Cancel change", "変更をキャンセル"),
+        "名称、服务地址、密钥或模型的未保存更改会丢失。": (
+            "Unsaved changes to the name, service URL, key, or model will be lost.",
+            "名前、サービス URL、キー、モデルの未保存の変更は失われます。",
+        ),
+        "复制所选片段": ("Duplicate selected clip", "選択クリップを複製"),
+        "如何使用新的运行环境目录？": (
+            "How should the new runtime directory be used?",
+            "新しいランタイムディレクトリをどう使用しますか？",
+        ),
+        "媒体组件、浏览器、模型、代理文件和缓存保存在这里。迁移会在下次启动、运行时尚未加载前执行，并保留旧目录。": (
+            "Media components, the browser, models, proxies, and caches are stored here. Migration runs before the runtime loads on the next launch and keeps the old directory.",
+            "メディアコンポーネント、ブラウザー、モデル、プロキシ、キャッシュをここに保存します。移行は次回起動時、ランタイムの読み込み前に実行され、旧ディレクトリは保持されます。",
+        ),
+        "已取消运行环境目录变更": (
+            "Runtime directory change cancelled",
+            "ランタイムディレクトリの変更をキャンセルしました",
+        ),
+        "已安排在下次启动时切换运行环境目录": (
+            "Runtime directory switch scheduled for next launch",
+            "次回起動時のランタイムディレクトリ切り替えを予約しました",
+        ),
+        "已安排在下次启动时迁移并切换运行环境目录": (
+            "Runtime directory migration and switch scheduled for next launch",
+            "次回起動時のランタイムディレクトリ移行と切り替えを予約しました",
+        ),
+        "常规设置已保存；界面语言将在重启后生效": (
+            "General settings saved; the interface language changes after restart",
+            "一般設定を保存しました。表示言語は再起動後に反映されます",
+        ),
+        "常规设置自动保存；提供商和 Cookie 请点击各自的保存按钮": (
+            "General settings save automatically; use Save for providers and cookies",
+            "一般設定は自動保存されます。プロバイダーと Cookie はそれぞれ保存してください",
+        ),
+        "当前位置": ("Current location", "現在の場所"),
+        "当前目录由 MEDIAFLOW_RUNTIME_DIR 或开发环境配置管理，请修改对应配置。": (
+            "The current directory is managed by MEDIAFLOW_RUNTIME_DIR or the development environment. Change that configuration instead.",
+            "現在のディレクトリは MEDIAFLOW_RUNTIME_DIR または開発環境設定で管理されています。該当設定を変更してください。",
+        ),
+        "当前磁盘可用空间：%1": ("Free space on current disk: %1", "現在のディスク空き容量：%1"),
+        "当前编码器不可用。请切换到软件编码器或其它可用编码器。": (
+            "The selected encoder is unavailable. Switch to the software encoder or another available encoder.",
+            "選択中のエンコーダーは利用できません。ソフトウェアエンコーダーまたは利用可能な別のエンコーダーに切り替えてください。",
+        ),
+        "截取当前帧": ("Capture current frame", "現在のフレームをキャプチャ"),
+        "打开导出页": ("Open Export", "書き出しを開く"),
+        "打开快捷键总览": ("Open shortcut reference", "ショートカット一覧を開く"),
+        "放大 / 缩小时间线": ("Zoom timeline in / out", "タイムラインを拡大 / 縮小"),
+        "推荐迁移现有数据。复制和校验会在下次启动时进行，旧目录不会删除。只有目标目录已经包含完整运行环境时，才应选择“仅切换”。": (
+            "Migrating existing data is recommended. Copying and verification run on the next launch, and the old directory is not deleted. Choose Switch only only when the destination already contains a complete runtime.",
+            "既存データの移行を推奨します。コピーと検証は次回起動時に実行され、旧ディレクトリは削除されません。移行先に完全なランタイムがある場合のみ「切り替えのみ」を選んでください。",
+        ),
+        "提供商或 Cookie 有未保存内容": (
+            "Provider or cookie content is unsaved",
+            "プロバイダーまたは Cookie に未保存の内容があります",
+        ),
+        "提供商配置和已保存的 API 密钥会永久移除，无法撤销。": (
+            "The provider configuration and saved API key will be permanently removed and cannot be undone.",
+            "プロバイダー設定と保存済み API キーは完全に削除され、元に戻せません。",
+        ),
+        "搜索操作或按键": ("Search actions or keys", "操作またはキーを検索"),
+        "撤销 / 重做": ("Undo / redo", "元に戻す / やり直す"),
+        "播放与定位": ("Playback and navigation", "再生と移動"),
+        "播放或暂停": ("Play or pause", "再生または一時停止"),
+        "放弃并关闭": ("Discard and close", "破棄して閉じる"),
+        "放弃并切换": ("Discard and switch", "破棄して切り替え"),
+        "放弃未保存的内容？": ("Discard unsaved content?", "未保存の内容を破棄しますか？"),
+        "放弃未保存的提供商更改？": (
+            "Discard unsaved provider changes?",
+            "プロバイダーの未保存の変更を破棄しますか？",
+        ),
+        "时间线标记已删除；可使用撤销恢复": (
+            "Timeline marker deleted; use Undo to restore it",
+            "タイムラインマーカーを削除しました。元に戻すで復元できます",
+        ),
+        "时间线标记已添加": ("Timeline marker added", "タイムラインマーカーを追加しました"),
+        "时间线标记已重命名": ("Timeline marker renamed", "タイムラインマーカーの名前を変更しました"),
+        "时间线编辑": ("Timeline editing", "タイムライン編集"),
+        "时间线选区已删除；可使用撤销恢复": (
+            "Timeline range deleted; use Undo to restore it",
+            "タイムライン範囲を削除しました。元に戻すで復元できます",
+        ),
+        "时间线选区已添加": ("Timeline range added", "タイムライン範囲を追加しました"),
+        "时间线选区已重命名": ("Timeline range renamed", "タイムライン範囲の名前を変更しました"),
+        "最大化播放器 / 时间线": ("Maximize player / timeline", "プレーヤー / タイムラインを最大化"),
+        "未知": ("Unknown", "不明"),
+        "术语及其翻译规则会永久移除，无法撤销。": (
+            "The term and its translation rule will be permanently removed and cannot be undone.",
+            "用語と翻訳ルールは完全に削除され、元に戻せません。",
+        ),
+        "标准 / 媒体 / 竖屏布局": ("Standard / media / vertical layout", "標準 / メディア / 縦長レイアウト"),
+        "正在保存更改…": ("Saving changes…", "変更を保存しています…"),
+        "永久删除": ("Delete permanently", "完全に削除"),
+        "永久清除": ("Clear permanently", "完全に消去"),
+        "永久移除": ("Remove permanently", "完全に削除"),
+        "没有错误记录": ("No error records", "エラー記録はありません"),
+        "更多工作流操作": ("More workflow actions", "その他のワークフロー操作"),
+        "更多源监视器操作": ("More source monitor actions", "その他のソースモニター操作"),
+        "添加时间线标记": ("Add timeline marker", "タイムラインマーカーを追加"),
+        "清空显示记录": ("Clear displayed records", "表示記録をクリア"),
+        "清除序列入出点": ("Clear sequence In/Out", "シーケンスのイン / アウト点をクリア"),
+        "清除这个网站的 Cookie？": ("Clear cookies for this site?", "このサイトの Cookie を消去しますか？"),
+        "界面操作发生错误后，可以从这里重新查看和复制详情。": (
+            "After an interface action fails, you can review and copy its details here.",
+            "画面操作でエラーが発生した後、ここで詳細を再確認してコピーできます。",
+        ),
+        "界面语言将在重新启动 MediaFlow Pro 后生效。": (
+            "The interface language changes after restarting MediaFlow Pro.",
+            "表示言語は MediaFlow Pro の再起動後に反映されます。",
+        ),
+        "确认": ("Confirm", "確認"),
+        "移除这个 LLM 提供商？": ("Remove this LLM provider?", "この LLM プロバイダーを削除しますか？"),
+        "移除这个字幕样式？": ("Remove this subtitle style?", "この字幕スタイルを削除しますか？"),
+        "移除这个术语？": ("Remove this term?", "この用語を削除しますか？"),
+        "空格": ("Space", "Space"),
+        "自定义样式预设会永久移除，无法撤销。已经保存到导出预设中的样式参数不会改变。": (
+            "The custom style preset will be permanently removed and cannot be undone. Style parameters already saved in export presets will not change.",
+            "カスタムスタイルプリセットは完全に削除され、元に戻せません。書き出しプリセットに保存済みのスタイル値は変更されません。",
+        ),
+        "设置入点：%1": ("Set In point: %1", "イン点を設定：%1"),
+        "设置出点：%1": ("Set Out point: %1", "アウト点を設定：%1"),
+        "设置序列入点 / 出点": ("Set sequence In / Out", "シーケンスのイン / アウト点を設定"),
+        "该候选及其分析结果会从项目中永久删除，无法撤销。已经添加到时间线的片段不会删除。": (
+            "This candidate and its analysis result will be permanently removed from the project and cannot be undone. Clips already added to the timeline will remain.",
+            "この候補と解析結果はプロジェクトから完全に削除され、元に戻せません。タイムラインに追加済みのクリップは残ります。",
+        ),
+        "跳到开头 / 结尾": ("Go to start / end", "先頭 / 末尾へ移動"),
+        "跳过当前阶段": ("Skip current stage", "現在のステージをスキップ"),
+        "输入一个容易识别的名称": ("Enter an easy-to-recognize name", "識別しやすい名前を入力"),
+        "输入框和网页交互获得焦点时，单键快捷键会暂停响应。": (
+            "Single-key shortcuts are suspended while a text field or web interaction has focus.",
+            "入力欄または Web 操作にフォーカスがある間、単一キーのショートカットは停止します。",
+        ),
+        "迁移…": ("Migrate…", "移行…"),
+        "迁移现有数据": ("Migrate existing data", "既存データを移行"),
+        "运行环境": ("Runtime storage", "ランタイム保存先"),
+        "这个项目要求的硬件编码器在本机不可用。请选择可用编码器后再开始导出。": (
+            "The hardware encoder required by this project is unavailable on this machine. Select an available encoder before starting export.",
+            "このプロジェクトで必要なハードウェアエンコーダーはこのマシンでは利用できません。利用可能なエンコーダーを選んでから書き出してください。",
+        ),
+        "这里保留本次运行中最近 50 条界面错误。任务失败仍保留在任务列表中。": (
+            "This keeps the 50 most recent interface errors from this run. Task failures remain in the task list.",
+            "今回の実行で発生した直近 50 件の画面エラーを保持します。タスク失敗はタスクリストにも残ります。",
+        ),
+        "退出面板最大化 / 清除选择": (
+            "Exit panel maximization / clear selection",
+            "パネル最大化を解除 / 選択解除",
+        ),
+        "选择新的运行环境目录": ("Choose a new runtime directory", "新しいランタイムディレクトリを選択"),
+        "重命名标记": ("Rename marker", "マーカー名を変更"),
+        "重命名标记…": ("Rename marker…", "マーカー名を変更…"),
+        "重命名选区": ("Rename range", "範囲名を変更"),
+        "重命名选区…": ("Rename range…", "範囲名を変更…"),
+        "错误 %1 · %2": ("Error %1 · %2", "エラー %1 · %2"),
+        "错误记录": ("Error history", "エラー履歴"),
+        "错误记录 %1": ("Error history %1", "エラー履歴 %1"),
+        "键盘快捷键": ("Keyboard shortcuts", "キーボードショートカット"),
+        "项目与面板": ("Project and panels", "プロジェクトとパネル"),
+    }
+)
+
 
 def normalize(value: str) -> str:
     return " ".join(value.split())

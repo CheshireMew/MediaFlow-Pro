@@ -19,8 +19,17 @@ ColumnLayout {
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
     readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+    readonly property bool modalOpen: removeGlossaryDialog.opened
     signal modeRequested(string mode)
     signal importRequested
+
+    AppConfirmationDialog {
+        id: removeGlossaryDialog
+        onConfirmed: function (termId) {
+            if (termId.length > 0)
+                mediaflow.settingsController.removeGlossaryTerm(termId)
+        }
+    }
 
     function selectValue(control, value) {
         for (var index = 0; index < control.model.length; ++index) {
@@ -570,7 +579,11 @@ ColumnLayout {
                         AppButton {
                             text: qsTr("移除")
                             enabled: mediaflow.settingsController.selectedGlossaryTermId.length > 0
-                            onClicked: mediaflow.settingsController.removeGlossaryTerm(mediaflow.settingsController.selectedGlossaryTermId)
+                            onClicked: removeGlossaryDialog.request(
+                                mediaflow.settingsController.selectedGlossaryTermId,
+                                qsTr("移除这个术语？"),
+                                qsTr("术语及其翻译规则会永久移除，无法撤销。"),
+                                qsTr("永久移除"))
                         }
                         Item {
                             Layout.fillWidth: true
