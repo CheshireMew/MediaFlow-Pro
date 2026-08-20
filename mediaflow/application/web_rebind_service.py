@@ -6,31 +6,34 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import JsonValue
-
 from mediaflow.application import web_package_contract as web_contract
 from mediaflow.application import web_package_files as web_files
 from mediaflow.application.ports import WebApplicationDocuments, WebPackageValidatorPort
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.web_clip_editing_service import WebClipEditingService
 from mediaflow.application.web_package_service import WebPackageService
+from mediaflow.application.web_rebind_conflicts import WebRebindConflictDetector
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.project import Asset
-from mediaflow.domain.web_media import (
+from mediaflow.domain.web_manifest import (
     EditableMediaManifest,
-    WebAnimationTrack,
     WebAssetSpec,
+)
+from mediaflow.domain.web_manifest_primitives import WebEditableField
+from mediaflow.domain.web_media_sources import (
+    WebMediaSourcesManifest,
+    web_media_sources_have_audio,
+)
+from mediaflow.domain.web_state import (
+    WebAnimationTrack,
     WebClipState,
     WebDataSnapshot,
-    WebEditableField,
     WebLayerOverride,
-    WebMediaSourcesManifest,
     WebRebindCommitReport,
     WebRebindConflict,
     WebRebindPlan,
     WebRuntimeVariant,
     WebSceneState,
-    web_media_sources_have_audio,
 )
 
 
@@ -153,7 +156,7 @@ class WebRebindService:
         if old_spec.source_hash != plan.old_source_hash or package_tree.source_hash != plan.new_source_hash:
             raise RuntimeError("Editable media rebind inputs changed after the reviewed plan")
         old_package_root = web_files.web_package_root(
-            self.repository.catalog.resolve_asset_path(asset),
+            self.repository.assets.resolve_asset_path(asset),
             old_spec.manifest,
         )
         if package_tree.source_hash == old_spec.source_hash:
@@ -184,8 +187,8 @@ class WebRebindService:
             )
 
         new_has_audio = web_media_sources_have_audio(new_media_sources)
-        main_profile = self.repository.catalog.get_sequence(
-            self.repository.catalog.get_project().main_sequence_id
+        main_profile = self.repository.sequences.get_sequence(
+            self.repository.projects.get_project().main_sequence_id
         ).profile
         duration_frames = max(
             1,
@@ -200,7 +203,7 @@ class WebRebindService:
 
         def commit_rebind() -> None:
             default_variant = publication.manifest.default_variant
-            self.repository.catalog.update_asset(
+            self.repository.assets.update_asset(
                 asset.model_copy(
                     update={
                         "path": str(publication.entry),
@@ -248,7 +251,7 @@ class WebRebindService:
         EditableMediaManifest,
         WebMediaSourcesManifest,
     ]:
-        asset = self.repository.catalog.get_asset(asset_id)
+        asset = self.repository.assets.get_asset(asset_id)
         if asset.kind != AssetKind.WEB:
             raise ValueError("Asset is not editable web media")
         old_spec = self.repository.web.get_web_asset_spec(asset_id)
@@ -274,7 +277,7 @@ class WebRebindService:
         asset_id: str,
     ) -> list[tuple[str, WebClipState]]:
         affected: list[tuple[str, WebClipState]] = []
-        for sequence in self.repository.catalog.list_sequences(include_archived=True):
+        for sequence in self.repository.sequences.list_sequences(include_archived=True):
             timeline = self.repository.timeline.load_timeline(sequence.id)
             for clip in timeline.clips:
                 if clip.asset_id == asset_id and clip.id in timeline.web_states:
@@ -288,377 +291,11 @@ class WebRebindService:
         new_media_sources: WebMediaSourcesManifest,
         affected: list[tuple[str, WebClipState]],
     ) -> list[WebRebindConflict]:
-        old_layers = {item.id: item for item in old_manifest.layers}
-        new_layers = {item.id: item for item in new_manifest.layers}
-        new_scenes = {item.id: item for item in new_manifest.scenes}
-        new_variants = {item.id for item in new_manifest.variants}
-        new_themes = {item.id: item for item in new_manifest.theme_variables}
-        old_parameters = {item.descriptor.id: item for item in old_manifest.parameters}
-        new_parameters = {item.descriptor.id: item for item in new_manifest.parameters}
-        new_data = {item.id: item for item in new_manifest.data_fields}
-        new_media_ids = {item.id for item in new_media_sources.sources}
-        conflicts: dict[str, WebRebindConflict] = {}
-
-        def add(
-            path: str,
-            kind: str,
-            message: str,
-            value: JsonValue,
-            resolution: Literal["drop", "default"],
-        ) -> None:
-            conflicts.setdefault(
-                path,
-                WebRebindConflict(
-                    path=path,
-                    kind=cast(
-                        Literal[
-                            "removed-layer",
-                            "removed-field",
-                            "removed-scene",
-                            "removed-parameter",
-                            "incompatible-value",
-                            "out-of-range-keyframe",
-                            "removed-data-field",
-                            "removed-theme-variable",
-                            "removed-variant",
-                            "removed-media-source",
-                        ],
-                        kind,
-                    ),
-                    message=message,
-                    current_value=value,
-                    allowed_resolutions=(resolution,),
-                ),
-            )
-
-        for _sequence_id, state in affected:
-            clip_root = f"clips.{state.clip_id}"
-            if state.scene_id and state.scene_id not in new_scenes:
-                add(
-                    f"{clip_root}.scene_id",
-                    "removed-scene",
-                    f"Selected scene {state.scene_id} was removed",
-                    state.scene_id,
-                    "default",
-                )
-            if state.variant and state.variant.id not in new_variants:
-                add(
-                    f"{clip_root}.variant",
-                    "removed-variant",
-                    f"Selected variant {state.variant.id} was removed",
-                    state.variant.id,
-                    "default",
-                )
-            for theme_id, theme_value in state.theme.items():
-                path = f"{clip_root}.theme.{theme_id}"
-                theme_definition = new_themes.get(theme_id)
-                if theme_definition is None:
-                    add(
-                        path,
-                        "removed-theme-variable",
-                        f"Theme variable {theme_id} was removed",
-                        cast(JsonValue, theme_value),
-                        "drop",
-                    )
-                    continue
-                try:
-                    if theme_definition.kind == "number":
-                        if not isinstance(theme_value, (int, float)) or isinstance(theme_value, bool):
-                            raise ValueError("numeric value required")
-                    elif not isinstance(theme_value, str):
-                        raise ValueError("text value required")
-                    self._clips.validate_constraint(
-                        theme_id,
-                        "theme",
-                        theme_value,
-                        theme_definition.constraints,
-                    )
-                except ValueError as error:
-                    add(
-                        path,
-                        "incompatible-value",
-                        str(error),
-                        cast(JsonValue, theme_value),
-                        "default",
-                    )
-            for parameter_id in set(state.parameters) | set(state.parameter_locks):
-                path = f"{clip_root}.parameters.{parameter_id}"
-                parameter_definition = new_parameters.get(parameter_id)
-                if (
-                    parameter_definition is None
-                    or parameter_definition.binding.scope != "global"
-                ):
-                    add(
-                        path,
-                        "removed-parameter",
-                        f"Global parameter {parameter_id} was removed or changed scope",
-                        cast(JsonValue, state.parameters.get(parameter_id)),
-                        "drop",
-                    )
-                    continue
-                if parameter_id in state.parameters:
-                    try:
-                        parameter_definition.descriptor.validate_value(
-                            cast(JsonValue, state.parameters[parameter_id])
-                        )
-                    except ValueError as error:
-                        add(
-                            path,
-                            "incompatible-value",
-                            str(error),
-                            cast(JsonValue, state.parameters[parameter_id]),
-                            "default",
-                        )
-            for scene_id, scene_state in state.scenes.items():
-                scene_root = f"{clip_root}.scenes.{scene_id}"
-                scene_definition = new_scenes.get(scene_id)
-                if scene_definition is None:
-                    add(
-                        scene_root,
-                        "removed-scene",
-                        f"Scene {scene_id} was removed",
-                        cast(JsonValue, scene_state.model_dump(mode="json")),
-                        "drop",
-                    )
-                    continue
-                for layer_id in (
-                    set(scene_state.layers) | set(scene_state.animations) | set(scene_state.locks)
-                ):
-                    layer_root = f"{scene_root}.layers.{layer_id}"
-                    layer = new_layers.get(layer_id)
-                    if layer is None:
-                        add(
-                            layer_root,
-                            "removed-layer",
-                            f"Layer {layer_id} was removed",
-                            cast(
-                                JsonValue,
-                                {
-                                    "override": (
-                                        scene_state.layers[layer_id].model_dump(
-                                            mode="json",
-                                            exclude_none=True,
-                                        )
-                                        if layer_id in scene_state.layers
-                                        else None
-                                    ),
-                                    "animations": {
-                                        key: value.model_dump(mode="json")
-                                        for key, value in scene_state.animations.get(layer_id, {}).items()
-                                    },
-                                    "locks": list(scene_state.locks.get(layer_id, ())),
-                                },
-                            ),
-                            "drop",
-                        )
-                        continue
-                    if old_layers.get(layer_id) is not None and old_layers[layer_id].kind != layer.kind:
-                        add(
-                            layer_root,
-                            "incompatible-value",
-                            f"Layer {layer_id} changed kind",
-                            old_layers[layer_id].kind,
-                            "default",
-                        )
-                        continue
-                    used_fields = (
-                        scene_state.layers.get(
-                            layer_id,
-                            WebLayerOverride(),
-                        ).changed_fields()
-                        | set(scene_state.animations.get(layer_id, {}))
-                        | set(scene_state.locks.get(layer_id, ()))
-                    )
-                    for field in sorted(used_fields - set(layer.editable)):
-                        add(
-                            f"{layer_root}.{field}",
-                            "removed-field",
-                            f"Layer field {layer_id}.{field} is no longer editable",
-                            None,
-                            "drop",
-                        )
-                    override = scene_state.layers.get(layer_id)
-                    if override is not None:
-                        for field, value in override.model_dump(exclude_none=True).items():
-                            path = f"{layer_root}.{field}"
-                            if field not in layer.editable:
-                                continue
-                            try:
-                                self._clips.validated_field_value(
-                                    layer_id,
-                                    field,
-                                    value,
-                                    layer.constraints.get(cast(WebEditableField, field)),
-                                )
-                                if field == "image" and value not in new_media_ids:
-                                    add(
-                                        path,
-                                        "removed-media-source",
-                                        f"Image source {value} was removed",
-                                        cast(JsonValue, value),
-                                        "default",
-                                    )
-                            except ValueError as error:
-                                add(
-                                    path,
-                                    "incompatible-value",
-                                    str(error),
-                                    cast(JsonValue, value),
-                                    "default",
-                                )
-                    for field, track in scene_state.animations.get(layer_id, {}).items():
-                        path = f"{layer_root}.{field}.animation"
-                        if field not in layer.editable:
-                            continue
-                        try:
-                            if track.keyframes[-1].time_ms >= scene_definition.duration_ms:
-                                raise OverflowError
-                            for keyframe in track.keyframes:
-                                self._clips.validated_field_value(
-                                    layer_id,
-                                    field,
-                                    keyframe.value,
-                                    layer.constraints.get(field),
-                                )
-                        except OverflowError:
-                            add(
-                                path,
-                                "out-of-range-keyframe",
-                                f"Animation {layer_id}.{field} exceeds scene duration",
-                                cast(JsonValue, track.model_dump(mode="json")),
-                                "default",
-                            )
-                        except ValueError as error:
-                            add(
-                                path,
-                                "incompatible-value",
-                                str(error),
-                                cast(JsonValue, track.model_dump(mode="json")),
-                                "default",
-                            )
-                parameter_ids = (
-                    set(scene_state.parameters)
-                    | set(scene_state.parameter_animations)
-                    | set(scene_state.parameter_locks)
-                )
-                for parameter_id in parameter_ids:
-                    parameter_root = f"{scene_root}.parameters.{parameter_id}"
-                    parameter_definition = new_parameters.get(parameter_id)
-                    if parameter_definition is None:
-                        add(
-                            parameter_root,
-                            "removed-parameter",
-                            f"Parameter {parameter_id} was removed",
-                            cast(
-                                JsonValue,
-                                scene_state.parameters.get(parameter_id),
-                            ),
-                            "drop",
-                        )
-                        continue
-                    old_definition = old_parameters.get(parameter_id)
-                    if (
-                        old_definition is not None
-                        and old_definition.binding.scope
-                        != parameter_definition.binding.scope
-                    ):
-                        add(
-                            parameter_root,
-                            "removed-parameter",
-                            f"Parameter {parameter_id} changed scope",
-                            cast(
-                                JsonValue,
-                                scene_state.parameters.get(parameter_id),
-                            ),
-                            "drop",
-                        )
-                        continue
-                    if parameter_id in scene_state.parameters:
-                        try:
-                            parameter_definition.descriptor.validate_value(
-                                cast(
-                                    JsonValue,
-                                    scene_state.parameters[parameter_id],
-                                )
-                            )
-                        except ValueError as error:
-                            add(
-                                parameter_root,
-                                "incompatible-value",
-                                str(error),
-                                cast(
-                                    JsonValue,
-                                    scene_state.parameters[parameter_id],
-                                ),
-                                "default",
-                            )
-                    parameter_track = scene_state.parameter_animations.get(parameter_id)
-                    if parameter_track is not None:
-                        path = f"{parameter_root}.animation"
-                        try:
-                            if (
-                                parameter_definition.descriptor.timeline != "keyframe"
-                                or parameter_track.keyframes[-1].time_ms >= scene_definition.duration_ms
-                            ):
-                                raise OverflowError
-                            for keyframe in parameter_track.keyframes:
-                                parameter_definition.descriptor.validate_value(keyframe.value)
-                        except OverflowError:
-                            add(
-                                path,
-                                "out-of-range-keyframe",
-                                f"Parameter animation {parameter_id} is no longer valid",
-                                cast(
-                                    JsonValue,
-                                    parameter_track.model_dump(mode="json"),
-                                ),
-                                "default",
-                            )
-                        except ValueError as error:
-                            add(
-                                path,
-                                "incompatible-value",
-                                str(error),
-                                cast(
-                                    JsonValue,
-                                    parameter_track.model_dump(mode="json"),
-                                ),
-                                "default",
-                            )
-                for field_id, data_value in scene_state.data_snapshot.values.items():
-                    path = f"{scene_root}.data.{field_id}"
-                    data_definition = new_data.get(field_id)
-                    if data_definition is None:
-                        add(
-                            path,
-                            "removed-data-field",
-                            f"Data field {field_id} was removed",
-                            data_value,
-                            "drop",
-                        )
-                        continue
-                    try:
-                        self._clips.validate_data_value(
-                            data_definition,
-                            data_value,
-                        )
-                        if data_definition.kind == "media-source" and data_value not in new_media_ids:
-                            add(
-                                path,
-                                "removed-media-source",
-                                f"Media source {data_value} was removed",
-                                data_value,
-                                "default",
-                            )
-                    except ValueError as error:
-                        add(
-                            path,
-                            "incompatible-value",
-                            str(error),
-                            data_value,
-                            "default",
-                        )
-        return [conflicts[path] for path in sorted(conflicts)]
+        return WebRebindConflictDetector(
+            old_manifest,
+            new_manifest,
+            new_media_sources,
+        ).detect(affected)
 
     def _migrate_rebind_state(
         self,

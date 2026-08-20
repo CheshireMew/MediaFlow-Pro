@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -9,6 +10,7 @@ import sys
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from ctypes import wintypes
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,7 +18,14 @@ from pathlib import Path
 import psutil
 
 from mediaflow.environment import load_project_environment, test_run_root
+from mediaflow.infrastructure.storage_budget import (
+    directory_inventory,
+    load_storage_policy,
+    require_storage_budget,
+    require_test_artifact_budget,
+)
 from scripts.ci.quality_plan import QualityPlan, forced_plan, plan_for_paths
+from scripts.run_artifacts import VERIFICATION_WORK_ROOT_VARIABLE
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_EXCLUDED_TESTS = (
@@ -119,8 +128,7 @@ def local_changed_paths(base: str) -> tuple[str, ...]:
         dict.fromkeys(
             path
             for path in (*tracked, *untracked)
-            if path.strip()
-            and not path.replace("\\", "/").startswith(LOCAL_EVIDENCE_PREFIXES)
+            if path.strip() and not path.replace("\\", "/").startswith(LOCAL_EVIDENCE_PREFIXES)
         )
     )
 
@@ -343,12 +351,53 @@ def offline_final_commands() -> tuple[QualityCommand, ...]:
     )
 
 
-def recommended_runtime_workers() -> int:
-    cpu_count = os.cpu_count() or 1
-    available_memory = psutil.virtual_memory().available
-    if cpu_count >= 12 and available_memory >= 12 * 1024**3:
+def _available_commit_memory() -> int:
+    if sys.platform != "win32":
+        return psutil.virtual_memory().available
+
+    class PerformanceInformation(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("commit_total", ctypes.c_size_t),
+            ("commit_limit", ctypes.c_size_t),
+            ("commit_peak", ctypes.c_size_t),
+            ("physical_total", ctypes.c_size_t),
+            ("physical_available", ctypes.c_size_t),
+            ("system_cache", ctypes.c_size_t),
+            ("kernel_total", ctypes.c_size_t),
+            ("kernel_paged", ctypes.c_size_t),
+            ("kernel_nonpaged", ctypes.c_size_t),
+            ("page_size", ctypes.c_size_t),
+            ("handle_count", wintypes.DWORD),
+            ("process_count", wintypes.DWORD),
+            ("thread_count", wintypes.DWORD),
+        ]
+
+    information = PerformanceInformation()
+    information.cb = ctypes.sizeof(information)
+    get_performance_info = ctypes.windll.psapi.GetPerformanceInfo  # type: ignore[attr-defined]
+    if not get_performance_info(ctypes.byref(information), information.cb):
+        return psutil.virtual_memory().available
+    return max(0, information.commit_limit - information.commit_total) * information.page_size
+
+
+def recommended_runtime_workers(
+    *,
+    cpu_count: int | None = None,
+    available_memory: int | None = None,
+    available_commit_memory: int | None = None,
+) -> int:
+    selected_cpu_count = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
+    selected_available_memory = (
+        available_memory if available_memory is not None else psutil.virtual_memory().available
+    )
+    selected_available_commit = (
+        available_commit_memory if available_commit_memory is not None else _available_commit_memory()
+    )
+    memory_budget = min(selected_available_memory, selected_available_commit)
+    if selected_cpu_count >= 12 and memory_budget >= 24 * 1024**3:
         return 4
-    if cpu_count >= 6 and available_memory >= 8 * 1024**3:
+    if selected_cpu_count >= 6 and memory_budget >= 12 * 1024**3:
         return 2
     return 1
 
@@ -378,9 +427,7 @@ def build_quality_stages(
                 max_workers=max_runtime_workers,
             )
         )
-        stages.append(
-            QualityStage("interactive-verifiers", interactive_verifier_commands())
-        )
+        stages.append(QualityStage("interactive-verifiers", interactive_verifier_commands()))
         stages.append(QualityStage("interactive-qml", interactive_qml_commands()))
         stages.append(
             QualityStage(
@@ -389,9 +436,7 @@ def build_quality_stages(
                 max_workers=2,
             )
         )
-        stages.append(
-            QualityStage("offline-preflight", offline_preflight_commands(run_root))
-        )
+        stages.append(QualityStage("offline-preflight", offline_preflight_commands(run_root)))
         stages.append(
             QualityStage(
                 "offline-parallel",
@@ -406,7 +451,7 @@ def build_quality_stages(
 def _command_root(work_root: Path, command: QualityCommand) -> Path:
     identity = hashlib.sha256(command.name.encode("utf-8")).hexdigest()[:8]
     root = work_root / identity
-    for directory in ("t", "s", "p", "m"):
+    for directory in ("t", "s", "p", "m", "v"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     return root
 
@@ -426,6 +471,7 @@ def _run_command(
             "MEDIAFLOW_SERVICE_STATE_DIR": str(root / "s"),
             "MEDIAFLOW_PROJECT_ROOT": str(root / "p"),
             "MEDIAFLOW_MEDIA_ROOT": str(root / "m"),
+            VERIFICATION_WORK_ROOT_VARIABLE: str(root / "v"),
             "PYTHONFAULTHANDLER": "1",
             "PYTHONUTF8": "1",
             "QT_QPA_PLATFORM": environment.get("QT_QPA_PLATFORM", "offscreen"),
@@ -467,19 +513,15 @@ def _run_stage(
     work_root: Path,
 ) -> tuple[CommandResult, ...]:
     print(
-        f"\n=== {stage.name}: {len(stage.commands)} command(s), "
-        f"max_workers={stage.max_workers} ===",
+        f"\n=== {stage.name}: {len(stage.commands)} command(s), max_workers={stage.max_workers} ===",
         flush=True,
     )
     if stage.max_workers == 1:
-        results = tuple(
-            _run_command(command, run_root, work_root) for command in stage.commands
-        )
+        results = tuple(_run_command(command, run_root, work_root) for command in stage.commands)
     else:
         with ThreadPoolExecutor(max_workers=stage.max_workers) as executor:
             futures = [
-                executor.submit(_run_command, command, run_root, work_root)
-                for command in stage.commands
+                executor.submit(_run_command, command, run_root, work_root) for command in stage.commands
             ]
             results = tuple(future.result() for future in futures)
     if any(result.exit_code != 0 for result in results):
@@ -496,6 +538,8 @@ def _write_report(
     status: str,
     results: Sequence[CommandResult],
     started_at: str,
+    storage_preflight: dict[str, object],
+    storage_root: Path,
     error: str | None = None,
 ) -> None:
     payload = {
@@ -507,6 +551,14 @@ def _write_report(
         "changed_paths": list(changed_paths),
         "work_root": str(work_root),
         "commands": [asdict(result) for result in results],
+        "storage": {
+            "preflight": storage_preflight,
+            "final_inventory": {
+                "evidence": directory_inventory(storage_root),
+                "workspace": directory_inventory(work_root),
+            },
+            "cleanup": "report-only-until-authorized",
+        },
         "error": error,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -518,6 +570,65 @@ def _print_dry_run(stages: Sequence[QualityStage], plan: QualityPlan) -> None:
         print(f"\n[{stage.name}] max_workers={stage.max_workers}")
         for command in stage.commands:
             print("  " + " ".join(command.arguments))
+
+
+def quality_run_roots(
+    configured_test_root: Path,
+    now: datetime,
+    process_id: int,
+) -> tuple[Path, Path]:
+    root = configured_test_root.expanduser().resolve()
+    identity = hashlib.sha256(f"{now.isoformat()}:{process_id}".encode()).hexdigest()[:8]
+    stamp = f"q-{now.strftime('%m%d%H%M')}-{process_id:x}-{identity}"
+    run_root = (root / "q" / stamp).resolve()
+    work_root = (root / "qw" / identity).resolve()
+    if (
+        not run_root.is_relative_to(root)
+        or not work_root.is_relative_to(root)
+        or work_root.is_relative_to(run_root)
+    ):
+        raise RuntimeError("Quality paths escaped the configured test artifact root")
+    return run_root, work_root
+
+
+def quality_expected_bytes(plan: QualityPlan) -> int:
+    gib = 1024**3
+    return {
+        "maintenance": 512 * 1024**2,
+        "core": 4 * gib,
+        "full": 16 * gib,
+    }[plan.scope]
+
+
+def quality_storage_preflight(
+    configured_test_root: Path,
+    run_root: Path,
+    work_root: Path,
+    plan: QualityPlan,
+) -> dict[str, object]:
+    policy = load_storage_policy()
+    expected = quality_expected_bytes(plan)
+    return {
+        "test_artifacts": require_test_artifact_budget(
+            configured_test_root,
+            expected_new_bytes=expected,
+            label=f"MediaFlow {plan.scope} quality evidence",
+        ),
+        "quality_run": require_storage_budget(
+            run_root,
+            expected_new_bytes=expected,
+            maximum_managed_bytes=policy.quality_run_max_bytes,
+            minimum_free_bytes=policy.minimum_free_bytes,
+            label=f"MediaFlow {plan.scope} quality run",
+        ),
+        "quality_workspace": require_storage_budget(
+            work_root,
+            expected_new_bytes=expected,
+            maximum_managed_bytes=policy.quality_run_max_bytes,
+            minimum_free_bytes=policy.minimum_free_bytes,
+            label=f"MediaFlow {plan.scope} quality workspace",
+        ),
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -542,16 +653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else forced_plan(arguments.scope, reason=f"local forced {arguments.scope} regression")
     )
     now = datetime.now(UTC)
-    stamp = now.strftime("q-%Y%m%dT%H%M%S.%fZ")
-    work_stamp = now.strftime("%H%M") + f"-{os.getpid()}"
     configured_test_root = test_run_root()
-    run_root = (configured_test_root / "quality" / stamp).resolve()
-    work_parent = (
-        configured_test_root.parents[1]
-        if len(configured_test_root.parents) > 1
-        else configured_test_root.parent
-    )
-    work_root = (work_parent / "q" / work_stamp).resolve()
+    run_root, work_root = quality_run_roots(configured_test_root, now, os.getpid())
     runtime_workers = arguments.max_runtime_workers or recommended_runtime_workers()
     stages = build_quality_stages(
         plan,
@@ -562,6 +665,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_dry_run(stages, plan)
         return 0
 
+    storage_preflight = quality_storage_preflight(
+        configured_test_root,
+        run_root,
+        work_root,
+        plan,
+    )
     run_root.mkdir(parents=True, exist_ok=False)
     work_root.mkdir(parents=True, exist_ok=False)
     started_at = datetime.now(UTC).isoformat()
@@ -580,6 +689,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         for stage in stages:
             results.extend(_run_stage(stage, run_root, work_root))
+            policy = load_storage_policy()
+            require_storage_budget(
+                run_root,
+                expected_new_bytes=0,
+                maximum_managed_bytes=policy.quality_run_max_bytes,
+                minimum_free_bytes=policy.minimum_free_bytes,
+                label="MediaFlow active quality run",
+            )
+            require_storage_budget(
+                work_root,
+                expected_new_bytes=0,
+                maximum_managed_bytes=policy.quality_run_max_bytes,
+                minimum_free_bytes=policy.minimum_free_bytes,
+                label="MediaFlow active quality workspace",
+            )
+            require_test_artifact_budget(
+                configured_test_root,
+                expected_new_bytes=0,
+                label="MediaFlow test artifact root",
+            )
     except StageFailure as error:
         results.extend(error.results)
         _write_report(
@@ -590,6 +719,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             status="failed",
             results=results,
             started_at=started_at,
+            storage_preflight=storage_preflight,
+            storage_root=run_root,
             error=str(error),
         )
         print(f"Quality run failed: {error}", file=sys.stderr)
@@ -603,6 +734,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             status="failed",
             results=results,
             started_at=started_at,
+            storage_preflight=storage_preflight,
+            storage_root=run_root,
             error=str(error),
         )
         print(f"Quality run failed: {error}", file=sys.stderr)
@@ -615,12 +748,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         status="passed",
         results=results,
         started_at=started_at,
+        storage_preflight=storage_preflight,
+        storage_root=run_root,
     )
     total_seconds = sum(result.seconds for result in results)
-    print(
-        f"Quality run passed: {len(results)} commands, "
-        f"{total_seconds:.1f}s cumulative command time"
-    )
+    print(f"Quality run passed: {len(results)} commands, {total_seconds:.1f}s cumulative command time")
     return 0
 
 

@@ -80,40 +80,44 @@ from .transcript_edits import (
     TranscriptSegmentSnapshot,
     TranscriptSnapshot,
 )
-from .web_media import (
+from .web_exports import WebClipExportResult
+from .web_manifest import (
     EditableMediaManifest,
-    WebAnimationTrack,
     WebAssetSpec,
-    WebCanvas,
-    WebClipExportResult,
-    WebClipState,
-    WebComponentMetadata,
     WebDataField,
+    WebLayerManifest,
+)
+from .web_manifest_primitives import (
+    WebCanvas,
+    WebComponentMetadata,
+    WebFieldConstraint,
+    WebFrameReadiness,
+    WebLayerBounds,
+    WebLayoutContract,
+    WebParameter,
+    WebParameterBinding,
+    WebPlayback,
+    WebScene,
+    WebThemeVariable,
+    WebVariant,
+)
+from .web_media_sources import WebMediaSourcesManifest
+from .web_state import (
+    WebAnimationTrack,
+    WebClipState,
     WebDataSnapshot,
     WebEasing,
     WebEditDocument,
-    WebFieldConstraint,
-    WebFrameReadiness,
     WebKeyframe,
-    WebLayerBounds,
-    WebLayerManifest,
     WebLayerOverride,
-    WebLayoutContract,
-    WebMediaSourcesManifest,
-    WebParameter,
     WebParameterAnimationTrack,
-    WebParameterBinding,
-    WebPlayback,
     WebRebindCommitReport,
     WebRebindConflict,
     WebRebindPlan,
     WebRuntimePlayback,
     WebRuntimeVariant,
-    WebScene,
     WebSceneState,
     WebStateDiff,
-    WebThemeVariable,
-    WebVariant,
     WebVariantResult,
 )
 

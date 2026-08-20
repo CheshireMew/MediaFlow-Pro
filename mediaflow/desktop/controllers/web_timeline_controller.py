@@ -5,12 +5,15 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Property, Signal, Slot
 
-from mediaflow.domain.timebase import (
-    source_frame_at_timeline_offset,
-    timeline_offset_for_source_frame,
+from mediaflow.desktop.editor_planning import (
+    selected_web_clip,
+    web_scene_time_for_frame,
+    web_time_ms_for_frame,
 )
+from mediaflow.domain.timebase import timeline_offset_for_source_frame
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import WebControllerScope
 from .web_editor_context import (
     WebEditorContext,
     coerce_web_descriptor_value,
@@ -22,11 +25,11 @@ if TYPE_CHECKING:
     from mediaflow.desktop.controllers.web_controller import WebController
 
 
-class WebTimelineController(ControllerFacet):
+class WebTimelineController(ControllerFacet[WebControllerScope]):
     timelineStateChanged = Signal()
     browserRuntimePreviewRequested = Signal(str)
 
-    def __init__(self, session, editor: WebController):
+    def __init__(self, session: WebControllerScope, editor: WebController):
         super().__init__(session)
         self.setObjectName("webTimelineController")
         self._editor = editor
@@ -45,7 +48,7 @@ class WebTimelineController(ControllerFacet):
             if item.get("target") == "layer" and str(item.get("source_id", "")).startswith(prefix)
         ]
 
-    @Property("QVariantList", notify=timelineStateChanged)
+    @Property(list, notify=timelineStateChanged)
     def timelineItemsData(self) -> list[dict]:
         scene_duration = int(self._context.edit_document.get("scene_duration_ms") or 0)
         descriptors = {str(item.get("source_id")): item for item in self._selected_layer_descriptor_rows()}
@@ -99,15 +102,15 @@ class WebTimelineController(ControllerFacet):
         )
         return items
 
-    @Property("QVariantList", notify=timelineStateChanged)
+    @Property(list, notify=timelineStateChanged)
     def keyframesData(self) -> list[dict]:
         return self._keyframe_rows()
 
     def _keyframe_rows(self) -> list[dict]:
         clip = self._selected_clip()
-        if clip is None or self._session.binding.timeline is None:
+        if clip is None or self._session.state.binding.timeline is None:
             return []
-        profile = self._session.binding.timeline.state.sequence.profile
+        profile = self._session.state.binding.require_timeline().state.sequence.profile
         fps = profile.fps
         scene_start_ms = self._scene_start_ms(self._context.active_scene_id)
         values: list[dict] = []
@@ -196,7 +199,7 @@ class WebTimelineController(ControllerFacet):
         if target == "layer":
             layer_id, field = source_id.rsplit(".", 1)
             updated = current.set_web_keyframe(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._context.clip_id,
                 layer_id,
                 field,
@@ -209,7 +212,7 @@ class WebTimelineController(ControllerFacet):
             )
         elif target == "parameter":
             updated = current.set_web_parameter_keyframe(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._context.clip_id,
                 source_id,
                 time_ms,
@@ -237,7 +240,7 @@ class WebTimelineController(ControllerFacet):
         if target == "layer":
             layer_id, field = source_id.rsplit(".", 1)
             updated = current.remove_web_keyframe(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._context.clip_id,
                 layer_id,
                 field,
@@ -247,7 +250,7 @@ class WebTimelineController(ControllerFacet):
             )
         elif target == "parameter":
             updated = current.remove_web_parameter_keyframe(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._context.clip_id,
                 source_id,
                 time_ms,
@@ -275,7 +278,7 @@ class WebTimelineController(ControllerFacet):
         if target == "layer":
             layer_id, field = source_id.rsplit(".", 1)
             updated = current.move_web_keyframe(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._context.clip_id,
                 layer_id,
                 field,
@@ -286,7 +289,7 @@ class WebTimelineController(ControllerFacet):
             )
         elif target == "parameter":
             updated = current.move_web_parameter_keyframe(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._context.clip_id,
                 source_id,
                 old_time_ms,
@@ -367,7 +370,7 @@ class WebTimelineController(ControllerFacet):
         value = max(0, int(end_ms) - int(start_ms)) if end_is_duration else max(0, int(end_ms))
         current = require_mutable_web_clip(self._session, self._context.clip_id)
         updated = current.update_web_clip(
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
             self._context.clip_id,
             {
                 self._context.selected_layer_id: {
@@ -383,7 +386,7 @@ class WebTimelineController(ControllerFacet):
 
     @Slot()
     def cancelTimelinePreview(self) -> None:
-        self.browserRuntimePreviewRequested.emit(self.stateJson)
+        self.browserRuntimePreviewRequested.emit(self._editor.runtime_state_json())
 
     @Slot(int, result=int)
     def timeMsForFrame(self, frame: int) -> int:
@@ -403,9 +406,9 @@ class WebTimelineController(ControllerFacet):
     @Slot(int, result=int)
     def frameForSceneTime(self, time_ms: int) -> int:
         clip = self._selected_clip()
-        if clip is None or self._session.binding.timeline is None:
+        if clip is None or self._session.state.binding.timeline is None:
             return 0
-        profile = self._session.binding.timeline.state.sequence.profile
+        profile = self._session.state.binding.require_timeline().state.sequence.profile
         global_time_ms = self._scene_start_ms(self._context.active_scene_id) + max(0, int(time_ms))
         source_frame = round(global_time_ms * profile.fps / 1000)
         local_frame = timeline_offset_for_source_frame(
@@ -424,9 +427,9 @@ class WebTimelineController(ControllerFacet):
     def snapSceneTimeMs(self, time_ms: int) -> int:
         duration = int(self._context.edit_document.get("scene_duration_ms") or 1)
         bounded = max(0, min(duration - 1, int(time_ms)))
-        if self._session.binding.timeline is None:
+        if self._session.state.binding.timeline is None:
             return bounded
-        fps = self._session.binding.timeline.state.sequence.profile.fps
+        fps = self._session.state.binding.require_timeline().state.sequence.profile.fps
         frame_ms = 1000 / fps
         snapped = round(bounded / frame_ms) * frame_ms
         scene: dict = next(
@@ -456,12 +459,7 @@ class WebTimelineController(ControllerFacet):
         self._editor.activate_scene(scene_id)
 
     def _selected_clip(self):
-        if self._session.binding.timeline is None or not self._context.clip_id:
-            return None
-        return next(
-            (item for item in self._session.binding.timeline.state.clips if item.id == self._context.clip_id),
-            None,
-        )
+        return selected_web_clip(self._session, self._context)
 
     def _scene_start_ms(self, scene_id: str) -> int:
         elapsed = 0
@@ -472,34 +470,11 @@ class WebTimelineController(ControllerFacet):
         return 0
 
     def _time_ms_for_frame(self, frame: int) -> int:
-        clip = self._selected_clip()
-        if clip is None or self._session.binding.timeline is None:
-            raise RuntimeError("No editable web clip is selected")
-        profile = self._session.binding.timeline.state.sequence.profile
-        local_frame = max(0, min(clip.duration - 1, int(frame) - clip.timeline_start))
-        source_frame = source_frame_at_timeline_offset(
-            clip.source_in,
-            local_frame,
-            clip.speed_numerator,
-            clip.speed_denominator,
-            freeze_source_frame=clip.freeze_source_frame,
-        )
-        return max(0, round(source_frame * 1000 / profile.fps))
+        return web_time_ms_for_frame(self._session, self._context, frame)
 
     def _scene_time_for_frame(self, frame: int) -> tuple[str, int]:
-        global_time_ms = self._time_ms_for_frame(frame)
-        elapsed = 0
-        scenes = self._context.manifest.get("scenes", [])
-        for scene in scenes:
-            duration = int(scene.get("duration_ms") or 0)
-            if global_time_ms < elapsed + duration:
-                return str(scene["id"]), max(0, global_time_ms - elapsed)
-            elapsed += duration
-        if not scenes:
-            raise RuntimeError("Editable media manifest has no scenes")
-        last = scenes[-1]
-        return str(last["id"]), max(0, int(last.get("duration_ms") or 1) - 1)
+        return web_scene_time_for_frame(self._session, self._context, frame)
 
     def _accept_state(self, _state) -> None:
-        self._session.events.historyChanged.emit()
+        self._session.updates.commit(history=True)
         self._session.projectors.timeline.schedule_preview_graph()

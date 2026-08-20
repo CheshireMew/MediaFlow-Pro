@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.environment import test_run_root
+from scripts.run_artifacts import verification_workspace_root
 
 DEFAULT_RUN_ROOT = test_run_root() / "reference-comparison-chain"
 
@@ -57,9 +58,10 @@ def verify(package: Path, run_dir: Path) -> dict[str, object]:
     source = package.expanduser().resolve(strict=True)
     if not source.is_dir():
         raise ValueError(f"editable-media package must be a directory: {source}")
-    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(run_dir / "projects")
-    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(run_dir / "media")
-    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(run_dir / "service")
+    workspace = verification_workspace_root(run_dir)
+    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(workspace / "projects")
+    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(workspace / "media")
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(workspace / "service")
     observed_revisions: dict[str, int] = {}
 
     def execute_request(request: dict[str, object]) -> dict[str, object]:

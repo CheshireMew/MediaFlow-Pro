@@ -17,8 +17,8 @@ AppScrollView {
     signal importRequested
 
     function formatTimecode(frame) {
-        const numerator = Math.max(1, Number(workspaceController.profileFpsNumerator || 30));
-        const denominator = Math.max(1, Number(workspaceController.profileFpsDenominator || 1));
+        const numerator = Math.max(1, Number(mediaflow.workspaceViewController.profileFpsNumerator || 30));
+        const denominator = Math.max(1, Number(mediaflow.workspaceViewController.profileFpsDenominator || 1));
         const nominalFps = Math.max(1, Math.round(numerator / denominator));
         const value = Math.max(0, Number(frame));
         const totalSeconds = Math.floor(value / nominalFps);
@@ -32,14 +32,14 @@ AppScrollView {
 
     onPlayheadFrameChanged: {
         if (playbackActive)
-            subtitleController.followSubtitleAtFrame(playheadFrame);
+            mediaflow.subtitleViewController.followSubtitleAtFrame(playheadFrame);
     }
 
     Connections {
-        target: subtitleController
+        target: mediaflow.subtitleViewController
         function onSelectionChanged() {
-            const row = subtitleController.subtitleSegmentsModel.findRow(
-                "segmentId", subtitleController.selectedSubtitleSegmentId);
+            const row = mediaflow.subtitleViewController.subtitleSegmentsModel.findRow(
+                "segmentId", mediaflow.subtitleViewController.selectedSubtitleSegmentId);
             if (row >= 0)
                 segmentList.positionViewAtIndex(row, ListView.Contain);
         }
@@ -55,14 +55,14 @@ AppScrollView {
         property var segmentDrafts: ({})
         property bool loadingSegmentDraft: false
         property string loadedSegmentId: ""
-        readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+        readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
 
         function segmentDraftKey(segmentId) {
-            return String(subtitleController.selectedDocumentId || "") + "\u001f" + String(segmentId || "");
+            return String(mediaflow.subtitleViewController.selectedDocumentId || "") + "\u001f" + String(segmentId || "");
         }
 
         function storeSelectedSegmentDraft() {
-            const segmentId = String(subtitleController.selectedSubtitleSegmentId || "");
+            const segmentId = String(mediaflow.subtitleViewController.selectedSubtitleSegmentId || "");
             if (loadingSegmentDraft || segmentId.length === 0 || loadedSegmentId !== segmentId)
                 return;
             const next = Object.assign({}, segmentDrafts);
@@ -84,7 +84,7 @@ AppScrollView {
         }
 
         function refreshSearch() {
-            root.searchMatches = subtitleController.findSubtitleMatches(findText.text, matchCase.checked);
+            root.searchMatches = mediaflow.subtitleEditingController.findSubtitleMatches(findText.text, matchCase.checked);
             if (root.searchMatches.length === 0)
                 root.searchMatchIndex = -1;
             else if (root.searchMatchIndex < 0 || root.searchMatchIndex >= root.searchMatches.length)
@@ -96,12 +96,12 @@ AppScrollView {
                 return;
             const count = root.searchMatches.length;
             root.searchMatchIndex = ((index % count) + count) % count;
-            subtitleController.selectSubtitleSegment(String(root.searchMatches[root.searchMatchIndex].segmentId), false);
+            mediaflow.subtitleViewController.selectSubtitleSegment(String(root.searchMatches[root.searchMatchIndex].segmentId), false);
         }
 
         function loadSelectedSegment() {
-            const segmentId = String(subtitleController.selectedSubtitleSegmentId || "");
-            const data = subtitleController.selectedSubtitleSegmentData;
+            const segmentId = String(mediaflow.subtitleViewController.selectedSubtitleSegmentId || "");
+            const data = mediaflow.subtitleViewController.selectedSubtitleSegmentData;
             const draft = segmentDrafts[segmentDraftKey(segmentId)];
             loadingSegmentDraft = true;
             loadedSegmentId = segmentId;
@@ -114,7 +114,7 @@ AppScrollView {
         Component.onCompleted: Qt.callLater(loadSelectedSegment)
 
         Connections {
-            target: subtitleController
+            target: mediaflow.subtitleViewController
             function onSelectionChanged() {
                 root.loadSelectedSegment();
             }
@@ -125,7 +125,7 @@ AppScrollView {
             title: qsTr("导出字幕文档")
             fileMode: FileDialog.SaveFile
             nameFilters: [qsTr("SRT 字幕 (*.srt)")]
-            onAccepted: subtitleController.exportSubtitleDocument(subtitleController.selectedDocumentId, selectedFile.toString())
+            onAccepted: mediaflow.subtitleEditingController.exportSubtitleDocument(mediaflow.subtitleViewController.selectedDocumentId, selectedFile.toString())
         }
 
         Text {
@@ -141,7 +141,7 @@ AppScrollView {
             visible: count > 0
             clip: true
             spacing: 5
-            model: subtitleController.subtitleDocumentsModel
+            model: mediaflow.subtitleViewController.subtitleDocumentsModel
             delegate: Rectangle {
                 required property string documentId
                 required property string language
@@ -150,8 +150,8 @@ AppScrollView {
                 width: documentList.width
                 height: 48
                 radius: Theme.radiusSmall
-                color: subtitleController.selectedDocumentId === documentId ? Theme.accentSoft : docMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-                border.color: subtitleController.selectedDocumentId === documentId ? Theme.accent : Theme.border
+                color: mediaflow.subtitleViewController.selectedDocumentId === documentId ? Theme.accentSoft : docMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                border.color: mediaflow.subtitleViewController.selectedDocumentId === documentId ? Theme.accent : Theme.border
                 RowLayout {
                     anchors.fill: parent
                     anchors.margins: 8
@@ -181,7 +181,7 @@ AppScrollView {
                     id: docMouse
                     anchors.fill: parent
                     hoverEnabled: true
-                    onClicked: subtitleController.selectSubtitleDocument(documentId)
+                    onClicked: mediaflow.subtitleViewController.selectSubtitleDocument(documentId)
                 }
             }
         }
@@ -202,14 +202,14 @@ AppScrollView {
                 Layout.fillWidth: true
                 primary: true
                 text: qsTr("识别时间轴声音")
-                enabled: Boolean(workspaceController.actionCapabilities.canStartTasks)
+                enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
                 onClicked: subtitleScroll.modeRequested("transcript")
             }
             AppButton {
                 objectName: "subtitleImportFileButton"
                 Layout.fillWidth: true
                 text: qsTr("导入字幕文件")
-                enabled: Boolean(workspaceController.actionCapabilities.canImport)
+                enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canImport)
                 onClicked: subtitleScroll.importRequested()
             }
         }
@@ -240,18 +240,18 @@ AppScrollView {
                     Layout.fillWidth: true
                     AppButton {
                         text: qsTr("添加")
-                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
-                        onClicked: subtitleController.addSubtitleSegment()
+                        enabled: root.canEdit && mediaflow.subtitleViewController.selectedDocumentId.length > 0
+                        onClicked: mediaflow.subtitleEditingController.addSubtitleSegment()
                     }
                     AppButton {
                         text: qsTr("合并")
-                        enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length >= 2
-                        onClicked: subtitleController.mergeSelectedSubtitleSegments()
+                        enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length >= 2
+                        onClicked: mediaflow.subtitleEditingController.mergeSelectedSubtitleSegments()
                     }
                     AppButton {
                         text: qsTr("删除")
-                        enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
-                        onClicked: subtitleController.deleteSelectedSubtitleSegments()
+                        enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length > 0
+                        onClicked: mediaflow.subtitleEditingController.deleteSelectedSubtitleSegments()
                     }
                     Item {
                         Layout.fillWidth: true
@@ -269,29 +269,29 @@ AppScrollView {
                             }
                             AppMenuItem {
                                 text: qsTr("导出 SRT")
-                                enabled: subtitleController.selectedDocumentId.length > 0
+                                enabled: mediaflow.subtitleViewController.selectedDocumentId.length > 0
                                 onTriggered: exportSubtitleDialog.open()
                             }
                             AppMenuSeparator {}
                             AppMenuItem {
                                 text: qsTr("翻译所选")
-                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
-                                onTriggered: subtitleController.translateSelectedSubtitleSegments()
+                                enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length > 0
+                                onTriggered: mediaflow.subtitleTranslationController.translateSelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("复制 SRT")
-                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
-                                onTriggered: subtitleController.copySelectedSubtitleSegments()
+                                enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length > 0
+                                onTriggered: mediaflow.subtitleEditingController.copySelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("粘贴替换")
-                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 0
-                                onTriggered: subtitleController.pasteReplaceSelectedSubtitleSegments()
+                                enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length > 0
+                                onTriggered: mediaflow.subtitleEditingController.pasteReplaceSelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("打开文件夹")
-                                enabled: subtitleController.selectedDocumentId.length > 0
-                                onTriggered: subtitleController.openSubtitleFolder()
+                                enabled: mediaflow.subtitleViewController.selectedDocumentId.length > 0
+                                onTriggered: mediaflow.subtitleEditingController.openSubtitleFolder()
                             }
                         }
                     }
@@ -339,8 +339,8 @@ AppScrollView {
                                 primary: true
                                 enabled: root.canEdit && findText.text.length > 0 && root.searchMatches.length > 0
                                 onClicked: {
-                                    subtitleController.replaceSubtitleText(findText.text, replaceText.text, matchCase.checked);
-                                    root.searchMatches = subtitleController.findSubtitleMatches(findText.text, matchCase.checked);
+                                    mediaflow.subtitleEditingController.replaceSubtitleText(findText.text, replaceText.text, matchCase.checked);
+                                    root.searchMatches = mediaflow.subtitleEditingController.findSubtitleMatches(findText.text, matchCase.checked);
                                 }
                             }
                         }
@@ -368,7 +368,7 @@ AppScrollView {
                                 enabled: root.canEdit && root.searchMatchIndex >= 0
                                 onClicked: {
                                     const match = root.searchMatches[root.searchMatchIndex];
-                                    subtitleController.replaceSubtitleMatch(String(match.segmentId), Number(match.start), Number(match.end), findText.text, replaceText.text, matchCase.checked);
+                                    mediaflow.subtitleEditingController.replaceSubtitleMatch(String(match.segmentId), Number(match.start), Number(match.end), findText.text, replaceText.text, matchCase.checked);
                                     Qt.callLater(function () {
                                         root.refreshSearch();
                                         root.activateSearchMatch(root.searchMatchIndex);
@@ -388,7 +388,7 @@ AppScrollView {
                         font.weight: Font.DemiBold
                     }
                     Text {
-                        text: subtitleController.selectedSubtitleSegmentIds.length > 1 ? qsTr("已选 %1 条").arg(subtitleController.selectedSubtitleSegmentIds.length) : ""
+                        text: mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length > 1 ? qsTr("已选 %1 条").arg(mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length) : ""
                         color: Theme.accentHover
                         font.pixelSize: Theme.fontSizeCaption
                     }
@@ -410,13 +410,13 @@ AppScrollView {
                     }
                     AppButton {
                         text: qsTr("智能拆分")
-                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
-                        onClicked: subtitleController.smartSplitSubtitleDocument(smartSplitLimit.value)
+                        enabled: root.canEdit && mediaflow.subtitleViewController.selectedDocumentId.length > 0
+                        onClicked: mediaflow.subtitleEditingController.smartSplitSubtitleDocument(smartSplitLimit.value)
                     }
                     AppButton {
                         text: qsTr("修复重叠")
-                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
-                        onClicked: subtitleController.fixSubtitleOverlaps()
+                        enabled: root.canEdit && mediaflow.subtitleViewController.selectedDocumentId.length > 0
+                        onClicked: mediaflow.subtitleEditingController.fixSubtitleOverlaps()
                     }
                 }
 
@@ -427,7 +427,7 @@ AppScrollView {
                     Layout.preferredHeight: Math.max(160, Math.min(360, contentHeight))
                     clip: true
                     spacing: 5
-                    model: subtitleController.subtitleSegmentsModel
+                    model: mediaflow.subtitleViewController.subtitleSegmentsModel
                     delegate: Rectangle {
                         required property string segmentId
                         required property int startFrame
@@ -437,8 +437,8 @@ AppScrollView {
                         width: segmentList.width
                         height: segmentPreviewText.implicitHeight + 31
                         radius: Theme.radiusSmall
-                        color: subtitleController.isSubtitleSegmentSelected(segmentId) ? Theme.accentSoft : segmentMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-                        border.color: hasOverlap ? Theme.danger : subtitleController.isSubtitleSegmentSelected(segmentId) ? Theme.accent : Theme.border
+                        color: mediaflow.subtitleViewController.isSubtitleSegmentSelected(segmentId) ? Theme.accentSoft : segmentMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                        border.color: hasOverlap ? Theme.danger : mediaflow.subtitleViewController.isSubtitleSegmentSelected(segmentId) ? Theme.accent : Theme.border
                         ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 8
@@ -466,52 +466,52 @@ AppScrollView {
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             onClicked: function (mouse) {
                                 if (mouse.button === Qt.RightButton) {
-                                    if (!subtitleController.isSubtitleSegmentSelected(segmentId))
-                                        subtitleController.selectSubtitleSegment(segmentId, false);
+                                    if (!mediaflow.subtitleViewController.isSubtitleSegmentSelected(segmentId))
+                                        mediaflow.subtitleViewController.selectSubtitleSegment(segmentId, false);
                                     segmentContextMenu.popup();
                                     return;
                                 }
-                                subtitleController.selectSubtitleSegment(
+                                mediaflow.subtitleViewController.selectSubtitleSegment(
                                     segmentId,
                                     (mouse.modifiers & Qt.ControlModifier) !== 0
                                 );
                                 subtitleScroll.seekRequested(
-                                    subtitleController.subtitleSegmentTimelineFrame(
+                                    mediaflow.subtitleViewController.subtitleSegmentTimelineFrame(
                                         segmentId, startFrame));
                             }
-                            onDoubleClicked: subtitleController.previewSubtitleSegment(segmentId)
+                            onDoubleClicked: mediaflow.subtitleViewController.previewSubtitleSegment(segmentId)
                         }
                         AppMenu {
                             id: segmentContextMenu
                             AppMenuItem {
                                 text: qsTr("播放这一条")
-                                onTriggered: subtitleController.previewSubtitleSegment(segmentId)
+                                onTriggered: mediaflow.subtitleViewController.previewSubtitleSegment(segmentId)
                             }
                             AppMenuSeparator {}
                             AppMenuItem {
                                 text: qsTr("翻译所选字幕")
                                 enabled: root.canEdit
-                                onTriggered: subtitleController.translateSelectedSubtitleSegments()
+                                onTriggered: mediaflow.subtitleTranslationController.translateSelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("复制所选字幕")
-                                onTriggered: subtitleController.copySelectedSubtitleSegments()
+                                onTriggered: mediaflow.subtitleEditingController.copySelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("合并所选字幕")
-                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length > 1
-                                onTriggered: subtitleController.mergeSelectedSubtitleSegments()
+                                enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length > 1
+                                onTriggered: mediaflow.subtitleEditingController.mergeSelectedSubtitleSegments()
                             }
                             AppMenuItem {
                                 text: qsTr("按中点拆分")
-                                enabled: root.canEdit && subtitleController.selectedSubtitleSegmentIds.length === 1
-                                onTriggered: subtitleController.splitSubtitleSegment(segmentId, -1)
+                                enabled: root.canEdit && mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length === 1
+                                onTriggered: mediaflow.subtitleEditingController.splitSubtitleSegment(segmentId, -1)
                             }
                             AppMenuSeparator {}
                             AppMenuItem {
                                 text: qsTr("删除所选字幕")
                                 enabled: root.canEdit
-                                onTriggered: subtitleController.deleteSelectedSubtitleSegments()
+                                onTriggered: mediaflow.subtitleEditingController.deleteSelectedSubtitleSegments()
                             }
                         }
                     }
@@ -527,7 +527,7 @@ AppScrollView {
                 Panel {
                     Layout.fillWidth: true
                     implicitHeight: 214
-                    visible: subtitleController.selectedSubtitleSegmentIds.length === 1
+                    visible: mediaflow.subtitleViewController.selectedSubtitleSegmentIds.length === 1
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 8
@@ -594,9 +594,9 @@ AppScrollView {
                             id: segmentText
                             objectName: "subtitleSegmentTextEditor"
                             collaborationPath: "/subtitles/documents/"
-                                + subtitleController.selectedDocumentId
+                                + mediaflow.subtitleViewController.selectedDocumentId
                                 + "/segments/"
-                                + subtitleController.selectedSubtitleSegmentId
+                                + mediaflow.subtitleViewController.selectedSubtitleSegmentId
                                 + "/text"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
@@ -610,7 +610,7 @@ AppScrollView {
                                 Layout.fillWidth: true
                                 text: qsTr("按中点拆分")
                                 enabled: root.canEdit
-                                onClicked: subtitleController.splitSubtitleSegment(subtitleController.selectedSubtitleSegmentId, -1)
+                                onClicked: mediaflow.subtitleEditingController.splitSubtitleSegment(mediaflow.subtitleViewController.selectedSubtitleSegmentId, -1)
                             }
                             AppButton {
                                 Layout.fillWidth: true
@@ -619,8 +619,8 @@ AppScrollView {
                                 text: qsTr("保存修改")
                                 enabled: root.canEdit
                                 onClicked: {
-                                    const segmentId = String(subtitleController.selectedSubtitleSegmentId || "");
-                                    if (subtitleController.updateSubtitleSegment(
+                                    const segmentId = String(mediaflow.subtitleViewController.selectedSubtitleSegmentId || "");
+                                    if (mediaflow.subtitleEditingController.updateSubtitleSegment(
                                             segmentId, segmentStart.value,
                                             segmentEnd.value, segmentText.text)) {
                                         root.clearSelectedSegmentDraft(segmentId);
@@ -650,8 +650,8 @@ AppScrollView {
                     AppButton {
                         text: qsTr("放入当前序列")
                         primary: true
-                        enabled: root.canEdit && subtitleController.selectedDocumentId.length > 0
-                        onClicked: subtitleController.placeSubtitleDocument(subtitleController.selectedDocumentId)
+                        enabled: root.canEdit && mediaflow.subtitleViewController.selectedDocumentId.length > 0
+                        onClicked: mediaflow.subtitlePlacementController.placeSubtitleDocument(mediaflow.subtitleViewController.selectedDocumentId)
                     }
                 }
                 ListView {
@@ -660,7 +660,7 @@ AppScrollView {
                     Layout.preferredHeight: Math.max(160, Math.min(360, contentHeight))
                     clip: true
                     spacing: 4
-                    model: subtitleController.subtitlePlacementsModel
+                    model: mediaflow.subtitleViewController.subtitlePlacementsModel
                     delegate: Rectangle {
                         required property string placementId
                         required property int startFrame
@@ -670,7 +670,7 @@ AppScrollView {
                         width: placementList.width
                         height: 48
                         radius: Theme.radiusSmall
-                        color: subtitleController.selectedSubtitlePlacementId === placementId ? Theme.accentSoft : placementMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                        color: mediaflow.subtitleViewController.selectedSubtitlePlacementId === placementId ? Theme.accentSoft : placementMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
                         border.color: hasOverride ? Theme.accent : Theme.border
                         RowLayout {
                             anchors.fill: parent
@@ -698,7 +698,7 @@ AppScrollView {
                             id: placementMouse
                             anchors.fill: parent
                             hoverEnabled: true
-                            onClicked: subtitleController.selectSubtitlePlacement(placementId)
+                            onClicked: mediaflow.subtitleViewController.selectSubtitlePlacement(placementId)
                         }
                     }
                     EmptyState {
@@ -712,7 +712,7 @@ AppScrollView {
                 Panel {
                     Layout.fillWidth: true
                     implicitHeight: 152
-                    visible: subtitleController.selectedSubtitlePlacementId.length > 0
+                    visible: mediaflow.subtitleViewController.selectedSubtitlePlacementId.length > 0
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 8
@@ -720,11 +720,11 @@ AppScrollView {
                         AppTextArea {
                             id: placementText
                             collaborationPath: "/subtitles/placements/"
-                                + subtitleController.selectedSubtitlePlacementId
+                                + mediaflow.subtitleViewController.selectedSubtitlePlacementId
                                 + "/text"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            text: subtitleController.selectedSubtitlePlacementData.text || ""
+                            text: mediaflow.subtitleViewController.selectedSubtitlePlacementData.text || ""
                             wrapMode: TextEdit.Wrap
                             readOnly: !root.canEdit
                         }
@@ -735,13 +735,13 @@ AppScrollView {
                                 primary: true
                                 text: qsTr("保存为序列覆盖")
                                 enabled: root.canEdit
-                                onClicked: subtitleController.updateSubtitlePlacementText(subtitleController.selectedSubtitlePlacementId, placementText.text, false)
+                                onClicked: mediaflow.subtitlePlacementController.updateSubtitlePlacementText(mediaflow.subtitleViewController.selectedSubtitlePlacementId, placementText.text, false)
                             }
                             AppButton {
                                 Layout.fillWidth: true
                                 text: qsTr("应用到文档")
                                 enabled: root.canEdit
-                                onClicked: subtitleController.updateSubtitlePlacementText(subtitleController.selectedSubtitlePlacementId, placementText.text, true)
+                                onClicked: mediaflow.subtitlePlacementController.updateSubtitlePlacementText(mediaflow.subtitleViewController.selectedSubtitlePlacementId, placementText.text, true)
                             }
                         }
                     }

@@ -6,11 +6,13 @@ AbstractButton {
     id: control
 
     property string iconName: ""
-    property int iconSize: Theme.iconSizeToolbar
+    property bool compact: false
+    property int iconSize: compact ? Theme.iconSizeSmall : Theme.iconSizeToolbar
     property bool primary: false
     property bool danger: false
     property bool flat: true
     property string toolTipText: ""
+    readonly property bool usesLucideIcon: buttonGlyph.usesLucide
     readonly property color foregroundColor: {
         if (!control.enabled)
             return Theme.textDisabled;
@@ -42,19 +44,25 @@ AbstractButton {
         return control.flat ? Theme.transparent : Theme.control;
     }
 
-    implicitWidth: Theme.iconButtonSize
-    implicitHeight: Theme.iconButtonSize
+    implicitWidth: compact ? Theme.iconButtonSizeCompact : Theme.iconButtonSize
+    implicitHeight: compact ? Theme.iconButtonSizeCompact : Theme.iconButtonSize
     padding: 0
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     Accessible.role: Accessible.Button
 
-    contentItem: AppIcon {
-        width: control.iconSize
-        height: control.iconSize
-        anchors.centerIn: parent
-        iconName: control.iconName
-        iconColor: control.foregroundColor
+    contentItem: Item {
+        implicitWidth: control.iconSize
+        implicitHeight: control.iconSize
+
+        AppIcon {
+            id: buttonGlyph
+            width: control.iconSize
+            height: control.iconSize
+            anchors.centerIn: parent
+            iconName: control.iconName
+            iconColor: control.foregroundColor
+        }
     }
 
     background: Rectangle {

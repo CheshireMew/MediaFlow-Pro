@@ -32,12 +32,12 @@ def test_workflow_transitions_are_persisted_and_project_override_is_respected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "mediaflow.infrastructure.project_catalog_repository.now_ms",
+        "mediaflow.infrastructure.project_metadata_repository.now_ms",
         lambda: 1_000,
     )
     root = tmp_path / "Workflow"
     with ProjectRepository.create(root, "Workflow") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         coordinator = WorkflowCoordinator(repository, global_auto_continue=False)
         run = coordinator.begin(
             sequence_id=project.main_sequence_id,
@@ -47,7 +47,7 @@ def test_workflow_transitions_are_persisted_and_project_override_is_respected(
 
         assert run.status == WorkflowStatus.AWAITING_CONFIRMATION
         assert run.auto_continue is False
-        assert repository.catalog.get_workflow_run(run.id) == run
+        assert repository.projects.get_workflow_run(run.id) == run
 
         running = coordinator.mark_running(run.id, task_ids=["task-1"])
         assert running.status == WorkflowStatus.RUNNING
@@ -58,13 +58,13 @@ def test_workflow_transitions_are_persisted_and_project_override_is_respected(
         assert prepared.status == WorkflowStatus.AWAITING_CONFIRMATION
         assert prepared.payload.task_ids == []
 
-        repository.catalog.set_workflow_auto_continue(True)
+        repository.projects.set_workflow_auto_continue(True)
         automatic = WorkflowCoordinator(repository, global_auto_continue=False).begin(
             sequence_id=project.main_sequence_id,
             stage=WorkflowStage.PREPARE_MEDIA,
         )
         assert automatic.auto_continue is True
-        assert repository.catalog.list_workflow_runs(active_only=True)[0].id == automatic.id
+        assert repository.projects.list_workflow_runs(active_only=True)[0].id == automatic.id
 
         cancelled = coordinator.cancel(run.id)
         assert cancelled.status == WorkflowStatus.CANCELLED
@@ -72,14 +72,14 @@ def test_workflow_transitions_are_persisted_and_project_override_is_respected(
 
 def test_global_workflow_mode_is_used_only_when_project_inherits(tmp_path: Path) -> None:
     with ProjectRepository.create(tmp_path / "Inherited", "Inherited") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         run = WorkflowCoordinator(repository, global_auto_continue=True).begin(
             sequence_id=project.main_sequence_id,
             stage=WorkflowStage.PREPARE_MEDIA,
         )
         assert run.auto_continue is True
 
-        repository.catalog.set_workflow_auto_continue(False)
+        repository.projects.set_workflow_auto_continue(False)
         overridden = WorkflowCoordinator(repository, global_auto_continue=True).begin(
             sequence_id=project.main_sequence_id,
             stage=WorkflowStage.PREPARE_MEDIA,
@@ -129,7 +129,7 @@ def test_failed_task_blocks_workflow_without_consuming_success_output(
             assert release.wait(5)
             raise RuntimeError("observable workflow failure")
 
-        project._tasks._handlers[TaskKind.ANALYZE] = fail
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = fail
         run = project._workflows.coordinator.begin(
             sequence_id=project.get_project().main_sequence_id,
             stage=WorkflowStage.PREPARE_MEDIA,
@@ -154,11 +154,11 @@ def test_failed_task_blocks_workflow_without_consuming_success_output(
         assert failed.status == TaskStatus.FAILED
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
+            project._repository.projects.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
-        persisted = project._repository.catalog.get_workflow_run(run.id)
+        persisted = project._repository.projects.get_workflow_run(run.id)
         assert persisted.status == WorkflowStatus.BLOCKED
         assert persisted.message_code == "workflow_task_failed"
         committed = project.committed_task_result(task.id)
@@ -183,7 +183,7 @@ def test_cancelled_task_blocks_workflow_for_recovery_without_consuming_output(
                 context.cancellation.raise_if_requested()
                 time.sleep(0.01)
 
-        project._tasks._handlers[TaskKind.ANALYZE] = wait_for_cancel
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = wait_for_cancel
         run = project._workflows.coordinator.begin(
             sequence_id=project.get_project().main_sequence_id,
             stage=WorkflowStage.PREPARE_MEDIA,
@@ -208,11 +208,11 @@ def test_cancelled_task_blocks_workflow_for_recovery_without_consuming_output(
         assert cancelled.status == TaskStatus.CANCELLED
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
+            project._repository.projects.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
-        persisted = project._repository.catalog.get_workflow_run(run.id)
+        persisted = project._repository.projects.get_workflow_run(run.id)
         assert persisted.status == WorkflowStatus.BLOCKED
         assert persisted.message_code == "workflow_task_cancelled"
 
@@ -225,7 +225,7 @@ def test_reopen_settles_workflow_when_owner_crashed_after_persisting_failure(
         root,
         "FailureBeforeWorkflowReceipt",
     )
-    project_record = repository.catalog.get_project()
+    project_record = repository.projects.get_project()
     coordinator = WorkflowCoordinator(
         repository,
         global_auto_continue=False,
@@ -264,7 +264,7 @@ def test_reopen_settles_workflow_when_owner_crashed_after_persisting_failure(
         coordinator.mark_running(run.id, task_ids=[task.id])
         release.set()
         assert tasks.wait(task.id, timeout=5).status == TaskStatus.FAILED
-        assert repository.catalog.get_workflow_run(run.id).status == WorkflowStatus.RUNNING
+        assert repository.projects.get_workflow_run(run.id).status == WorkflowStatus.RUNNING
     finally:
         release.set()
         tasks.shutdown()
@@ -272,7 +272,7 @@ def test_reopen_settles_workflow_when_owner_crashed_after_persisting_failure(
 
     application = EditorApplication()
     with application.open_project(root, writable=True) as reopened:
-        settled = reopened._repository.catalog.get_workflow_run(run.id)
+        settled = reopened._repository.projects.get_workflow_run(run.id)
         assert settled.status == WorkflowStatus.BLOCKED
         assert settled.message_code == "workflow_task_failed"
 
@@ -288,11 +288,11 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
         "RetryAttempt",
     ) as project:
         project.set_workflow_mode(False)
-        asset = project._repository.catalog.import_external_asset(
+        asset = project._repository.assets.import_external_asset(
             source,
             AssetKind.VIDEO,
         )
-        asset = project._repository.catalog.update_asset(
+        asset = project._repository.assets.update_asset(
             asset.model_copy(
                 update={"metadata": asset.metadata.model_copy(update={"width": 3840, "height": 2160})}
             )
@@ -315,15 +315,15 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
             assert release_second.wait(5)
             return TaskCompletion()
 
-        project._tasks._handlers[TaskKind.PROXY] = proxy
+        project._tasks._execution.handlers[TaskKind.PROXY] = proxy
         project.continue_workflow(run.id)
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
+            project._repository.projects.get_workflow_run(run.id).status != WorkflowStatus.BLOCKED
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
-        failed_run = project._repository.catalog.get_workflow_run(run.id)
+        failed_run = project._repository.projects.get_workflow_run(run.id)
         assert failed_run.status == WorkflowStatus.BLOCKED
         assert failed_run.payload.stage_attempt == 1
         first_task = project.get_task(failed_run.payload.task_ids[0])
@@ -332,7 +332,7 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
 
         project.continue_workflow(run.id)
         assert second_started.wait(5)
-        retried_run = project._repository.catalog.get_workflow_run(run.id)
+        retried_run = project._repository.projects.get_workflow_run(run.id)
         second_task = project.get_task(retried_run.payload.task_ids[0])
         assert retried_run.payload.stage_attempt == 2
         assert second_task.id != first_task.id
@@ -342,11 +342,11 @@ def test_failed_workflow_recovery_creates_a_new_persisted_stage_attempt(
         assert project.wait_for_task(second_task.id, timeout=5).status == TaskStatus.COMPLETED
         deadline = time.monotonic() + 5
         while (
-            project._repository.catalog.get_workflow_run(run.id).stage != WorkflowStage.TRANSCRIBE
+            project._repository.projects.get_workflow_run(run.id).stage != WorkflowStage.TRANSCRIBE
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
-        advanced = project._repository.catalog.get_workflow_run(run.id)
+        advanced = project._repository.projects.get_workflow_run(run.id)
         assert advanced.stage == WorkflowStage.TRANSCRIBE
         assert advanced.status == WorkflowStatus.AWAITING_CONFIRMATION
         assert attempts == 2

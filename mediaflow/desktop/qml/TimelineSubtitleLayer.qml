@@ -23,7 +23,7 @@ Item {
 
     function synchronizeRows() {
         rowsSyncPending = false;
-        placementRows = subtitleController.subtitlePlacementsModel.snapshot();
+        placementRows = mediaflow.subtitleViewController.subtitlePlacementsModel.snapshot();
         subtitleCanvas.requestPaint();
     }
 
@@ -56,7 +56,7 @@ Item {
     onPlacementRowsChanged: subtitleCanvas.requestPaint()
 
     Connections {
-        target: subtitleController.subtitlePlacementsModel
+        target: mediaflow.subtitleViewController.subtitlePlacementsModel
         ignoreUnknownSignals: true
         function onModelReset() { subtitleOverlayLayer.scheduleRowsSync(); }
         function onRowsInserted() { subtitleOverlayLayer.scheduleRowsSync(); }
@@ -66,7 +66,7 @@ Item {
     }
 
     Connections {
-        target: subtitleController
+        target: mediaflow.subtitleViewController
         function onSelectionChanged() { subtitleCanvas.requestPaint(); }
     }
 
@@ -101,7 +101,7 @@ Item {
             context.clearRect(0, 0, width, height);
             context.font = Theme.canvasMonospaceFont(Theme.fontSizeCaption);
             context.textBaseline = "middle";
-            const selectedId = subtitleController.selectedSubtitlePlacementId;
+            const selectedId = mediaflow.subtitleViewController.selectedSubtitlePlacementId;
             for (let index = 0; index < subtitleOverlayLayer.placementRows.length; ++index) {
                 const row = subtitleOverlayLayer.placementRows[index];
                 const audioPosition = Number(row.audioTrackPosition);
@@ -161,7 +161,7 @@ Item {
                     mouse.accepted = false;
                     return;
                 }
-                subtitleController.selectSubtitlePlacement(String(placement.placementId));
+                mediaflow.subtitleViewController.selectSubtitlePlacement(String(placement.placementId));
                 if (mouse.button === Qt.RightButton) {
                     subtitleOverlayLayer.contextPlacementId = String(placement.placementId);
                     overviewMenu.popup();
@@ -172,7 +172,7 @@ Item {
             onDoubleClicked: function (mouse) {
                 const placement = subtitleOverlayLayer.placementAt(mouse.x, mouse.y);
                 if (placement.placementId)
-                    subtitleController.previewSubtitlePlacement(String(placement.placementId));
+                    mediaflow.subtitleViewController.previewSubtitlePlacement(String(placement.placementId));
                 else
                     mouse.accepted = false;
             }
@@ -186,20 +186,20 @@ Item {
         id: overviewMenu
         AppMenuItem {
             text: qsTr("播放这一条")
-            onTriggered: subtitleController.previewSubtitlePlacement(
+            onTriggered: mediaflow.subtitleViewController.previewSubtitlePlacement(
                 subtitleOverlayLayer.contextPlacementId)
         }
         AppMenuItem {
             text: qsTr("恢复字幕文档时间")
             enabled: view.canEdit
-            onTriggered: subtitleController.resetSubtitlePlacementTiming(
+            onTriggered: mediaflow.subtitlePlacementController.resetSubtitlePlacementTiming(
                 subtitleOverlayLayer.contextPlacementId)
         }
     }
 
     Rectangle {
         id: subtitleOverlay
-        property var placement: subtitleController.selectedSubtitlePlacementData
+        property var placement: mediaflow.subtitleViewController.selectedSubtitlePlacementData
         property string placementId: String(placement.placementId || "")
         property int audioTrackPosition: Number(placement.audioTrackPosition ?? -1)
         property int startFrame: Number(placement.startFrame || 0)
@@ -229,8 +229,8 @@ Item {
         Accessible.name: qsTr("字幕：%1。拖动可移动，拖动两侧可调整时间。")
             .arg(subtitleText)
         Accessible.role: Accessible.ListItem
-        Keys.onReturnPressed: subtitleController.previewSubtitlePlacement(placementId)
-        Keys.onSpacePressed: subtitleController.previewSubtitlePlacement(placementId)
+        Keys.onReturnPressed: mediaflow.subtitleViewController.previewSubtitlePlacement(placementId)
+        Keys.onSpacePressed: mediaflow.subtitleViewController.previewSubtitlePlacement(placementId)
 
         Rectangle {
             anchors.left: parent.left
@@ -299,7 +299,7 @@ Item {
                 const delta = Math.round(
                     subtitleOverlay.moveOffset / view.pixelsPerFrame);
                 if (delta !== 0)
-                    subtitleController.moveSubtitlePlacement(
+                    mediaflow.subtitlePlacementController.moveSubtitlePlacement(
                         subtitleOverlay.placementId,
                         subtitleOverlay.startFrame + delta,
                         view.pixelsPerFrame,
@@ -311,7 +311,7 @@ Item {
                 subtitleOverlay.moveOffset = 0;
             }
             onCanceled: subtitleOverlay.moveOffset = 0
-            onDoubleClicked: subtitleController.previewSubtitlePlacement(
+            onDoubleClicked: mediaflow.subtitleViewController.previewSubtitlePlacement(
                 subtitleOverlay.placementId)
             ToolTip.visible: containsMouse
             ToolTip.text: subtitleOverlay.subtitleText
@@ -321,13 +321,13 @@ Item {
             id: subtitleOverlayMenu
             AppMenuItem {
                 text: qsTr("播放这一条")
-                onTriggered: subtitleController.previewSubtitlePlacement(
+                onTriggered: mediaflow.subtitleViewController.previewSubtitlePlacement(
                     subtitleOverlay.placementId)
             }
             AppMenuItem {
                 text: qsTr("恢复字幕文档时间")
                 enabled: view.canEdit && subtitleOverlay.timingOverridden
-                onTriggered: subtitleController.resetSubtitlePlacementTiming(
+                onTriggered: mediaflow.subtitlePlacementController.resetSubtitlePlacementTiming(
                     subtitleOverlay.placementId)
             }
         }
@@ -356,7 +356,7 @@ Item {
                 onActiveChanged: if (!active && subtitleOverlay.leftTrimOffset !== 0) {
                     const delta = Math.round(
                         subtitleOverlay.leftTrimOffset / view.pixelsPerFrame);
-                    subtitleController.resizeSubtitlePlacement(
+                    mediaflow.subtitlePlacementController.resizeSubtitlePlacement(
                         subtitleOverlay.placementId,
                         subtitleOverlay.startFrame + delta,
                         subtitleOverlay.endFrame,
@@ -390,7 +390,7 @@ Item {
                 onActiveChanged: if (!active && subtitleOverlay.rightTrimOffset !== 0) {
                     const delta = Math.round(
                         subtitleOverlay.rightTrimOffset / view.pixelsPerFrame);
-                    subtitleController.resizeSubtitlePlacement(
+                    mediaflow.subtitlePlacementController.resizeSubtitlePlacement(
                         subtitleOverlay.placementId,
                         subtitleOverlay.startFrame,
                         subtitleOverlay.endFrame + delta,

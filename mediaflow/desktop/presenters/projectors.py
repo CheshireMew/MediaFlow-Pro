@@ -45,7 +45,7 @@ class PresentationProjectors:
         self.tasks.refresh_tasks()
         self.refresh_active_sequence(refresh_sequences=False)
         self.workspace.refresh_recent_projects()
-        self.session.events.workflowChanged.emit()
+        self.session.updates.commit(workflow=True)
 
     def refresh_active_sequence(self, *, refresh_sequences: bool = False) -> None:
         if refresh_sequences:
@@ -56,5 +56,5 @@ class PresentationProjectors:
         self.audio.refresh_audio_buses()
         self.audio.refresh_audio_metrics()
         self.timeline.refresh_preview_subtitles()
-        self.session.events.projectStateChanged.emit()
-        self.session.events.historyChanged.emit()
+        self.session.updates.commit(project=True)
+        self.session.updates.commit(history=True)

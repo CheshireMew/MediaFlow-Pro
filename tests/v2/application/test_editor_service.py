@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from aiohttp import ClientSession
 
-import mediaflow.service.desktop_proxy as desktop_proxy_module
+import mediaflow.service.remote_project as desktop_proxy_module
 from mediaflow.application.asset_task_handlers import AssetTaskHandlers
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers.controller_hub import EditorControllers
@@ -22,15 +22,19 @@ from mediaflow.domain.enums import TrackKind, TransitionKind
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.subtitles import SubtitleSegment
 from mediaflow.infrastructure.project_lock import ProcessFileLock
+from mediaflow.infrastructure.project_operation_repository import (
+    ProjectOperationRepository,
+)
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.service.client import (
     EditorServiceClient,
     EditorServiceRpcError,
     call_sync,
     execute_sync,
+    shutdown_sync_service,
 )
 from mediaflow.service.codec import decode_transport, encode_transport
-from mediaflow.service.desktop_proxy import DesktopEditorApplication
+from mediaflow.service.desktop_application_proxy import DesktopEditorApplication
 from mediaflow.service.discovery import ServiceDiscovery, ServicePaths
 from mediaflow.service.server import PRIVATE_PORT_END, PRIVATE_PORT_START, EditorServiceServer
 
@@ -63,6 +67,64 @@ def _request(
         "actor": {"kind": "agent", "id": "service-test", "name": "Service Test"},
         "client_id": "pytest-service-client",
     }
+
+
+@pytest.mark.asyncio
+async def test_direct_task_rpc_uses_the_canonical_automation_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "projects"))
+    monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(tmp_path / "media"))
+    server = EditorServiceServer(paths=_paths(tmp_path / "service-state"))
+    discovery = await server.start()
+    client = EditorServiceClient(discovery)
+    try:
+        created = await client.execute(
+            _request(
+                "project.create",
+                request_id="create-direct-task-rpc-project",
+                arguments={
+                    "name": "Direct Task RPC",
+                    "directory_name": "direct-task-rpc",
+                    "profile": ProjectProfile().model_dump(
+                        mode="json",
+                        exclude_computed_fields=True,
+                    ),
+                },
+            )
+        )
+
+        response = await client.call(
+            "task.list",
+            {
+                "project": created["result"]["path"],
+                "client_id": "direct-task-rpc-test",
+            },
+        )
+
+        assert response["result"] == {"tasks": []}
+        assert response["project_revision"] == 0
+    finally:
+        await server.stop()
+
+
+def test_sync_shutdown_waits_until_the_resident_service_process_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_root = tmp_path / "resident-service"
+    monkeypatch.setenv("MEDIAFLOW_SERVICE_STATE_DIR", str(service_root))
+
+    status = call_sync("service.status")
+    discovery = ServiceDiscovery.read(service_root / "discovery.json")
+    assert status["pid"] == discovery.pid
+    assert discovery.belongs_to_live_process() is True
+
+    shutdown_sync_service()
+
+    assert discovery.belongs_to_live_process() is False
+    assert not (service_root / "discovery.json").exists()
 
 
 @pytest.mark.asyncio
@@ -187,13 +249,24 @@ async def test_websocket_publishes_real_project_conflict_to_matching_project(
                     }
                 )
                 assert (await websocket.receive_json())["type"] == "project.subscribed"
+                audio = await client.execute(
+                    _request(
+                        "audio.inspect",
+                        project=str(project),
+                        request_id="conflict-event-audio",
+                    )
+                )
+                dialogue_bus = next(item for item in audio["result"]["buses"] if item["name"] == "对白")
                 await client.execute(
                     _request(
-                        "timeline.track.add",
+                        "audio.bus.update",
                         project=str(project),
                         request_id="conflict-event-first-write",
                         base_revision=0,
-                        arguments={"kind": "video", "name": "First write"},
+                        arguments={
+                            "bus_id": dialogue_bus["id"],
+                            "changes": {"gain_db": -1.0},
+                        },
                     )
                 )
                 assert (await websocket.receive_json(timeout=5))["type"] == "project.changed"
@@ -201,11 +274,14 @@ async def test_websocket_publishes_real_project_conflict_to_matching_project(
                 with pytest.raises(EditorServiceRpcError) as conflict:
                     await client.execute(
                         _request(
-                            "timeline.track.add",
+                            "audio.bus.update",
                             project=str(project),
                             request_id="conflict-event-stale-write",
                             base_revision=0,
-                            arguments={"kind": "audio", "name": "Stale write"},
+                            arguments={
+                                "bus_id": dialogue_bus["id"],
+                                "changes": {"gain_db": -2.0},
+                            },
                         )
                     )
                 assert conflict.value.code == -32009
@@ -214,7 +290,7 @@ async def test_websocket_publishes_real_project_conflict_to_matching_project(
                 assert event["payload"]["project_id"] == project_id
                 assert event["payload"]["project_path"] == str(project)
                 assert event["payload"]["request_id"] == "conflict-event-stale-write"
-                assert event["payload"]["operation"] == "timeline.track.add"
+                assert event["payload"]["operation"] == "audio.bus.update"
                 assert event["payload"]["expected_revision"] == 0
                 assert event["payload"]["current_revision"] == 1
                 assert event["payload"]["conflicting_events"]
@@ -257,20 +333,13 @@ async def test_service_subscription_receives_real_runtime_tool_events(
                     "cancelled",
                 }:
                     observed.append(await websocket.receive_json(timeout=10))
-                runtime_events = [
-                    item for item in observed if item["type"] == "runtime.changed"
-                ]
+                runtime_events = [item for item in observed if item["type"] == "runtime.changed"]
                 assert [item["payload"]["state"] for item in runtime_events] == [
                     "running",
                     "completed",
                 ]
-                assert all(
-                    item["payload"]["operation"] == "inspect"
-                    for item in runtime_events
-                )
-                assert [
-                    item["payload"]["runtime_revision"] for item in runtime_events
-                ] == [1, 2]
+                assert all(item["payload"]["operation"] == "inspect" for item in runtime_events)
+                assert [item["payload"]["runtime_revision"] for item in runtime_events] == [1, 2]
     finally:
         await server.stop()
 
@@ -319,9 +388,7 @@ async def test_service_shutdown_bounds_uncooperative_websocket(
     try:
         async with ClientSession(headers=headers) as session:
             async with session.ws_connect(discovery.websocket_url) as websocket:
-                assert (await websocket.receive_json())[
-                    "type"
-                ] == "service.ready"
+                assert (await websocket.receive_json())["type"] == "service.ready"
                 stopping_started = time.perf_counter()
                 await server.stop()
                 assert time.perf_counter() - stopping_started < 3.5
@@ -411,12 +478,8 @@ async def test_websocket_stream_delivers_real_task_and_committed_project_events(
                 ):
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        raise AssertionError(
-                            f"WebSocket missed terminal task event: {observed}"
-                        )
-                    observed.append(
-                        await websocket.receive_json(timeout=remaining)
-                    )
+                        raise AssertionError(f"WebSocket missed terminal task event: {observed}")
+                    observed.append(await websocket.receive_json(timeout=remaining))
 
         assert any(item["type"] == "project.changed" for item in observed)
         with closing(sqlite3.connect(project / "project.mfp")) as connection:
@@ -470,6 +533,17 @@ def test_service_transport_batches_homogeneous_domain_models() -> None:
     assert decode_transport(encoded) == segments
 
 
+def test_service_transport_rejects_unregistered_schema_ids() -> None:
+    with pytest.raises(ValueError, match="Unknown Editor Service transport schema"):
+        decode_transport(
+            {
+                "$mediaflow_type": "model",
+                "schema": "python.import.is.not.a.contract",
+                "value": {},
+            }
+        )
+
+
 def test_project_event_cursor_reports_latest_durable_event(tmp_path: Path) -> None:
     application = EditorApplication()
     project = application.create_project(tmp_path, "Cursor")
@@ -492,11 +566,12 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
     server = EditorServiceServer(paths=_paths(tmp_path / "service-state"))
     await server.start()
     try:
-        manager = server._sessions
-        assert manager is not None
+        operations = server._operations
+        assert operations is not None
+        registry = operations.registry
         project_root = tmp_path / "lifetime-boundary"
         await asyncio.to_thread(
-            manager.create_desktop_project,
+            registry.create_desktop_project,
             project_root,
             "Lifetime Boundary",
             ProjectProfile(),
@@ -505,7 +580,7 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
         )
         lookup_finished = threading.Event()
         allow_lookup_to_return = threading.Event()
-        original_open_session = manager.open_session
+        original_open_session = registry.open_session
 
         def paused_open_session(*args, **kwargs):
             session = original_open_session(*args, **kwargs)
@@ -514,10 +589,10 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
                 raise TimeoutError("Test did not release the session lookup")
             return session
 
-        monkeypatch.setattr(manager, "open_session", paused_open_session)
+        monkeypatch.setattr(registry, "open_session", paused_open_session)
         read = asyncio.create_task(
             asyncio.to_thread(
-                manager.execute_desktop_command,
+                operations.desktop.execute_desktop_command,
                 path=project_root,
                 target="project",
                 sequence_id="",
@@ -532,7 +607,7 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
         assert await asyncio.to_thread(lookup_finished.wait, 3)
         release = asyncio.create_task(
             asyncio.to_thread(
-                manager.release_desktop_project,
+                registry.release_desktop_project,
                 project_root,
                 "desktop-lifetime-test",
                 5.0,
@@ -546,7 +621,7 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
         await asyncio.wait_for(release, timeout=5)
 
         assert decode_transport(response["value"]).name == "Lifetime Boundary"
-        assert project_root.resolve() not in manager._sessions
+        assert not registry.has_session(project_root)
     finally:
         await server.stop()
 
@@ -632,6 +707,7 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
             )
         assert unnecessary_upgrade.value.code == -32602
         assert "current schema" in str(unnecessary_upgrade.value)
+        sequence_id = created["result"]["project"]["main_sequence_id"]
 
         headers = {"Authorization": f"Bearer {discovery.token}"}
         async with ClientSession(headers=headers) as session:
@@ -663,6 +739,13 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
         assert changed["project_revision"] == 1
         assert changed["event"]["cursor"] == 2
         assert changed["event"]["operation"] == "timeline.track.add"
+        track_id = changed["result"]["track"]["id"]
+        assert changed["event"]["write_set"] == [
+            f"/sequences/{sequence_id}/tracks/{track_id}",
+            f"/sequences/{sequence_id}/tracks/order",
+        ]
+        assert changed["event"]["changes"][0]["action"] == "create"
+        assert changed["event"]["changes"][0]["value"]["id"] == track_id
         assert pushed["type"] == "project.changed"
         assert pushed["payload"]["project_revision"] == 1
         assert pushed["payload"]["operation_result"] == changed["result"]
@@ -678,7 +761,6 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
             ).fetchall()
         assert stored == [(0, "project.create"), (1, "timeline.track.add")]
 
-        sequence_id = created["result"]["project"]["main_sequence_id"]
         audio = await client.execute(
             _request(
                 "audio.inspect",
@@ -704,17 +786,18 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
         assert rebased["project_revision"] == 2
         assert rebased["result"]["bus"]["gain_db"] == -2.0
 
-        with pytest.raises(EditorServiceRpcError) as conflict:
-            await client.execute(
-                _request(
-                    "timeline.track.add",
-                    project=str(project),
-                    request_id="stale-service-track",
-                    base_revision=0,
-                    arguments={"kind": "audio", "name": "Stale audio"},
-                )
+        stale_track = await client.execute(
+            _request(
+                "timeline.track.add",
+                project=str(project),
+                request_id="stale-service-track",
+                base_revision=0,
+                arguments={"kind": "audio", "name": "Stale audio"},
             )
-        assert conflict.value.code == -32009
+        )
+        assert stale_track["rebased_from"] == 0
+        assert stale_track["project_revision"] == 3
+        assert stale_track["result"]["track"]["name"] == "Stale audio"
 
         batch_requests = [
             _request(
@@ -738,7 +821,7 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
                 "requests": batch_requests,
             },
         )
-        assert batch["project_revision"] == 3
+        assert batch["project_revision"] == 4
         assert batch["event"]["operation"] == "operation.execute_batch"
         assert batch["event"]["undo_group_id"] == "agent-batch-1"
         assert [item["request_id"] for item in batch["results"]] == [
@@ -755,12 +838,12 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
             {
                 "project": str(project),
                 "request_id": "undo-agent-batch",
-                "base_revision": 3,
+                "base_revision": 4,
                 "actor": batch_requests[0]["actor"],
                 "undo_group_id": "agent-batch-1",
             },
         )
-        assert undone["project_revision"] == 4
+        assert undone["project_revision"] == 5
         timeline = await client.execute(
             _request(
                 "timeline.get",
@@ -781,7 +864,7 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
                 "requests": batch_requests,
             },
         )
-        assert batch_retry["project_revision"] == 4
+        assert batch_retry["project_revision"] == 5
         assert batch_retry["event"]["cursor"] == batch["event"]["cursor"]
         assert batch_retry["event"]["operation"] == "operation.execute_batch"
 
@@ -797,21 +880,30 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
                 },
             )
         )
-        assert exact_retry["project_revision"] == 4
+        assert exact_retry["project_revision"] == 5
         assert exact_retry["result"] == rebased["result"]
         with closing(sqlite3.connect(project / "project.mfp")) as connection:
-            assert connection.execute(
-                "SELECT COUNT(*) FROM project_event WHERE request_id=?",
-                ("rebase-disjoint-audio",),
-            ).fetchone()[0] == 1
-            assert connection.execute(
-                "SELECT COUNT(*) FROM project_event WHERE undo_group_id=?",
-                ("agent-batch-1",),
-            ).fetchone()[0] == 2
-            assert connection.execute(
-                "SELECT COUNT(*) FROM undo_group WHERE id=?",
-                ("agent-batch-1",),
-            ).fetchone()[0] == 1
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM project_event WHERE request_id=?",
+                    ("rebase-disjoint-audio",),
+                ).fetchone()[0]
+                == 1
+            )
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM project_event WHERE undo_group_id=?",
+                    ("agent-batch-1",),
+                ).fetchone()[0]
+                == 2
+            )
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM undo_group WHERE id=?",
+                    ("agent-batch-1",),
+                ).fetchone()[0]
+                == 1
+            )
     finally:
         await server.stop()
 
@@ -867,9 +959,7 @@ async def test_history_survives_service_restart_and_redo_restores_the_edit(
             "history.list",
             {"project": str(project)},
         )
-        assert [item["id"] for item in history["items"]] == [
-            "restart-history-track"
-        ]
+        assert [item["id"] for item in history["items"]] == ["restart-history-track"]
         undone = await restarted_client.call(
             "history.undo",
             {
@@ -892,10 +982,7 @@ async def test_history_survives_service_restart_and_redo_restores_the_edit(
                 arguments={"sequence_id": sequence_id},
             )
         )
-        assert all(
-            track["name"] != "Restarted track"
-            for track in after_undo["result"]["timeline"]["tracks"]
-        )
+        assert all(track["name"] != "Restarted track" for track in after_undo["result"]["timeline"]["tracks"])
 
         redone = await restarted_client.call(
             "history.redo",
@@ -918,10 +1005,7 @@ async def test_history_survives_service_restart_and_redo_restores_the_edit(
                 arguments={"sequence_id": sequence_id},
             )
         )
-        assert any(
-            track["name"] == "Restarted track"
-            for track in after_redo["result"]["timeline"]["tracks"]
-        )
+        assert any(track["name"] == "Restarted track" for track in after_redo["result"]["timeline"]["tracks"])
     finally:
         await restarted.stop()
 
@@ -985,9 +1069,7 @@ async def test_history_undo_rejects_a_later_overlapping_edit(
                 },
             )
         assert conflict.value.code == -32009
-        assert conflict.value.data["conflicting_events"][0]["request_id"] == (
-            "history-conflict-second"
-        )
+        assert conflict.value.data["conflicting_events"][0]["request_id"] == ("history-conflict-second")
     finally:
         await server.stop()
 
@@ -1151,7 +1233,7 @@ async def test_async_task_receipt_recovers_after_scheduling_persistence_fault(
             )
         )
         project = Path(created["result"]["path"])
-        original_save = ProjectRepository.save_automation_result
+        original_save = ProjectOperationRepository.save_result
         injected = False
 
         def fail_once(self, request_id, operation, input_hash, result):
@@ -1161,7 +1243,7 @@ async def test_async_task_receipt_recovers_after_scheduling_persistence_fault(
                 raise RuntimeError("injected fault after real task result")
             return original_save(self, request_id, operation, input_hash, result)
 
-        monkeypatch.setattr(ProjectRepository, "save_automation_result", fail_once)
+        monkeypatch.setattr(ProjectOperationRepository, "save_result", fail_once)
         request = _request(
             "asset.import",
             project=str(project),
@@ -1182,35 +1264,34 @@ async def test_async_task_receipt_recovers_after_scheduling_persistence_fault(
                 )
             )
             if before_retry["result"]["assets"] and any(
-                task["status"] == "completed"
-                for task in before_retry["result"]["tasks"]
+                task["status"] == "completed" for task in before_retry["result"]["tasks"]
             ):
                 break
             if time.monotonic() >= deadline:
-                raise AssertionError(
-                    "Service did not commit the asynchronous task result"
-                )
+                raise AssertionError("Service did not commit the asynchronous task result")
             await asyncio.sleep(0.05)
         imported_tasks = [
             task
             for task in before_retry["result"]["tasks"]
-            if task.get("idempotency_key")
-            == "automation:recover-running-import:asset.import"
+            if task.get("idempotency_key") == "automation:recover-running-import:asset.import"
         ]
         assert len(imported_tasks) == 1
         assert imported_tasks[0]["status"] == "completed"
         assert len(before_retry["result"]["assets"]) == 1
         with closing(sqlite3.connect(project / "project.mfp")) as connection:
-            assert connection.execute(
-                "SELECT state FROM automation_request WHERE request_id=?",
-                ("recover-running-import",),
-            ).fetchone()[0] == "running"
+            assert (
+                connection.execute(
+                    "SELECT state FROM automation_request WHERE request_id=?",
+                    ("recover-running-import",),
+                ).fetchone()[0]
+                == "running"
+            )
             assert connection.execute(
                 "SELECT task_id FROM task_consumption WHERE task_id=?",
                 (imported_tasks[0]["id"],),
             ).fetchone() == (imported_tasks[0]["id"],)
 
-        monkeypatch.setattr(ProjectRepository, "save_automation_result", original_save)
+        monkeypatch.setattr(ProjectOperationRepository, "save_result", original_save)
         recovered = await client.execute(request)
         assert recovered["rebased_from"] == 0
         assert recovered["result"]["task"]["id"] == imported_tasks[0]["id"]
@@ -1287,26 +1368,19 @@ def test_desktop_and_agent_share_service_writer_and_live_projection(
             if time.monotonic() >= deadline:
                 raise AssertionError("Desktop revision did not follow the agent event")
             time.sleep(0.02)
-        with pytest.raises(EditorServiceRpcError) as conflict:
-            timeline.add_track(TrackKind.AUDIO, "Human stale draft")
-        assert conflict.value.code == -32009
-        resolved = project.resolve_pending_conflict("keep_local")
-        assert resolved.name == "Human stale draft"
+        rebased_local = timeline.add_track(TrackKind.AUDIO, "Human stale draft")
+        assert rebased_local.name == "Human stale draft"
         assert {track.name for track in timeline.state.tracks} >= {
             "Agent conflict",
             "Human stale draft",
         }
         assert timeline.can_undo is True
         timeline.undo()
-        assert "Human stale draft" not in {
-            track.name for track in timeline.state.tracks
-        }
+        assert "Human stale draft" not in {track.name for track in timeline.state.tracks}
         assert "Agent conflict" in {track.name for track in timeline.state.tracks}
         assert timeline.can_redo is True
         timeline.redo()
-        assert "Human stale draft" in {
-            track.name for track in timeline.state.tracks
-        }
+        assert "Human stale draft" in {track.name for track in timeline.state.tracks}
         with closing(sqlite3.connect(project.project_dir / "project.mfp")) as connection:
             actors = [
                 row[0]
@@ -1315,10 +1389,7 @@ def test_desktop_and_agent_share_service_writer_and_live_projection(
                 )
             ]
             operations = [
-                row[0]
-                for row in connection.execute(
-                    "SELECT operation FROM project_event ORDER BY cursor"
-                )
+                row[0] for row in connection.execute("SELECT operation FROM project_event ORDER BY cursor")
             ]
         assert actors == ["human", "agent", "agent", "human", "human", "human"]
         assert operations[-2:] == ["history.undo", "history.redo"]
@@ -1343,7 +1414,7 @@ def test_agent_event_updates_the_qml_bound_track_model(
             tmp_path,
             "QML Service Projection",
         )
-        project = controllers.session.binding.current
+        project = controllers.session.state.binding.current
         assert project is not None
         document = project.get_project()
         changed = execute_sync(
@@ -1359,25 +1430,19 @@ def test_agent_event_updates_the_qml_bound_track_model(
                 },
             )
         )
-        model = controllers.timeline.tracksModel
-        roles = {
-            bytes(name).decode("utf-8"): role
-            for role, name in model.roleNames().items()
-        }
+        model = controllers.timeline_view.tracksModel
+        roles = {bytes(name).decode("utf-8"): role for role, name in model.roleNames().items()}
         deadline = time.monotonic() + 5
         while True:
             qapp.processEvents()
-            names = {
-                model.data(model.index(row), roles["name"])
-                for row in range(model.rowCount())
-            }
+            names = {model.data(model.index(row), roles["name"]) for row in range(model.rowCount())}
             if "Agent visible in QML" in names:
                 break
             if time.monotonic() >= deadline:
                 raise AssertionError("The QML-bound track model did not apply the agent event")
             time.sleep(0.02)
         assert project.known_content_revision == changed["project_revision"]
-        assert controllers.timeline.tracksModel is controllers.session.models.tracks
+        assert controllers.timeline_view.tracksModel is controllers.session.models.tracks
     finally:
         controllers.shutdown()
         call_sync("service.shutdown", {"force": True}, start_if_needed=False)
@@ -1398,9 +1463,7 @@ def test_desktop_runtime_tool_call_crosses_the_real_service_boundary(
     try:
         result = application.run_runtime_tool("inspect", progress=progress.append)
         assert isinstance(result, dict)
-        assert [item.message_code for item in progress] == [
-            "runtime_service_operation"
-        ]
+        assert [item.message_code for item in progress] == ["runtime_service_operation"]
         status = call_sync("service.status", start_if_needed=False)
         assert status["active_runtime_operation"] is None
     finally:
@@ -1453,10 +1516,7 @@ def test_desktop_session_refs_release_only_the_registered_last_client(
             TrackKind.AUDIO,
             "Second client remains connected",
         )
-        names = {
-            track.name
-            for track in second.timeline(document.main_sequence_id).state.tracks
-        }
+        names = {track.name for track in second.timeline(document.main_sequence_id).state.tracks}
         assert names >= {
             "First client remains connected",
             "Second client remains connected",

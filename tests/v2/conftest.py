@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import time
 import uuid
 from collections.abc import Iterator
@@ -26,6 +25,10 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.environment import test_run_root
 from mediaflow.infrastructure.project_lock import ProcessFileLock
+from mediaflow.infrastructure.storage_budget import (
+    directory_inventory,
+    require_test_artifact_budget,
+)
 
 if TYPE_CHECKING:
     from tests.v2.editor_service_api import EditorServiceApi
@@ -33,10 +36,12 @@ if TYPE_CHECKING:
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 TEST_RUN_ROOT = test_run_root()
-MANAGED_PYTEST_ROOT = TEST_RUN_ROOT / "pytest"
+MANAGED_PYTEST_ROOT = TEST_RUN_ROOT / "p"
 MANIFEST_SCHEMA = "mediaflow-pytest-run/v1"
 _LEGACY_MANAGED_RUN_PATTERN = re.compile(
     r"^(?:"
+    r"r-[0-9a-f]{12}"
+    r"|"
     r"r-\d{8}T\d{6}-\d+-[0-9a-f]{8}"
     r"|pytest-run-\d{8}T\d{6}\.\d{6}Z-\d+-[0-9a-f]{8}"
     r")$"
@@ -48,6 +53,7 @@ _REMOVE_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.1, 0.2, 0.4)
 @dataclass
 class TestRunState:
     root: Path
+    storage_preflight: dict[str, object] = field(default_factory=dict)
     cases: dict[str, Path] = field(default_factory=dict)
     failed_nodes: set[str] = field(default_factory=set)
     finished_nodes: set[str] = field(default_factory=set)
@@ -57,7 +63,7 @@ def _safe_case_name(node_id: str) -> str:
     # The node id remains in the manifest. Keeping it out of the directory name
     # leaves enough path budget for projects with deeply nested managed sources
     # on Windows.
-    digest = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:12]
     return f"c-{digest}"
 
 
@@ -126,17 +132,10 @@ def _try_remove_managed_directory(
 
 def _owned_passed_manifest(candidate: Path) -> dict[str, object]:
     managed_root = MANAGED_PYTEST_ROOT.resolve(strict=True)
-    if candidate.is_symlink() or (
-        hasattr(candidate, "is_junction") and candidate.is_junction()
-    ):
+    if candidate.is_symlink() or (hasattr(candidate, "is_junction") and candidate.is_junction()):
         raise RuntimeError(f"Refusing to follow a linked pytest run: {candidate}")
     resolved = candidate.resolve(strict=True)
-    if (
-        resolved.parent != managed_root
-        or not _LEGACY_MANAGED_RUN_PATTERN.fullmatch(
-            candidate.name
-        )
-    ):
+    if resolved.parent != managed_root or not _LEGACY_MANAGED_RUN_PATTERN.fullmatch(candidate.name):
         raise RuntimeError(f"Refusing to inspect an unmanaged pytest run: {resolved}")
     manifest = candidate / "run-result.json"
     try:
@@ -151,17 +150,10 @@ def _owned_passed_manifest(candidate: Path) -> dict[str, object]:
             "managed": True,
             "status": "passed",
         }
-        if any(
-            payload.get(key) != value
-            for key, value in expected.items()
-        ):
-            raise RuntimeError(
-                f"Pytest run ownership mismatch: {candidate}"
-            )
+        if any(payload.get(key) != value for key, value in expected.items()):
+            raise RuntimeError(f"Pytest run ownership mismatch: {candidate}")
     elif not _is_legacy_passed_manifest(payload):
-        raise RuntimeError(
-            f"Pytest run ownership mismatch: {candidate}"
-        )
+        raise RuntimeError(f"Pytest run ownership mismatch: {candidate}")
     if not isinstance(payload.get("finished_at"), str):
         raise RuntimeError(f"Passed pytest run has no finish time: {candidate}")
     return payload
@@ -204,15 +196,19 @@ def _retention_lock() -> Iterator[None]:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    storage_preflight = require_test_artifact_budget(
+        MANAGED_PYTEST_ROOT,
+        expected_new_bytes=1024**3,
+        label="MediaFlow pytest evidence",
+    )
     MANAGED_PYTEST_ROOT.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    compact_stamp = stamp[:15]
-    run_root = (
-        MANAGED_PYTEST_ROOT
-        / f"r-{compact_stamp}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    )
+    run_identity = hashlib.sha256(
+        f"{stamp}:{os.getpid()}:{uuid.uuid4().hex}".encode()
+    ).hexdigest()[:12]
+    run_root = MANAGED_PYTEST_ROOT / f"r-{run_identity}"
     with _retention_lock():
-        (run_root / "cases").mkdir(
+        (run_root / "c").mkdir(
             parents=True,
             exist_ok=False,
         )
@@ -229,28 +225,24 @@ def pytest_configure(config: pytest.Config) -> None:
                     "failed_nodes": [],
                     "case_count": 0,
                     "cases": {},
+                    "storage_preflight": storage_preflight,
+                    "cleanup": "report-only-until-authorized",
                 },
             )
         except BaseException as error:
             try:
-                archive = (
-                    MANAGED_PYTEST_ROOT
-                    / "setup-failures"
-                )
+                archive = MANAGED_PYTEST_ROOT / "setup-failures"
                 archive.mkdir(exist_ok=True)
                 destination = archive / run_root.name
                 run_root.replace(destination)
-                error.add_note(
-                    "未完成的 pytest 运行目录已移到："
-                    f"{destination}"
-                )
+                error.add_note(f"未完成的 pytest 运行目录已移到：{destination}")
             except BaseException as archive_error:
-                error.add_note(
-                    "pytest 运行清单写入失败，且未完成目录归档失败："
-                    f"{archive_error}"
-                )
+                error.add_note(f"pytest 运行清单写入失败，且未完成目录归档失败：{archive_error}")
             raise
-    config.stash[RUN_STATE_KEY] = TestRunState(run_root)
+    config.stash[RUN_STATE_KEY] = TestRunState(
+        run_root,
+        storage_preflight=storage_preflight,
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -286,10 +278,13 @@ def _run_manifest(
         "case_count": len(state.cases),
         "retained_nodes": retained,
         "retained_case_count": len(retained),
-        "retention_status": (
-            "complete" if not retention_errors else "incomplete"
-        ),
+        "retention_status": ("complete" if not retention_errors else "incomplete"),
         "retention_errors": retention_errors,
+        "storage": {
+            "preflight": state.storage_preflight,
+            "final_inventory": directory_inventory(state.root),
+            "cleanup": "report-only-until-authorized",
+        },
         "cases": {
             node_id: str(case_path.relative_to(state.root)).replace("\\", "/")
             for node_id, case_path in sorted(state.cases.items())
@@ -356,21 +351,15 @@ def _finish_passed_run(
                 payload = _owned_passed_manifest(candidate)
             except RuntimeError:
                 continue
-            successful_runs.append(
-                (str(payload["finished_at"]), candidate.name, candidate)
-            )
+            successful_runs.append((str(payload["finished_at"]), candidate.name, candidate))
         successful_runs.sort()
         retention_errors: list[dict[str, str]] = []
         for _, _, obsolete in successful_runs[:-1]:
             try:
                 _remove_owned_passed_run(obsolete)
             except Exception as error:
-                retention_errors.append(
-                    _retention_error(obsolete, error)
-                )
-        manifest["retention_status"] = (
-            "complete" if not retention_errors else "incomplete"
-        )
+                retention_errors.append(_retention_error(obsolete, error))
+        manifest["retention_status"] = "complete" if not retention_errors else "incomplete"
         manifest["retention_errors"] = retention_errors
         _write_manifest(state.root / "run-result.json", manifest)
 
@@ -388,9 +377,9 @@ def pytest_sessionfinish(
 
 @pytest.fixture
 def tmp_path(request: pytest.FixtureRequest) -> Path:
-    """Keep the latest successful run and every failing case on D: for inspection."""
+    """Keep managed test evidence under the configured, budgeted test root."""
     state = request.config.stash[RUN_STATE_KEY]
-    path = state.root / "cases" / _safe_case_name(request.node.nodeid)
+    path = state.root / "c" / _safe_case_name(request.node.nodeid)
     path.mkdir(parents=True, exist_ok=False)
     state.cases[request.node.nodeid] = path
     return path
@@ -423,12 +412,18 @@ def isolated_storage_paths(
     monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(path.parent / "media"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "_projects"))
     monkeypatch.setenv("MEDIAFLOW_SERVICE_STATE_DIR", str(tmp_path / "_service"))
+    monkeypatch.setenv("MEDIAFLOW_MINIMUM_FREE_BYTES", "1")
+    monkeypatch.setenv("MEDIAFLOW_RUNTIME_MAX_BYTES", str(8 * 1024**3))
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ARTIFACT_MAX_BYTES", str(8 * 1024**3))
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ARTIFACTS_MAX_BYTES", str(16 * 1024**3))
+    monkeypatch.setenv("MEDIAFLOW_DOWNLOAD_OPERATION_MAX_BYTES", str(4 * 1024**3))
+    monkeypatch.setenv("MEDIAFLOW_DELIVERY_OPERATION_MAX_BYTES", str(8 * 1024**3))
     try:
         yield path
     finally:
-        api_module = sys.modules.get("tests.v2.editor_service_api")
-        if api_module is not None:
-            api_module.EditorServiceApi.shutdown()
+        from mediaflow.service.client import shutdown_sync_service
+
+        shutdown_sync_service()
 
 
 @pytest.fixture

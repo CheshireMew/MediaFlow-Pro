@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from mediaflow.domain.tasks import Task
-from mediaflow.domain.web_media import web_asset_spec_document
+from mediaflow.domain.web_manifest import web_asset_spec_document
 
 if TYPE_CHECKING:
     from mediaflow.automation.contracts import AutomationRequest
@@ -21,17 +21,13 @@ class OperationContext:
     @property
     def project(self) -> EditorProject:
         if self._project is None:
-            raise RuntimeError(
-                f"{self.envelope.operation} requires an open project"
-            )
+            raise RuntimeError(f"{self.envelope.operation} requires an open project")
         return self._project
 
     @property
     def application(self) -> EditorApplication:
         if self._application is None:
-            raise RuntimeError(
-                f"{self.envelope.operation} requires the application runtime"
-            )
+            raise RuntimeError(f"{self.envelope.operation} requires the application runtime")
         return self._application
 
     @property
@@ -49,10 +45,7 @@ class OperationContext:
         return value
 
     def sequence_id(self) -> str:
-        return str(
-            self.arguments.get("sequence_id")
-            or self.project.get_project().main_sequence_id
-        )
+        return str(self.arguments.get("sequence_id") or self.project.get_project().main_sequence_id)
 
     def actor(self) -> Literal["human", "automation"]:
         return cast(
@@ -63,10 +56,7 @@ class OperationContext:
     def task_idempotency(self) -> str | None:
         if not self.envelope.request_id:
             return None
-        return (
-            f"automation:{self.envelope.request_id}:"
-            f"{self.envelope.operation}"
-        )
+        return f"automation:{self.envelope.request_id}:{self.envelope.operation}"
 
     @staticmethod
     def task_receipt(task: Task) -> dict[str, Any]:
@@ -85,10 +75,7 @@ def project_snapshot(project: EditorProject) -> dict[str, Any]:
         "read_only": project.read_only,
         "sequences": project.list_sequences(),
         "assets": project.list_assets(),
-        "web_assets": [
-            web_asset_spec_document(item)
-            for item in project.list_web_assets()
-        ],
+        "web_assets": [web_asset_spec_document(item) for item in project.list_web_assets()],
         "active_workflows": project.list_workflow_runs(active_only=True),
         "tasks": project.list_tasks(),
     }

@@ -41,7 +41,7 @@ from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from scripts.run_artifacts import verification_run
+from scripts.run_artifacts import verification_run, verification_workspace_root
 
 FIXTURE_ROOT = test_fixture_root()
 PREVIEW_FPS = 30
@@ -79,19 +79,13 @@ def preview_requirements_met(
     return (
         open_seconds <= OPEN_LIMIT_SECONDS
         and startup_seconds <= STARTUP_LIMIT_SECONDS
-        and first_window_advanced_frames
-        >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
-        and first_window_presented_frames
-        >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
-        and first_window_visible_frames
-        >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
+        and first_window_advanced_frames >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
+        and first_window_presented_frames >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
+        and first_window_visible_frames >= first_window_expected_frames - POSITION_TOLERANCE_FRAMES
         and first_window_dropped_frames == 0
-        and final_advanced_frames
-        >= final_expected_frames - POSITION_TOLERANCE_FRAMES
-        and final_presented_frames
-        >= final_expected_frames - POSITION_TOLERANCE_FRAMES
-        and final_visible_frames
-        >= final_expected_frames - POSITION_TOLERANCE_FRAMES
+        and final_advanced_frames >= final_expected_frames - POSITION_TOLERANCE_FRAMES
+        and final_presented_frames >= final_expected_frames - POSITION_TOLERANCE_FRAMES
+        and final_visible_frames >= final_expected_frames - POSITION_TOLERANCE_FRAMES
         and final_dropped_frames == 0
         and presentation_p95_seconds <= CADENCE_P95_LIMIT_SECONDS
         and presentation_max_seconds <= CADENCE_MAX_LIMIT_SECONDS
@@ -231,9 +225,10 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     fixture = FIXTURE_ROOT / f"preview-motion-silent-long-gop-1080p30-{media_seconds}s.mkv"
     ensure_fixture(fixture, paths, media_seconds)
 
-    with ProjectRepository.create(run_dir / "Preview Performance", "Preview Performance") as repository:
+    project_dir = verification_workspace_root(run_dir) / "preview-performance"
+    with ProjectRepository.create(project_dir, "Preview Performance") as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(fixture)
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,
@@ -275,8 +270,7 @@ ApplicationWindow {
 
         def record_presentation() -> None:
             if bool(preview.property("playing")):
-                presentation_samples.append(
-                    (time.monotonic(), int(preview.property("position"))))
+                presentation_samples.append((time.monotonic(), int(preview.property("position"))))
 
         def record_visible_frame() -> None:
             if not bool(preview.property("playing")):
@@ -316,9 +310,9 @@ ApplicationWindow {
         first_window_position = int(preview.property("position"))
         first_window_advanced = first_window_position - playback_start_position
         first_window_presented = len(
-            samples_in_window(presentation_samples, check_started, first_window_ended))
-        first_window_visible = len(
-            samples_in_window(visible_samples, check_started, first_window_ended))
+            samples_in_window(presentation_samples, check_started, first_window_ended)
+        )
+        first_window_visible = len(samples_in_window(visible_samples, check_started, first_window_ended))
 
         remaining = arguments.duration_seconds - arguments.playback_check_seconds
         if remaining > 0:
@@ -345,9 +339,10 @@ ApplicationWindow {
             playback_ended,
         )
         presentation_p95, presentation_max, maximum_from_frame, maximum_to_frame = cadence_seconds(
-            final_presentation_samples)
-        visible_p95, visible_max, visible_maximum_from_frame, visible_maximum_to_frame = (
-            cadence_seconds(final_visible_samples)
+            final_presentation_samples
+        )
+        visible_p95, visible_max, visible_maximum_from_frame, visible_maximum_to_frame = cadence_seconds(
+            final_visible_samples
         )
         report = {
             "fixture": str(fixture),

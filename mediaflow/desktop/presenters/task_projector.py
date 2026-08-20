@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from mediaflow.desktop.presentation_catalogs import (
+from mediaflow.desktop.presentation_asr import transcription_configuration_label
+from mediaflow.desktop.presentation_tasks import (
     export_recovery_configuration_label,
     task_message_label,
     task_status_label,
     task_title,
-    transcription_configuration_label,
 )
 from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
@@ -16,13 +16,13 @@ from .base import Projector
 
 class TaskProjector(Projector):
     def refresh_tasks(self) -> None:
-        project = self._session.binding.current
+        project = self._session.state.binding.current
         if project is None:
             self._session.models.tasks.set_items([])
-            self._session.events.tasksChanged.emit()
+            self._session.updates.commit(tasks=True)
             return
         tasks = sorted(
-            self._session.task_state.items.values(),
+            self._session.state.tasks.items.values(),
             key=lambda task: (task.created_at, task.id),
         )
         pending_ids = [task.id for task in tasks if task.status == TaskStatus.PENDING]
@@ -69,10 +69,7 @@ class TaskProjector(Projector):
                     "inputAssetIds": list(task.input_asset_ids),
                     "contextId": self._task_context_id(task.command),
                     "error": task.error or "",
-                    "artifacts": [
-                        item.display_path(project.project_dir)
-                        for item in task.artifacts
-                    ],
+                    "artifacts": [item.display_path(project.project_dir) for item in task.artifacts],
                     "executionTrace": [
                         {
                             "step": task_message_label(item.step),
@@ -87,11 +84,11 @@ class TaskProjector(Projector):
                 for task in reversed(tasks)
             ]
         )
-        self._session.events.tasksChanged.emit()
+        self._session.updates.commit(tasks=True)
 
     @staticmethod
     def _task_context_id(command: object) -> str:
-        for attribute in ("document_id", "sequence_id", "asset_id"):
+        for attribute in ("document_id", "session_id", "sequence_id", "asset_id"):
             value = getattr(command, attribute, None)
             if value:
                 return str(value)
@@ -109,10 +106,10 @@ class TaskProjector(Projector):
                     "uploader": entry.uploader,
                     "available": entry.available,
                     "unavailableReason": entry.unavailable_reason,
-                    "selected": entry.index in self._session.download_state.selected_entries,
+                    "selected": entry.index in self._session.state.download.selected_entries,
                 }
                 for entry in (
-                    self._session.download_state.plan.entries if self._session.download_state.plan else []
+                    self._session.state.download.plan.entries if self._session.state.download.plan else []
                 )
             ]
         )

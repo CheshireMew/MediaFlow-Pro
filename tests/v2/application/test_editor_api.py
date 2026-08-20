@@ -261,6 +261,27 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
     assert operations["speech.synthesize"]["required_capabilities"] == [
         "gpt-sovits-v2pro"
     ]
+    assert operations["dubbing.prepare"]["execution_mode"] == "task"
+    assert operations["dubbing.prepare"]["required_capabilities"] == [
+        "project-editing",
+        "speaker-diarization",
+        "mlt",
+        "ffmpeg",
+        "ffprobe",
+    ]
+    assert operations["dubbing.synthesize"]["required_capabilities"] == [
+        "project-editing",
+        "gpt-sovits-v2pro",
+        "ffmpeg",
+    ]
+    assert set(operations["dubbing.prepare"]["arguments_schema"]["required"]) == {
+        "source_document_id"
+    }
+    reference_settings = operations["dubbing.prepare"]["arguments_schema"][
+        "properties"
+    ]["settings"]["properties"]
+    assert reference_settings["reference_min_seconds"]["minimum"] == 3.0
+    assert reference_settings["reference_max_seconds"]["maximum"] == 9.8
     batch_clip_schema = operations["timeline.clip.batch.add"][
         "arguments_schema"
     ]
@@ -294,6 +315,61 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
         }
         for operation in operations.values()
     )
+
+
+def test_progressive_describe_views_are_lossless_slices_of_the_full_contract() -> None:
+    full = describe_contract()
+    full_operations = {item["name"]: item for item in full["operations"]}
+
+    summary = describe_contract({"view": "summary"})
+    assert summary["view"] == "summary"
+    assert summary["product"] == full["product"]
+    assert summary["protocol"] == full["protocol"]
+    assert summary["version"] == full["version"]
+    assert summary["default_project_root"] == full["default_project_root"]
+    assert summary["transport"] == full["transport"]
+    assert summary["request_schema"] == full["request_schema"]
+    assert summary["success_response_schema"] == full["success_response_schema"]
+    assert summary["error_response_schema"] == full["error_response_schema"]
+    assert summary["capabilities"] == full["capabilities"]
+    assert summary["editor_field_catalogs"] == ["visual_effects", "audio_effects"]
+    assert len(summary["operations"]) == len(full_operations)
+    assert len(json.dumps(summary)) < len(json.dumps(full)) / 10
+    for operation in summary["operations"]:
+        assert set(operation) == {
+            "name",
+            "project_access",
+            "execution_mode",
+            "history_mode",
+            "idempotency",
+            "required_capabilities",
+        }
+        expected = full_operations[operation["name"]]
+        assert operation == {key: expected[key] for key in operation}
+
+    exact = describe_contract({"view": "operation", "name": "task.wait"})
+    assert exact == {
+        "view": "operation",
+        "product": full["product"],
+        "protocol": full["protocol"],
+        "version": full["version"],
+        "operation": full_operations["task.wait"],
+    }
+
+    catalog = describe_contract({"view": "catalog", "name": "audio_effects"})
+    assert catalog == {
+        "view": "catalog",
+        "product": full["product"],
+        "protocol": full["protocol"],
+        "version": full["version"],
+        "name": "audio_effects",
+        "catalog": full["editor_field_catalogs"]["audio_effects"],
+    }
+
+    with pytest.raises(ValueError, match="Unknown automation operation"):
+        describe_contract({"view": "operation", "name": "removed.operation"})
+    with pytest.raises(ValueError, match="Unknown editor field catalog"):
+        describe_contract({"view": "catalog", "name": "removed_catalog"})
 
 
 def test_project_create_persists_the_explicit_public_profile(
@@ -767,8 +843,8 @@ def test_ai_transcript_edit_plan_runs_through_real_cli_and_can_restore(
     source = tmp_path / "interview.mp4"
     source.write_bytes(b"timeline-source")
     with ProjectRepository.create(project_path, "AI Transcript Project") as repository:
-        project = repository.catalog.get_project()
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
         editor = TimelineEditor(repository, project.main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(

@@ -20,12 +20,13 @@ def execute_operation(
     on_event: Callable[[ProjectChangeEvent], None] | None = None,
 ) -> tuple[dict, ProjectChangeEvent | None]:
     definition = OPERATIONS[envelope.operation]
+    mutation_plan = definition.mutation_plan(
+        envelope.operation,
+        envelope.arguments,
+        project,
+    )
     result, event = project.execute_automation_request(
-        (
-            envelope.request_id
-            if definition.project_access in {"create", "write"}
-            else None
-        ),
+        (envelope.request_id if definition.project_access in {"create", "write"} else None),
         envelope.operation,
         envelope.arguments,
         lambda retrying: definition.validate_result(
@@ -39,18 +40,12 @@ def execute_operation(
             )
         ),
         atomic=definition.execution_mode == "atomic",
-        base_revision=(
-            0
-            if definition.project_access == "create"
-            else envelope.base_revision
-        ),
+        base_revision=(0 if definition.project_access == "create" else envelope.base_revision),
         idempotency_base_revision=(
-            envelope.base_revision
-            if request_base_revision is _UNSET_REQUEST_BASE
-            else request_base_revision
+            envelope.base_revision if request_base_revision is _UNSET_REQUEST_BASE else request_base_revision
         ),
         actor=envelope.actor,
-        write_set=definition.write_set(envelope.operation, envelope.arguments),
+        mutation_plan=mutation_plan,
         undo_group_id=envelope.undo_group_id,
         on_event=on_event,
         force_event=envelope.operation in {"project.create", "project.upgrade"},

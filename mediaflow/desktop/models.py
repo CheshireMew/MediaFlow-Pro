@@ -8,11 +8,14 @@ from PySide6.QtCore import (
     QByteArray,
     QModelIndex,
     QObject,
+    QPersistentModelIndex,
     QSortFilterProxyModel,
     Qt,
     QTimer,
     Slot,
 )
+
+_INVALID_MODEL_INDEX = QModelIndex()
 
 
 class DictListModel(QAbstractListModel):
@@ -21,7 +24,9 @@ class DictListModel(QAbstractListModel):
         if not roles or len(set(roles)) != len(roles):
             raise ValueError("Model roles must be non-empty and unique")
         self._roles = roles
-        self._role_numbers = {Qt.UserRole + index + 1: role for index, role in enumerate(roles)}
+        self._role_numbers = {
+            int(Qt.ItemDataRole.UserRole) + index + 1: role for index, role in enumerate(roles)
+        }
         self._items: list[dict[str, Any]] = []
         self._key_rows: dict[str, int] = {}
         self._deferred_role_changes: dict[int, set[int]] = {}
@@ -30,10 +35,17 @@ class DictListModel(QAbstractListModel):
     def roleNames(self) -> dict[int, QByteArray]:
         return {number: QByteArray(name.encode("utf-8")) for number, name in self._role_numbers.items()}
 
-    def rowCount(self, parent: QModelIndex | None = None) -> int:
-        return 0 if parent is not None and parent.isValid() else len(self._items)
+    def rowCount(
+        self,
+        parent: QModelIndex | QPersistentModelIndex = _INVALID_MODEL_INDEX,
+    ) -> int:
+        return 0 if parent.isValid() else len(self._items)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = int(Qt.ItemDataRole.DisplayRole),
+    ) -> Any:
         if not index.isValid() or not 0 <= index.row() < len(self._items):
             return None
         role_name = self._role_numbers.get(role)
@@ -254,7 +266,11 @@ class AssetFilterModel(QSortFilterProxyModel):
         self._bin_ids = set(bin_ids)
         self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
-    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+    def filterAcceptsRow(
+        self,
+        source_row: int,
+        source_parent: QModelIndex | QPersistentModelIndex,
+    ) -> bool:
         source = self.sourceModel()
         if not isinstance(source, AssetListModel):
             return False
@@ -342,7 +358,11 @@ class AssetMomentFilterModel(QSortFilterProxyModel):
         self._search_text = normalized
         self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
-    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+    def filterAcceptsRow(
+        self,
+        source_row: int,
+        source_parent: QModelIndex | QPersistentModelIndex,
+    ) -> bool:
         if not self._search_text:
             return False
         source = self.sourceModel()

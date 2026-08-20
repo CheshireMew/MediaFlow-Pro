@@ -104,30 +104,30 @@ Panel {
             AppButton {
                 Layout.fillWidth: true
                 visible: root.taskActive
-                enabled: workspaceController.actionCapabilities.canManageTasks
+                enabled: mediaflow.workspaceViewController.actionCapabilities.canManageTasks
                 danger: true
                 text: qsTr("取消")
-                onClicked: taskController.cancelTask(root.taskData.taskId)
+                onClicked: mediaflow.taskController.cancelTask(root.taskData.taskId)
             }
             AppButton {
                 Layout.fillWidth: true
                 visible: root.taskData.status === "failed"
                     || root.taskData.status === "cancelled"
-                enabled: workspaceController.actionCapabilities.canManageTasks
+                enabled: mediaflow.workspaceViewController.actionCapabilities.canManageTasks
                 text: qsTr("重试")
-                onClicked: taskController.retryTask(root.taskData.taskId)
+                onClicked: mediaflow.taskController.retryTask(root.taskData.taskId)
             }
             AppButton {
                 Layout.fillWidth: true
                 visible: root.showArtifact && root.taskData.status === "completed"
                     && root.taskData.artifacts && root.taskData.artifacts.length > 0
                 text: qsTr("打开结果")
-                onClicked: taskController.openArtifact(root.taskData.artifacts[0])
+                onClicked: mediaflow.taskController.openArtifact(root.taskData.artifacts[0])
             }
             AppButton {
                 objectName: "contextTaskDetailsButton"
                 text: qsTr("任务详情")
-                onClicked: taskController.openTaskCenter()
+                onClicked: mediaflow.taskController.openTaskCenter()
             }
         }
     }

@@ -43,7 +43,6 @@ CORE_PREFIXES = (
 CORE_FILES = {
     "mediaflow/atomic_file.py",
     "mediaflow/cli.py",
-    "mediaflow/composition.py",
     "mediaflow/file_digest.py",
     "mediaflow/mcp_server.py",
 }
@@ -305,6 +304,7 @@ def _self_test() -> None:
         ("AGENTS.md", "ARCHITECTURE.md"): ("maintenance", False, False, False),
         ("mediaflow/domain/project.py",): ("full", True, False, True),
         ("mediaflow/domain/task.py",): ("core", True, False, False),
+        ("mediaflow/composition.py",): ("full", True, False, False),
         ("mediaflow/infrastructure/runtime_paths.py",): ("full", True, True, False),
         ("mediaflow/desktop/native/MltRuntime.cpp",): ("full", True, True, False),
         ("tests/v2/integration/test_native_preview.py",): ("full", True, True, False),

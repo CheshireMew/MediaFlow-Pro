@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from mediaflow.domain.timeline import TimelineMergeConflict, TimelineState
-from mediaflow.domain.web_media import WebClipState
+from mediaflow.domain.web_state import WebClipState
 
 
 class TimelineMergePolicy:

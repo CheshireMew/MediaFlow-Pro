@@ -92,6 +92,141 @@ def migrate_v45_to_v46(
         )
 
 
+def migrate_v46_to_v47(workspace) -> None:
+    with workspace.transaction() as connection:
+        migrate_version_snapshots(
+            workspace,
+            connection,
+            source_version=46,
+            target_version=47,
+            migrate_database=_add_dubbing_documents,
+        )
+        _add_dubbing_documents(connection)
+        connection.execute(
+            "UPDATE schema_info SET version=47 WHERE component='project'"
+        )
+
+
+def _add_dubbing_documents(connection: sqlite3.Connection) -> None:
+    script = """
+        CREATE TABLE IF NOT EXISTS dubbing_session (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+            sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+            source_document_id TEXT NOT NULL REFERENCES subtitle_document(id) ON DELETE CASCADE,
+            target_document_id TEXT REFERENCES subtitle_document(id) ON DELETE SET NULL,
+            source_language TEXT NOT NULL,
+            target_language TEXT NOT NULL,
+            dialogue_track_id TEXT NOT NULL REFERENCES track(id) ON DELETE RESTRICT,
+            source_timeline_revision INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN (
+                'preparing', 'review', 'synthesizing', 'synthesized', 'committed'
+            )),
+            settings_json TEXT NOT NULL,
+            diarization_engine TEXT NOT NULL,
+            diarization_version TEXT NOT NULL,
+            diarization_model TEXT NOT NULL,
+            synthesis_engine TEXT NOT NULL,
+            synthesis_version TEXT NOT NULL,
+            master_path TEXT,
+            master_sha256 TEXT,
+            master_duration_seconds REAL,
+            master_asset_id TEXT REFERENCES asset(id) ON DELETE SET NULL,
+            committed_track_id TEXT REFERENCES track(id) ON DELETE SET NULL,
+            committed_clip_id TEXT REFERENCES clip(id) ON DELETE SET NULL,
+            revision INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS dubbing_speaker (
+            session_id TEXT NOT NULL REFERENCES dubbing_session(id) ON DELETE CASCADE,
+            id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            review_status TEXT NOT NULL CHECK(review_status IN (
+                'automatic', 'accepted', 'needs_review'
+            )),
+            PRIMARY KEY(session_id, id),
+            UNIQUE(session_id, position)
+        );
+        CREATE TABLE IF NOT EXISTS dubbing_reference (
+            session_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            speaker_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            start_frame INTEGER NOT NULL,
+            end_frame INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            language TEXT NOT NULL,
+            duration_seconds REAL NOT NULL,
+            primary_reference INTEGER NOT NULL,
+            PRIMARY KEY(session_id, id),
+            UNIQUE(session_id, speaker_id, position),
+            FOREIGN KEY(session_id, speaker_id)
+                REFERENCES dubbing_speaker(session_id, id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS dubbing_speaker_turn (
+            session_id TEXT NOT NULL REFERENCES dubbing_session(id) ON DELETE CASCADE,
+            id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            speaker_id TEXT NOT NULL,
+            start_frame INTEGER NOT NULL,
+            end_frame INTEGER NOT NULL,
+            confidence REAL,
+            PRIMARY KEY(session_id, id),
+            UNIQUE(session_id, position),
+            FOREIGN KEY(session_id, speaker_id)
+                REFERENCES dubbing_speaker(session_id, id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS dubbing_utterance (
+            session_id TEXT NOT NULL REFERENCES dubbing_session(id) ON DELETE CASCADE,
+            id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            speaker_id TEXT NOT NULL,
+            source_segment_ids_json TEXT NOT NULL,
+            target_segment_ids_json TEXT NOT NULL,
+            start_frame INTEGER NOT NULL,
+            end_frame INTEGER NOT NULL,
+            source_text TEXT NOT NULL,
+            target_text TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN (
+                'pending', 'generated', 'needs_review', 'failed'
+            )),
+            review_status TEXT NOT NULL CHECK(review_status IN (
+                'automatic', 'accepted', 'needs_review'
+            )),
+            output_path TEXT,
+            output_sha256 TEXT,
+            natural_duration_seconds REAL,
+            fitted_duration_seconds REAL,
+            speed_factor REAL NOT NULL,
+            seed INTEGER NOT NULL,
+            reference_sha256 TEXT,
+            issues_json TEXT NOT NULL,
+            PRIMARY KEY(session_id, id),
+            UNIQUE(session_id, position),
+            FOREIGN KEY(session_id, speaker_id)
+                REFERENCES dubbing_speaker(session_id, id) ON DELETE RESTRICT
+        );
+        CREATE INDEX IF NOT EXISTS idx_dubbing_session_project_time
+        ON dubbing_session(project_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_dubbing_session_sequence
+        ON dubbing_session(sequence_id, updated_at);
+        """
+    statement_lines: list[str] = []
+    for line in script.splitlines():
+        statement_lines.append(line)
+        statement = "\n".join(statement_lines).strip()
+        if statement and sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement_lines.clear()
+    if any(line.strip() for line in statement_lines):
+        raise RuntimeError("Incomplete dubbing schema migration statement")
+
+
 def _migrate_v45_web_snapshot(
     connection: sqlite3.Connection,
     web_assets: dict[str, tuple[str, str, str]],

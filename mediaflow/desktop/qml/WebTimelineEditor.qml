@@ -9,7 +9,7 @@ Item {
     id: root
     objectName: "webTimelineEditor"
     property int playheadFrame: 0
-    property var items: webTimelineController.timelineItemsData
+    property var items: mediaflow.webTimelineController.timelineItemsData
     readonly property var intervals: items.filter(item => item.kind === "interval")
     readonly property var keyframes: items.filter(item => item.kind === "keyframe")
     readonly property int durationMs: items.length > 0
@@ -75,7 +75,7 @@ Item {
             height: 30
 
             function preview() {
-                webTimelineController.previewTimelineInterval(
+                mediaflow.webTimelineController.previewTimelineInterval(
                     String(modelData.startField),
                     String(modelData.endField),
                     previewStart,
@@ -84,7 +84,7 @@ Item {
             }
 
             function commit() {
-                webTimelineController.commitTimelineInterval(
+                mediaflow.webTimelineController.commitTimelineInterval(
                     String(modelData.startField),
                     String(modelData.endField),
                     previewStart,
@@ -137,17 +137,17 @@ Item {
                             return;
                         const length = initialEnd - initialStart;
                         const delta = translation.x / root.trackWidth * root.durationMs;
-                        let next = webTimelineController.snapSceneTimeMs(initialStart + delta);
+                        let next = mediaflow.webTimelineController.snapSceneTimeMs(initialStart + delta);
                         next = Math.max(0, Math.min(root.durationMs - length - 1, next));
                         intervalRow.previewStart = next;
                         intervalRow.previewEnd = next + length;
                         intervalRow.preview();
-                        root.seekRequested(webTimelineController.frameForSceneTime(next));
+                        root.seekRequested(mediaflow.webTimelineController.frameForSceneTime(next));
                     }
                     onCanceled: {
                         intervalRow.previewStart = initialStart;
                         intervalRow.previewEnd = initialEnd;
-                        webTimelineController.cancelTimelinePreview();
+                        mediaflow.webTimelineController.cancelTimelinePreview();
                     }
                 }
 
@@ -178,14 +178,14 @@ Item {
                                 + translation.x / root.trackWidth * root.durationMs;
                             intervalRow.previewStart = Math.min(
                                 intervalRow.previewEnd - 1,
-                                webTimelineController.snapSceneTimeMs(raw));
+                                mediaflow.webTimelineController.snapSceneTimeMs(raw));
                             intervalRow.preview();
-                            root.seekRequested(webTimelineController.frameForSceneTime(
+                            root.seekRequested(mediaflow.webTimelineController.frameForSceneTime(
                                 intervalRow.previewStart));
                         }
                         onCanceled: {
                             intervalRow.previewStart = initialStart;
-                            webTimelineController.cancelTimelinePreview();
+                            mediaflow.webTimelineController.cancelTimelinePreview();
                         }
                     }
                 }
@@ -217,14 +217,14 @@ Item {
                                 + translation.x / root.trackWidth * root.durationMs;
                             intervalRow.previewEnd = Math.max(
                                 intervalRow.previewStart + 1,
-                                webTimelineController.snapSceneTimeMs(raw));
+                                mediaflow.webTimelineController.snapSceneTimeMs(raw));
                             intervalRow.preview();
-                            root.seekRequested(webTimelineController.frameForSceneTime(
+                            root.seekRequested(mediaflow.webTimelineController.frameForSceneTime(
                                 intervalRow.previewEnd));
                         }
                         onCanceled: {
                             intervalRow.previewEnd = initialEnd;
-                            webTimelineController.cancelTimelinePreview();
+                            mediaflow.webTimelineController.cancelTimelinePreview();
                         }
                     }
                 }
@@ -275,11 +275,11 @@ Item {
                         if (active) {
                             initialTime = marker.previewTime;
                         } else if (marker.previewTime !== initialTime) {
-                            webTimelineController.moveTimelineKeyframe(
+                            mediaflow.webTimelineController.moveTimelineKeyframe(
                                 String(marker.modelData.target),
                                 String(marker.modelData.sourceId),
                                 initialTime,
-                                webTimelineController.frameForSceneTime(marker.previewTime));
+                                mediaflow.webTimelineController.frameForSceneTime(marker.previewTime));
                         }
                     }
                     onTranslationChanged: {
@@ -287,10 +287,10 @@ Item {
                             return;
                         const raw = initialTime
                             + translation.x / root.trackWidth * root.durationMs;
-                        marker.previewTime = webTimelineController.snapSceneTimeMs(raw);
-                        const frame = webTimelineController.frameForSceneTime(
+                        marker.previewTime = mediaflow.webTimelineController.snapSceneTimeMs(raw);
+                        const frame = mediaflow.webTimelineController.frameForSceneTime(
                             marker.previewTime);
-                        webTimelineController.previewTimelineKeyframe(
+                        mediaflow.webTimelineController.previewTimelineKeyframe(
                             String(marker.modelData.target),
                             String(marker.modelData.sourceId),
                             initialTime,
@@ -299,7 +299,7 @@ Item {
                     }
                     onCanceled: {
                         marker.previewTime = initialTime;
-                        webTimelineController.cancelTimelinePreview();
+                        mediaflow.webTimelineController.cancelTimelinePreview();
                     }
                 }
             }
@@ -307,7 +307,7 @@ Item {
     }
 
     Rectangle {
-        x: root.xForTime(webTimelineController.sceneTimeMsForFrame(root.playheadFrame))
+        x: root.xForTime(mediaflow.webTimelineController.sceneTimeMsForFrame(root.playheadFrame))
         y: 24
         width: 2
         height: root.height - 28

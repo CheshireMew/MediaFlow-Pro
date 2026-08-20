@@ -12,7 +12,7 @@ Rectangle {
     required property string activeMode
     required property var exportPreviewOptions
     property string previewMode: "program"
-    readonly property var sourceMonitor: mediaController.sourceMonitorData
+    readonly property var sourceMonitor: mediaflow.mediaController.sourceMonitorData
     readonly property alias viewport: previewViewport
     readonly property bool webInputActive: Boolean(
         webEditorLoader.item && webEditorLoader.item.webInputActive)
@@ -24,7 +24,7 @@ Rectangle {
     clip: true
 
     Connections {
-        target: mediaController
+        target: mediaflow.mediaController
         function onSourceMonitorChanged() {
             if (!root.sourceMonitor.assetId && root.previewMode === "source")
                 root.previewMode = "program";
@@ -32,7 +32,7 @@ Rectangle {
     }
 
     Connections {
-        target: workspaceController
+        target: mediaflow.workspacePlaybackController
         function onRemoteSeekRequested(frame) {
             previewViewport.seek(frame);
         }
@@ -97,7 +97,7 @@ Rectangle {
                     text: qsTr("入点 %1").arg(root.sourceMonitor.inFrame || 0)
                     compact: true
                     quiet: true
-                    onClicked: mediaController.setSourceInFrame(previewViewport.position)
+                    onClicked: mediaflow.mediaController.setSourceInFrame(previewViewport.position)
                 }
                 AppButton {
                     objectName: "sourceMarkOutButton"
@@ -105,7 +105,7 @@ Rectangle {
                     text: qsTr("出点 %1").arg(root.sourceMonitor.outFrame || 0)
                     compact: true
                     quiet: true
-                    onClicked: mediaController.setSourceOutFrame(previewViewport.position)
+                    onClicked: mediaflow.mediaController.setSourceOutFrame(previewViewport.position)
                 }
                 AppButton {
                     objectName: "sourceCaptureFrameButton"
@@ -113,8 +113,8 @@ Rectangle {
                     text: qsTr("截帧")
                     compact: true
                     quiet: true
-                    enabled: workspaceController.actionCapabilities.canEdit
-                    onClicked: mediaController.captureSourceFrame(previewViewport.position)
+                    enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                    onClicked: mediaflow.mediaController.captureSourceFrame(previewViewport.position)
                 }
                 AppButton {
                     objectName: "sourceInsertRangeButton"
@@ -122,8 +122,8 @@ Rectangle {
                     text: qsTr("插入选段")
                     compact: true
                     primary: true
-                    enabled: workspaceController.actionCapabilities.canEdit
-                    onClicked: mediaController.addSourceRangeToTimeline(
+                    enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                    onClicked: mediaflow.mediaController.addSourceRangeToTimeline(
                         root.timelineView.visiblePlayheadFrame,
                         root.timelineView.pixelsPerFrame,
                         root.timelineView.snapEnabled)
@@ -147,37 +147,37 @@ Rectangle {
             PreviewViewport {
                 id: previewViewport
                 anchors.fill: parent
-                visible: !(webController.isWebClip && webController.editMode)
+                visible: !(mediaflow.webController.isWebClip && mediaflow.webController.editMode)
                 source: root.previewMode === "source"
                     ? String(root.sourceMonitor.graphPath || "")
-                    : workspaceController.previewGraphPath
-                runtimeRoot: workspaceController.mltRuntimeRoot
-                mltLibrary: workspaceController.mltLibraryPath
-                mltRepository: workspaceController.mltRepositoryPath
-                mltData: workspaceController.mltDataPath
-                hdrEnabled: workspaceController.colorMode === "hdr10_bt2020_pq"
-                profileWidth: workspaceController.profileWidth
-                profileHeight: workspaceController.profileHeight
+                    : mediaflow.workspaceViewController.previewGraphPath
+                runtimeRoot: mediaflow.workspaceViewController.mltRuntimeRoot
+                mltLibrary: mediaflow.workspaceViewController.mltLibraryPath
+                mltRepository: mediaflow.workspaceViewController.mltRepositoryPath
+                mltData: mediaflow.workspaceViewController.mltDataPath
+                hdrEnabled: mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq"
+                profileWidth: mediaflow.workspaceViewController.profileWidth
+                profileHeight: mediaflow.workspaceViewController.profileHeight
                 exportPreviewActive: root.previewMode === "program"
                     && root.activeMode === "export"
                 transformInteractionEnabled: root.previewMode === "program"
                 exportPreviewOptions: root.exportPreviewOptions
                 subtitleText: root.previewMode === "source" ? ""
                     : root.activeMode === "export"
-                    ? subtitleController.subtitleTextForTrackAtFrame(
+                    ? mediaflow.subtitleViewController.subtitleTextForTrackAtFrame(
                         String(root.exportPreviewOptions.burnSubtitleTrackId || ""), position)
-                    : subtitleController.subtitleTextAtFrame(position)
+                    : mediaflow.subtitleViewController.subtitleTextAtFrame(position)
                 watermarkSource: root.previewMode === "program"
                     && root.activeMode === "export"
                     && root.exportPreviewOptions.watermark
                     && root.exportPreviewOptions.watermark.enabled
-                    ? mediaController.assetUrl(String(
+                    ? mediaflow.mediaController.assetUrl(String(
                         root.exportPreviewOptions.watermark.asset_id || "")) : ""
                 onDroppedFramesReported: function (count) {
-                    workspaceController.reportPreviewDroppedFrames(count);
+                    mediaflow.workspaceSequenceController.reportPreviewDroppedFrames(count);
                 }
                 onHdrActiveReported: function (active) {
-                    workspaceController.reportHdrPreviewActive(active);
+                    mediaflow.workspaceSequenceController.reportHdrPreviewActive(active);
                 }
             }
 
@@ -185,7 +185,7 @@ Rectangle {
                 id: webEditorLoader
                 objectName: "webEditorLoader"
                 anchors.fill: parent
-                visible: webController.isWebClip && webController.editMode
+                visible: mediaflow.webController.isWebClip && mediaflow.webController.editMode
                 active: visible || status === Loader.Ready
                 sourceComponent: WebEditorCanvas {
                     playheadFrame: previewViewport.position

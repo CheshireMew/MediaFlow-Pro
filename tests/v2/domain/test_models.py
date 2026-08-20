@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from mediaflow.domain.audio import AUDIO_EFFECT_DEFINITIONS, AudioEffect
+from mediaflow.domain.clip_transform_projection import project_clip_transform_points
 from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
 from mediaflow.domain.editor_fields import EditorFieldValue
 from mediaflow.domain.enums import (
@@ -43,7 +44,14 @@ from mediaflow.domain.timebase import (
     source_interval_for_timeline_interval,
     timeline_offset_for_source_frame,
 )
-from mediaflow.domain.timeline import Clip, TimelineMarker, TimelineRange, TimelineState
+from mediaflow.domain.timeline import (
+    Clip,
+    ClipTransform,
+    ClipTransformKeyframe,
+    TimelineMarker,
+    TimelineRange,
+    TimelineState,
+)
 from mediaflow.domain.visual_effects import VISUAL_EFFECT_DEFINITIONS, new_visual_effect
 
 
@@ -108,6 +116,28 @@ def test_source_interval_orders_reverse_and_freeze_frames() -> None:
     assert round_fraction(Fraction(-3, 2)) == -2
 
 
+def test_clip_transform_projection_uses_one_clip_local_clock_for_all_renderers() -> None:
+    transformed = ClipTransform(x=12, scale_x=1.5)
+    clip = Clip(
+        track_id="video",
+        asset_id="asset",
+        timeline_start=100,
+        source_in=10,
+        duration=5,
+        media_kind=ClipMediaKind.VIDEO_ONLY,
+        speed_numerator=2,
+        transform_keyframes=[
+            ClipTransformKeyframe(source_frame=14, transform=transformed),
+            ClipTransformKeyframe(source_frame=30, transform=ClipTransform(x=99)),
+        ],
+    )
+
+    projection = project_clip_transform_points(clip)
+
+    assert projection.has_keyframes is True
+    assert projection.points == ((0, clip.transform), (2, transformed))
+
+
 def test_storage_names_are_windows_safe_normalized_and_length_bounded() -> None:
     assert safe_path_component("  CON.txt  ") == "_CON.txt"
     assert safe_path_component("报告：第一期?.mp4") == "报告：第一期_.mp4"
@@ -132,9 +162,7 @@ def test_safe_child_path_budgets_the_complete_native_tool_path(
         "😀" * 200,
         prefix="02-",
         suffix="-12345678.mp4",
-        required_sibling_component_utf16_units=(
-            OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-        ),
+        required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
     )
 
     assert child.parent == parent.resolve()
@@ -142,12 +170,7 @@ def test_safe_child_path_budgets_the_complete_native_tool_path(
     assert child.name.endswith("-12345678.mp4")
     assert utf16_units(str(child)) <= 240
     assert utf16_units(child.name) <= 240
-    assert (
-        utf16_units(str(child.parent))
-        + 1
-        + OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS
-        <= 240
-    )
+    assert utf16_units(str(child.parent)) + 1 + OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS <= 240
 
 
 def test_content_addressed_children_preserve_full_identity_with_real_path_budget(
@@ -304,11 +327,7 @@ def test_artifact_references_preserve_foreign_absolute_paths(tmp_path: Path) -> 
         ArtifactReference(scope="external", path="/home/runner/output.mp4"),
         ArtifactReference(scope="external", path="C:/Runner/output.mp4"),
     ]
-    foreign = next(
-        reference
-        for reference in references
-        if not Path(reference.path).is_absolute()
-    )
+    foreign = next(reference for reference in references if not Path(reference.path).is_absolute())
 
     assert foreign.display_path(tmp_path) == foreign.path
     assert foreign.local_path(tmp_path) is None
@@ -373,9 +392,7 @@ def test_export_commands_reject_conflicting_or_audio_highlight_presets() -> None
     with pytest.raises(ValueError, match="扩展名与封装格式不一致"):
         mismatched_destination.validate_for_execution()
 
-    m4a_preset = audio_preset.model_copy(
-        update={"container": "ipod", "audio_codec": "aac"}
-    )
+    m4a_preset = audio_preset.model_copy(update={"container": "ipod", "audio_codec": "aac"})
     assert m4a_preset.preferred_extension == "m4a"
     assert m4a_preset.validate_destination("audio.m4a").suffix == ".m4a"
 
@@ -521,9 +538,7 @@ def test_visual_effects_use_the_same_descriptor_validation_and_keyframe_contract
     effect = new_visual_effect(VisualEffectKind.COLOR_ADJUSTMENT, 0)
     definition = VISUAL_EFFECT_DEFINITIONS[VisualEffectKind.COLOR_ADJUSTMENT]
 
-    assert effect.parameters == {
-        descriptor.id: descriptor.default for descriptor in definition.descriptors
-    }
+    assert effect.parameters == {descriptor.id: descriptor.default for descriptor in definition.descriptors}
     assert {descriptor.timeline for descriptor in definition.descriptors} == {"keyframe"}
     with pytest.raises(ValidationError, match="exceeds maximum"):
         type(effect).model_validate(

@@ -85,14 +85,14 @@ class SubtitleRepository(ProjectRepositoryComponent):
         return self.get_subtitle_document(document.id)
 
     def _validate_subtitle_document(self, document: SubtitleDocument) -> None:
-        project = self._owner.catalog.get_project()
+        project = self._relations.projects.get_project()
         if document.project_id != project.id:
             raise ValueError("Subtitle document belongs to another project")
-        self._owner.catalog.get_asset(document.asset_id)
+        self._relations.assets.get_asset(document.asset_id)
         if document.sequence_id:
-            self._owner.catalog.get_sequence(document.sequence_id)
+            self._relations.sequences.get_sequence(document.sequence_id)
         if document.media_asset_id:
-            media_asset = self._owner.catalog.get_asset(document.media_asset_id)
+            media_asset = self._relations.assets.get_asset(document.media_asset_id)
             if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 raise ValueError("Subtitle media must be a video or audio asset")
         if document.source_document_id:
@@ -179,7 +179,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
         signature: str,
         result: AsrResult,
     ) -> AsrResult:
-        self._owner.catalog.get_asset(asset_id)
+        self._relations.assets.get_asset(asset_id)
         payload = [
             {
                 "start_seconds": segment.start_seconds,
@@ -225,7 +225,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
             "SELECT * FROM subtitle_segment WHERE document_id=? ORDER BY start_frame, id",
             (document_id,),
         )
-        return [self._subtitle_segment_from_row(row) for row in rows]
+        return [self.subtitle_segment_from_row(row) for row in rows]
 
     def subtitle_segment_summary(self, document_id: str) -> tuple[int, int, int]:
         self.get_subtitle_document(document_id)
@@ -261,7 +261,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
             + " ORDER BY word.start_frame, word.position, word.id",
             (document_id,),
         )
-        return [self._subtitle_word_from_row(row) for row in rows]
+        return [self.subtitle_word_from_row(row) for row in rows]
 
     def save_subtitle_words(
         self,
@@ -368,7 +368,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
                 ).fetchall()
             ]
             for sequence_id in sequence_ids:
-                self._sync_subtitle_placements(connection, sequence_id)
+                self.sync_subtitle_placements(connection, sequence_id)
             self._touch_project(connection)
 
     def place_subtitle_document(
@@ -421,7 +421,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
                     source_end_frame,
                 ),
             )
-            self._sync_subtitle_placements(connection, track_row["sequence_id"])
+            self.sync_subtitle_placements(connection, track_row["sequence_id"])
             self._touch_project(connection)
         segment_ids = {item.id for item in self.list_subtitle_segments(document_id)}
         return [item for item in self.list_subtitle_placements(track_id) if item.segment_id in segment_ids]
@@ -431,13 +431,13 @@ class SubtitleRepository(ProjectRepositoryComponent):
             "SELECT * FROM subtitle_placement WHERE track_id=? ORDER BY start_frame, id",
             (track_id,),
         )
-        return [self._subtitle_placement(row) for row in rows]
+        return [self.subtitle_placement_from_row(row) for row in rows]
 
     def get_subtitle_placement(self, placement_id: str) -> SubtitlePlacement:
         row = self._fetchone("SELECT * FROM subtitle_placement WHERE id=?", (placement_id,))
         if row is None:
             raise KeyError(placement_id)
-        return self._subtitle_placement(row)
+        return self.subtitle_placement_from_row(row)
 
     def update_subtitle_placement_text(
         self,
@@ -496,7 +496,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
                 "UPDATE subtitle_placement SET timing_overridden=0 WHERE id=?",
                 (placement_id,),
             )
-            self._sync_subtitle_placements(connection, row["sequence_id"])
+            self.sync_subtitle_placements(connection, row["sequence_id"])
             self._touch_project(connection)
         return self.get_subtitle_placement(placement_id)
 
@@ -561,9 +561,9 @@ class SubtitleRepository(ProjectRepositoryComponent):
         segment_row = self._fetchone("SELECT * FROM subtitle_segment WHERE id=?", (row["segment_id"],))
         if segment_row is None:
             raise RuntimeError("Subtitle segment disappeared during update")
-        return self._subtitle_segment_from_row(segment_row)
+        return self.subtitle_segment_from_row(segment_row)
 
-    def _sync_subtitle_placements(
+    def sync_subtitle_placements(
         self,
         connection: sqlite3.Connection,
         sequence_id: str,
@@ -734,7 +734,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
                     )
 
     @staticmethod
-    def _subtitle_placement(row: sqlite3.Row) -> SubtitlePlacement:
+    def subtitle_placement_from_row(row: sqlite3.Row) -> SubtitlePlacement:
         return SubtitlePlacement(
             id=row["id"],
             track_id=row["track_id"],
@@ -861,7 +861,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
         )
 
     @staticmethod
-    def _subtitle_segment_from_row(row: sqlite3.Row) -> SubtitleSegment:
+    def subtitle_segment_from_row(row: sqlite3.Row) -> SubtitleSegment:
         return SubtitleSegment(
             id=row["id"],
             document_id=row["document_id"],
@@ -874,7 +874,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
         )
 
     @staticmethod
-    def _subtitle_word_from_row(row: sqlite3.Row) -> SubtitleWord:
+    def subtitle_word_from_row(row: sqlite3.Row) -> SubtitleWord:
         return SubtitleWord(
             id=row["id"],
             segment_id=row["segment_id"],

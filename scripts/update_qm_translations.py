@@ -440,9 +440,9 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "音乐": ("Music", "音楽"),
     "音频 %1": ("Audio %1", "オーディオ %1"),
     "高光分析完成": ("Highlight analysis complete", "ハイライト分析完了"),
-    "DeepSeek 推理模式（deepseek-reasoner）": (
-        "DeepSeek reasoning mode (deepseek-reasoner)",
-        "DeepSeek 推論モード（deepseek-reasoner）",
+    "推理模式（%1）": (
+        "Reasoning mode (%1)",
+        "推論モード（%1）",
     ),
     "上一个": ("Previous", "前へ"),
     "下一个": ("Next", "次へ"),
@@ -546,7 +546,7 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "预览": ("Preview", "プレビュー"),
     "添加到主序列": ("Add to Main Sequence", "メインシーケンスに追加"),
     "确认下载": ("Confirm Download", "ダウンロードの確認"),
-    "视频信息与下载设置": ("Video Info & Download Settings", "動画情報とダウンロード設定"),
+    "媒体信息与下载设置": ("Media Info & Download Settings", "メディア情報とダウンロード設定"),
     "已完成链接分析": ("Link analysis complete", "リンク解析が完了しました"),
     "下载计划已失效，请重新分析链接。": (
         "The download plan has expired. Analyze the URL again.",
@@ -563,11 +563,12 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "媒体集合 · %1 项": ("Media collection · %1 items", "メディアコレクション · %1件"),
     "单个视频 · %1": ("Single video · %1", "単一動画 · %1"),
     "单个视频": ("Single video", "単一動画"),
+    "单集音频": ("Podcast episode audio", "ポッドキャストエピソード音声"),
     "%1 秒": ("%1 sec", "%1秒"),
     "最佳可用质量": ("Best available quality", "利用可能な最高画質"),
     "开始下载": ("Start Download", "ダウンロードを開始"),
     "下载并新建项目": ("Download & Create Project", "ダウンロードしてプロジェクトを作成"),
-    "正在读取视频信息…": ("Reading video info…", "動画情報を読み込み中…"),
+    "正在读取媒体信息…": ("Reading media info…", "メディア情報を読み込み中…"),
     "选择新项目的保存位置": (
         "Choose Where to Save the New Project",
         "新しいプロジェクトの保存場所を選択",
@@ -849,7 +850,10 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     ),
     "创建项目": ("Create Project", "プロジェクトを作成"),
     "快速开始": ("Quick Start", "クイックスタート"),
-    "粘贴视频或播放列表链接": ("Paste a video or playlist URL", "動画またはプレイリストのURLを貼り付け"),
+    "粘贴媒体或播放列表链接": (
+        "Paste a media or playlist URL",
+        "メディアまたはプレイリストのURLを貼り付け",
+    ),
     "最近项目": ("Recent Projects", "最近のプロジェクト"),
     "项目目录可直接复制或移动": (
         "Project folders can be copied or moved directly",
@@ -1045,7 +1049,7 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "例如 DeepSeek": ("For example, DeepSeek", "例：DeepSeek"),
     "服务地址": ("Service URL", "サービスURL"),
     "模型名称": ("Model Name", "モデル名"),
-    "例如 deepseek-chat": ("For example, deepseek-chat", "例：deepseek-chat"),
+    "例如模型 ID": ("For example, model ID", "例：モデル ID"),
     "翻译和高光分析使用同一强类型配置。留空全部字段可禁用 LLM。": (
         "Translation and highlight analysis share one typed configuration. Leave all fields empty to disable the LLM.",
         "翻訳とハイライト分析は同じ型付き設定を使用します。すべて空欄にするとLLMを無効にできます。",
@@ -1409,6 +1413,10 @@ TRANSLATIONS.update(
         ),
         "翻译术语": ("Translated Term", "訳語"),
         "自定义文件名（可选）": ("Custom Filename (optional)", "カスタムファイル名（任意）"),
+        "自定义音频文件名（可选）": (
+            "Custom audio filename (optional)",
+            "音声ファイル名を指定（任意）",
+        ),
         "视频编码": ("Video Codec", "動画コーデック"),
         "设为当前提供商": ("Set as Active Provider", "現在のプロバイダーに設定"),
         "请先到“媒体”模式选择素材，或导入字幕文件。": (
@@ -1453,6 +1461,60 @@ TRANSLATIONS.update(
             "既定で字幕もダウンロードしてSRTに変換",
         ),
         "默认处理模式": ("Default Processing Mode", "既定の処理モード"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "CLI 请求": ("CLI Request", "CLIリクエスト"),
+        "复制 CLI": ("Copy CLI", "CLIをコピー"),
+        "复制当前导出为 CLI 请求": (
+            "Copy Current Export as CLI Request",
+            "現在の書き出しをCLIリクエストとしてコピー",
+        ),
+        "复制当前转录为 CLI 请求": (
+            "Copy Current Transcription as CLI Request",
+            "現在の文字起こしをCLIリクエストとしてコピー",
+        ),
+        "复制换版提交为 CLI 请求": (
+            "Copy Revision Commit as CLI Request",
+            "版の差し替え確定をCLIリクエストとしてコピー",
+        ),
+        "复制换版检查为 CLI 请求": (
+            "Copy Revision Check as CLI Request",
+            "版の差し替え確認をCLIリクエストとしてコピー",
+        ),
+        "复制移除请求": ("Copy Removal Request", "削除リクエストをコピー"),
+        "复制设置请求": ("Copy Settings Request", "設定リクエストをコピー"),
+        "复制诊断包 CLI": ("Copy Diagnostics CLI", "診断バンドルCLIをコピー"),
+        "复制项目交接 CLI": (
+            "Copy Project Handoff CLI",
+            "プロジェクト引き渡しCLIをコピー",
+        ),
+        "正在写入诊断包": ("Writing diagnostics bundle", "診断バンドルを書き込み中"),
+        "正在准备画面": ("Preparing frames", "フレームを準備中"),
+        "正在准备画面 · 已缓冲 %1 帧": (
+            "Preparing frames · %1 buffered",
+            "フレームを準備中 · %1フレームをバッファ済み",
+        ),
+        "正在收集项目诊断信息": (
+            "Collecting project diagnostics",
+            "プロジェクトの診断情報を収集中",
+        ),
+        "正在检查媒体运行时": ("Checking media runtime", "メディアランタイムを確認中"),
+        "正在读取素材身份与媒体信息": (
+            "Reading asset identity and media metadata",
+            "素材IDとメディア情報を読み込み中",
+        ),
+        "生成诊断包": ("Create Diagnostics Bundle", "診断バンドルを作成"),
+        "诊断包任务已加入任务中心": (
+            "Diagnostics bundle task added to Task Center",
+            "診断バンドルのタスクをタスクセンターに追加しました",
+        ),
+        "请求已复制到剪贴板。保存为 request.json 后可直接执行：": (
+            "Request copied to the clipboard. Save it as request.json to run it directly:",
+            "リクエストをクリップボードにコピーしました。request.jsonとして保存すると直接実行できます：",
+        ),
     }
 )
 
@@ -1667,6 +1729,10 @@ TRANSLATIONS.update(
         "项目已创建，正在下载视频": (
             "Project created; downloading video",
             "プロジェクトを作成しました。動画をダウンロードしています",
+        ),
+        "项目已创建，正在下载音频": (
+            "Project created; downloading audio",
+            "プロジェクトを作成しました。音声をダウンロードしています",
         ),
         "项目已打开": ("Project opened", "プロジェクトを開きました"),
         "项目正被其他窗口使用，已只读打开": (
@@ -2267,6 +2333,162 @@ TRANSLATIONS.update(
     }
 )
 
+TRANSLATIONS.update(
+    {
+        "0 为自动": ("0 selects automatically", "0 は自動"),
+        "Community-1 模型": ("Community-1 model", "Community-1 モデル"),
+        "Community-1 用于多人同时说话等复杂录音，需要先在 Hugging Face 接受模型条款并配置令牌。": (
+            "Community-1 is for complex recordings with overlapping speakers and requires accepting the Hugging Face model terms and configuring a token.",
+            "Community-1 は複数人が同時に話す複雑な録音向けで、Hugging Face のモデル規約への同意とトークン設定が必要です。",
+        ),
+        "Hugging Face 令牌": ("Hugging Face token", "Hugging Face トークン"),
+        "Python (python.exe)": ("Python (python.exe)", "Python (python.exe)"),
+        "pyannote Python": ("pyannote Python", "pyannote Python"),
+        "中文配音": ("Chinese Dubbing", "中国語吹き替え"),
+        "主参考 · %1 秒 · %2": (
+            "Primary reference · %1 s · %2",
+            "主参照 · %1 秒 · %2",
+        ),
+        "人数范围": ("Speaker range", "話者数の範囲"),
+        "识别方式": ("Identification method", "識別方法"),
+        "使用独立的 pyannote.audio Community-1 环境。请先在 <a href='https://huggingface.co/pyannote/speaker-diarization-community-1'>Hugging Face 模型页</a>接受条款；模型首次授权下载后可离线运行。": (
+            "Use a separate pyannote.audio Community-1 environment. First accept the terms on the <a href='https://huggingface.co/pyannote/speaker-diarization-community-1'>Hugging Face model page</a>; after the first authorized download, the model can run offline.",
+            "独立した pyannote.audio Community-1 環境を使用します。先に <a href='https://huggingface.co/pyannote/speaker-diarization-community-1'>Hugging Face のモデルページ</a>で利用条件に同意してください。初回の認証済みダウンロード後はオフラインで実行できます。",
+        ),
+        "选择独立 pyannote 环境中的 python.exe": (
+            "Select python.exe from the isolated pyannote environment",
+            "独立した pyannote 環境の python.exe を選択",
+        ),
+        "保存参考原文": ("Save Reference Transcript", "参照原文を保存"),
+        "保存并确认": ("Save and Confirm", "保存して確認"),
+        "保存说话人": ("Save Speaker", "話者を保存"),
+        "把音频放入主要对白轨。没有英文字幕时可以直接在这里识别；选中源字幕后，会自动翻译、区分说话人并抽取克隆参考。": (
+            "Place the audio on the primary dialogue track. If there are no English subtitles, transcribe them here; after selecting the source subtitles, MediaFlow translates them, separates speakers, and extracts cloning references automatically.",
+            "音声を主要会話トラックに配置してください。英語字幕がない場合はここで文字起こしできます。元字幕を選ぶと、翻訳、話者分離、クローン用参照の抽出を自動で行います。",
+        ),
+        "未找到源字幕": ("No Source Subtitles Found", "元字幕が見つかりません"),
+        "正在识别对白…": ("Transcribing Dialogue…", "会話を文字起こし中…"),
+        "源语言": ("Source Language", "元の言語"),
+        "识别英文对白": ("Transcribe English Dialogue", "英語の会話を文字起こし"),
+        "准备多人配音": ("Prepare Multi-speaker Dubbing", "複数話者の吹き替えを準備"),
+        "创建多人中文配音方案": (
+            "Create Multi-speaker Chinese Dubbing Plan",
+            "複数話者の中国語吹き替えプランを作成",
+        ),
+        "创建方案": ("Create Plan", "プランを作成"),
+        "自动翻译并新建译文": (
+            "Translate Automatically and Create a New Translation",
+            "自動翻訳して新しい訳文を作成",
+        ),
+        "参考音频中实际说出的原文": (
+            "Exact words spoken in the reference audio",
+            "参照音声で実際に話している原文",
+        ),
+        "合成全部": ("Synthesize All", "すべて合成"),
+        "多人说话识别": ("Multi-speaker Diarization", "複数話者の識別"),
+        "多人音色识别": ("Multi-speaker Voice Identification", "複数話者の声色識別"),
+        "多人配音": ("Multi-speaker Dubbing", "複数話者の吹き替え"),
+        "定位": ("Locate", "位置へ移動"),
+        "已提交": ("Committed", "反映済み"),
+        "已确认": ("Confirmed", "確認済み"),
+        "待确认": ("Needs Confirmation", "要確認"),
+        "提交到时间线": ("Commit to Timeline", "タイムラインへ反映"),
+        "提交多人配音到时间线": (
+            "Commit Multi-speaker Dubbing to Timeline",
+            "複数話者の吹き替えをタイムラインへ反映",
+        ),
+        "更新配音轨": ("Update Dubbing Track", "吹き替えトラックを更新"),
+        "未创建": ("Not Created", "未作成"),
+        "准备中": ("Preparing", "準備中"),
+        "待审校": ("Awaiting Review", "校正待ち"),
+        "合成中": ("Synthesizing", "合成中"),
+        "已生成母版": ("Master Generated", "マスター生成済み"),
+        "待生成": ("Pending Generation", "生成待ち"),
+        "已生成": ("Generated", "生成済み"),
+        "待复核": ("Needs Review", "要確認"),
+        "本地模型已缓存时可以留空": (
+            "May be left blank when the model is cached locally",
+            "モデルがローカルにキャッシュ済みなら空欄にできます",
+        ),
+        "普通模式直接按英文转写片段提取 3D-Speaker 音色并聚类，适合轮流说话的音频，不需要 Hugging Face 账号或令牌。": (
+            "Standard mode extracts and clusters 3D-Speaker voice embeddings from English transcript segments. It is designed for turn-taking audio and needs no Hugging Face account or token.",
+            "標準モードは英語の文字起こし区間から 3D-Speaker の声色を抽出してクラスタリングします。交互に話す音声向けで、Hugging Face のアカウントやトークンは不要です。",
+        ),
+        "转写片段音色聚类（推荐）": (
+            "Transcript Voice Clustering (Recommended)",
+            "文字起こし区間の声色クラスタリング（推奨）",
+        ),
+        "重叠语音 Community-1": (
+            "Overlapping Speech: Community-1",
+            "重複音声：Community-1",
+        ),
+        "本地音色模型已就绪：%1": (
+            "Local voice model ready: %1",
+            "ローカル声色モデル準備完了：%1",
+        ),
+        "尚未安装本地音色模型": (
+            "Local voice model is not installed",
+            "ローカル声色モデルは未インストールです",
+        ),
+        "重新安装": ("Reinstall", "再インストール"),
+        "安装本地模型": ("Install Local Model", "ローカルモデルをインストール"),
+        "正在提取对白音轨": (
+            "Extracting the dialogue track",
+            "会話トラックを抽出中",
+        ),
+        "正在提取说话人参考音色": (
+            "Extracting speaker voice references",
+            "話者の参照音声を抽出中",
+        ),
+        "正在识别不同说话人": (
+            "Identifying speakers",
+            "話者を識別中",
+        ),
+        "正在创建本地音色识别环境": (
+            "Creating the local voice identification environment",
+            "ローカル声色識別環境を作成中",
+        ),
+        "正在安装本地音色识别运行库": (
+            "Installing the local voice identification runtime",
+            "ローカル声色識別ランタイムをインストール中",
+        ),
+        "正在下载 3D-Speaker 音色模型": (
+            "Downloading the 3D-Speaker voice model",
+            "3D-Speaker 声色モデルをダウンロード中",
+        ),
+        "正在逐句生成配音": (
+            "Synthesizing dubbing line by line",
+            "文ごとに吹き替えを合成中",
+        ),
+        "生成多人配音": (
+            "Generate Multi-speaker Dubbing",
+            "複数話者の吹き替えを生成",
+        ),
+        "试听": ("Preview Audio", "試聴"),
+        "试听母版": ("Preview Master", "マスターを試聴"),
+        "说话人与参考音频": (
+            "Speakers and Reference Audio",
+            "話者と参照音声",
+        ),
+        "说话人识别设备": ("Diarization Device", "話者識別デバイス"),
+        "选择 pyannote.audio Python": (
+            "Select pyannote.audio Python",
+            "pyannote.audio の Python を選択",
+        ),
+        "选择主参考": ("Select Primary Reference", "主参照を選択"),
+        "逐句审校": ("Line-by-line Review", "文ごとの確認"),
+        "重做本句": ("Regenerate This Line", "この文を再生成"),
+        "需要复核：%1 句": (
+            "Needs review: %1 lines",
+            "要確認: %1 文",
+        ),
+        "静音原对白轨": (
+            "Mute Original Dialogue Track",
+            "元の会話トラックをミュート",
+        ),
+    }
+)
+
 
 def normalize(value: str) -> str:
     return " ".join(value.split())
@@ -2300,6 +2522,10 @@ def update_catalog(path: Path, language_index: int) -> None:
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     i18n = root / "mediaflow" / "resources" / "i18n"
+    desktop = root / "mediaflow" / "desktop"
+    presentation_sources = sorted(desktop.glob("presentation_*.py"))
+    if not presentation_sources:
+        raise FileNotFoundError("No presentation catalog sources found")
     catalogs = [(i18n / "mediaflow_en.ts", 0), (i18n / "mediaflow_ja.ts", 1)]
     lupdate = Path(sys.executable).with_name("pyside6-lupdate.exe")
     lrelease = Path(sys.executable).with_name("pyside6-lrelease.exe")
@@ -2310,8 +2536,8 @@ def main() -> None:
     subprocess.run(
         [
             str(lupdate),
-            str(root / "mediaflow" / "desktop" / "qml"),
-            str(root / "mediaflow" / "desktop" / "presentation_catalogs.py"),
+            str(desktop / "qml"),
+            *(str(path) for path in presentation_sources),
             "-no-obsolete",
             "-ts",
             *(str(path) for path, _ in catalogs),

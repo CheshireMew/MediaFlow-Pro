@@ -21,7 +21,7 @@ from mediaflow.automation.contracts import AutomationRequest
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.composition import EditorApplication
 from mediaflow.domain.asr import TranscriptionPlan
-from mediaflow.domain.collaboration import ActorIdentity
+from mediaflow.domain.collaboration import ActorIdentity, ProjectMutationPlan
 from mediaflow.domain.enums import (
     AssetKind,
     ExportFormat,
@@ -46,6 +46,9 @@ from mediaflow.domain.tasks import (
     SequenceBoundaryTaskOutcome,
     Task,
 )
+from mediaflow.infrastructure.project_operation_repository import (
+    ProjectOperationRepository,
+)
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.task_repository import TaskRepository
 
@@ -53,7 +56,7 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 def test_real_task_generates_artifact_and_consumer_reads_persisted_result(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     task_repository = TaskRepository(project_repository)
     service = TaskService(task_repository, max_workers=1)
     events = []
@@ -81,9 +84,7 @@ def test_real_task_generates_artifact_and_consumer_reads_persisted_result(tmp_pa
         )
         context.report(OperationProgress.indeterminate("verifying"))
         assert output.read_text(encoding="utf-8") == "observable producer output"
-        return TaskCompletion.with_artifacts(
-            ArtifactReference.project(context.project_dir, output)
-        )
+        return TaskCompletion.with_artifacts(ArtifactReference.project(context.project_dir, output))
 
     service.register(TaskKind.ANALYZE, generate)
     started = service.start(
@@ -118,7 +119,7 @@ def test_published_task_result_retries_completion_receipt_instead_of_failing(
         root,
         "Completion Receipt Retry",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     task_repository = TaskRepository(project_repository)
     service = TaskService(task_repository, max_workers=1)
     output = root / "generated" / "receipt-output.txt"
@@ -136,9 +137,7 @@ def test_published_task_result_retries_completion_receipt_instead_of_failing(
         if event_type == "completed":
             completion_attempts += 1
             if completion_attempts == 1:
-                raise sqlite3.OperationalError(
-                    "injected completion receipt failure"
-                )
+                raise sqlite3.OperationalError("injected completion receipt failure")
         return original_update(
             task,
             owner_id,
@@ -154,17 +153,13 @@ def test_published_task_result_retries_completion_receipt_instead_of_failing(
 
     def publish(_context: TaskContext) -> TaskCompletion:
         output.write_text("published once", encoding="utf-8")
-        return TaskCompletion.with_artifacts(
-            ArtifactReference.project(root, output)
-        )
+        return TaskCompletion.with_artifacts(ArtifactReference.project(root, output))
 
     service.register(TaskKind.ANALYZE, publish)
     try:
         started = service.start(
             project_id=project.id,
-            command=AnalyzeDownloadCommand(
-                url="test://completion-receipt"
-            ),
+            command=AnalyzeDownloadCommand(url="test://completion-receipt"),
         )
         completed = service.wait(started.id, timeout=5)
 
@@ -173,10 +168,7 @@ def test_published_task_result_retries_completion_receipt_instead_of_failing(
         assert completed.error is None
         assert output.read_text(encoding="utf-8") == "published once"
         assert completed.artifacts[0].resolve(root) == output
-        assert not any(
-            event.event_type == "failed"
-            for event in task_repository.events_after(0)
-        )
+        assert not any(event.event_type == "failed" for event in task_repository.events_after(0))
     finally:
         service.shutdown()
         project_repository.close()
@@ -189,7 +181,7 @@ def test_task_start_uses_one_sequence_identity_and_rejects_mismatch(
         tmp_path / "Task Sequence Identity",
         "Task Sequence Identity",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     service.register(
@@ -198,11 +190,7 @@ def test_task_start_uses_one_sequence_identity_and_rejects_mismatch(
     )
     command = ExportSequenceCommand(
         sequence_id=project.main_sequence_id,
-        output_path=str(
-            project_repository.project_dir
-            / "exports"
-            / "identity.mp4"
-        ),
+        output_path=str(project_repository.project_dir / "exports" / "identity.mp4"),
     )
     try:
         with pytest.raises(
@@ -218,9 +206,7 @@ def test_task_start_uses_one_sequence_identity_and_rejects_mismatch(
         audio_highlights = ExportHighlightsCommand(
             sequence_id=project.main_sequence_id,
             candidate_ids=["candidate"],
-            output_dir=str(
-                project_repository.project_dir / "exports"
-            ),
+            output_dir=str(project_repository.project_dir / "exports"),
             preset=ExportPreset(
                 name="Audio only",
                 format=ExportFormat.AUDIO,
@@ -258,7 +244,7 @@ def test_non_executable_transcription_is_rejected_before_task_persistence(
         tmp_path / "Invalid Transcription",
         "Invalid Transcription",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     service.register(
@@ -301,7 +287,7 @@ def test_cancel_before_handler_publish_keeps_sqlite_cancelled_and_no_file(
         root,
         "Pre Publish Cancel",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     handler_started = threading.Event()
@@ -313,9 +299,7 @@ def test_cancel_before_handler_publish_keeps_sqlite_cancelled_and_no_file(
         assert allow_publish.wait(timeout=5)
         context.cancellation.raise_if_requested()
         output.write_text("must not publish", encoding="utf-8")
-        return TaskCompletion.with_artifacts(
-            ArtifactReference.project(root, output)
-        )
+        return TaskCompletion.with_artifacts(ArtifactReference.project(root, output))
 
     service.register(TaskKind.ANALYZE, publish)
     try:
@@ -346,7 +330,7 @@ def test_cancel_after_file_publish_cannot_rewrite_success_as_cancelled(
         root,
         "Post Publish Cancel",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     published = threading.Event()
@@ -358,9 +342,7 @@ def test_cancel_after_file_publish_cannot_rewrite_success_as_cancelled(
         output.write_text("committed output", encoding="utf-8")
         published.set()
         assert allow_handler_return.wait(timeout=5)
-        return TaskCompletion.with_artifacts(
-            ArtifactReference.project(root, output)
-        )
+        return TaskCompletion.with_artifacts(ArtifactReference.project(root, output))
 
     service.register(TaskKind.ANALYZE, publish)
     try:
@@ -390,7 +372,7 @@ def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
 ) -> None:
     root = tmp_path / "Completion CAS"
     project_repository = ProjectRepository.create(root, "Completion CAS")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     completion_cas_started = threading.Event()
@@ -420,9 +402,7 @@ def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
     def publish(context: TaskContext) -> TaskCompletion:
         context.cancellation.raise_if_requested()
         output.write_text("returned completion", encoding="utf-8")
-        return TaskCompletion.with_artifacts(
-            ArtifactReference.project(root, output)
-        )
+        return TaskCompletion.with_artifacts(ArtifactReference.project(root, output))
 
     service.register(TaskKind.ANALYZE, publish)
     try:
@@ -439,9 +419,7 @@ def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
         assert completed.stop_request is None
         assert repository.get(started.id) == completed
         artifact = completed.artifacts[0].resolve(root)
-        assert artifact.read_text(encoding="utf-8") == (
-            "returned completion"
-        )
+        assert artifact.read_text(encoding="utf-8") == ("returned completion")
     finally:
         allow_completion_cas.set()
         service.shutdown()
@@ -451,7 +429,7 @@ def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
 def test_running_task_is_resumed_after_handlers_are_registered(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     pending = repository.create(
         Task(
@@ -496,7 +474,7 @@ def test_running_task_is_resumed_after_handlers_are_registered(tmp_path: Path) -
 def test_failed_task_can_retry_and_history_removal_keeps_artifacts(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     attempts = 0
@@ -509,9 +487,7 @@ def test_failed_task_can_retry_and_history_removal_keeps_artifacts(tmp_path: Pat
         output = context.project_dir / "generated" / "retry-output.txt"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text("retry completed", encoding="utf-8")
-        return TaskCompletion.with_artifacts(
-            ArtifactReference.project(context.project_dir, output)
-        )
+        return TaskCompletion.with_artifacts(ArtifactReference.project(context.project_dir, output))
 
     service.register(TaskKind.ANALYZE, generate)
     original = service.start(
@@ -546,7 +522,7 @@ def test_failed_task_can_retry_and_history_removal_keeps_artifacts(tmp_path: Pat
 def test_bulk_pause_resume_and_cancel_control_the_real_queue(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
 
@@ -590,7 +566,7 @@ def test_bulk_pause_resume_and_cancel_control_the_real_queue(tmp_path: Path) -> 
 def test_observer_failure_cannot_rewrite_a_completed_task(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     service = TaskService(TaskRepository(project_repository), max_workers=1)
 
     def fail_observer(_event) -> None:
@@ -622,7 +598,7 @@ def test_repeated_idempotency_key_returns_one_persisted_task_and_runs_once(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     service = TaskService(repository, max_workers=1)
     executions = 0
@@ -657,7 +633,7 @@ def test_stale_owner_update_cannot_overwrite_a_newer_control_request(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     first_repository = TaskRepository(project_repository)
     second_repository = TaskRepository(project_repository)
     created = first_repository.create(
@@ -695,7 +671,7 @@ def test_cancel_escalation_wins_after_worker_observed_an_earlier_pause(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     service = TaskService(
         TaskRepository(project_repository),
         max_workers=1,
@@ -741,7 +717,7 @@ def test_cancel_escalation_wins_after_worker_observed_an_earlier_pause(
 def test_progress_updates_are_throttled_and_finished_future_is_released(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     service = TaskService(TaskRepository(project_repository), max_workers=1)
     events = []
     service.events.subscribe(events.append, include_snapshot=False)
@@ -765,12 +741,12 @@ def test_progress_updates_are_throttled_and_finished_future_is_released(tmp_path
     )
     assert service.wait(started.id, timeout=5).status == TaskStatus.COMPLETED
     deadline = time.monotonic() + 1
-    while started.id in service._futures and time.monotonic() < deadline:
+    while started.id in service._execution.futures and time.monotonic() < deadline:
         time.sleep(0.001)
 
     progress_events = [event for event in events if event.event_type == "progress"]
     assert len(progress_events) < 150
-    assert started.id not in service._futures
+    assert started.id not in service._execution.futures
     service.shutdown()
     project_repository.close()
 
@@ -780,7 +756,7 @@ def test_cross_process_idempotent_wait_blocks_until_persisted_completion(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     first = TaskService(
         TaskRepository(project_repository),
         max_workers=1,
@@ -841,7 +817,7 @@ def test_separate_python_process_waits_for_persisted_terminal_state(
 ) -> None:
     root = tmp_path / "ProcessWait"
     project_repository = ProjectRepository.create(root, "ProcessWait")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     service = TaskService(
         TaskRepository(project_repository),
         max_workers=1,
@@ -922,7 +898,7 @@ def test_live_lease_heartbeat_prevents_second_service_recovery(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     first = TaskService(
         TaskRepository(project_repository),
         max_workers=1,
@@ -980,7 +956,7 @@ def test_subsecond_requested_lease_uses_scheduler_safe_expiry(
         tmp_path / "Lease Floor",
         "Lease Floor",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     service = TaskService(
         TaskRepository(project_repository),
         max_workers=1,
@@ -999,18 +975,13 @@ def test_subsecond_requested_lease_uses_scheduler_safe_expiry(
     try:
         task = service.start(
             project_id=project.id,
-            command=AnalyzeDownloadCommand(
-                url="test://scheduler-safe-lease"
-            ),
+            command=AnalyzeDownloadCommand(url="test://scheduler-safe-lease"),
         )
         assert started.wait(5)
         running = service.get(task.id)
         assert running.heartbeat_at is not None
         assert running.lease_expires_at is not None
-        assert (
-            running.lease_expires_at
-            - running.heartbeat_at
-        ) >= 1_000
+        assert (running.lease_expires_at - running.heartbeat_at) >= 1_000
     finally:
         release.set()
         service.shutdown()
@@ -1058,9 +1029,7 @@ def test_recovery_poll_logs_throttled_storage_failures_and_keeps_running(
         project_repository.close()
 
     recovery_logs = [
-        record
-        for record in caplog.records
-        if "Task recovery poll failed" in record.getMessage()
+        record for record in caplog.records if "Task recovery poll failed" in record.getMessage()
     ]
     assert attempts >= 4
     assert len(recovery_logs) == 1
@@ -1076,7 +1045,7 @@ def test_heartbeat_logs_transient_storage_failure_and_renews_next_time(
         tmp_path / "Heartbeat Health",
         "Heartbeat Health",
     )
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     original_renew = repository.renew_lease
     renew_attempts = 0
@@ -1090,9 +1059,7 @@ def test_heartbeat_logs_transient_storage_failure_and_renews_next_time(
         nonlocal renew_attempts
         renew_attempts += 1
         if renew_attempts == 1:
-            raise sqlite3.OperationalError(
-                "injected heartbeat storage failure"
-            )
+            raise sqlite3.OperationalError("injected heartbeat storage failure")
         renewed = original_renew(
             task_id,
             owner_id,
@@ -1121,9 +1088,7 @@ def test_heartbeat_logs_transient_storage_failure_and_renews_next_time(
     try:
         started = service.start(
             project_id=project.id,
-            command=AnalyzeDownloadCommand(
-                url="test://heartbeat-storage-recovery"
-            ),
+            command=AnalyzeDownloadCommand(url="test://heartbeat-storage-recovery"),
         )
         assert service.wait(started.id, timeout=5).status == TaskStatus.COMPLETED
     finally:
@@ -1131,9 +1096,7 @@ def test_heartbeat_logs_transient_storage_failure_and_renews_next_time(
         project_repository.close()
 
     heartbeat_logs = [
-        record
-        for record in caplog.records
-        if "could not renew its lease" in record.getMessage()
+        record for record in caplog.records if "could not renew its lease" in record.getMessage()
     ]
     assert renew_attempts >= 2
     assert len(heartbeat_logs) == 1
@@ -1188,7 +1151,7 @@ def test_expired_lease_is_claimed_once_and_old_owner_cannot_complete(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     repository = TaskRepository(project_repository)
     pending = repository.create(
         Task(
@@ -1231,10 +1194,7 @@ def test_expired_lease_is_claimed_once_and_old_owner_cannot_complete(
         barrier.wait()
         service.recover_claimable()
 
-    threads = [
-        threading.Thread(target=recover, args=(service,))
-        for service in (first, second)
-    ]
+    threads = [threading.Thread(target=recover, args=(service,)) for service in (first, second)]
     for thread in threads:
         thread.start()
     barrier.wait()
@@ -1271,7 +1231,7 @@ def test_remote_pause_is_persisted_and_resume_gets_a_fresh_lease(
 ) -> None:
     root = tmp_path / "Project"
     project_repository = ProjectRepository.create(root, "Project")
-    project = project_repository.catalog.get_project()
+    project = project_repository.projects.get_project()
     first = TaskService(
         TaskRepository(project_repository),
         max_workers=1,
@@ -1346,9 +1306,7 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
                 progress=OperationProgress.indeterminate("paused"),
             )
         )
-        project._tasks._handlers[TaskKind.ANALYZE] = (
-            lambda _context: TaskCompletion()
-        )
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = lambda _context: TaskCompletion()
         envelope = AutomationRequest(
             operation="task.resume",
             project=str(root),
@@ -1374,7 +1332,7 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
         initial_receipt = OperationContext.task_receipt(task)
         assert initial_receipt["task"]["status"] == TaskStatus.PAUSED.value
 
-        original_save = ProjectRepository.save_automation_result
+        original_save = ProjectOperationRepository.save_result
 
         def fail_receipt_write(
             _repository: ProjectRepository,
@@ -1386,8 +1344,8 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
             raise OSError("injected receipt write failure")
 
         monkeypatch.setattr(
-            ProjectRepository,
-            "save_automation_result",
+            ProjectOperationRepository,
+            "save_result",
             fail_receipt_write,
         )
         with pytest.raises(OSError, match="receipt write failure"):
@@ -1398,6 +1356,7 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
                 action,
                 atomic=False,
                 actor=ActorIdentity(kind="system", id="task-service-test"),
+                mutation_plan=ProjectMutationPlan.scoped([]),
             )
 
         completed = project.wait_for_task(task.id, timeout=5)
@@ -1407,14 +1366,17 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
             (envelope.request_id,),
         )
         assert receipt["state"] == "running"
-        assert project._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (task.id,),
-        ) is not None
+        assert (
+            project._repository._fetchone(
+                "SELECT task_id FROM task_consumption WHERE task_id=?",
+                (task.id,),
+            )
+            is not None
+        )
 
         monkeypatch.setattr(
-            ProjectRepository,
-            "save_automation_result",
+            ProjectOperationRepository,
+            "save_result",
             original_save,
         )
         recovered, _recovered_event = project.execute_automation_request(
@@ -1424,6 +1386,7 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
             action,
             atomic=False,
             actor=ActorIdentity(kind="system", id="task-service-test"),
+            mutation_plan=ProjectMutationPlan.scoped([]),
         )
         cached, _cached_event = project.execute_automation_request(
             envelope.request_id,
@@ -1432,6 +1395,7 @@ def test_task_resume_scheduling_replays_after_receipt_write_failure(
             action,
             atomic=False,
             actor=ActorIdentity(kind="system", id="task-service-test"),
+            mutation_plan=ProjectMutationPlan.scoped([]),
         )
 
         assert recovered["task"]["id"] == task.id
@@ -1458,11 +1422,11 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
         "BoundaryReceiptCrash",
     ) as project:
         sequence_id = project.get_project().main_sequence_id
-        asset = project._repository.catalog.import_external_asset(
+        asset = project._repository.assets.import_external_asset(
             source,
             AssetKind.VIDEO,
         )
-        asset = project._repository.catalog.update_asset(
+        asset = project._repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -1512,7 +1476,7 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             )
         )
         task_id = task.id
-        project._tasks._handlers[TaskKind.ANALYZE] = (
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = (
             lambda _context: TaskCompletion(outcome=outcome)
         )
         envelope = AutomationRequest(
@@ -1535,7 +1499,7 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
                 )
             )
 
-        original_save = ProjectRepository.save_automation_result
+        original_save = ProjectOperationRepository.save_result
 
         def fail_receipt_write(
             _repository: ProjectRepository,
@@ -1547,8 +1511,8 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             raise OSError("injected boundary receipt failure")
 
         monkeypatch.setattr(
-            ProjectRepository,
-            "save_automation_result",
+            ProjectOperationRepository,
+            "save_result",
             fail_receipt_write,
         )
         with pytest.raises(OSError, match="boundary receipt failure"):
@@ -1559,6 +1523,7 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
                 action,
                 atomic=False,
                 actor=ActorIdentity(kind="system", id="task-service-test"),
+                mutation_plan=ProjectMutationPlan.scoped([]),
             )
 
         completed = project.wait_for_task(task.id, timeout=5)
@@ -1567,10 +1532,13 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             in_frame=10,
             out_frame=90,
         )
-        assert project._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (task.id,),
-        ) is not None
+        assert (
+            project._repository._fetchone(
+                "SELECT task_id FROM task_consumption WHERE task_id=?",
+                (task.id,),
+            )
+            is not None
+        )
 
         applied = project.load_timeline(sequence_id)
         assert applied.sequence.in_out == SequenceInOut(
@@ -1578,14 +1546,23 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             out_frame=90,
         )
         assert len(project._history._undo) == 1
+        task_group = project._repository.history.get(f"task-{task.id}")
+        assert task_group is not None
+        assert task_group.write_set == [f"/sequences/{sequence_id}/settings/in_out"]
+        task_event = project._repository.events.for_undo_group(f"task-{task.id}")
+        assert task_event is not None
+        assert task_event.operation == "task.analyze_sequence_bounds"
+        assert task_event.write_set == task_group.write_set
+        assert task_event.changes[0].value == {
+            "in_frame": 10,
+            "out_frame": 90,
+        }
         committed_content_revision = project.content_revision()
-        committed_timeline_revision = project.get_sequence(
-            sequence_id
-        ).timeline_revision
+        committed_timeline_revision = project.get_sequence(sequence_id).timeline_revision
 
     monkeypatch.setattr(
-        ProjectRepository,
-        "save_automation_result",
+        ProjectOperationRepository,
+        "save_result",
         original_save,
     )
     with application.open_project(root, writable=True) as reopened:
@@ -1609,6 +1586,7 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             retry_action,
             atomic=False,
             actor=ActorIdentity(kind="system", id="task-service-test"),
+            mutation_plan=ProjectMutationPlan.scoped([]),
         )
         assert recovered["task"]["id"] == task_id
         committed = reopened.committed_task_result(task_id)
@@ -1617,9 +1595,7 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
         assert retry_flags == [True]
         assert reopened.content_revision() == committed_content_revision
         assert (
-            reopened.get_sequence(
-                reopened.get_project().main_sequence_id
-            ).timeline_revision
+            reopened.get_sequence(reopened.get_project().main_sequence_id).timeline_revision
             == committed_timeline_revision
         )
         assert reopened.load_timeline(
@@ -1629,6 +1605,19 @@ def test_sequence_boundary_resume_reopen_does_not_reapply_consumed_result(
             out_frame=90,
         )
         assert reopened._history.can_undo is False
+        assert reopened.can_undo is True
+        undo_result, undo_event = reopened.execute_history_command(
+            "undo",
+            request_id="undo-boundary-task",
+            base_revision=reopened.content_revision(),
+            actor=ActorIdentity(kind="agent", id="boundary-receipt-test"),
+            undo_group_id=f"task-{task_id}",
+        )
+        assert undo_result["direction"] == "undo"
+        assert undo_event.write_set == [
+            f"/sequences/{reopened.get_project().main_sequence_id}/settings/in_out"
+        ]
+        assert reopened.load_timeline(reopened.get_project().main_sequence_id).sequence.in_out is None
 
 
 def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
@@ -1645,11 +1634,11 @@ def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
         "ConsumptionRollback",
     ) as project:
         sequence_id = project.get_project().main_sequence_id
-        asset = project._repository.catalog.import_external_asset(
+        asset = project._repository.assets.import_external_asset(
             source,
             AssetKind.VIDEO,
         )
-        asset = project._repository.catalog.update_asset(
+        asset = project._repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -1672,9 +1661,7 @@ def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
             duration=100,
         )
         project._history.clear()
-        snapshot_hash = project.sequence_boundary_snapshot_hash(
-            sequence_id
-        )
+        snapshot_hash = project.sequence_boundary_snapshot_hash(sequence_id)
         outcome = SequenceBoundaryTaskOutcome(
             analysis=SequenceBoundaryAnalysis(
                 sequence_id=sequence_id,
@@ -1696,11 +1683,9 @@ def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
             assert release_handler.wait(timeout=5)
             return TaskCompletion(outcome=outcome)
 
-        project._tasks._handlers[TaskKind.ANALYZE] = complete_after_release
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = complete_after_release
         revision_before = project.content_revision()
-        timeline_revision_before = project.get_sequence(
-            sequence_id
-        ).timeline_revision
+        timeline_revision_before = project.get_sequence(sequence_id).timeline_revision
         with project._repository.transaction() as connection:
             connection.execute(
                 """CREATE TRIGGER fail_task_consumption_insert
@@ -1720,7 +1705,7 @@ def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
             sequence_id=sequence_id,
         )
         assert handler_entered.wait(timeout=5)
-        worker = project._tasks._futures[started.id]
+        worker = project._tasks._execution.futures[started.id]
         release_handler.set()
         with pytest.raises(
             sqlite3.IntegrityError,
@@ -1730,26 +1715,21 @@ def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
         unsettled = project.get_task(started.id)
         assert unsettled.status == TaskStatus.RUNNING
 
-        assert project.load_timeline(
-            sequence_id
-        ).sequence.in_out is None
+        assert project.load_timeline(sequence_id).sequence.in_out is None
         assert project.content_revision() == revision_before
-        assert (
-            project.get_sequence(sequence_id).timeline_revision
-            == timeline_revision_before
-        )
+        assert project.get_sequence(sequence_id).timeline_revision == timeline_revision_before
         assert project._history.can_undo is False
-        assert project._repository._fetchone(
-            "SELECT task_id FROM task_consumption WHERE task_id=?",
-            (started.id,),
-        ) is None
-        with project._repository.transaction() as connection:
-            connection.execute(
-                "DROP TRIGGER fail_task_consumption_insert"
+        assert (
+            project._repository._fetchone(
+                "SELECT task_id FROM task_consumption WHERE task_id=?",
+                (started.id,),
             )
+            is None
+        )
+        with project._repository.transaction() as connection:
+            connection.execute("DROP TRIGGER fail_task_consumption_insert")
             connection.execute(
-                "UPDATE task SET heartbeat_at=0, lease_expires_at=1 "
-                "WHERE id=?",
+                "UPDATE task SET heartbeat_at=0, lease_expires_at=1 WHERE id=?",
                 (started.id,),
             )
 
@@ -1763,9 +1743,7 @@ def test_task_settlement_insert_failure_rolls_back_and_recovers_atomically(
 
         assert applied.sequence_bounds_status == "applied"
         assert replayed == applied
-        assert project.load_timeline(
-            sequence_id
-        ).sequence.in_out == SequenceInOut(
+        assert project.load_timeline(sequence_id).sequence.in_out == SequenceInOut(
             in_frame=10,
             out_frame=90,
         )
@@ -1783,13 +1761,11 @@ def test_task_preparation_cannot_write_project_outside_command_queue(
         revision = project.content_revision()
 
         def illegal_write(_context: TaskContext) -> TaskCompletion:
-            project._repository.catalog.create_short_sequence("illegal")
+            project._repository.sequences.create_short_sequence("illegal")
             return TaskCompletion()
 
-        project._tasks._handlers[TaskKind.ANALYZE] = illegal_write
-        started = project.start_task(
-            AnalyzeDownloadCommand(url="test://illegal-project-write")
-        )
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = illegal_write
+        started = project.start_task(AnalyzeDownloadCommand(url="test://illegal-project-write"))
         failed = project.wait_for_task(started.id, timeout=5)
 
         assert failed.status == TaskStatus.FAILED
@@ -1821,17 +1797,13 @@ def test_project_close_keeps_lock_until_slow_task_worker_has_joined(
         except TaskStopped:
             stop_observed.set()
             if not allow_handler_to_stop.wait(timeout=5):
-                raise RuntimeError(
-                    "test did not release the slow task"
-                ) from None
+                raise RuntimeError("test did not release the slow task") from None
             raise
 
-    project._tasks._handlers[TaskKind.ANALYZE] = slow_stop
-    task = project.start_task(
-        AnalyzeDownloadCommand(url="test://slow-close")
-    )
+    project._tasks._execution.handlers[TaskKind.ANALYZE] = slow_stop
+    task = project.start_task(AnalyzeDownloadCommand(url="test://slow-close"))
     assert handler_started.wait(timeout=5)
-    worker_threads = tuple(project._tasks._executor._threads)
+    worker_threads = tuple(project._tasks._execution.executor._threads)
     maintenance_thread = project._tasks._maintenance_thread
 
     with pytest.raises(TaskShutdownTimeout) as shutdown_error:
@@ -1851,10 +1823,7 @@ def test_project_close_keeps_lock_until_slow_task_worker_has_joined(
 
     assert worker_threads
     assert all(not worker.is_alive() for worker in worker_threads)
-    assert (
-        maintenance_thread is None
-        or not maintenance_thread.is_alive()
-    )
+    assert maintenance_thread is None or not maintenance_thread.is_alive()
     with application.open_project(root, writable=True) as reopened:
         assert reopened.read_only is False
         assert reopened.get_task(task.id).status == TaskStatus.PAUSED
@@ -1873,9 +1842,7 @@ def test_second_project_instance_is_read_only_across_every_task_write_boundary(
             assert observer.list_tasks() == []
 
             guarded_actions = (
-                lambda: observer.start_task(
-                    AnalyzeDownloadCommand(url="test://read-only")
-                ),
+                lambda: observer.start_task(AnalyzeDownloadCommand(url="test://read-only")),
                 lambda: observer.resume_task("missing"),
                 lambda: observer.retry_task("missing"),
                 lambda: observer.pause_task("missing"),
@@ -1894,9 +1861,7 @@ def test_second_project_instance_is_read_only_across_every_task_write_boundary(
                 read_only_store.create(
                     Task(
                         project_id=observer.get_project().id,
-                        command=AnalyzeDownloadCommand(
-                            url="test://repository-read-only"
-                        ),
+                        command=AnalyzeDownloadCommand(url="test://repository-read-only"),
                     )
                 )
 
@@ -1918,14 +1883,12 @@ def test_expired_task_recovery_stays_inside_the_project_writer(
             recovered.append(context.recovered)
             return TaskCompletion()
 
-        project._tasks._handlers[TaskKind.ANALYZE] = execute
+        project._tasks._execution.handlers[TaskKind.ANALYZE] = execute
         repository = project._tasks.repository
         pending = repository.create(
             Task(
                 project_id=project.get_project().id,
-                command=AnalyzeDownloadCommand(
-                    url="test://owned-recovery"
-                ),
+                command=AnalyzeDownloadCommand(url="test://owned-recovery"),
             )
         )
         assert repository.claim(pending.id, "crashed-process", 1) is not None

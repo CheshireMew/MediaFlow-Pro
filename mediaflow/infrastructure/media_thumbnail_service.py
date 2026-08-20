@@ -17,6 +17,7 @@ from mediaflow.domain.storage_names import (
 from .ffmpeg_runner import FfmpegRunner
 from .project_repository import ProjectRepository
 from .runtime_paths import RuntimePaths
+from .visual_source_resolver import resolve_visual_source
 
 
 class MediaThumbnailService:
@@ -51,11 +52,7 @@ class MediaThumbnailService:
                         str(self.CACHE_VERSION),
                         asset.id,
                         asset.kind.value,
-                        (
-                            asset.fingerprint.edge_sha256
-                            if asset.fingerprint is not None
-                            else ""
-                        ),
+                        (asset.fingerprint.edge_sha256 if asset.fingerprint is not None else ""),
                         str(source),
                         str(source_stat.st_size),
                         str(source_stat.st_mtime_ns),
@@ -64,10 +61,7 @@ class MediaThumbnailService:
                     )
                 ).encode("utf-8")
             ).hexdigest()
-            thumbnail_dir = (
-                self.paths.project_cache_dir(repository.project_dir)
-                / "thumbnails"
-            )
+            thumbnail_dir = self.paths.project_cache_dir(repository.project_dir) / "thumbnails"
             destination = content_addressed_child_path(
                 thumbnail_dir,
                 f"thumbnail:{signature}",
@@ -138,9 +132,7 @@ class MediaThumbnailService:
             return destination.resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = native_temporary_sibling(destination, label="capture")
-        seconds = (
-            bounded_frame * profile.fps_denominator / profile.fps_numerator
-        )
+        seconds = bounded_frame * profile.fps_denominator / profile.fps_numerator
         try:
             if not self._render_frame(
                 source,
@@ -252,17 +244,5 @@ class MediaThumbnailService:
 
     @staticmethod
     def _visual_source(repository: ProjectRepository, asset: Asset) -> Path | None:
-        original = repository.catalog.resolve_asset_path(asset)
-        candidates = [original]
-        if asset.kind == AssetKind.VIDEO:
-            for proxy_value in (asset.sdr_preview_proxy_path, asset.proxy_path):
-                if not proxy_value:
-                    continue
-                proxy = Path(proxy_value)
-                candidates.append(
-                    (repository.project_dir / proxy).resolve()
-                    if not proxy.is_absolute()
-                    else proxy.resolve()
-                )
-        source = next((candidate for candidate in candidates if candidate.is_file()), None)
+        source = resolve_visual_source(repository, asset, prefer="original")
         return require_windows_interop_path(source) if source is not None else None

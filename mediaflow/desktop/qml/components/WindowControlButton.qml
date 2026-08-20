@@ -6,11 +6,10 @@ AppIconButton {
 
     property bool closeButton: false
 
-    implicitWidth: 46
-    implicitHeight: 46
-    iconSize: Theme.iconSizeToolbar
+    implicitWidth: 40
+    implicitHeight: 38
+    iconSize: Theme.iconSizeSmall
     flat: true
-    danger: closeButton
     focusPolicy: Qt.NoFocus
 
     background: Rectangle {
@@ -23,13 +22,4 @@ AppIconButton {
         }
     }
 
-    contentItem: AppIcon {
-        width: control.iconSize
-        height: control.iconSize
-        anchors.centerIn: parent
-        iconName: control.iconName
-        iconColor: control.closeButton && (control.hovered || control.down)
-            ? Theme.textStrong
-            : control.enabled ? Theme.textSubtle : Theme.textDisabled
-    }
 }

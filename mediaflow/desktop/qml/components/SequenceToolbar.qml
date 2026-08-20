@@ -25,9 +25,9 @@ Item {
     }
 
     function activeSequenceName() {
-        for (let index = 0; index < workspaceController.sequencesModel.rowCount(); index++) {
-            const sequence = workspaceController.sequencesModel.get(index);
-            if (sequence.sequenceId === workspaceController.activeSequenceId)
+        for (let index = 0; index < mediaflow.workspaceViewController.sequencesModel.rowCount(); index++) {
+            const sequence = mediaflow.workspaceViewController.sequencesModel.get(index);
+            if (sequence.sequenceId === mediaflow.workspaceViewController.activeSequenceId)
                 return root.sequenceDisplayName(
                     sequence.kind, sequence.name, sequence.displayName);
         }
@@ -46,7 +46,7 @@ Item {
             orientation: ListView.Horizontal
             spacing: 3
             clip: true
-            model: workspaceController.sequencesModel
+            model: mediaflow.workspaceViewController.sequencesModel
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.horizontal: AppScrollBar {
                 policy: sequenceTabs.contentWidth > sequenceTabs.width
@@ -63,9 +63,9 @@ Item {
                 width: Math.min(180, Math.max(86, implicitWidth))
                 text: root.sequenceDisplayName(kind, name, displayName)
                 checkable: true
-                checked: workspaceController.activeSequenceId === sequenceId
+                checked: mediaflow.workspaceViewController.activeSequenceId === sequenceId
                 quiet: !checked
-                onClicked: workspaceController.selectSequence(sequenceId)
+                onClicked: mediaflow.workspaceSequenceController.selectSequence(sequenceId)
                 ToolTip.visible: hovered && implicitWidth > width
                 ToolTip.text: text
             }
@@ -75,6 +75,7 @@ Item {
             id: createShortButton
             objectName: "createShortSequenceButton"
             iconName: "add"
+            compact: true
             flat: true
             enabled: root.actionsEnabled
             Accessible.name: qsTr("新建短视频序列")
@@ -86,6 +87,7 @@ Item {
             id: sequenceMenuButton
             objectName: "sequenceMenuButton"
             iconName: "more"
+            compact: true
             flat: true
             Accessible.name: qsTr("当前序列设置")
             toolTipText: Accessible.name
@@ -116,18 +118,18 @@ Item {
             AppButton {
                 objectName: "archiveActiveSequenceButton"
                 Layout.fillWidth: true
-                visible: workspaceController.canArchiveActiveSequence
+                visible: mediaflow.workspaceViewController.canArchiveActiveSequence
                 danger: true
                 text: qsTr("移除当前短视频")
                 onClicked: {
-                    workspaceController.archiveActiveSequence();
+                    mediaflow.workspaceSequenceController.archiveActiveSequence();
                     sequenceMenu.close();
                 }
             }
             AppButton {
                 objectName: "editSequenceProfileButton"
                 Layout.fillWidth: true
-                text: workspaceController.profileConfirmed ? qsTr("序列设置 · %1 · %2").arg(workspaceController.profileLabel).arg(workspaceController.colorMode === "hdr10_bt2020_pq" ? "HDR10" : "SDR") : qsTr("序列设置")
+                text: mediaflow.workspaceViewController.profileConfirmed ? qsTr("序列设置 · %1 · %2").arg(mediaflow.workspaceViewController.profileLabel).arg(mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq" ? "HDR10" : "SDR") : qsTr("序列设置")
                 enabled: root.actionsEnabled
                 onClicked: {
                     root.editProfileRequested();

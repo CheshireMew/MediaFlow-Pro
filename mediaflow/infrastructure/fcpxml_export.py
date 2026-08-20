@@ -9,6 +9,7 @@ from xml.etree import ElementTree as ET
 
 from mediaflow.application.ports import InterchangeExportDocuments
 from mediaflow.application.timeline_clock import assets_in_timeline_clock
+from mediaflow.domain.clip_transform_projection import project_clip_transform_points
 from mediaflow.domain.enums import (
     AssetKind,
     ClipMediaKind,
@@ -18,7 +19,7 @@ from mediaflow.domain.enums import (
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.project import Asset
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
-from mediaflow.domain.timebase import timeline_offset_for_source_frame
+from mediaflow.domain.storage_names import python_io_path
 from mediaflow.domain.timeline import (
     Clip,
     ClipTransform,
@@ -27,12 +28,13 @@ from mediaflow.domain.timeline import (
 )
 from mediaflow.infrastructure.output_reservation import (
     archive_failed_output,
+    publish_python_output,
     require_python_output_transaction_path,
     reserve_python_output,
     temporary_output_path,
 )
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.web_render_service import WebRenderCache
+from mediaflow.infrastructure.web_render_target import WebRenderCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +68,7 @@ class FcpxmlExportService:
             destination,
             overwrite=overwrite,
         )
-        output.parent.mkdir(parents=True, exist_ok=True)
+        python_io_path(output.parent).mkdir(parents=True, exist_ok=True)
         with reserve_python_output(output):
             return self._export_reserved(state, output, overwrite=overwrite)
 
@@ -84,7 +86,7 @@ class FcpxmlExportService:
             output = output.with_suffix(".fcpxml")
         output = require_python_output_transaction_path(output)
         self.validate(state)
-        if output.exists() and not overwrite:
+        if python_io_path(output).exists() and not overwrite:
             raise FileExistsError(output)
         return output
 
@@ -98,7 +100,9 @@ class FcpxmlExportService:
             )
 
         assets = assets_in_timeline_clock(
-            self.documents.catalog,
+            self.documents.projects,
+            self.documents.sequences,
+            self.documents.assets,
             state.sequence,
         )
         presentations = self._clip_presentations(state, assets)
@@ -141,7 +145,7 @@ class FcpxmlExportService:
         *,
         overwrite: bool,
     ) -> Path:
-        if output.exists() and not overwrite:
+        if python_io_path(output).exists() and not overwrite:
             raise FileExistsError(output)
         root = ET.Element("fcpxml", version="1.11")
         resources = ET.SubElement(root, "resources")
@@ -160,7 +164,9 @@ class FcpxmlExportService:
             ),
         )
         assets = assets_in_timeline_clock(
-            self.documents.catalog,
+            self.documents.projects,
+            self.documents.sequences,
+            self.documents.assets,
             state.sequence,
         )
         presentations = self._clip_presentations(state, assets)
@@ -290,7 +296,7 @@ class FcpxmlExportService:
         temporary = temporary_output_path(output, "fcpxml")
         try:
             ET.ElementTree(root).write(temporary, encoding="utf-8", xml_declaration=True)
-            temporary.replace(output)
+            publish_python_output(temporary, output)
         except Exception:
             archive_failed_output(temporary, output)
             raise
@@ -391,7 +397,7 @@ class FcpxmlExportService:
                     duration_frames = target.frame_count
                     resource_name = f"{asset.name} · {clip.id[:8]}"
                 else:
-                    source = self.documents.catalog.resolve_asset_path(asset).resolve()
+                    source = self.documents.assets.resolve_asset_path(asset).resolve()
                     duration_frames = max(
                         1,
                         asset.metadata.duration_frames,
@@ -693,7 +699,9 @@ class FcpxmlExportService:
         asset: Asset,
         state: TimelineState,
     ) -> None:
-        points, has_keyframes = self._transform_points(clip)
+        projection = project_clip_transform_points(clip)
+        points = list(projection.points)
+        has_keyframes = projection.has_keyframes
         transforms = [value for _frame, value in points]
         if any(
             value.crop_left or value.crop_top or value.crop_right or value.crop_bottom for value in transforms
@@ -840,32 +848,6 @@ class FcpxmlExportService:
                 mode="1",
                 amount=f"{audio.pan:g}",
             )
-
-    def _transform_points(
-        self,
-        clip: Clip,
-    ) -> tuple[list[tuple[int, ClipTransform]], bool]:
-        points: dict[int, ClipTransform] = {0: clip.transform}
-        has_keyframes = False
-        for keyframe in clip.transform_keyframes:
-            if keyframe.timeline_offset is not None:
-                local_frame = keyframe.timeline_offset
-            else:
-                assert keyframe.source_frame is not None
-                try:
-                    local_frame = timeline_offset_for_source_frame(
-                        clip.source_in,
-                        keyframe.source_frame,
-                        clip.speed_numerator,
-                        clip.speed_denominator,
-                        freeze_source_frame=clip.freeze_source_frame,
-                    )
-                except ValueError:
-                    continue
-            if 0 <= local_frame < clip.duration:
-                points[local_frame] = keyframe.transform
-                has_keyframes = True
-        return sorted(points.items()), has_keyframes
 
     def _append_parameter_animation(
         self,

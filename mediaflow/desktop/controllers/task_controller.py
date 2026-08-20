@@ -3,20 +3,22 @@ from __future__ import annotations
 from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 
 from mediaflow.desktop.download_selection import parse_download_entry_selection
-from mediaflow.domain.downloads import DownloadRequest
+from mediaflow.domain.downloads import DownloadCodec, DownloadRequest
 from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.task_commands import DownloadMediaCommand
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import TaskControllerScope
 
 
-class TaskController(ControllerFacet):
+class TaskController(ControllerFacet[TaskControllerScope]):
     taskCenterRequested = Signal()
     tasksChanged = Signal()
     downloadPlanChanged = Signal()
@@ -32,43 +34,43 @@ class TaskController(ControllerFacet):
 
     @Property(int, notify=tasksChanged)
     def activeTaskCount(self) -> int:
-        return sum(task.status.is_active for task in self._session.task_state.items.values())
+        return sum(task.status.is_active for task in self._session.state.tasks.items.values())
 
     @Property(int, notify=tasksChanged)
     def inFlightTaskCount(self) -> int:
-        return sum(task.status.is_in_flight for task in self._session.task_state.items.values())
+        return sum(task.status.is_in_flight for task in self._session.state.tasks.items.values())
 
     @Property(int, notify=tasksChanged)
     def pausedTaskCount(self) -> int:
-        return sum(task.status == TaskStatus.PAUSED for task in self._session.task_state.items.values())
+        return sum(task.status == TaskStatus.PAUSED for task in self._session.state.tasks.items.values())
 
     @Property(int, notify=tasksChanged)
     def terminalTaskCount(self) -> int:
-        return sum(task.status.is_terminal for task in self._session.task_state.items.values())
+        return sum(task.status.is_terminal for task in self._session.state.tasks.items.values())
 
     @Property(bool, notify=downloadPlanChanged)
     def downloadPlanReady(self) -> bool:
-        return self._session.download_state.plan is not None
+        return self._session.state.download.plan is not None
 
     @Property(bool, notify=downloadPlanChanged)
     def downloadAnalysisBusy(self) -> bool:
-        return self._session.download_state.busy
+        return self._session.state.download.busy
 
-    @Property("QVariantMap", notify=downloadPlanChanged)
+    @Property(dict, notify=downloadPlanChanged)
     def downloadPlanData(self) -> dict:
-        if self._session.download_state.plan is None:
+        if self._session.state.download.plan is None:
             return {}
-        data = self._session.download_state.plan.model_dump(mode="json")
-        data["entryCount"] = len(self._session.download_state.plan.entries)
+        data = self._session.state.download.plan.model_dump(mode="json")
+        data["entryCount"] = len(self._session.state.download.plan.entries)
         data["availableEntryCount"] = sum(
-            entry.available for entry in self._session.download_state.plan.entries
+            entry.available for entry in self._session.state.download.plan.entries
         )
         return data
 
     def _active_download_tasks(self):
         return [
             task
-            for task in self._session.task_state.items.values()
+            for task in self._session.state.tasks.items.values()
             if task.kind == TaskKind.DOWNLOAD and task.status.is_active
         ]
 
@@ -153,19 +155,19 @@ class TaskController(ControllerFacet):
     def analyzeDownloadUrl(self, url: str) -> None:
         normalized_url = url.strip()
         if not normalized_url:
-            self._session.events.errorOccurred.emit("请输入视频链接")
+            self._session.updates.report_error("请输入媒体链接")
             return
         try:
             self._remember_download_url(normalized_url)
         except Exception as error:
-            self._session.events.errorOccurred.emit(f"保存最近视频地址失败：{error}")
-        self._session.download_state.request_id += 1
-        request_id = self._session.download_state.request_id
-        self._session.download_state.busy = True
-        self._session.download_state.plan = None
-        self._session.download_state.selected_entries = set()
+            self._session.updates.report_error(f"保存最近媒体地址失败：{error}")
+        self._session.state.download.request_id += 1
+        request_id = self._session.state.download.request_id
+        self._session.state.download.busy = True
+        self._session.state.download.plan = None
+        self._session.state.download.selected_entries = set()
         self._session.projectors.tasks.refresh_download_entries()
-        self._session.events.downloadPlanChanged.emit()
+        self._session.updates.commit(download_plan=True)
         self._session.background.submit(
             "download_plan",
             request_id,
@@ -186,6 +188,9 @@ class TaskController(ControllerFacet):
         filename: str,
     ) -> None:
         self._session._require_writable()
+        plan = self._session.state.download.plan
+        if plan is None:
+            raise RuntimeError("下载分析结果已失效，请重新分析链接")
         requests = self._build_download_requests(
             resolution,
             entry_selection,
@@ -193,7 +198,8 @@ class TaskController(ControllerFacet):
             codec,
             filename,
         )
-        self._remember_download_preferences(resolution, download_subtitles, codec)
+        if plan.media_kind != "audio":
+            self._remember_download_preferences(resolution, download_subtitles, codec)
         self._session._start_download_workflow(requests)
         self._clear_download_plan()
 
@@ -209,7 +215,7 @@ class TaskController(ControllerFacet):
         codec: str,
         filename: str,
     ) -> None:
-        plan = self._session.download_state.plan
+        plan = self._session.state.download.plan
         if plan is None:
             raise RuntimeError("下载分析结果已失效，请重新分析链接")
         requests = self._build_download_requests(
@@ -219,7 +225,7 @@ class TaskController(ControllerFacet):
             codec,
             filename,
         )
-        profile = self._download_project_profile(plan, resolution)
+        profile = self._download_project_profile(plan, requests[0].resolution)
         project_parent = self._session._local_path(parent_url)
         self._session.lifecycle.create_and_open(
             project_parent,
@@ -228,10 +234,14 @@ class TaskController(ControllerFacet):
             ensure_unique=True,
         )
         self._session.settings_persistence.remember_default_project_directory(project_parent)
-        self._remember_download_preferences(resolution, download_subtitles, codec)
+        if plan.media_kind != "audio":
+            self._remember_download_preferences(resolution, download_subtitles, codec)
         self._session._start_download_workflow(requests)
         self._clear_download_plan()
-        self._session._set_status("项目已创建，正在下载视频")
+        if plan.media_kind == "audio":
+            self._session._set_status("项目已创建，正在下载音频")
+        else:
+            self._session._set_status("项目已创建，正在下载视频")
 
     def _build_download_requests(
         self,
@@ -241,40 +251,48 @@ class TaskController(ControllerFacet):
         codec: str,
         filename: str,
     ) -> list[DownloadRequest]:
-        plan = self._session.download_state.plan
+        plan = self._session.state.download.plan
         if plan is None:
             raise RuntimeError("下载分析结果已失效，请重新分析链接")
         selected_items = entry_selection.strip()
         available_entries = {entry.index: entry for entry in plan.entries if entry.available}
         if plan.kind == "collection" and not selected_items:
-            if not self._session.download_state.selected_entries:
+            if not self._session.state.download.selected_entries:
                 raise ValueError("请至少选择一个可用的下载项目")
             selected_items = ",".join(
-                str(index) for index in sorted(self._session.download_state.selected_entries)
+                str(index) for index in sorted(self._session.state.download.selected_entries)
             )
         selected_entry_indices = (
             parse_download_entry_selection(selected_items, set(available_entries))
             if plan.kind == "collection"
             else [plan.entries[0].index]
         )
+        selected_resolution = (
+            "audio"
+            if plan.media_kind == "audio"
+            else resolution or self._session.state.service_settings.download.resolution
+        )
+        if codec not in {"best", "avc"}:
+            raise ValueError("下载编码设置无效")
+        selected_codec = cast(DownloadCodec, codec)
         return [
             DownloadRequest(
                 entry=available_entries[index],
                 collection_title=(plan.collection_title if plan.kind == "collection" else ""),
-                resolution=resolution or self._session.service_settings.download.resolution,
-                codec=codec,
-                download_subtitles=download_subtitles,
-                subtitle_languages=self._session.service_settings.download.subtitle_languages,
+                resolution=selected_resolution,
+                codec=selected_codec,
+                download_subtitles=download_subtitles if plan.media_kind == "video" else False,
+                subtitle_languages=self._session.state.service_settings.download.subtitle_languages,
                 filename_prefix=filename.strip(),
-                output_directory=self._session.service_settings.download.output_directory,
+                output_directory=self._session.state.service_settings.download.output_directory,
             )
             for index in selected_entry_indices
         ]
 
     def _remember_download_url(self, url: str) -> None:
-        if self._session.service_settings.download.last_url == url:
+        if self._session.state.service_settings.download.last_url == url:
             return
-        candidate = self._session.service_settings.model_copy(deep=True)
+        candidate = self._session.state.service_settings.model_copy(deep=True)
         candidate.download.last_url = url
         self._session.settings_persistence.commit(candidate)
 
@@ -287,21 +305,22 @@ class TaskController(ControllerFacet):
         selected_resolution = resolution.strip() or "best"
         if codec not in {"best", "avc"}:
             raise ValueError("下载编码设置无效")
+        selected_codec = cast(DownloadCodec, codec)
         if (
-            self._session.service_settings.download.resolution == selected_resolution
-            and self._session.service_settings.download.download_subtitles == download_subtitles
-            and self._session.service_settings.download.codec == codec
+            self._session.state.service_settings.download.resolution == selected_resolution
+            and self._session.state.service_settings.download.download_subtitles == download_subtitles
+            and self._session.state.service_settings.download.codec == codec
         ):
             return
-        candidate = self._session.service_settings.model_copy(deep=True)
+        candidate = self._session.state.service_settings.model_copy(deep=True)
         candidate.download.resolution = selected_resolution
         candidate.download.download_subtitles = download_subtitles
-        candidate.download.codec = codec
+        candidate.download.codec = selected_codec
         self._session.settings_persistence.commit(candidate)
 
     @staticmethod
     def _download_project_profile(plan, resolution: str) -> ProjectProfile | None:
-        if plan.width <= 0 or plan.height <= 0 or resolution == "audio":
+        if plan.media_kind == "audio" or plan.width <= 0 or plan.height <= 0 or resolution == "audio":
             return None
         target_height = plan.height
         height_aliases = {"4k": 2160, "2k": 1440}
@@ -325,10 +344,10 @@ class TaskController(ControllerFacet):
         )
 
     def _clear_download_plan(self) -> None:
-        self._session.download_state.plan = None
-        self._session.download_state.selected_entries = set()
+        self._session.state.download.plan = None
+        self._session.state.download.selected_entries = set()
         self._session.projectors.tasks.refresh_download_entries()
-        self._session.events.downloadPlanChanged.emit()
+        self._session.updates.commit(download_plan=True)
 
     @Slot()
     def dismissDownloadPlan(self) -> None:
@@ -336,23 +355,23 @@ class TaskController(ControllerFacet):
 
     @Slot(int, bool)
     def setDownloadEntrySelected(self, entry_index: int, selected: bool) -> None:
-        plan_entries = self._session.download_state.plan.entries if self._session.download_state.plan else []
+        plan_entries = self._session.state.download.plan.entries if self._session.state.download.plan else []
         entries = {entry.index: entry for entry in plan_entries}
         if entry_index not in entries or not entries[entry_index].available:
             return
         if selected:
-            self._session.download_state.selected_entries.add(entry_index)
+            self._session.state.download.selected_entries.add(entry_index)
         else:
-            self._session.download_state.selected_entries.discard(entry_index)
+            self._session.state.download.selected_entries.discard(entry_index)
         self._session.projectors.tasks.refresh_download_entries()
 
     @Slot(bool)
     def selectAllDownloadEntries(self, selected: bool) -> None:
-        self._session.download_state.selected_entries = (
+        self._session.state.download.selected_entries = (
             {
                 entry.index
                 for entry in (
-                    self._session.download_state.plan.entries if self._session.download_state.plan else []
+                    self._session.state.download.plan.entries if self._session.state.download.plan else []
                 )
                 if entry.available
             }
@@ -365,28 +384,28 @@ class TaskController(ControllerFacet):
     @report_ui_errors
     def pauseTask(self, task_id: str) -> None:
         self._session._require_writable()
-        self._session.binding.current.pause_task(task_id)
+        self._session.state.binding.require_current().pause_task(task_id)
         self._session._set_status("已请求暂停任务")
 
     @Slot(str)
     @report_ui_errors
     def resumeTask(self, task_id: str) -> None:
         self._session._require_writable()
-        self._session.binding.current.resume_task(task_id)
+        self._session.state.binding.require_current().resume_task(task_id)
         self._session.projectors.tasks.refresh_tasks()
 
     @Slot(str)
     @report_ui_errors
     def cancelTask(self, task_id: str) -> None:
         self._session._require_writable()
-        self._session.binding.current.cancel_task(task_id)
+        self._session.state.binding.require_current().cancel_task(task_id)
         self._session._set_status("已请求取消任务")
 
     @Slot(str)
     @report_ui_errors
     def retryTask(self, task_id: str) -> None:
         self._session._require_writable()
-        self._session.binding.current.retry_task(task_id)
+        self._session.state.binding.require_current().retry_task(task_id)
         self._session._set_status("已重新创建任务")
         self._session.projectors.tasks.refresh_tasks()
 
@@ -394,7 +413,7 @@ class TaskController(ControllerFacet):
     @report_ui_errors
     def removeTask(self, task_id: str) -> None:
         self._session._require_writable()
-        self._session.binding.current.delete_task(task_id)
+        self._session.state.binding.require_current().delete_task(task_id)
         self._session._set_status("已移除任务记录，任务产物仍保留")
         self._session.projectors.tasks.refresh_tasks()
 
@@ -402,21 +421,21 @@ class TaskController(ControllerFacet):
     @report_ui_errors
     def pauseAllTasks(self) -> None:
         self._session._require_writable()
-        count = self._session.binding.current.pause_all_tasks()
+        count = self._session.state.binding.require_current().pause_all_tasks()
         self._session._set_status("已请求暂停 %1 个任务", count)
 
     @Slot()
     @report_ui_errors
     def cancelAllTasks(self) -> None:
         self._session._require_writable()
-        count = self._session.binding.current.cancel_all_tasks()
+        count = self._session.state.binding.require_current().cancel_all_tasks()
         self._session._set_status("已请求取消 %1 个任务", count)
 
     @Slot()
     @report_ui_errors
     def clearTaskHistory(self) -> None:
         self._session._require_writable()
-        count = self._session.binding.current.clear_task_history()
+        count = self._session.state.binding.require_current().clear_task_history()
         self._session._set_status("已清理 %1 条任务记录，任务产物仍保留", count)
         self._session.projectors.tasks.refresh_tasks()
 
@@ -433,9 +452,9 @@ class TaskController(ControllerFacet):
     def openArtifact(self, path_value: str) -> None:
         path = Path(path_value)
         if not path.is_absolute():
-            if not self._session.binding.current:
+            if not self._session.state.binding.current:
                 raise RuntimeError("当前没有打开的项目")
-            path = self._session.binding.current.project_dir / path
+            path = self._session.state.binding.require_current().project_dir / path
         path = path.resolve(strict=True)
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
             raise RuntimeError(f"无法打开产物：{path}")

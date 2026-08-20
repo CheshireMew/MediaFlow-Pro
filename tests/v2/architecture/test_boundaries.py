@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 
+from mediaflow.application.desktop_mutation_adapter import plan_desktop_project_mutation
+from mediaflow.application.project_mutation_planning import plan_automation_project_mutation
+from mediaflow.application.settings_form import SettingsForm
 from mediaflow.application.workflow_stage_handlers import workflow_stage_handlers
 from mediaflow.automation.operation_registry import OPERATIONS, OperationDefinition
 from mediaflow.desktop.presentation_catalogs import (
@@ -16,6 +20,9 @@ from mediaflow.infrastructure.project_migrations import PROJECT_MIGRATIONS
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.project_repository_component import ProjectRepositoryComponent
 from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
+from mediaflow.service.commands import DESKTOP_COMMANDS, DesktopCommand, desktop_command
+from mediaflow.service.remote_project import RemoteEditorProject
+from mediaflow.service.remote_timeline import RemoteTimelineEditor
 
 ROOT = Path(__file__).resolve().parents[3]
 PYTHON_ROOTS = (ROOT / "mediaflow", ROOT / "scripts", ROOT / "tests")
@@ -48,8 +55,13 @@ def _class(path: Path, name: str) -> ast.ClassDef:
     return next(node for node in _tree(path).body if isinstance(node, ast.ClassDef) and node.name == name)
 
 
+def test_mypy_covers_the_complete_mediaflow_package() -> None:
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert configuration["tool"]["mypy"]["files"] == ["mediaflow"]
+
+
 def test_runtime_status_messages_use_the_registered_translation_boundary() -> None:
-    presentation_path = ROOT / "mediaflow" / "desktop" / "presentation_catalogs.py"
+    presentation_path = ROOT / "mediaflow" / "desktop" / "presentation_messages.py"
     status_function = next(
         node
         for node in _tree(presentation_path).body
@@ -71,6 +83,7 @@ def test_runtime_status_messages_use_the_registered_translation_boundary() -> No
         "_finish_subtitle_placement_edit": 1,
         "_after_visual_effect_change": 0,
         "commit": 1,
+        "commit_pair": 2,
         "remember_default_project_directory": 1,
     }
     mediaflow_root = ROOT / "mediaflow"
@@ -120,13 +133,20 @@ def test_runtime_status_messages_use_the_registered_translation_boundary() -> No
                             dynamic_bridges.add((path.relative_to(ROOT).as_posix(), function.name))
 
     assert dynamic_bridges == {
-        ("mediaflow/composition.py", "from_dict"),
+        ("mediaflow/project_task_settlement.py", "from_dict"),
         ("mediaflow/desktop/controllers/project_controller.py", "_apply_workflow_update"),
         ("mediaflow/desktop/controllers/project_controller.py", "_finish_sequence_in_out_edit"),
         ("mediaflow/desktop/controllers/project_controller.py", "_finish_subtitle_edit"),
-        ("mediaflow/desktop/controllers/subtitle_controller.py", "_finish_subtitle_placement_edit"),
-        ("mediaflow/desktop/controllers/timeline_controller.py", "_after_visual_effect_change"),
+        (
+            "mediaflow/desktop/controllers/subtitle_placement_controller.py",
+            "_finish_subtitle_placement_edit",
+        ),
+        (
+            "mediaflow/desktop/controllers/timeline_effects_controller.py",
+            "_after_visual_effect_change",
+        ),
         ("mediaflow/desktop/coordinators/settings_persistence.py", "commit"),
+        ("mediaflow/desktop/coordinators/settings_persistence.py", "commit_pair"),
         (
             "mediaflow/desktop/coordinators/settings_persistence.py",
             "remember_default_project_directory",
@@ -201,6 +221,15 @@ def test_domain_and_application_layers_do_not_depend_on_outer_layers() -> None:
     assert violations == []
 
 
+def test_automation_operation_handlers_do_not_construct_infrastructure() -> None:
+    violations: list[str] = []
+    for path in (ROOT / "mediaflow" / "automation").glob("*_operations.py"):
+        for module in _imported_modules(path):
+            if module.startswith("mediaflow.infrastructure"):
+                violations.append(f"{path.name} -> {module}")
+    assert violations == []
+
+
 def test_workflow_service_dispatches_to_complete_stage_registry() -> None:
     assert set(workflow_stage_handlers()) == set(WorkflowStage)
     path = ROOT / "mediaflow" / "application" / "project_workflow_service.py"
@@ -209,6 +238,38 @@ def test_workflow_service_dispatches_to_complete_stage_registry() -> None:
     assert methods["continue_run"].end_lineno - methods["continue_run"].lineno < 40
     assert methods["handle_task"].end_lineno - methods["handle_task"].lineno < 40
     assert "_stage_handlers[run.stage]" in path.read_text(encoding="utf-8")
+
+
+def test_task_service_is_a_composed_facade_without_polling_or_worker_ownership() -> None:
+    service_path = ROOT / "mediaflow" / "application" / "task_service.py"
+    service = _class(service_path, "TaskService")
+    methods = {
+        node.name for node in service.body if isinstance(node, ast.FunctionDef)
+    }
+    assert methods.isdisjoint(
+        {
+            "_run",
+            "_heartbeat_loop",
+            "_persist_owned",
+            "_persist_completion",
+            "_persist_settlement",
+            "_persist_failure_or_stop",
+        }
+    )
+    assert service.end_lineno - service.lineno < 270
+    assert {
+        "task_execution.py",
+        "task_execution_types.py",
+        "task_lifecycle.py",
+        "task_persistence.py",
+        "task_waiter.py",
+    } <= {
+        path.name for path in (ROOT / "mediaflow" / "application").glob("task_*.py")
+    }
+    wait_method = next(
+        node for node in service.body if isinstance(node, ast.FunctionDef) and node.name == "wait"
+    )
+    assert "sleep" not in ast.unparse(wait_method)
 
 
 def test_repository_and_subtitle_capabilities_remain_split() -> None:
@@ -228,10 +289,6 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         "known_content_revision",
         "content_revision",
         "acknowledge_content_revision",
-        "automation_result",
-        "begin_automation_request",
-        "save_automation_result",
-        "consume_task_result_once",
         "coalesced_revision",
         "enlist_transaction_publication",
         "transaction",
@@ -250,22 +307,30 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         and target.value.id == "self"
     }
     assert {
-        "catalog",
+        "projects",
+        "sequences",
+        "assets",
         "timeline",
         "audio",
         "subtitles",
         "highlights",
         "web",
         "records",
+        "operations",
+        "observations",
     } <= assigned_components
     for component_name in (
-        "ProjectCatalogRepository",
+        "ProjectMetadataRepository",
+        "SequenceCatalogRepository",
+        "AssetCatalogRepository",
         "TimelineRepository",
         "AudioRepository",
         "SubtitleRepository",
         "HighlightRepository",
         "WebMediaRepository",
         "ProjectRecordsRepository",
+        "ProjectOperationRepository",
+        "ProjectObservationRepository",
     ):
         module = next(
             path
@@ -279,6 +344,24 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
             isinstance(base, ast.Name) and base.id == ProjectRepositoryComponent.__name__
             for base in component.bases
         )
+
+    component_files = []
+    for path in (ROOT / "mediaflow" / "infrastructure").glob("*_repository.py"):
+        tree = _tree(path)
+        if any(
+            isinstance(node, ast.ClassDef)
+            and any(
+                isinstance(base, ast.Name) and base.id == "ProjectRepositoryComponent"
+                for base in node.bases
+            )
+            for node in tree.body
+        ):
+            component_files.append(path)
+    assert component_files
+    for path in component_files:
+        source = path.read_text(encoding="utf-8")
+        assert "self._owner" not in source
+        assert re.search(r"_relations\.[A-Za-z_]+\._[A-Za-z_]", source) is None
 
     acquisition = _class(
         ROOT / "mediaflow" / "application" / "subtitle_acquisition.py",
@@ -415,6 +498,44 @@ def test_removed_desktop_session_aliases_have_no_callers() -> None:
     assert violations == []
 
 
+def test_desktop_session_has_one_mutable_state_tree() -> None:
+    controller = ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py"
+    session = _class(controller, "ProjectSession")
+    initializer = next(
+        node for node in session.body if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assignments = {
+        target.attr
+        for node in ast.walk(initializer)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "self"
+    }
+    old_members = {
+        "binding",
+        "selection",
+        "task_state",
+        "presentation",
+        "asset_state",
+        "download_state",
+        "runtime_state",
+        "requests",
+        "service_settings",
+        "desktop_settings",
+    }
+    assert "state" in assignments
+    assert assignments.isdisjoint(old_members)
+    violations = []
+    for path in _python_files():
+        source = path.read_text(encoding="utf-8")
+        for member in old_members:
+            if re.search(rf"\b(?:_?session|session)\.{member}\b", source):
+                violations.append(f"{path.relative_to(ROOT)} reads legacy session.{member}")
+    assert violations == []
+
+
 def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     session = _class(
         ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py",
@@ -433,12 +554,14 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     for component in (
         "PreviewViewport",
         "WorkspaceNavigation",
-        "WorkspaceShortcuts",
+        "WorkspaceChrome",
     ):
         assert component in workspace
         assert (qml_root / "components" / f"{component}.qml").is_file()
     status_overlays = qml_root / "WorkspaceStatusOverlays.qml"
-    assert "WorkspaceStatusOverlays" in workspace
+    workspace_chrome = (qml_root / "components" / "WorkspaceChrome.qml").read_text(encoding="utf-8")
+    assert "WorkspaceStatusOverlays" in workspace_chrome
+    assert "WorkspaceShortcuts" in workspace_chrome
     assert "WorkflowBanner" not in workspace
     assert status_overlays.is_file()
     status_overlay_source = status_overlays.read_text(encoding="utf-8")
@@ -471,6 +594,8 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
         panel_source = (qml_root / panel_name).read_text(encoding="utf-8")
         assert f'text: qsTr("{redundant_title}")' not in panel_source
     assert "TaskDrawer" not in workspace
+
+
     assert not (qml_root / "TaskDrawer.qml").exists()
     transcript_panel = (qml_root / "TranscriptPanel.qml").read_text(encoding="utf-8")
     assert "transcribeTimelineButton" in transcript_panel
@@ -481,11 +606,12 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert "transcriptWordSegmentList" not in transcript_panel
     assert "rippleDeleteTranscriptWordsButton" not in transcript_panel
     assert "selectedSubtitleWordIds" not in transcript_panel
-    subtitle_controller = (
-        ROOT / "mediaflow" / "desktop" / "controllers" / "subtitle_controller.py"
-    ).read_text(encoding="utf-8")
-    assert "subtitleWordsModel" not in subtitle_controller
-    assert "rippleDeleteSelectedWords" not in subtitle_controller
+    subtitle_controllers = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "mediaflow" / "desktop" / "controllers").glob("subtitle_*_controller.py")
+    )
+    assert "subtitleWordsModel" not in subtitle_controllers
+    assert "rippleDeleteSelectedWords" not in subtitle_controllers
     automation_contract = (ROOT / "mediaflow" / "automation" / "contracts.py").read_text(encoding="utf-8")
     automation_registry = (ROOT / "mediaflow" / "automation" / "operation_registry.py").read_text(
         encoding="utf-8"
@@ -564,29 +690,184 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
         "ExportWatermarkSettings",
     ):
         assert (qml_root / "components" / f"{component}.qml").is_file()
-    presentation = (ROOT / "mediaflow" / "desktop" / "presentation_catalogs.py").read_text(encoding="utf-8")
-    assert "准备流畅预览" in presentation
-    assert "准备音频波形" in presentation
-    assert '"生成代理"' not in presentation
-    assert '"生成波形"' not in presentation
+    task_presentation = (ROOT / "mediaflow" / "desktop" / "presentation_tasks.py").read_text(
+        encoding="utf-8"
+    )
+    assert "准备流畅预览" in task_presentation
+    assert "准备音频波形" in task_presentation
+    assert '"生成代理"' not in task_presentation
+    assert '"生成波形"' not in task_presentation
+
+
+
+def test_desktop_qml_uses_one_root_and_focused_workspace_boundaries() -> None:
+    app_source = (ROOT / "mediaflow" / "desktop" / "app.py").read_text(encoding="utf-8")
+    assert set(re.findall(r'setContextProperty\(\s*"([^"]+)"', app_source)) == {
+        "applicationMonospaceFontFamily",
+        "mediaflow",
+    }
+
+    qml_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "mediaflow" / "desktop" / "qml").rglob("*.qml")
+    )
+    assert "workspaceController" not in qml_source
+    for controller in (
+        "workspaceViewController",
+        "workspaceProjectController",
+        "workspaceSequenceController",
+        "workspaceWorkflowController",
+        "workspacePlaybackController",
+        "settingsController",
+        "mediaController",
+        "timelineViewController",
+        "taskController",
+        "webController",
+    ):
+        assert not re.search(rf"(?<!mediaflow\.)\b{controller}\b", qml_source)
+
+    main_qml = (ROOT / "mediaflow" / "desktop" / "qml" / "Main.qml").read_text(encoding="utf-8")
+    assert "target: mediaflow.taskController" in main_qml
+    assert "function onDownloadPlanChanged()" in main_qml
+    web_editor_canvas = (
+        ROOT / "mediaflow" / "desktop" / "qml" / "WebEditorCanvas.qml"
+    ).read_text(encoding="utf-8")
+    assert 'WebChannel.id: "mediaflowWebController"' in web_editor_canvas
+    assert "channel.objects.mediaflowWebController" in web_editor_canvas
+    assert "channel.objects.mediaflow.webController" not in web_editor_canvas
+
+    view = _class(
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_controller.py",
+        "WorkspaceViewController",
+    )
+    view_methods = {node.name for node in view.body if isinstance(node, ast.FunctionDef)}
+    assert view_methods.isdisjoint(
+        {
+            "createProject",
+            "openProject",
+            "closeProject",
+            "selectSequence",
+            "updateSequenceProfile",
+            "continueWorkflow",
+            "shutdown",
+        }
+    )
+    facet_source = (
+        ROOT / "mediaflow" / "desktop" / "controllers" / "controller_facet.py"
+    ).read_text(encoding="utf-8")
+    assert "ProjectSession" not in facet_source
+
+    direct_event_emits = []
+    for path in (ROOT / "mediaflow" / "desktop").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if re.search(r"\.events\.[A-Za-z_][A-Za-z0-9_]*\.emit\(", source):
+            direct_event_emits.append(str(path.relative_to(ROOT)))
+    assert direct_event_emits == []
+
+
+def test_settings_dialog_uses_the_typed_backend_draft() -> None:
+    qml_root = ROOT / "mediaflow" / "desktop" / "qml"
+    settings_files = (
+        qml_root / "SettingsDialog.qml",
+        qml_root / "SettingsGeneralPage.qml",
+        qml_root / "SettingsMediaPage.qml",
+        qml_root / "SettingsAiPage.qml",
+    )
+    qml_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in settings_files
+    )
+    controller_source = (
+        ROOT / "mediaflow" / "desktop" / "controllers" / "settings_controller.py"
+    ).read_text(encoding="utf-8")
+    for removed_qml_path in (
+        "settingsPayload",
+        "settingsBaseline",
+        "settingsSaveTimer",
+        "JSON.stringify",
+        "saveSettings(",
+    ):
+        assert removed_qml_path not in qml_source
+    assert "def saveSettings(" not in controller_source
+    assert "SettingsDraft(" in controller_source
+    draft_fields = set(re.findall(r'updateDraft\("([^"]+)"', qml_source))
+    form_fields = {
+        field.alias or name for name, field in SettingsForm.model_fields.items()
+    }
+    assert draft_fields == form_fields
+    assert len(settings_files[0].read_text(encoding="utf-8").splitlines()) <= 170
+    assert all(
+        len(path.read_text(encoding="utf-8").splitlines()) <= 500
+        for path in settings_files[1:]
+    )
+    ai_source = settings_files[-1].read_text(encoding="utf-8")
+    assert "required property bool enabled" in ai_source
+    assert "visible: !enabled" in ai_source
+    assert "model.enabled" not in ai_source
+    for model_id in ("deepseek-chat", "deepseek-reasoner"):
+        assert model_id not in ai_source
 
 
 def test_audited_god_files_stay_replaced_by_focused_components() -> None:
     limits = {
+        ROOT / "mediaflow" / "composition.py": 780,
+        ROOT / "mediaflow" / "editor_project_document_commands.py": 240,
+        ROOT / "mediaflow" / "editor_project_media_commands.py": 170,
+        ROOT / "mediaflow" / "editor_project_task_commands.py": 125,
+        ROOT / "mediaflow" / "editor_project_web_commands.py": 135,
+        ROOT / "mediaflow" / "editor_project_delivery_commands.py": 240,
+        ROOT / "mediaflow" / "project_presentation.py": 320,
+        ROOT / "mediaflow" / "project_collaboration.py": 650,
+        ROOT / "mediaflow" / "project_task_settlement.py": 350,
+        ROOT / "mediaflow" / "application" / "ports.py": 170,
+        ROOT / "mediaflow" / "application" / "external_ports.py": 70,
+        ROOT / "mediaflow" / "application" / "project_document_ports.py": 110,
+        ROOT / "mediaflow" / "application" / "project_storage_ports.py": 360,
+        ROOT / "mediaflow" / "application" / "project_service_ports.py": 300,
+        ROOT / "mediaflow" / "application" / "project_task_document_ports.py": 115,
+        ROOT / "mediaflow" / "application" / "task_runtime_ports.py": 510,
+        ROOT / "mediaflow" / "application" / "timeline_editor.py": 960,
+        ROOT / "mediaflow" / "application" / "timeline_visual_editing.py": 220,
+        ROOT / "mediaflow" / "application" / "timeline_track_editing.py": 180,
+        ROOT / "mediaflow" / "application" / "timeline_structure_editing.py": 160,
+        ROOT / "mediaflow" / "application" / "timeline_marker_editing.py": 170,
+        ROOT / "mediaflow" / "application" / "timeline_change_session.py": 350,
         ROOT / "mediaflow" / "application" / "project_task_handlers.py": 150,
-        ROOT / "mediaflow" / "application" / "web_media_service.py": 50,
+        ROOT / "mediaflow" / "application" / "web_media_service.py": 60,
         ROOT / "mediaflow" / "application" / "web_package_service.py": 450,
-        ROOT / "mediaflow" / "application" / "web_clip_editing_service.py": 1600,
+        ROOT / "mediaflow" / "application" / "web_clip_editing_service.py": 240,
+        ROOT / "mediaflow" / "application" / "web_clip_parameter_editing.py": 280,
+        ROOT / "mediaflow" / "application" / "web_clip_layer_editing.py": 370,
+        ROOT / "mediaflow" / "application" / "web_clip_data_editing.py": 160,
+        ROOT / "mediaflow" / "application" / "web_runtime_state_commit.py": 410,
+        ROOT / "mediaflow" / "application" / "web_field_validation.py": 110,
         ROOT / "mediaflow" / "application" / "web_batch_service.py": 180,
-        ROOT / "mediaflow" / "application" / "web_rebind_service.py": 850,
+        ROOT / "mediaflow" / "application" / "web_rebind_service.py": 450,
+        ROOT / "mediaflow" / "application" / "web_rebind_conflicts.py": 550,
+        ROOT / "mediaflow" / "application" / "web_edit_document_builder.py": 360,
         ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py": 260,
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_controller.py": 360,
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_project_controller.py": 210,
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_sequence_controller.py": 190,
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_workflow_controller.py": 50,
+        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_playback_controller.py": 50,
         ROOT / "mediaflow" / "desktop" / "controllers" / "web_controller.py": 700,
         ROOT / "mediaflow" / "desktop" / "controllers" / "web_timeline_controller.py": 550,
         ROOT / "mediaflow" / "desktop" / "controllers" / "web_delivery_controller.py": 300,
-        ROOT / "mediaflow" / "desktop" / "qml" / "Workspace.qml": 600,
+        ROOT / "mediaflow" / "desktop" / "qml" / "Workspace.qml": 560,
+        ROOT / "mediaflow" / "desktop" / "qml" / "components" / "WorkspaceChrome.qml": 140,
         ROOT / "mediaflow" / "desktop" / "qml" / "TimelineView.qml": 400,
         ROOT / "mediaflow" / "infrastructure" / "mlt" / "compiler.py": 300,
         ROOT / "mediaflow" / "infrastructure" / "project_migration_runner.py": 100,
+        ROOT / "mediaflow" / "infrastructure" / "project_repository.py": 600,
+        ROOT / "mediaflow" / "infrastructure" / "project_operation_repository.py": 220,
+        ROOT / "mediaflow" / "infrastructure" / "project_observation_repository.py": 300,
+        ROOT / "mediaflow" / "infrastructure" / "proxy_service.py": 410,
+        ROOT / "mediaflow" / "infrastructure" / "proxy_encoding.py": 140,
+        ROOT / "mediaflow" / "service" / "server.py": 520,
+        ROOT / "mediaflow" / "service" / "request_dispatcher.py": 330,
+        ROOT / "mediaflow" / "service" / "desktop_command_catalog.py": 280,
+        ROOT / "mediaflow" / "mcp_server.py": 200,
+        ROOT / "mediaflow" / "mcp_tools.py": 360,
     }
     assert {
         str(path.relative_to(ROOT)): len(path.read_text(encoding="utf-8").splitlines())
@@ -666,8 +947,55 @@ def test_audited_god_files_stay_replaced_by_focused_components() -> None:
         "SettingsPersistence",
         "TaskOperations",
         "TimelineAssetOperations",
+        "DesktopSessionState",
     ):
         assert boundary in session_source
+
+    timeline_editor = _class(
+        ROOT / "mediaflow" / "application" / "timeline_editor.py",
+        "TimelineEditor",
+    )
+    timeline_methods = {node.name for node in timeline_editor.body if isinstance(node, ast.FunctionDef)}
+    assert timeline_methods.isdisjoint(
+        {"_apply_history_action", "_apply_change", "_persist_change", "_canonical_state"}
+    )
+    web_editor = _class(
+        ROOT / "mediaflow" / "application" / "web_clip_editing_service.py",
+        "WebClipEditingService",
+    )
+    web_methods = {node.name for node in web_editor.body if isinstance(node, ast.FunctionDef)}
+    assert web_methods.isdisjoint({"validated_field_value", "validate_data_value", "validate_constraint"})
+
+
+def test_audited_long_operations_remain_small_or_delegate_to_focused_components() -> None:
+    limits = {
+        (ROOT / "mediaflow" / "domain" / "web_manifest.py", "valid_contract"): 5,
+        (
+            ROOT / "mediaflow" / "application" / "web_edit_document_builder.py",
+            "build_web_edit_document",
+        ): 60,
+        (
+            ROOT / "mediaflow" / "application" / "web_rebind_service.py",
+            "_rebind_conflicts",
+        ): 20,
+        (ROOT / "mediaflow" / "service" / "server.py", "_dispatch"): 20,
+        (ROOT / "mediaflow" / "mcp_server.py", "build_mcp_server"): 40,
+        (
+            ROOT / "mediaflow" / "infrastructure" / "proxy_service.py",
+            "_prepare_outputs",
+        ): 110,
+    }
+    for (path, function_name), maximum_lines in limits.items():
+        functions = [
+            node
+            for node in ast.walk(_tree(path))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == function_name
+        ]
+        assert len(functions) == 1
+        function = functions[0]
+        assert function.end_lineno is not None
+        assert function.end_lineno - function.lineno + 1 <= maximum_lines
 
 
 def test_project_migrations_are_one_continuous_registered_chain() -> None:
@@ -677,10 +1005,7 @@ def test_project_migrations_are_one_continuous_registered_chain() -> None:
     assert [migration.target_version for migration in PROJECT_MIGRATIONS] == list(
         range(2, PROJECT_SCHEMA_VERSION + 1)
     )
-    implementations = [
-        migration.apply or migration.apply_with_runtime
-        for migration in PROJECT_MIGRATIONS
-    ]
+    implementations = [migration.apply or migration.apply_with_runtime for migration in PROJECT_MIGRATIONS]
     assert all(implementation is not None for implementation in implementations)
     assert len(set(implementations)) == len(PROJECT_MIGRATIONS)
     assert not (ROOT / "mediaflow" / "infrastructure" / "project_schema.py").exists()
@@ -716,10 +1041,185 @@ def test_automation_contract_models_access_and_execution_share_one_registry() ->
             ROOT / "mediaflow" / "automation" / consumer
         ).read_text(encoding="utf-8")
     assert "operation_registry import OPERATIONS" in (
-        ROOT / "mediaflow" / "service" / "sessions.py"
+        ROOT / "mediaflow" / "service" / "automation_sessions.py"
     ).read_text(encoding="utf-8")
     assert "operation_registry import OPERATIONS" not in (
         ROOT / "mediaflow" / "automation" / "dispatcher.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_desktop_transport_uses_one_typed_command_registry() -> None:
+    assert DESKTOP_COMMANDS
+    assert all(isinstance(value, DesktopCommand) for value in DESKTOP_COMMANDS.values())
+    assert all(key == (value.target, value.name) for key, value in DESKTOP_COMMANDS.items())
+    assert all(desktop_command(*key) is value for key, value in DESKTOP_COMMANDS.items())
+    assert len({value.schema_id for value in DESKTOP_COMMANDS.values()}) == len(
+        DESKTOP_COMMANDS
+    )
+    assert all(value.request_model is not None for value in DESKTOP_COMMANDS.values())
+    assert all(value.result_model is not None for value in DESKTOP_COMMANDS.values())
+    assert all(
+        value.mutation_plan(sequence_id="sequence", args=[], kwargs={}).change_scopes
+        for value in DESKTOP_COMMANDS.values()
+        if value.access == "write"
+    )
+
+    service_root = ROOT / "mediaflow" / "service"
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in service_root.glob("*.py"))
+    for removed in (
+        "PROJECT_READ_COMMANDS",
+        "PROJECT_RUNTIME_COMMANDS",
+        "PROJECT_WRITE_COMMANDS",
+    ):
+        assert removed not in sources
+    for removed_helper in (
+        "project_command",
+        "timeline_command",
+        "command_mutation_plan",
+    ):
+        assert not re.search(rf"\b{removed_helper}\s*\(", sources)
+    commands_source = (service_root / "commands.py").read_text(encoding="utf-8")
+    assert "/desktop/" not in commands_source
+    mutation_source = (ROOT / "mediaflow" / "application" / "project_mutation_planning.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Project write operation has no mutation boundary" in mutation_source
+    assert "plan_desktop_project_mutation" in commands_source
+
+    assert "__getattr__" not in RemoteEditorProject.__dict__
+    assert "__getattr__" not in RemoteTimelineEditor.__dict__
+    for (target, name), definition in DESKTOP_COMMANDS.items():
+        remote_type = RemoteEditorProject if target == "project" else RemoteTimelineEditor
+        assert hasattr(remote_type, name), definition.schema_id
+
+    codec_path = service_root / "codec.py"
+    assert "importlib" not in _imported_modules(codec_path)
+    assert "_load_mediaflow_class" not in codec_path.read_text(encoding="utf-8")
+
+    assert desktop_command("project", "import_web_package").mutation_plan(
+        sequence_id="sequence",
+        args=[],
+        kwargs={},
+    ).change_scopes == ["/assets"]
+    assert desktop_command("project", "create_web_variants").mutation_plan(
+        sequence_id="sequence",
+        args=[],
+        kwargs={},
+    ).change_scopes == ["/sequences"]
+    assert desktop_command("project", "set_workflow_mode").mutation_plan(
+        sequence_id="sequence",
+        args=[],
+        kwargs={},
+    ).change_scopes == ["/project/workflow_auto_continue"]
+    assert desktop_command("project", "create_asset_bin").mutation_plan(
+        sequence_id="sequence",
+        args=[],
+        kwargs={},
+    ).change_scopes == ["/asset-bins"]
+    assert desktop_command("project", "update_web_data").mutation_plan(
+        sequence_id="sequence",
+        args=["sequence", "clip"],
+        kwargs={"values": {"title": "value"}},
+    ).change_scopes == ["/web/clips/clip"]
+    assert desktop_command("timeline", "move_clip").mutation_plan(
+        sequence_id="sequence",
+        args=["clip"],
+        kwargs={"timeline_start": 10},
+    ).change_scopes == [
+        "/sequences/sequence/clips/clip",
+        "/sequences/sequence/tracks",
+        "/sequences/sequence/transitions",
+    ]
+    assert desktop_command("timeline", "set_sequence_profile").mutation_plan(
+        sequence_id="sequence",
+        args=[],
+        kwargs={},
+    ).change_scopes == [
+        "/assets",
+        "/highlights",
+        "/sequences/sequence",
+        "/subtitles",
+    ]
+
+
+def test_desktop_and_automation_share_one_project_mutation_planner() -> None:
+    planner_path = ROOT / "mediaflow" / "application" / "project_mutation_planning.py"
+    planner = _tree(planner_path)
+    assert [
+        node.name
+        for node in planner.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_plan_project_mutation"
+    ] == ["_plan_project_mutation"]
+    for consumer in (
+        ROOT / "mediaflow" / "automation" / "operation_registry.py",
+        ROOT / "mediaflow" / "service" / "commands.py",
+    ):
+        source = consumer.read_text(encoding="utf-8")
+        assert "_operation_change_scopes" not in source
+        assert "_command_change_scopes" not in source
+
+    pairs = (
+        (
+            "timeline.clip.move",
+            {"sequence_id": "sequence", "clip_id": "clip", "track_id": "track"},
+            "timeline",
+            "move_clip",
+            ["clip"],
+            {"timeline_start": 10, "track_id": "track"},
+        ),
+        (
+            "transcript.edit.apply",
+            {"sequence_id": "sequence"},
+            "project",
+            "apply_transcript_edit",
+            [],
+            {},
+        ),
+        (
+            "web.asset.rebind.commit",
+            {"asset_id": "asset"},
+            "project",
+            "commit_web_asset_rebind",
+            ["asset"],
+            {},
+        ),
+        (
+            "audio.effect.remove",
+            {"effect_id": "effect"},
+            "project",
+            "remove_audio_effect",
+            ["effect"],
+            {},
+        ),
+    )
+    for operation, arguments, target, command, args, kwargs in pairs:
+        automation = plan_automation_project_mutation(
+            operation,
+            arguments,
+            default_sequence_id="sequence",
+        )
+        desktop = plan_desktop_project_mutation(
+            target,
+            command,
+            sequence_id="sequence",
+            args=args,
+            kwargs=kwargs,
+        )
+        assert desktop == automation
+
+
+def test_project_events_can_only_store_actual_change_actions() -> None:
+    collaboration_source = (ROOT / "mediaflow" / "project_collaboration.py").read_text(encoding="utf-8")
+    event_source = (ROOT / "mediaflow" / "infrastructure" / "project_event_repository.py").read_text(
+        encoding="utf-8"
+    )
+    domain_source = (ROOT / "mediaflow" / "domain" / "collaboration.py").read_text(encoding="utf-8")
+    assert 'action="invoke"' not in collaboration_source
+    assert '"invoke"' not in domain_source
+    assert "observations.capture" in collaboration_source
+    assert "before.changes_to" in event_source
+    assert "Project mutation scope has no observable state reader" in (
+        ROOT / "mediaflow" / "infrastructure" / "project_observation_repository.py"
     ).read_text(encoding="utf-8")
 
 
@@ -739,16 +1239,63 @@ def test_automation_context_uses_the_typed_application_boundary() -> None:
     assert "Any" not in fields["_application"]
 
 
-def test_ffmpeg_processes_have_one_execution_boundary() -> None:
+def test_ffmpeg_and_ffprobe_processes_have_one_execution_boundary() -> None:
     infrastructure = ROOT / "mediaflow" / "infrastructure"
     violations: list[str] = []
     for path in infrastructure.rglob("*.py"):
-        if path.name in {"ffmpeg_runner.py", "subprocess_runner.py"}:
+        if path.name in {"ffmpeg_runner.py", "ffprobe_runner.py", "subprocess_runner.py"}:
             continue
         source = path.read_text(encoding="utf-8")
-        if re.search(r"\bsubprocess\.(?:run|Popen)\s*\(", source) and re.search(
-            r"\b(?:self\.)?paths\.ffmpeg\b", source
-        ):
+        tree = ast.parse(source, filename=str(path))
+        parents = {
+            child: parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+
+        def runner_owns_reference(
+            node: ast.Attribute,
+            parent_map: dict[ast.AST, ast.AST] = parents,
+        ) -> bool:
+            current: ast.AST | None = node
+            while current is not None and not isinstance(current, ast.stmt):
+                if (
+                    isinstance(current, ast.Call)
+                    and isinstance(current.func, ast.Name)
+                    and current.func.id in {"FfmpegRunner", "FfprobeRunner"}
+                ):
+                    return True
+                current = parent_map.get(current)
+            return False
+
+        imports_process_runner = any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "mediaflow.infrastructure.subprocess_runner"
+            and any(
+                alias.name in {"run_cancellable", "run_cancellable_streaming"}
+                for alias in node.names
+            )
+            for node in ast.walk(tree)
+        )
+        references_media_executable = any(
+            isinstance(node, ast.Attribute)
+            and node.attr in {"ffmpeg", "ffprobe"}
+            and (
+                (isinstance(node.value, ast.Name) and node.value.id == "paths")
+                or (isinstance(node.value, ast.Attribute) and node.value.attr == "paths")
+            )
+            and not runner_owns_reference(node)
+            for node in ast.walk(tree)
+        )
+        starts_subprocess = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+            and node.func.attr in {"run", "Popen"}
+            for node in ast.walk(tree)
+        )
+        if references_media_executable and (imports_process_runner or starts_subprocess):
             violations.append(str(path.relative_to(ROOT)))
         if "ffmpeg_progress_command" in source or "FfmpegProgressObserver" in source:
             violations.append(str(path.relative_to(ROOT)))
@@ -798,6 +1345,9 @@ def test_workspace_modes_have_one_presentation_catalog() -> None:
     assert len({mode.panel_object_name for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
     assert "edit" not in {mode.key for mode in WORKSPACE_MODES}
     assert "export" not in WORKSPACE_NAVIGATION_MODE_KEYS
+    mode_labels = {mode.key: mode.label_source for mode in WORKSPACE_MODES}
+    assert mode_labels["transcript"] == "字幕"
+    assert mode_labels["highlight"] == "高光"
 
     qml_root = ROOT / "mediaflow" / "desktop" / "qml"
     navigation = (qml_root / "components" / "WorkspaceNavigation.qml").read_text(encoding="utf-8")
@@ -809,7 +1359,7 @@ def test_workspace_modes_have_one_presentation_catalog() -> None:
     qml_smoke = (ROOT / "tests" / "v2" / "desktop" / "test_qml_smoke.py").read_text(encoding="utf-8")
 
     assert "workspace_mode_catalog" in controller
-    assert "workspaceController.workspaceModes" in navigation
+    assert "workspaceViewController.workspaceModes" in navigation
     assert "panelObjectName" in workspace
     assert "model: [" not in navigation
     assert 'activeMode === "media" ? 0' not in workspace

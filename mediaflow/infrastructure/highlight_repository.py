@@ -7,7 +7,7 @@ from .project_repository_component import ProjectRepositoryComponent
 
 class HighlightRepository(ProjectRepositoryComponent):
     def save_highlights(self, candidates: list[HighlightCandidate]) -> None:
-        project = self._owner.catalog.get_project()
+        project = self._relations.projects.get_project()
         if any(candidate.project_id != project.id for candidate in candidates):
             raise ValueError("Highlight belongs to another project")
         with self.transaction() as connection:

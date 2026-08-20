@@ -25,7 +25,7 @@ AppScrollView {
     }
 
     function syncTranscriptionSettings() {
-        const data = settingsController.settingsData
+        const data = mediaflow.settingsController.settingsData
         asrModelSelect.currentIndex = indexOfValue(
             asrModelSelect.model, data.asrModel)
         asrDeviceSelect.currentIndex = indexOfValue(
@@ -38,8 +38,8 @@ AppScrollView {
 
     function formatTimecode(frame) {
         const fps = Math.max(1, Math.round(
-            workspaceController.profileFpsNumerator
-                / Math.max(1, workspaceController.profileFpsDenominator)))
+            mediaflow.workspaceViewController.profileFpsNumerator
+                / Math.max(1, mediaflow.workspaceViewController.profileFpsDenominator)))
         const bounded = Math.max(0, Math.round(Number(frame || 0)))
         const frames = bounded % fps
         const totalSeconds = Math.floor(bounded / fps)
@@ -65,10 +65,10 @@ AppScrollView {
     }
 
     function refreshContext() {
-        const sequenceId = String(workspaceController.activeSequenceId || "");
-        taskData = taskController.latestTask("transcribe", sequenceId);
-        resultData = subtitleController.sequenceTranscriptionSummary(sequenceId);
-        planData = subtitleController.transcriptionPlanSummary;
+        const sequenceId = String(mediaflow.workspaceViewController.activeSequenceId || "");
+        taskData = mediaflow.taskController.latestTask("transcribe", sequenceId);
+        resultData = mediaflow.subtitleTranscriptionController.sequenceTranscriptionSummary(sequenceId);
+        planData = mediaflow.subtitleTranscriptionController.transcriptionPlanSummary;
     }
 
     Component.onCompleted: {
@@ -77,16 +77,16 @@ AppScrollView {
     }
 
     Connections {
-        target: taskController
+        target: mediaflow.taskController
         function onTasksChanged() { transcriptScroll.refreshContext(); }
     }
     Connections {
-        target: workspaceController
+        target: mediaflow.workspaceViewController
         function onProjectStateChanged() { transcriptScroll.refreshContext(); }
         function onHistoryChanged() { transcriptScroll.refreshContext(); }
     }
     Connections {
-        target: settingsController
+        target: mediaflow.settingsController
         function onSettingsChanged() {
             transcriptScroll.syncTranscriptionSettings()
             transcriptScroll.refreshContext()
@@ -160,7 +160,7 @@ AppScrollView {
                     Layout.fillWidth: true
                     textRole: "text"
                     valueRole: "value"
-                    model: settingsController.asrModelOptions
+                    model: mediaflow.settingsController.asrModelOptions
                     enabled: !transcriptScroll.taskActive
                 }
                 Text {
@@ -192,7 +192,7 @@ AppScrollView {
                         Layout.fillWidth: true
                         textRole: "text"
                         valueRole: "value"
-                        model: settingsController.asrLanguageOptions
+                        model: mediaflow.settingsController.asrLanguageOptions
                         enabled: !transcriptScroll.taskActive
                     }
                 }
@@ -202,7 +202,7 @@ AppScrollView {
                     Layout.fillWidth: true
                     textRole: "text"
                     valueRole: "value"
-                    model: settingsController.asrParallelOptions
+                    model: mediaflow.settingsController.asrParallelOptions
                     enabled: !transcriptScroll.taskActive
                 }
                 Text {
@@ -214,7 +214,7 @@ AppScrollView {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: settingsController.settingsData.asrEngine === "faster_whisper_cli"
+                    text: mediaflow.settingsController.settingsData.asrEngine === "faster_whisper_cli"
                         ? qsTr("引擎：Faster-Whisper XXL CLI")
                         : qsTr("引擎：内置 faster-whisper")
                     color: Theme.textMuted
@@ -226,10 +226,10 @@ AppScrollView {
                     primary: true
                     text: transcriptScroll.taskActive
                         ? qsTr("正在转录…") : qsTr("转录当前时间轴")
-                    enabled: subtitleController.canTranscribeCurrentSequence
+                    enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
                         && !transcriptScroll.taskActive
-                        && Boolean(workspaceController.actionCapabilities.canStartTasks)
-                    onClicked: subtitleController.transcribeCurrentSequence(
+                        && Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
+                    onClicked: mediaflow.subtitleTranscriptionController.transcribeCurrentSequence(
                         String(asrModelSelect.currentValue || ""),
                         String(asrDeviceSelect.currentValue || "auto"),
                         String(asrLanguageSelect.currentValue || "auto"),
@@ -239,9 +239,9 @@ AppScrollView {
                     objectName: "copyTranscriptionCliRequestButton"
                     Layout.fillWidth: true
                     text: qsTr("复制当前转录为 CLI 请求")
-                    enabled: subtitleController.canTranscribeCurrentSequence
+                    enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
                         && !transcriptScroll.taskActive
-                    onClicked: automationController.copyCurrentTranscriptionRequest(
+                    onClicked: mediaflow.automationController.copyCurrentTranscriptionRequest(
                         String(asrModelSelect.currentValue || ""),
                         String(asrDeviceSelect.currentValue || "auto"),
                         String(asrLanguageSelect.currentValue || "auto"),
@@ -249,7 +249,7 @@ AppScrollView {
                 }
                 Text {
                     Layout.fillWidth: true
-                    visible: !subtitleController.canTranscribeCurrentSequence
+                    visible: !mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
                     text: qsTr("请先在时间轴把一条音频轨设为“对白”，并确认当前范围内有对白素材。")
                     color: Theme.warning
                     font.pixelSize: Theme.fontSizeCaption
@@ -309,7 +309,7 @@ AppScrollView {
                     primary: true
                     text: qsTr("进入字幕编辑")
                     onClicked: {
-                        subtitleController.selectSubtitleDocument(
+                        mediaflow.subtitleViewController.selectSubtitleDocument(
                             transcriptScroll.resultData.documentId);
                         transcriptScroll.modeRequested("subtitle");
                     }

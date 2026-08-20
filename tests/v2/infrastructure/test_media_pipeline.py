@@ -63,19 +63,19 @@ def test_native_media_services_reject_an_overlong_external_source_before_launch(
         tmp_path / "Native Boundaries",
         "Native Boundaries",
     ) as repository:
-        asset = repository.catalog.import_external_asset(
+        asset = repository.assets.import_external_asset(
             short_source,
             AssetKind.VIDEO,
         )
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.update_asset(
             asset.model_copy(update={"path": str(deep_source)})
         )
-        profile = repository.catalog.get_sequence(
-            repository.catalog.get_project().main_sequence_id
+        profile = repository.sequences.get_sequence(
+            repository.projects.get_project().main_sequence_id
         ).profile
         editor = TimelineEditor(
             repository,
-            repository.catalog.get_project().main_sequence_id,
+            repository.projects.get_project().main_sequence_id,
         )
         track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
@@ -169,7 +169,7 @@ def test_media_probe_rejects_deep_source_before_starting_ffprobe(
         subprocess_started = True
         raise AssertionError("ffprobe must not start for an over-budget path")
 
-    monkeypatch.setattr(media_probe.subprocess, "run", fail_if_started)
+    monkeypatch.setattr(media_probe.FfprobeRunner, "run", fail_if_started)
 
     with pytest.raises(ValueError, match="路径过深"):
         MediaProbe(RuntimeContext.discover().paths).probe(source)
@@ -199,8 +199,8 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
         assert cover_probe.kind == AssetKind.IMAGE
         assert (cover_probe.metadata.width, cover_probe.metadata.height) == (640, 360)
         assert ProjectCoverService(paths).cover_for(repository) == cover
-        default_profile = repository.catalog.get_sequence(
-            repository.catalog.get_project().main_sequence_id
+        default_profile = repository.sequences.get_sequence(
+            repository.projects.get_project().main_sequence_id
         ).profile
         assert (default_profile.width, default_profile.height, default_profile.fps_numerator) == (
             1920,
@@ -210,7 +210,8 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
 
         asset = assets.adopt_main_profile_from_video(asset.id)
         assert asset.metadata.duration_frames == 25
-        profile = repository.catalog.get_sequence(repository.catalog.get_project().main_sequence_id).profile
+        main_sequence_id = repository.projects.get_project().main_sequence_id
+        profile = repository.sequences.get_sequence(main_sequence_id).profile
         assert (profile.width, profile.height, profile.fps_numerator) == (640, 360, 25)
 
         proxy_progress = []
@@ -278,7 +279,7 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
         )
         completed = project.wait_for_task(task.id, timeout=30)
         persisted = project.get_task(task.id)
-        updated_asset = repository.catalog.get_asset(asset.id)
+        updated_asset = repository.assets.get_asset(asset.id)
         assert updated_asset.waveform_path
         waveform_path = repository.project_dir / updated_asset.waveform_path
         waveform_payload = json.loads(waveform_path.read_text(encoding="utf-8"))
@@ -337,7 +338,7 @@ def test_stale_waveform_producer_cannot_overwrite_current_asset_waveform(
         initial_payload = initial_path.read_bytes()
 
         generate_real_media(source, paths, width=640, height=360)
-        current_asset = repository.catalog.refresh_asset_status(stale_asset.id)
+        current_asset = repository.assets.refresh_asset_status(stale_asset.id)
         current = WaveformService(repository, paths).generate(
             current_asset,
             duration_seconds=1,
@@ -353,7 +354,7 @@ def test_stale_waveform_producer_cannot_overwrite_current_asset_waveform(
                 duration_seconds=1,
             )
 
-        reloaded = repository.catalog.get_asset(stale_asset.id)
+        reloaded = repository.assets.get_asset(stale_asset.id)
         assert repository.project_dir / reloaded.waveform_path == current_path
         assert current_path.read_bytes() == current_payload
         assert initial_path.read_bytes() == initial_payload
@@ -430,7 +431,7 @@ def test_thumbnail_cache_tracks_content_when_size_and_timestamp_are_unchanged(
             image_source,
             ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
         )
-        current_asset = repository.catalog.refresh_asset_status(initial_asset.id)
+        current_asset = repository.assets.refresh_asset_status(initial_asset.id)
         assert current_asset.fingerprint != initial_asset.fingerprint
 
         current_thumbnail = thumbnails.thumbnail_for(
@@ -478,7 +479,7 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
             assert asset.managed is False
             assert Path(asset.path).parent == media_workspace.resolve()
             assert Path(asset.path).is_file()
-            assert repository.catalog.list_assets()[0].id == asset.id
+            assert repository.assets.list_assets()[0].id == asset.id
             collection_entry = analyzed.entries[0].model_copy(update={"index": 1, "title": "Lesson One"})
             collection_output = downloader.download(
                 DownloadRequest(
@@ -509,7 +510,7 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
             assert asset.managed is False
             assert Path(asset.path).parent == external_directory.resolve()
             assert Path(asset.path).is_file()
-            assert repository.catalog.resolve_asset_path(asset) == Path(asset.path)
+            assert repository.assets.resolve_asset_path(asset) == Path(asset.path)
         task_repository = ProjectRepository.create(tmp_path / "Task Download", "Task Download")
         project = EditorProject(task_repository, settings=ServiceSettings(), paths=paths)
         try:
@@ -527,13 +528,13 @@ def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp
 
             completed = project.wait_for_task(task.id, timeout=30)
             persisted = project.get_task(task.id)
-            registered = task_repository.catalog.list_assets()
+            registered = task_repository.assets.list_assets()
 
             assert completed.status == TaskStatus.COMPLETED
             assert isinstance(persisted.command, DownloadMediaCommand)
             assert persisted.command.request == request
             assert len(registered) == 1
-            visible_path = task_repository.catalog.resolve_asset_path(registered[0])
+            visible_path = task_repository.assets.resolve_asset_path(registered[0])
             assert visible_path.is_file()
             assert visible_path.parent.name == "Task Course"
             assert visible_path.name.startswith("007 Task Lesson [")
@@ -597,7 +598,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
             )
 
         monkeypatch.setattr(
-            repository.catalog,
+            repository.assets,
             "commit_external_asset",
             fail_registration,
         )
@@ -617,7 +618,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
         )
 
         assert completed.status == TaskStatus.FAILED
-        assert repository.catalog.list_assets() == []
+        assert repository.assets.list_assets() == []
         visible_files = [
             path
             for path in selected_output.rglob("*")
@@ -668,7 +669,7 @@ def test_hdr_project_generates_hdr_and_sdr_display_proxies(tmp_path: Path) -> No
         assert hdr.metadata.color_primaries == "bt2020"
         assert sdr.metadata.pixel_format == "yuv420p"
         assert sdr.metadata.color_primaries == "bt709"
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=video_track.id,

@@ -7,14 +7,14 @@ import "components"
 ColumnLayout {
     id: root
     objectName: "exportPanel"
-    property var formats: exportController.exportFormatOptions
+    property var formats: mediaflow.exportController.exportFormatOptions
     property var previewOptions: ({})
     property var taskData: ({})
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
-    readonly property bool canStartTasks: Boolean(workspaceController.actionCapabilities.canStartTasks)
+    readonly property bool canStartTasks: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
     readonly property bool canExportSequence: root.canStartTasks
-        && exportController.canExportSequence
+        && mediaflow.exportController.canExportSequence
     signal previewConfigurationChanged(var options)
     spacing: 10
 
@@ -23,7 +23,7 @@ ColumnLayout {
     }
 
     function restorePreset() {
-        const value = exportController.exportPresetData
+        const value = mediaflow.exportController.exportPresetData
         if (!value || !value.format)
             return
         const advanced = value.advanced || {}
@@ -43,8 +43,8 @@ ColumnLayout {
     }
 
     function refreshTask() {
-        taskData = taskController.latestTask(
-            "export", workspaceController.activeSequenceId);
+        taskData = mediaflow.taskController.latestTask(
+            "export", mediaflow.workspaceViewController.activeSequenceId);
     }
 
     Component.onCompleted: {
@@ -53,11 +53,11 @@ ColumnLayout {
     }
 
     Connections {
-        target: exportController
+        target: mediaflow.exportController
         function onProjectStateChanged() { Qt.callLater(root.restorePreset) }
     }
     Connections {
-        target: taskController
+        target: mediaflow.taskController
         function onTasksChanged() { root.refreshTask(); }
     }
 
@@ -77,10 +77,10 @@ ColumnLayout {
         formats: root.formats
         taskActive: root.taskActive
         actionsEnabled: root.canExportSequence
-        defaultDirectory: exportController.defaultExportDirectory
+        defaultDirectory: mediaflow.exportController.defaultExportDirectory
         onExportRequested: {
             if (root.canExportSequence)
-                exportController.exportSequenceToDefaultLocation(
+                mediaflow.exportController.exportSequenceToDefaultLocation(
                     root.selectedFormat().value,
                     root.selectedFormat().suffix,
                     exportSettings.exportOptions());
@@ -102,7 +102,7 @@ ColumnLayout {
         Layout.fillWidth: true
         text: qsTr("复制当前导出为 CLI 请求")
         enabled: root.canExportSequence
-        onClicked: automationController.copyCurrentExportRequest(
+        onClicked: mediaflow.automationController.copyCurrentExportRequest(
             root.selectedFormat().value,
             root.selectedFormat().suffix,
             exportSettings.exportOptions())

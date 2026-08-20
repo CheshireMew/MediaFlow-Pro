@@ -79,7 +79,7 @@ class TranslationService:
         if not output_language:
             raise ValueError("Target language is required")
 
-        project = self.repository.catalog.get_project()
+        project = self.repository.projects.get_project()
         try:
             existing = (
                 self.repository.subtitles.get_subtitle_document(operation_id)

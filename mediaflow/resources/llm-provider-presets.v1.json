@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "providers": [
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "base_url": "https://api.deepseek.com/v1",
+      "standard_model": "deepseek-chat",
+      "reasoning_model": "deepseek-reasoner"
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "base_url": "https://api.openai.com/v1",
+      "standard_model": "gpt-4o",
+      "reasoning_model": ""
+    },
+    {
+      "id": "google-gemini",
+      "label": "Google Gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "standard_model": "gemini-1.5-flash",
+      "reasoning_model": ""
+    },
+    {
+      "id": "anthropic-claude",
+      "label": "Anthropic Claude",
+      "base_url": "https://api.anthropic.com/v1",
+      "standard_model": "claude-3-5-sonnet-20240620",
+      "reasoning_model": ""
+    },
+    {
+      "id": "glm",
+      "label": "GLM",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "standard_model": "glm-5.1",
+      "reasoning_model": ""
+    },
+    {
+      "id": "minimax",
+      "label": "MiniMax",
+      "base_url": "https://api.minimax.io/v1",
+      "standard_model": "MiniMax-M2.7",
+      "reasoning_model": ""
+    },
+    {
+      "id": "siliconflow",
+      "label": "SiliconFlow",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "standard_model": "deepseek-ai/DeepSeek-V3",
+      "reasoning_model": ""
+    },
+    {
+      "id": "custom-local",
+      "label": "",
+      "base_url": "",
+      "standard_model": "",
+      "reasoning_model": "",
+      "custom": true
+    }
+  ]
+}

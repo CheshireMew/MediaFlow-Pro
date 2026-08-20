@@ -25,6 +25,7 @@ from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
+    python_io_path,
     utf16_units,
 )
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
@@ -40,6 +41,10 @@ from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.subtitle_file_store import LocalSubtitleFileStore
+from mediaflow.infrastructure.subtitle_publication_storage import (
+    LocalSubtitlePublicationStorage,
+)
 from tests.v2.infrastructure.test_media_pipeline import (
     generate_black_intro_video,
     generate_real_media,
@@ -56,7 +61,7 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
     asset = assets.adopt_main_profile_from_video(asset.id)
     project = EditorProject(repository, settings=ServiceSettings(), paths=paths)
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
@@ -179,7 +184,7 @@ def test_fcpxml_exports_real_media_timing_markers_and_captions(tmp_path: Path) -
         assets = AssetService(repository, MediaProbe(paths))
         asset = assets.import_external(source)
         asset = assets.adopt_main_profile_from_video(asset.id)
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         subtitle_track = editor.add_track(TrackKind.SUBTITLE)
@@ -192,8 +197,12 @@ def test_fcpxml_exports_real_media_timing_markers_and_captions(tmp_path: Path) -
         )
         editor.add_marker(2, "空白区标记")
         editor.add_marker(10, "重点")
-        publication = SubtitlePublicationService(repository)
-        document = SubtitleAcquisitionService(repository, publication).import_subtitle_file(
+        publication = SubtitlePublicationService(repository, LocalSubtitlePublicationStorage())
+        document = SubtitleAcquisitionService(
+            repository,
+            publication,
+            LocalSubtitleFileStore(),
+        ).import_subtitle_file(
             subtitle,
             assets,
             media_asset_id=asset.id,
@@ -260,8 +269,8 @@ def test_fcpxml_uses_effective_tracks_retime_maps_and_hdr10_pq(tmp_path: Path) -
     source = tmp_path / "retime.mp4"
     source.write_bytes(b"fcpxml-source")
     with ProjectRepository.create(tmp_path / "FCPXML Semantics", "FCPXML Semantics") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -273,7 +282,7 @@ def test_fcpxml_uses_effective_tracks_retime_maps_and_hdr10_pq(tmp_path: Path) -
                 }
             )
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         editor.set_sequence_profile(
             editor.state.sequence.profile.model_copy(
@@ -318,7 +327,7 @@ def test_fcpxml_uses_effective_tracks_retime_maps_and_hdr10_pq(tmp_path: Path) -
             solo=False,
         )
         document = SubtitleDocument(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             asset_id=asset.id,
             language="en",
         )
@@ -364,8 +373,8 @@ def test_short_sequence_clock_is_shared_by_mlt_and_fcpxml(tmp_path: Path) -> Non
         "Short Clock Export",
         main_profile,
     ) as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -374,7 +383,7 @@ def test_short_sequence_clock_is_shared_by_mlt_and_fcpxml(tmp_path: Path) -> Non
                 }
             )
         )
-        short = repository.catalog.create_short_sequence(
+        short = repository.sequences.create_short_sequence(
             "30 fps short",
             main_profile.model_copy(update={"fps_numerator": 30}),
         )
@@ -443,11 +452,11 @@ def test_fcpxml_long_destination_uses_a_short_atomic_sibling(
         tmp_path / "Long FCPXML Project",
         "Long FCPXML Project",
     ) as repository:
-        asset = repository.catalog.import_external_asset(
+        asset = repository.assets.import_external_asset(
             source,
             AssetKind.VIDEO,
         )
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -459,7 +468,7 @@ def test_fcpxml_long_destination_uses_a_short_atomic_sibling(
                 }
             )
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
@@ -482,7 +491,7 @@ def test_fcpxml_long_destination_uses_a_short_atomic_sibling(
         )
 
         assert output == destination
-        assert ET.parse(output).getroot().attrib["version"] == "1.11"
+        assert ET.parse(python_io_path(output)).getroot().attrib["version"] == "1.11"
         assert not [
             item
             for item in parent.iterdir()
@@ -499,11 +508,11 @@ def test_fcpxml_preserves_linked_mute_detached_components_and_adjustments(
         tmp_path / "FCPXML Component Semantics",
         "FCPXML Component Semantics",
     ) as repository:
-        asset = repository.catalog.import_external_asset(
+        asset = repository.assets.import_external_asset(
             source,
             AssetKind.VIDEO,
         )
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -518,7 +527,7 @@ def test_fcpxml_preserves_linked_mute_detached_components_and_adjustments(
                 }
             )
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
 
         linked_track = editor.add_track(
@@ -765,11 +774,11 @@ def test_fcpxml_preflight_rejects_unreliable_transition_and_bus_processing(
         tmp_path / "FCPXML Preflight",
         "FCPXML Preflight",
     ) as repository:
-        asset = repository.catalog.import_external_asset(
+        asset = repository.assets.import_external_asset(
             source,
             AssetKind.VIDEO,
         )
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -781,7 +790,7 @@ def test_fcpxml_preflight_rejects_unreliable_transition_and_bus_processing(
                 }
             )
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         left = editor.add_clip(
@@ -872,7 +881,7 @@ def test_fcpxml_preflight_rejects_an_unusable_path_before_creating_directories(
         tmp_path / "FCPXML Path Preflight",
         "FCPXML Path Preflight",
     ) as repository:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         state = repository.timeline.load_timeline(sequence_id)
         output_parent = tmp_path
         output = output_parent / "handoff.fcpxml"

@@ -1,7 +1,7 @@
 import QtQuick
 import ".."
 
-Canvas {
+Item {
     id: root
 
     width: Theme.iconSizeToolbar
@@ -9,14 +9,28 @@ Canvas {
     property string iconName: "media"
     property color iconColor: Theme.textMuted
     property real strokeWidth: Theme.iconStrokeWidth
+    readonly property bool usesLucide: lucideIcon.available
 
-    onIconNameChanged: requestPaint()
-    onIconColorChanged: requestPaint()
-    onStrokeWidthChanged: requestPaint()
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
+    onIconNameChanged: fallbackIcon.requestPaint()
+    onIconColorChanged: fallbackIcon.requestPaint()
+    onStrokeWidthChanged: fallbackIcon.requestPaint()
+    onWidthChanged: fallbackIcon.requestPaint()
+    onHeightChanged: fallbackIcon.requestPaint()
 
-    onPaint: {
+    LucideIcon {
+        id: lucideIcon
+        anchors.fill: parent
+        iconName: root.iconName
+        iconColor: root.iconColor
+        strokeWidth: 2
+    }
+
+    Canvas {
+        id: fallbackIcon
+        anchors.fill: parent
+        visible: !lucideIcon.available
+
+        onPaint: {
         const context = getContext("2d");
         const canvasSize = Math.min(width, height);
         const scale = canvasSize / 24;
@@ -390,5 +404,6 @@ Canvas {
         }
 
         context.restore();
+        }
     }
 }

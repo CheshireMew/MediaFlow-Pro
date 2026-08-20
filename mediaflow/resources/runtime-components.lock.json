@@ -1,12 +1,15 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "components": [
     {
       "id": "faster-whisper-xxl",
       "display_name": "Faster-Whisper XXL",
       "version": "r245.4",
       "homepage": "https://github.com/Purfview/whisper-standalone-win",
-      "license": "MIT",
+      "license": "NOASSERTION",
+      "distribution": "upstream-download-only",
+      "bundle_allowed": false,
+      "license_notes": "The standalone release has no repository license file or complete third-party license inventory. Do not redistribute this archive without explicit upstream permission and an exact contents review.",
       "targets": ["windows-x86_64"],
       "archive": {
         "file_name": "Faster-Whisper-XXL_r245.4_windows.7z",
@@ -20,7 +23,8 @@
         "required_paths": [
           "faster-whisper-xxl.exe"
         ],
-        "minimum_free_bytes": 4294967296
+        "minimum_free_bytes": 4294967296,
+        "peak_install_bytes": 4294967296
       }
     },
     {
@@ -28,7 +32,10 @@
       "display_name": "GPT-SoVITS v2Pro",
       "version": "20250604",
       "homepage": "https://github.com/RVC-Boss/GPT-SoVITS",
-      "license": "MIT",
+      "license": "NOASSERTION",
+      "distribution": "upstream-download-only",
+      "bundle_allowed": false,
+      "license_notes": "GPT-SoVITS source code is MIT, but this composite Windows archive also contains a Python runtime, dependencies, and pretrained models. Do not redistribute the archive without an exact contents and rights review.",
       "targets": ["windows-x86_64"],
       "archive": {
         "file_name": "GPT-SoVITS-v2pro-20250604.7z",
@@ -46,7 +53,8 @@
           "GPT_SoVITS/pretrained_models/s1v3.ckpt",
           "GPT_SoVITS/pretrained_models/v2Pro/s2Gv2Pro.pth"
         ],
-        "minimum_free_bytes": 25769803776
+        "minimum_free_bytes": 25769803776,
+        "peak_install_bytes": 25769803776
       }
     }
   ]

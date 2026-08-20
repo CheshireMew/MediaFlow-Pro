@@ -1,0 +1,292 @@
+{
+  "protocol": "project-steward-production-storage-contract",
+  "version": 1,
+  "project_id": "mediaflow-pro",
+  "policy": {
+    "unknown_peak": "block",
+    "outside_owned_roots": "block",
+    "over_budget": "block",
+    "cleanup_without_authorization": "report-only"
+  },
+  "producers": [
+    {
+      "id": "local-quality-run",
+      "root_source": {
+        "kind": "user-environment-policy",
+        "value": "MEDIAFLOW_TEST_ROOT/q/<run-id> for evidence and MEDIAFLOW_TEST_ROOT/qw/<run-id-hash> for the Windows-safe workspace"
+      },
+      "artifact_classes": [
+        "temporary",
+        "evidence"
+      ],
+      "peak_estimate": {
+        "source": "quality_expected_bytes for maintenance, core or full scope",
+        "unknown_behavior": "block"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "MEDIAFLOW_QUALITY_RUN_MAX_BYTES and MEDIAFLOW_TEST_ARTIFACT_MAX_BYTES",
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+      },
+      "reuse": {
+        "required": false
+      },
+      "lifecycle": {
+        "preflight": "quality_storage_preflight runs before the evidence and work roots are created",
+        "finalization": "quality-report records separate evidence and workspace inventories for passed and failed runs",
+        "interruption": "the owned run remains inspectable under the same quality root"
+      },
+      "implementation_files": [
+        "mediaflow/infrastructure/storage_budget.py",
+        "scripts/ci/run_quality.py",
+        "scripts/report_storage.py"
+      ],
+      "test_files": [
+        "tests/v2/architecture/test_ci_quality_plan.py",
+        "tests/v2/infrastructure/test_storage_budget.py"
+      ],
+      "enforcement": {
+        "file": "scripts/ci/run_quality.py",
+        "tokens": [
+          "quality_run_roots",
+          "quality_storage_preflight",
+          "require_test_artifact_budget",
+          "report-only-until-authorized"
+        ]
+      }
+    },
+    {
+      "id": "pytest-and-verification-evidence",
+      "root_source": {
+        "kind": "user-environment-policy",
+        "value": "MEDIAFLOW_TEST_ROOT"
+      },
+      "artifact_classes": [
+        "temporary",
+        "evidence"
+      ],
+      "peak_estimate": {
+        "source": "one GiB reservation per managed pytest or verification run",
+        "unknown_behavior": "block"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "MEDIAFLOW_TEST_ARTIFACT_MAX_BYTES",
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+      },
+      "reuse": {
+        "required": false
+      },
+      "lifecycle": {
+        "preflight": "managed pytest and script runs reserve budget before creating a run directory",
+        "finalization": "run-result records retained evidence and final inventory",
+        "interruption": "running manifests retain process ownership for later review"
+      },
+      "implementation_files": [
+        "mediaflow/infrastructure/storage_budget.py",
+        "scripts/run_artifacts.py",
+        "tests/v2/conftest.py"
+      ],
+      "test_files": [
+        "tests/v2/infrastructure/test_script_run_artifacts.py",
+        "tests/v2/infrastructure/test_storage_budget.py"
+      ],
+      "enforcement": {
+        "file": "scripts/run_artifacts.py",
+        "tokens": [
+          "require_test_artifact_budget",
+          "directory_inventory",
+          "storage_preflight",
+          "report-only-until-authorized"
+        ]
+      }
+    },
+    {
+      "id": "project-derived-cache",
+      "root_source": {
+        "kind": "runtime-config",
+        "value": "RuntimePaths.project_cache_dir(project_dir)"
+      },
+      "artifact_classes": [
+        "cache",
+        "temporary",
+        "evidence"
+      ],
+      "peak_estimate": {
+        "source": "video dimensions, frame count and concurrent partial/final copies",
+        "unknown_behavior": "block"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "MEDIAFLOW_PROJECT_CACHE_MAX_BYTES and MEDIAFLOW_PROJECT_CACHES_MAX_BYTES",
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+      },
+      "reuse": {
+        "required": true,
+        "identity": "project path identity plus content-addressed render or sequence build key"
+      },
+      "lifecycle": {
+        "preflight": "web render and segmented export check the project cache before the first large write",
+        "finalization": "content-addressed manifests identify reusable completed outputs",
+        "interruption": "partial and failed outputs remain owned evidence or explicit review candidates"
+      },
+      "implementation_files": [
+        "mediaflow/infrastructure/runtime_paths.py",
+        "mediaflow/infrastructure/segmented_export_service.py",
+        "mediaflow/infrastructure/storage_budget.py",
+        "mediaflow/infrastructure/web_render_service.py",
+        "scripts/report_storage.py"
+      ],
+      "test_files": [
+        "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_web_media.py"
+      ],
+      "enforcement": {
+        "file": "mediaflow/infrastructure/storage_budget.py",
+        "tokens": [
+          "require_project_cache_budget",
+          "register_project_cache_owner",
+          "estimate_video_cache_bytes",
+          "MEDIAFLOW_PROJECT_CACHE_MAX_BYTES",
+          "MEDIAFLOW_PROJECT_CACHES_MAX_BYTES",
+          "block-before-large-write"
+        ]
+      }
+    },
+    {
+      "id": "runtime-component-installation",
+      "root_source": {
+        "kind": "runtime-config",
+        "value": "MEDIAFLOW_RUNTIME_DIR"
+      },
+      "artifact_classes": [
+        "cache",
+        "temporary"
+      ],
+      "peak_estimate": {
+        "source": "runtime-components.lock.json install.peak_install_bytes includes archive, extraction and concurrent copies",
+        "unknown_behavior": "block"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "MEDIAFLOW_RUNTIME_MAX_BYTES",
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+      },
+      "reuse": {
+        "required": true,
+        "identity": "component id, locked version and verified archive SHA-256"
+      },
+      "lifecycle": {
+        "preflight": "require_runtime_budget runs before receipt, download or extraction directories are created",
+        "finalization": "runtime-component storage receipt records archive and resolved installation",
+        "interruption": "receipt PID and process-start identity distinguish active work from an abandoned running receipt; retained objects remain report-only"
+      },
+      "implementation_files": [
+        "mediaflow/infrastructure/runtime_components.py",
+        "mediaflow/infrastructure/storage_budget.py",
+        "mediaflow/resources/runtime-components.lock.json",
+        "scripts/report_storage.py"
+      ],
+      "test_files": [
+        "tests/v2/infrastructure/test_asr_cli.py",
+        "tests/v2/infrastructure/test_storage_budget.py"
+      ],
+      "enforcement": {
+        "file": "mediaflow/infrastructure/runtime_components.py",
+        "tokens": [
+          "peak_install_bytes",
+          "require_runtime_budget",
+          "start_storage_receipt",
+          "finalize_storage_receipt"
+        ]
+      }
+    },
+    {
+      "id": "media-download",
+      "root_source": {
+        "kind": "user-environment-policy",
+        "value": "DownloadRequest.output_directory"
+      },
+      "artifact_classes": [
+        "temporary",
+        "deliverable"
+      ],
+      "peak_estimate": {
+        "source": "duration and selected quality bitrate ceiling, or the enforced MEDIAFLOW_DOWNLOAD_OPERATION_MAX_BYTES cap",
+        "unknown_behavior": "block"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "MEDIAFLOW_DOWNLOAD_OPERATION_MAX_BYTES",
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+      },
+      "reuse": {
+        "required": false
+      },
+      "lifecycle": {
+        "preflight": "require_download_budget runs before the staging directory and network transfer",
+        "finalization": "media-download storage receipt records every published output",
+        "interruption": "partial staging is archived beside the delivery root and recorded by the failed receipt; a directly terminated owner is detected from receipt process identity"
+      },
+      "implementation_files": [
+        "mediaflow/infrastructure/ytdlp_service.py",
+        "mediaflow/infrastructure/storage_budget.py",
+        "scripts/report_storage.py"
+      ],
+      "test_files": [
+        "tests/v2/infrastructure/test_download_features.py",
+        "tests/v2/infrastructure/test_storage_budget.py"
+      ],
+      "enforcement": {
+        "file": "mediaflow/infrastructure/ytdlp_service.py",
+        "tokens": [
+          "estimate_download_peak_bytes",
+          "require_download_budget",
+          "max_filesize",
+          "finalize_storage_receipt"
+        ]
+      }
+    },
+    {
+      "id": "project-proxy",
+      "root_source": {
+        "kind": "project-relative",
+        "value": "proxies"
+      },
+      "artifact_classes": [
+        "cache",
+        "temporary"
+      ],
+      "peak_estimate": {
+        "source": "timeline duration, fixed proxy video/audio rate ceilings and one or two simultaneous outputs",
+        "unknown_behavior": "block"
+      },
+      "budget": {
+        "maximum_managed_bytes_source": "MEDIAFLOW_PROJECT_ARTIFACT_MAX_BYTES and MEDIAFLOW_PROJECT_ARTIFACTS_MAX_BYTES",
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+      },
+      "reuse": {
+        "required": true,
+        "identity": "asset fingerprint, source stat and project profile content address"
+      },
+      "lifecycle": {
+        "preflight": "require_project_artifact_budget runs before the proxy directory or FFmpeg output is created",
+        "finalization": "project-proxy receipt becomes passed only after proxy paths commit to project.mfp",
+        "interruption": "uncommitted outputs are moved to failed-proxies and the receipt records retained files; a directly terminated owner is detected from receipt process identity"
+      },
+      "implementation_files": [
+        "mediaflow/infrastructure/proxy_service.py",
+        "mediaflow/infrastructure/storage_budget.py",
+        "scripts/report_storage.py"
+      ],
+      "test_files": [
+        "tests/v2/infrastructure/test_proxy_commit_boundary.py",
+        "tests/v2/infrastructure/test_storage_budget.py"
+      ],
+      "enforcement": {
+        "file": "mediaflow/infrastructure/proxy_service.py",
+        "tokens": [
+          "estimate_proxy_peak_bytes",
+          "require_project_artifact_budget",
+          "PROXY_VIDEO_MAX_BITRATE",
+          "finalize_storage_receipt"
+        ]
+      }
+    }
+  ]
+}

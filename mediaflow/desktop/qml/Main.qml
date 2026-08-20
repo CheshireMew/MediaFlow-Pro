@@ -16,21 +16,25 @@ ApplicationWindow {
         ? Math.min(720, Screen.desktopAvailableHeight) : 720
     visible: true
     flags: Qt.Window | Qt.FramelessWindowHint
-    title: workspaceController.hasProject ? workspaceController.projectName : Qt.application.name
+    title: mediaflow.workspaceViewController.hasProject ? mediaflow.workspaceViewController.projectName : Qt.application.name
     readonly property bool downloadPlanVisible: downloadPlanDialog.visible
     property bool projectVersionsVisible: false
     readonly property int downloadPlanEntryCount: downloadEntries.count
+    readonly property bool downloadPlanIsAudio:
+        mediaflow.taskController.downloadPlanData.media_kind === "audio"
     readonly property string defaultProjectDirectory: String(
-        settingsController.settingsData.defaultProjectDirectory || "")
+        mediaflow.settingsController.settingsData.defaultProjectDirectory || "")
     readonly property string defaultDownloadDirectory: String(
-        settingsController.settingsData.downloadDirectory || "")
+        mediaflow.settingsController.settingsData.downloadDirectory || "")
     readonly property string downloadDestinationLabel: defaultDownloadDirectory
     property bool windowStateReady: false
     property int restorableWidth: 1600
     property int restorableHeight: 980
     readonly property var downloadResolutionOptions: {
+        if (window.downloadPlanIsAudio)
+            return [{label: qsTr("仅下载音频"), value: "audio"}]
         const options = [{label: qsTr("最佳可用质量"), value: "best"}]
-        const heights = taskController.downloadPlanData.available_heights || []
+        const heights = mediaflow.taskController.downloadPlanData.available_heights || []
         for (const height of heights)
             options.push({label: String(height) + "p", value: String(height) + "p"})
         options.push({label: qsTr("仅下载音频"), value: "audio"})
@@ -46,9 +50,10 @@ ApplicationWindow {
         return 0
     }
     function syncDownloadFormFromSettings() {
-        const data = settingsController.settingsData
+        const data = mediaflow.settingsController.settingsData
         downloadResolution.currentIndex = window.indexOfValue(
-            window.downloadResolutionOptions, data.downloadResolution || "best")
+            window.downloadResolutionOptions,
+            window.downloadPlanIsAudio ? "audio" : data.downloadResolution || "best")
         downloadCodec.currentIndex = window.indexOfValue(
             downloadCodec.model, data.downloadCodec || "avc")
         downloadSubtitles.checked = Boolean(data.downloadSubtitles)
@@ -93,7 +98,7 @@ ApplicationWindow {
     palette.disabled.text: Theme.textDisabled
     palette.disabled.buttonText: Theme.textDisabled
     Component.onCompleted: {
-        const data = settingsController.settingsData
+        const data = mediaflow.settingsController.settingsData
         const availableWidth = Screen.desktopAvailableWidth > 0
             ? Screen.desktopAvailableWidth : 1600
         const availableHeight = Screen.desktopAvailableHeight > 0
@@ -125,7 +130,7 @@ ApplicationWindow {
             Qt.callLater(clampWindowToScreen);
     }
     onScreenChanged: Qt.callLater(clampWindowToScreen)
-    onClosing: settingsController.saveWindowState(
+    onClosing: mediaflow.settingsController.saveWindowState(
         restorableWidth, restorableHeight, visibility === Window.Maximized)
 
     ColumnLayout {
@@ -146,7 +151,7 @@ ApplicationWindow {
             objectName: "pageLoader"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            sourceComponent: workspaceController.hasProject ? workspaceComponent : homeComponent
+            sourceComponent: mediaflow.workspaceViewController.hasProject ? workspaceComponent : homeComponent
         }
     }
     Component { id: homeComponent; HomeView {} }
@@ -155,6 +160,8 @@ ApplicationWindow {
     WorkspaceTour {
         id: workspaceTour
         anchors.fill: parent
+        workspaceItem: mediaflow.workspaceViewController.hasProject
+            ? pageLoader.item : null
     }
 
     AppDialog {
@@ -171,7 +178,7 @@ ApplicationWindow {
             Text {
                 Layout.fillWidth: true
                 text: {
-                    const actors = workspaceController.collaborationConflict.actors || []
+                    const actors = mediaflow.workspaceViewController.collaborationConflict.actors || []
                     return actors.length > 0
                         ? qsTr("%1 在你开始输入后修改了同一项内容。你的输入仍然保留，请选择采用哪一份。").arg(actors.join("、"))
                         : qsTr("项目中的同一项内容在你开始输入后发生了变化。你的输入仍然保留，请选择采用哪一份。")
@@ -183,7 +190,7 @@ ApplicationWindow {
             Text {
                 Layout.fillWidth: true
                 text: {
-                    const paths = workspaceController.collaborationConflict.paths || []
+                    const paths = mediaflow.workspaceViewController.collaborationConflict.paths || []
                     return paths.length > 0
                         ? qsTr("发生冲突的位置：%1").arg(paths.join("\n"))
                         : ""
@@ -199,22 +206,25 @@ ApplicationWindow {
                 AppButton {
                     objectName: "acceptRemoteConflictButton"
                     text: qsTr("采用项目中的最新内容")
-                    onClicked: workspaceController.resolveCollaborationConflict("accept_remote")
+                    onClicked: mediaflow.workspaceProjectController.resolveCollaborationConflict("accept_remote")
                 }
                 AppButton {
                     objectName: "keepLocalConflictButton"
                     primary: true
                     text: qsTr("保留我的输入")
-                    onClicked: workspaceController.resolveCollaborationConflict("keep_local")
+                    onClicked: mediaflow.workspaceProjectController.resolveCollaborationConflict("keep_local")
                 }
             }
         }
     }
     Connections {
-        target: workspaceController
+        target: mediaflow.workspaceProjectController
         function onSampleTourRequested() { workspaceTour.open(); }
+    }
+    Connections {
+        target: mediaflow.workspaceViewController
         function onCollaborationConflictChanged() {
-            if (workspaceController.collaborationConflictPending)
+            if (mediaflow.workspaceViewController.collaborationConflictPending)
                 collaborationConflictDialog.open()
             else
                 collaborationConflictDialog.close()
@@ -224,7 +234,7 @@ ApplicationWindow {
     FolderDialog {
         id: downloadOutputDirectoryDialog
         title: qsTr("选择媒体默认保存位置")
-        onAccepted: settingsController.setDefaultDownloadDirectory(selectedFolder.toLocalFile())
+        onAccepted: mediaflow.settingsController.setDefaultDownloadDirectory(selectedFolder.toLocalFile())
     }
 
     AppDialog {
@@ -234,7 +244,7 @@ ApplicationWindow {
         width: Math.min(900, window.width - 64)
         height: Math.min(760, window.height - 48)
         modal: true
-        title: workspaceController.hasProject ? qsTr("确认下载") : qsTr("视频信息与下载设置")
+        title: mediaflow.workspaceViewController.hasProject ? qsTr("确认下载") : qsTr("媒体信息与下载设置")
         standardButtons: Dialog.NoButton
         closePolicy: Popup.NoAutoClose
         onOpened: Qt.callLater(window.syncDownloadFormFromSettings)
@@ -248,7 +258,7 @@ ApplicationWindow {
             spacing: 10
             Text {
                 Layout.fillWidth: true
-                text: taskController.downloadPlanData.title || qsTr("已完成链接分析")
+                text: mediaflow.taskController.downloadPlanData.title || qsTr("已完成链接分析")
                 color: Theme.text
                 font.pixelSize: Theme.fontSizeBodyLarge
                 font.weight: Font.DemiBold
@@ -258,10 +268,10 @@ ApplicationWindow {
                 objectName: "downloadMediaSummary"
                 Layout.fillWidth: true
                 text: {
-                    const data = taskController.downloadPlanData
+                    const data = mediaflow.taskController.downloadPlanData
                     const parts = [data.kind === "collection"
                         ? qsTr("媒体集合 · %1 项").arg(data.entryCount)
-                        : qsTr("单个视频")]
+                        : data.media_kind === "audio" ? qsTr("单集音频") : qsTr("单个视频")]
                     if (data.width > 0 && data.height > 0)
                         parts.push(String(data.width) + "×" + String(data.height))
                     if (data.fps > 0)
@@ -276,7 +286,7 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.fillWidth: true
-                visible: !workspaceController.hasProject
+                visible: !mediaflow.workspaceViewController.hasProject
                 Text {
                     text: qsTr("项目名称")
                     color: Theme.textMuted
@@ -295,9 +305,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 textRole: "label"; valueRole: "value"
                 model: window.downloadResolutionOptions
+                enabled: !window.downloadPlanIsAudio
             }
             RowLayout {
                 Layout.fillWidth: true
+                visible: !window.downloadPlanIsAudio
                 Text { text: qsTr("视频编码"); color: Theme.textMuted; Layout.preferredWidth: 120 }
                 AppComboBox {
                     id: downloadCodec
@@ -314,11 +326,15 @@ ApplicationWindow {
                 id: downloadSubtitles
                 objectName: "downloadSubtitles"
                 text: qsTr("同时下载字幕和自动字幕，并转换为 SRT")
+                visible: !window.downloadPlanIsAudio
             }
             AppTextField {
                 id: downloadFilename
+                objectName: "downloadFilename"
                 Layout.fillWidth: true
-                placeholderText: taskController.downloadPlanData.kind === "collection"
+                placeholderText: window.downloadPlanIsAudio
+                                 ? qsTr("自定义音频文件名（可选）")
+                                 : mediaflow.taskController.downloadPlanData.kind === "collection"
                                  ? qsTr("批量文件名前缀（可选）")
                                  : qsTr("自定义文件名（可选）")
             }
@@ -341,9 +357,9 @@ ApplicationWindow {
                 }
                 AppButton {
                     objectName: "resetMediaDirectoryButton"
-                    visible: window.defaultDownloadDirectory !== settingsController.builtInMediaDirectory
+                    visible: window.defaultDownloadDirectory !== mediaflow.settingsController.builtInMediaDirectory
                     text: qsTr("恢复默认")
-                    onClicked: settingsController.resetDefaultDownloadDirectory()
+                    onClicked: mediaflow.settingsController.resetDefaultDownloadDirectory()
                 }
             }
             Text {
@@ -354,7 +370,7 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.fillWidth: true
-                visible: taskController.downloadPlanData.kind === "collection"
+                visible: mediaflow.taskController.downloadPlanData.kind === "collection"
                 Text {
                     text: qsTr("下载项目")
                     color: Theme.text
@@ -364,21 +380,21 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     text: qsTr("全选")
-                    onClicked: taskController.selectAllDownloadEntries(true)
+                    onClicked: mediaflow.taskController.selectAllDownloadEntries(true)
                 }
                 AppButton {
                     text: qsTr("清空")
-                    onClicked: taskController.selectAllDownloadEntries(false)
+                    onClicked: mediaflow.taskController.selectAllDownloadEntries(false)
                 }
             }
             ListView {
                 id: downloadEntries
                 Layout.fillWidth: true
                 Layout.preferredHeight: visible ? Math.min(220, Math.max(58, contentHeight)) : 0
-                visible: taskController.downloadPlanData.kind === "collection"
+                visible: mediaflow.taskController.downloadPlanData.kind === "collection"
                 clip: true
                 spacing: 4
-                model: taskController.downloadEntriesModel
+                model: mediaflow.taskController.downloadEntriesModel
                 delegate: Rectangle {
                     required property int entryIndex
                     required property string mediaId
@@ -400,7 +416,7 @@ ApplicationWindow {
                         AppCheckBox {
                             checked: parent.parent.selected
                             enabled: parent.parent.available
-                            onToggled: taskController.setDownloadEntrySelected(
+                            onToggled: mediaflow.taskController.setDownloadEntrySelected(
                                 parent.parent.entryIndex, checked)
                         }
                         Text {
@@ -425,7 +441,7 @@ ApplicationWindow {
             AppTextField {
                 id: playlistItems
                 Layout.fillWidth: true
-                visible: taskController.downloadPlanData.kind === "collection"
+                visible: mediaflow.taskController.downloadPlanData.kind === "collection"
                 placeholderText: qsTr("也可手动输入项目范围，例如 1-5,8")
                 color: Theme.text
             }
@@ -434,30 +450,30 @@ ApplicationWindow {
                 AppButton {
                     Layout.fillWidth: true
                     text: qsTr("取消")
-                    onClicked: taskController.dismissDownloadPlan()
+                    onClicked: mediaflow.taskController.dismissDownloadPlan()
                 }
                 AppButton {
                     objectName: "confirmDownloadButton"
                     Layout.fillWidth: true
                     primary: true
-                    enabled: taskController.downloadPlanReady
-                        && (workspaceController.hasProject
-                            ? Boolean(workspaceController.actionCapabilities.canStartTasks)
-                            : Boolean(workspaceController.actionCapabilities.canCreateProject))
-                    text: workspaceController.hasProject
+                    enabled: mediaflow.taskController.downloadPlanReady
+                        && (mediaflow.workspaceViewController.hasProject
+                            ? Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
+                            : Boolean(mediaflow.workspaceViewController.actionCapabilities.canCreateProject))
+                    text: mediaflow.workspaceViewController.hasProject
                           ? qsTr("开始下载") : qsTr("下载并新建项目")
                     onClicked: {
                         if (!enabled)
                             return;
-                        if (workspaceController.hasProject) {
-                            taskController.submitDownloadPlan(
+                        if (mediaflow.workspaceViewController.hasProject) {
+                            mediaflow.taskController.submitDownloadPlan(
                                 String(downloadResolution.currentValue),
                                 playlistItems.text,
                                 downloadSubtitles.checked,
                                 String(downloadCodec.currentValue),
                                 downloadFilename.text)
                         } else {
-                            taskController.createProjectAndDownload(
+                            mediaflow.taskController.createProjectAndDownload(
                                 window.defaultProjectDirectory,
                                 downloadProjectName.text,
                                 String(downloadResolution.currentValue),
@@ -504,7 +520,7 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     text: qsTr("复制详情")
-                    onClicked: taskController.copyErrorDetails(errorText.text)
+                    onClicked: mediaflow.taskController.copyErrorDetails(errorText.text)
                 }
                 AppButton {
                     text: qsTr("关闭")
@@ -516,16 +532,20 @@ ApplicationWindow {
     }
 
     Connections {
-        target: workspaceController
+        target: mediaflow.workspaceViewController
         function onErrorOccurred(message) {
-            const reference = String(workspaceController.lastErrorId || "")
+            const reference = String(mediaflow.workspaceViewController.lastErrorId || "")
             errorText.text = message + (reference.length > 0
                 ? " [" + reference + "]" : "")
             errorPopup.open()
             errorTimer.restart()
         }
+    }
+
+    Connections {
+        target: mediaflow.taskController
         function onDownloadPlanChanged() {
-            if (taskController.downloadPlanReady)
+            if (mediaflow.taskController.downloadPlanReady)
                 downloadPlanDialog.open()
             else
                 downloadPlanDialog.close()

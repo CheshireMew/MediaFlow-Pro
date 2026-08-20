@@ -39,4 +39,4 @@ AI 交付给用户前：
 - `project.handoff.inspect` 能指出离线素材、未导出的当前修订或其它阻断。
 - 最终视频从当前 `project.mfp` 修订导出，不能在工程外另有一条更“新”的 FFmpeg 时间线。
 
-具体操作名、请求和结果结构始终以当前 `mediaflow-cli describe` 为准。
+具体操作名先以当前 `mediaflow-cli describe --summary` 为准；请求和结果结构再以选中操作的 `mediaflow-cli describe --operation <名称>` 为准。

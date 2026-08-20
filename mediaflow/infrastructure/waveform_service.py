@@ -38,7 +38,7 @@ class WaveformService:
         progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> Path:
-        source = self.repository.catalog.resolve_asset_path(asset)
+        source = self.repository.assets.resolve_asset_path(asset)
         if not source.is_file():
             raise FileNotFoundError(source)
         source = require_windows_interop_path(source)
@@ -136,7 +136,7 @@ class WaveformService:
             progress=progress,
             check_cancelled=check_cancelled,
         )
-        return self.repository.catalog.set_asset_waveform_path(
+        return self.repository.assets.set_asset_waveform_path(
             asset.id,
             expected_fingerprint=asset.fingerprint,
             waveform_path=output,

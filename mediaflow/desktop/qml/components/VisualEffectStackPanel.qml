@@ -41,7 +41,7 @@ Panel {
                 text: qsTr("添加")
                 compact: true
                 enabled: root.canEdit && effectKind.currentValue
-                onClicked: timelineController.addSelectedClipVisualEffect(
+                onClicked: mediaflow.timelineEffectsController.addSelectedClipVisualEffect(
                     String(effectKind.currentValue))
             }
         }
@@ -78,7 +78,7 @@ Panel {
                         AppSwitch {
                             checked: Boolean(effectCard.modelData.enabled)
                             enabled: root.canEdit
-                            onToggled: timelineController.setSelectedClipVisualEffectEnabled(
+                            onToggled: mediaflow.timelineEffectsController.setSelectedClipVisualEffectEnabled(
                                 String(effectCard.modelData.effectId), checked)
                         }
                         Text {
@@ -91,7 +91,7 @@ Panel {
                         AppIconButton {
                             iconName: "up"
                             enabled: root.canEdit && Number(effectCard.modelData.position) > 0
-                            onClicked: timelineController.moveSelectedClipVisualEffect(
+                            onClicked: mediaflow.timelineEffectsController.moveSelectedClipVisualEffect(
                                 String(effectCard.modelData.effectId),
                                 Number(effectCard.modelData.position) - 1)
                         }
@@ -99,7 +99,7 @@ Panel {
                             iconName: "down"
                             enabled: root.canEdit
                                 && Number(effectCard.modelData.position) + 1 < root.effects.length
-                            onClicked: timelineController.moveSelectedClipVisualEffect(
+                            onClicked: mediaflow.timelineEffectsController.moveSelectedClipVisualEffect(
                                 String(effectCard.modelData.effectId),
                                 Number(effectCard.modelData.position) + 1)
                         }
@@ -107,7 +107,7 @@ Panel {
                             iconName: "delete"
                             danger: true
                             enabled: root.canEdit
-                            onClicked: timelineController.removeSelectedClipVisualEffect(
+                            onClicked: mediaflow.timelineEffectsController.removeSelectedClipVisualEffect(
                                 String(effectCard.modelData.effectId))
                         }
                     }
@@ -120,7 +120,7 @@ Panel {
                             enabled: root.canEdit && Boolean(effectCard.modelData.enabled)
                             field: parameterRow.modelData
                             onValueCommitted: value =>
-                                timelineController.setSelectedClipVisualEffectParameter(
+                                mediaflow.timelineEffectsController.setSelectedClipVisualEffectParameter(
                                     String(effectCard.modelData.effectId),
                                     String(parameterRow.modelData.source_id), value)
                         }

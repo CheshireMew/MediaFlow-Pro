@@ -31,6 +31,10 @@ PACKAGE_SOURCES = (
         "assets/web-card-cases/text-card-glossary",
         "editable-media-v6-cases/text-card-glossary",
     ),
+    (
+        "assets/web-card-cases/dark-icon-directory",
+        "editable-media-v6-cases/dark-icon-directory",
+    ),
 )
 MEDIA_BUILD_CASE_SOURCES = (
     (
@@ -66,12 +70,12 @@ def _publish_package(staging: Path, destination: Path) -> None:
         archived = archive_root / (
             f"{destination.name}-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
         )
-        destination.replace(archived)
+        shutil.move(str(destination), str(archived))
     try:
         staging.replace(destination)
     except BaseException:
         if archived is not None and not destination.exists():
-            archived.replace(destination)
+            shutil.move(str(archived), str(destination))
         raise
 
 

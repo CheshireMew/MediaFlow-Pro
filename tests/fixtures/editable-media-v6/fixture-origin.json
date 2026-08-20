@@ -4,9 +4,14 @@
   "producer": "visual-multimedia/assets/web-media-starter",
   "editable_media_version": 6,
   "files": {
+    "_start_editable_preview.bat": "7d717ba19a5de48c6b7ce7a3052c4e7efa1ea89f750d4ed3077189ecbd84d60e",
+    "editable-media-editor.css": "59d475826ec3d2043d09cca8b4a36e38119b0595011d9fac1583130e274d01c0",
+    "editable-media-editor.js": "dd67910e04b1c8861f627a93b449650395d7ae1fd3fd8ac8f143189c82e0d526",
     "editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
-    "editable-media.json": "bc09c10e8fdafda79486446494f035bae4ce57a8ec10c7c7bf6b7a4641990bdc",
-    "index.html": "628ac87f21bc97ecad41ee3427d77789189554bc6dbdcdfe65426348695040c1",
-    "media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce"
+    "editable-media.json": "d68470b54cd1af32ca5ee0cf41ad5f97bb8fac3e2d3ab7fc450c5a624ae134d7",
+    "index.html": "2f2be1a3a38842f6e69a48d56ce53d273156fa92e19c0b051555567b16517908",
+    "media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce",
+    "preview-server.py": "a32fc34d5bee4d8c124e22875393921cce5a739aee775fbb485e28aa7c61131a",
+    "typography-presets.json": "87b77900ccdfc34e85e2a451e737ea68d346193c5a73ccb2e5fc939de5c5da90"
   }
 }

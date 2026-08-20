@@ -4,6 +4,8 @@ import hashlib
 from collections.abc import Callable
 from pathlib import Path
 
+from mediaflow.domain.storage_names import python_io_path
+
 HashProgress = Callable[[int, int], None]
 
 
@@ -18,7 +20,7 @@ def sha256_file(
 
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
-    source_path = Path(path)
+    source_path = python_io_path(path)
     total = source_path.stat().st_size
     completed = 0
     digest = hashlib.sha256()

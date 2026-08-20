@@ -95,15 +95,13 @@ def test_shutdown_cancels_inflight_download_analysis_within_socket_bound(
     )
     controllers = EditorControllers()
     try:
-        controllers.tasks.analyzeDownloadUrl(
-            f"http://127.0.0.1:{server.server_address[1]}/watch"
-        )
+        controllers.tasks.analyzeDownloadUrl(f"http://127.0.0.1:{server.server_address[1]}/watch")
         assert request_seen.wait(timeout=3)
         started = time.monotonic()
         controllers.shutdown()
         assert time.monotonic() - started < 3.0
     finally:
-        if not controllers.session.requests.shutting_down:
+        if not controllers.session.state.requests.shutting_down:
             controllers.shutdown()
         release_response.set()
         server.shutdown()
@@ -131,7 +129,7 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
     ui_errors: list[str] = []
     session.events.errorOccurred.connect(ui_errors.append)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Download UI",
         )
@@ -163,10 +161,10 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
 
         controllers.tasks.submitDownloadPlan("best", "1-2", False, "best", "")
 
-        run = session.binding.current.list_workflow_runs(active_only=True)[0]
+        run = session.state.binding.current.list_workflow_runs(active_only=True)[0]
         task_ids = run.payload.task_ids
         assert len(task_ids) == 2
-        completed = [session.binding.current.wait_for_task(task_id, timeout=30) for task_id in task_ids]
+        completed = [session.state.binding.current.wait_for_task(task_id, timeout=30) for task_id in task_ids]
         assert _process_until(
             lambda: controllers.workspace.workflowStage == "prepare_media"
             and controllers.workspace.workflowStatus == "awaiting_confirmation"
@@ -174,10 +172,10 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             timeout=5,
         )
 
-        task_commands = [session.binding.current.get_task(task_id).command for task_id in task_ids]
+        task_commands = [session.state.binding.current.get_task(task_id).command for task_id in task_ids]
         asset_paths = [
-            session.binding.current.resolve_asset_path(asset)
-            for asset in session.binding.current.list_assets()
+            session.state.binding.current.resolve_asset_path(asset)
+            for asset in session.state.binding.current.list_assets()
         ]
 
         assert all(task.status == TaskStatus.COMPLETED for task in completed)
@@ -195,7 +193,7 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             ui_errors,
             timeout=5,
         )
-        controllers.workspace.updateSequenceProfile(
+        controllers.workspace_sequence.updateSequenceProfile(
             1920,
             1080,
             30,
@@ -210,15 +208,11 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             / "editable-media-v6"
             / "editable-media.json"
         )
-        controllers.media.importFiles(
-            [QUrl.fromLocalFile(str(web_manifest))]
-        )
+        controllers.media.importFiles([QUrl.fromLocalFile(str(web_manifest))])
         web_asset_id = next(
-            asset.id
-            for asset in session.binding.current.list_assets()
-            if asset.kind == AssetKind.WEB
+            asset.id for asset in session.state.binding.current.list_assets() if asset.kind == AssetKind.WEB
         )
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.dropAssets(
             [web_asset_id],
             "",
             -1,
@@ -228,9 +222,9 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             True,
             False,
         )
-        assert controllers.timeline.clipsModel.rowCount() == 1
+        assert controllers.timeline_view.clipsModel.rowCount() == 1
 
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.dropAssets(
             [downloaded_asset_id],
             "",
             -1,
@@ -248,16 +242,12 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
             ui_errors,
             timeout=5,
         )
-        assert controllers.timeline.clipsModel.findRow("clipId", video_clip_id) >= 0
+        assert controllers.timeline_view.clipsModel.findRow("clipId", video_clip_id) >= 0
         assert controllers.workspace.workflowStage == "prepare_media"
         assert controllers.workspace.workflowStatus == "awaiting_confirmation"
-        assert controllers.workspace.workflowMessageCode != (
-            "workflow_no_transcribable_assets"
-        )
+        assert controllers.workspace.workflowMessageCode != ("workflow_no_transcribable_assets")
 
-        persisted_settings = DesktopSettingsRepository(
-            os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]
-        ).load()
+        persisted_settings = DesktopSettingsRepository(os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]).load()
         assert persisted_settings.ui.recent_project_paths == [str(tmp_path / "Download UI")]
     finally:
         controllers.shutdown()
@@ -298,25 +288,21 @@ def test_default_workspace_contains_real_downloaded_video_and_subtitles(
     controllers = EditorControllers()
     session = controllers.session
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Captioned Download",
         )
         page_url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
-        session._set_download_plan(
-            YtDlpDownloadService(
-                RuntimeContext.discover().paths
-            ).analyze(page_url)
-        )
+        session._set_download_plan(YtDlpDownloadService(RuntimeContext.discover().paths).analyze(page_url))
         controllers.tasks.submitDownloadPlan("best", "", True, "best", "")
 
-        run = session.binding.current.list_workflow_runs(active_only=True)[0]
-        completed = session.binding.current.wait_for_task(run.payload.task_ids[0], timeout=30)
+        run = session.state.binding.current.list_workflow_runs(active_only=True)[0]
+        completed = session.state.binding.current.wait_for_task(run.payload.task_ids[0], timeout=30)
         assert completed.status == TaskStatus.COMPLETED
 
-        assets = session.binding.current.list_assets()
-        paths = [session.binding.current.resolve_asset_path(asset) for asset in assets]
-        workspace = Path(session.service_settings.download.output_directory)
+        assets = session.state.binding.current.list_assets()
+        paths = [session.state.binding.current.resolve_asset_path(asset) for asset in assets]
+        workspace = Path(session.state.service_settings.download.output_directory)
         assert {asset.kind for asset in assets} == {AssetKind.VIDEO, AssetKind.SUBTITLE}
         assert all(path.is_relative_to(workspace) and path.is_file() for path in paths)
         project_subtitles = list((tmp_path / "Captioned Download" / "generated" / "subtitles").rglob("*.srt"))
@@ -354,9 +340,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
     )
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    settings_repository = ServiceSettingsRepository(
-        os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
-    )
+    settings_repository = ServiceSettingsRepository(os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"])
     remembered = settings_repository.load()
     remembered.download.resolution = "360p"
     remembered.download.download_subtitles = True
@@ -517,12 +501,8 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert downloaded_path.is_file()
         assert downloaded_path.parent.name == "WorkSpace"
         assert (expected_project_path / "project.mfp").is_file()
-        persisted_settings = ServiceSettingsRepository(
-            os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
-        ).load()
-        assert persisted_settings.default_project_directory == str(
-            (tmp_path / "Video").resolve()
-        )
+        persisted_settings = ServiceSettingsRepository(os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]).load()
+        assert persisted_settings.default_project_directory == str((tmp_path / "Video").resolve())
         assert persisted_settings.download.output_directory == str((tmp_path / "WorkSpace").resolve())
         assert persisted_settings.download.resolution == "best"
         assert persisted_settings.download.download_subtitles is False

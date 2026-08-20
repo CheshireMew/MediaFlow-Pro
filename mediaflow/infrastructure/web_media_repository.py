@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 
-from mediaflow.domain.web_media import (
+from mediaflow.domain.web_manifest import (
     WebAssetSpec,
-    WebClipState,
     editable_media_manifest_document,
 )
+from mediaflow.domain.web_state import WebClipState
 
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
@@ -14,7 +14,7 @@ from .project_serialization import json_value as _json
 
 class WebMediaRepository(ProjectRepositoryComponent):
     def save_web_asset_spec(self, spec: WebAssetSpec) -> WebAssetSpec:
-        asset = self._owner.catalog.get_asset(spec.asset_id)
+        asset = self._relations.assets.get_asset(spec.asset_id)
         if asset.kind.value != "web":
             raise ValueError("Editable media metadata can only belong to a web asset")
         with self.transaction() as connection:
@@ -26,9 +26,7 @@ class WebMediaRepository(ProjectRepositoryComponent):
                        source_hash=excluded.source_hash""",
                 (
                     spec.asset_id,
-                    _json(
-                        editable_media_manifest_document(spec.manifest)
-                    ),
+                    _json(editable_media_manifest_document(spec.manifest)),
                     spec.source_hash,
                 ),
             )
@@ -60,9 +58,7 @@ class WebMediaRepository(ProjectRepositoryComponent):
         if row is None:
             raise KeyError(clip_id)
         payload = json.loads(row["state_json"])
-        return WebClipState.model_validate(
-            {**payload, "clip_id": clip_id, "revision": row["revision"]}
-        )
+        return WebClipState.model_validate({**payload, "clip_id": clip_id, "revision": row["revision"]})
 
     def list_web_clip_states(self, sequence_id: str) -> dict[str, WebClipState]:
         rows = self._fetchall(
@@ -96,17 +92,15 @@ class WebMediaRepository(ProjectRepositoryComponent):
                   WHERE clip.id IN ({placeholders})""",
             clip_ids,
         )
-        if {row["id"] for row in rows} != set(clip_ids) or any(
-            row["kind"] != "web" for row in rows
-        ):
+        if {row["id"] for row in rows} != set(clip_ids) or any(row["kind"] != "web" for row in rows):
             raise ValueError("Editable media state must belong to existing web clips")
         with self.transaction() as connection:
             for state in states:
-                self._upsert_web_clip_state(connection, state)
+                self.upsert_web_clip_state(connection, state)
             self._touch_project(connection)
 
     @staticmethod
-    def _upsert_web_clip_state(connection, state: WebClipState) -> None:
+    def upsert_web_clip_state(connection, state: WebClipState) -> None:
         payload = state.model_dump(
             mode="json",
             exclude={"clip_id", "revision"},

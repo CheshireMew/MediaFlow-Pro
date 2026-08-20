@@ -3,9 +3,9 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from mediaflow.domain.clip_transform_projection import project_clip_transform_points
 from mediaflow.domain.enums import AssetKind, ColorMode
 from mediaflow.domain.project import Asset
-from mediaflow.domain.timebase import timeline_offset_for_source_frame
 from mediaflow.domain.timeline import Clip, ClipTransform
 from mediaflow.domain.visual_effects import visual_effect_mlt
 from mediaflow.infrastructure.mlt.graph import MltGraph
@@ -231,25 +231,9 @@ class MltClipGraph:
 
             rect = rect_value(transform)
             rotation = f"{transform.rotation:g}"
-            if clip.transform_keyframes:
-                points: dict[int, ClipTransform] = {producer_start: transform}
-                for keyframe in clip.transform_keyframes:
-                    if keyframe.timeline_offset is not None:
-                        local_frame = keyframe.timeline_offset
-                    else:
-                        assert keyframe.source_frame is not None
-                        try:
-                            local_frame = timeline_offset_for_source_frame(
-                                clip.source_in,
-                                keyframe.source_frame,
-                                clip.speed_numerator,
-                                clip.speed_denominator,
-                                freeze_source_frame=clip.freeze_source_frame,
-                            )
-                        except ValueError:
-                            continue
-                    if 0 <= local_frame < clip.duration:
-                        points[producer_start + local_frame] = keyframe.transform
+            projection = project_clip_transform_points(clip)
+            if projection.has_keyframes:
+                points = {producer_start + frame: value for frame, value in projection.points}
                 final_value = points[max(points)]
                 points[producer_start + clip.duration - 1] = final_value
                 rect = ";".join(f"{frame}={rect_value(value)}" for frame, value in sorted(points.items()))

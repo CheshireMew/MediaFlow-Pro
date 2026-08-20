@@ -10,6 +10,10 @@ from mediaflow.domain.project import Asset
 from mediaflow.domain.timeline import TimelineState, Track
 from mediaflow.infrastructure.mlt.clip_graph import MltClipGraph
 from mediaflow.infrastructure.mlt.graph import MltGraph
+from mediaflow.infrastructure.mlt.playlist_layout import (
+    append_playlist_layout,
+    plan_playlist_layout,
+)
 
 
 class MltVideoGraph:
@@ -30,44 +34,17 @@ class MltVideoGraph:
     ) -> None:
         playlist = ET.SubElement(root, "playlist", {"id": MltGraph.playlist_id(track.id)})
         MltGraph.property(playlist, "mediaflow:track_name", track.name)
-        incoming = {item.right_clip_id: item for item in state.transitions if item.track_id == track.id}
-        outgoing = {item.left_clip_id: item for item in state.transitions if item.track_id == track.id}
-        cursor = 0
-        for clip in state.clips_for_track(track.id):
-            incoming_after = MltGraph.transition_parts(incoming[clip.id])[1] if clip.id in incoming else 0
-            outgoing_before = MltGraph.transition_parts(outgoing[clip.id])[0] if clip.id in outgoing else 0
-            visible_start = clip.timeline_start + incoming_after
-            visible_end = clip.timeline_end - outgoing_before
-            if visible_start > cursor:
-                ET.SubElement(playlist, "blank", {"length": str(visible_start - cursor)})
-            if visible_end > visible_start:
-                producer_in = MltGraph.producer_frame(
-                    clip,
-                    assets[clip.asset_id],
-                    incoming_after,
-                )
-                ET.SubElement(
-                    playlist,
-                    "entry",
-                    {
-                        "producer": MltGraph.producer_id(clip.id),
-                        "in": str(producer_in),
-                        "out": str(producer_in + visible_end - visible_start - 1),
-                    },
-                )
-                cursor = visible_end
-            if clip.id in outgoing:
-                transition = outgoing[clip.id]
-                ET.SubElement(
-                    playlist,
-                    "entry",
-                    {
-                        "producer": MltGraph.transition_id(transition.id),
-                        "in": "0",
-                        "out": str(transition.duration - 1),
-                    },
-                )
-                cursor += transition.duration
+        transitions = (item for item in state.transitions if item.track_id == track.id)
+        append_playlist_layout(
+            playlist,
+            plan_playlist_layout(
+                state.clips_for_track(track.id),
+                assets,
+                transitions,
+                producer_id=MltGraph.producer_id,
+                transition_id=MltGraph.transition_id,
+            ),
+        )
 
     def append_layer_compositors(
         self,
@@ -97,10 +74,10 @@ class MltVideoGraph:
     ) -> tuple[str, str, Path] | None:
         if watermark is None or not watermark.enabled or not watermark.asset_id:
             return None
-        asset = self.repository.catalog.get_asset(watermark.asset_id)
+        asset = self.repository.assets.get_asset(watermark.asset_id)
         if asset.kind != AssetKind.IMAGE:
             raise ValueError("Watermark asset must be an image")
-        source = self.repository.catalog.resolve_asset_path(asset)
+        source = self.repository.assets.resolve_asset_path(asset)
         if not source.is_file():
             raise FileNotFoundError(source)
         producer_id = f"watermark_producer_{asset.id}"

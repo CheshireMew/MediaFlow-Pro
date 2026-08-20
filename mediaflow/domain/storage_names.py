@@ -29,6 +29,18 @@ def canonical_resolved_path(value: str | Path) -> Path:
     return Path(text)
 
 
+def python_io_path(value: str | Path) -> Path:
+    """Return an absolute path Python can use beyond Windows' legacy MAX_PATH."""
+
+    path = canonical_resolved_path(value)
+    if os.name != "nt":
+        return path
+    text = os.fspath(path)
+    if text.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + text[2:])
+    return Path("\\\\?\\" + text)
+
+
 WINDOWS_INTEROP_PATH_UTF16_LIMIT = 240
 WINDOWS_COMPONENT_UTF16_LIMIT = 240
 OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS = 80

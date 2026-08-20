@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.environment import test_run_root
+from scripts.run_artifacts import verification_workspace_root
 
 FIXTURE = ROOT / "tests" / "fixtures" / "editable-media-v6"
 DEFAULT_RUN_ROOT = test_run_root() / "web-render-performance"
@@ -87,8 +88,7 @@ def web_render_requirements_met(
         and parallel_capture_backend == "drawelement"
         and slow_modulo_seconds > 0
         and slow_dynamic_seconds > 0
-        and 1 - slow_dynamic_seconds / slow_modulo_seconds
-        >= MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT
+        and 1 - slow_dynamic_seconds / slow_modulo_seconds >= MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT
     )
 
 
@@ -99,7 +99,7 @@ def _slow_frame_scheduler_benchmark(
 ) -> dict[str, float | int]:
     """Compare the removed modulo assignment with the production scheduler."""
 
-    from mediaflow.infrastructure.web_capture_engine import _FrameScheduler
+    from mediaflow.infrastructure.web_capture_scheduler import _FrameScheduler
 
     durations = [0.008 if frame % worker_count == 0 else 0.0005 for frame in range(frame_count)]
 
@@ -148,36 +148,43 @@ def _slow_frame_scheduler_benchmark(
 
 
 def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
+    workspace = verification_workspace_root(run_dir)
     os.environ["MEDIAFLOW_WEB_WORKERS"] = str(workers)
     os.environ["MEDIAFLOW_WEB_FAST_CAPTURE"] = "1"
     os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(
-        run_dir / f"settings-{workers}" / "service-settings.json"
+        workspace / f"settings-{workers}" / "service-settings.json"
     )
-    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(run_dir / f"media-{workers}")
-    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(run_dir / f"projects-{workers}")
+    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(workspace / f"media-{workers}")
+    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(workspace / f"projects-{workers}")
 
     from mediaflow.application.timeline_editor import TimelineEditor
     from mediaflow.application.web_media_service import WebMediaServices
     from mediaflow.domain.enums import TrackKind
+    from mediaflow.infrastructure.editable_media_contract import editable_media_contract
     from mediaflow.infrastructure.project_repository import ProjectRepository
     from mediaflow.infrastructure.runtime_context import RuntimeContext
+    from mediaflow.infrastructure.structured_file_reader import LocalStructuredFileReader
     from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
     from mediaflow.infrastructure.web_capture_engine import web_capture_diagnostics
+    from mediaflow.infrastructure.web_package_storage import LocalWebPackageStorage
     from mediaflow.infrastructure.web_render_service import WebRenderService
 
     runtime = RuntimeContext.discover()
     paths = runtime.paths
-    project_dir = run_dir / f"workers-{workers}"
+    project_dir = workspace / f"workers-{workers}"
     with ProjectRepository.create(
         project_dir,
         f"Web render performance workers {workers}",
     ) as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
         services = WebMediaServices(
             repository,
             lambda sequence_id: editor,
-            BrowserWebPackageValidator(paths.chromium),
+            BrowserWebPackageValidator(paths.chromium, editable_media_contract()),
+            LocalStructuredFileReader(),
+            LocalWebPackageStorage(),
+            editable_media_contract(),
         )
         asset = services.packages.import_package(FIXTURE)
         track = editor.add_track(TrackKind.VIDEO)
@@ -274,8 +281,7 @@ def _minimum_frame_psnr(ffmpeg: Path, left: Path, right: Path) -> float:
         check=True,
     )
     values = [
-        float(match.group(1))
-        for match in re.finditer(r"\bpsnr_avg:([0-9]+(?:\.[0-9]+)?)", result.stdout)
+        float(match.group(1)) for match in re.finditer(r"\bpsnr_avg:([0-9]+(?:\.[0-9]+)?)", result.stdout)
     ]
     return min(values, default=float("inf"))
 
@@ -336,11 +342,9 @@ def _child_result(
         or not isinstance(payload.get("capture_backend_reason"), str)
         or not payload["capture_backend_reason"]
         or (
-            payload.get("fallback_reason") is not None
-            and not isinstance(payload.get("fallback_reason"), str)
+            payload.get("fallback_reason") is not None and not isinstance(payload.get("fallback_reason"), str)
         )
-        or payload.get("worker_bound")
-        not in {"worker_limit", "work", "memory", "pixels"}
+        or payload.get("worker_bound") not in {"worker_limit", "work", "memory", "pixels"}
         or not isinstance(payload.get("available_memory_bytes"), int)
         or not isinstance(payload.get("estimated_worker_bytes"), int)
         or not isinstance(payload.get("seek_seconds"), (int, float))
@@ -427,10 +431,7 @@ def verify(
     parallel_cache = Path(parallel["cache"])
     serial_hashes = _frame_hashes(ffmpeg, serial_cache)
     parallel_hashes = _frame_hashes(ffmpeg, parallel_cache)
-    identical_frames = sum(
-        left == right
-        for left, right in zip(serial_hashes, parallel_hashes, strict=False)
-    )
+    identical_frames = sum(left == right for left, right in zip(serial_hashes, parallel_hashes, strict=False))
     minimum_frame_psnr_db = _minimum_frame_psnr(
         ffmpeg,
         serial_cache,

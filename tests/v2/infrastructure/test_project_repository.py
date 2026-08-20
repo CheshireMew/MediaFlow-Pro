@@ -88,9 +88,9 @@ def test_project_repository_owns_the_project_root_path_boundary(
 
     assert utf16_units(str(max_project_path)) == PROJECT_ROOT_PATH_UTF16_LIMIT
     with ProjectRepository.create(max_project_path, "Maximum Root") as created:
-        project_id = created.catalog.get_project().id
+        project_id = created.projects.get_project().id
     with ProjectRepository.open(max_project_path, writable=False) as reopened:
-        assert reopened.catalog.get_project().id == project_id
+        assert reopened.projects.get_project().id == project_id
 
 
 def test_nested_transaction_rolls_back_its_partial_writes_when_outer_recovers(
@@ -103,9 +103,7 @@ def test_nested_transaction_rolls_back_its_partial_writes_when_outer_recovers(
         with repository.transaction() as outer:
             try:
                 with repository.transaction() as inner:
-                    inner.execute(
-                        "UPDATE project SET workflow_auto_continue=1"
-                    )
+                    inner.execute("UPDATE project SET workflow_auto_continue=1")
                     raise ValueError("injected nested failure")
             except ValueError:
                 pass
@@ -114,7 +112,7 @@ def test_nested_transaction_rolls_back_its_partial_writes_when_outer_recovers(
                 ("Outer change survived",),
             )
 
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         assert project.name == "Outer change survived"
         assert project.workflow_auto_continue is None
 
@@ -137,16 +135,13 @@ def test_base_exception_rolls_back_outer_transaction_and_connection_recovers(
                 )
                 raise AbortTransaction
 
-        assert (
-            repository.catalog.get_project().name
-            == "InterruptedTransaction"
-        )
+        assert repository.projects.get_project().name == "InterruptedTransaction"
         with repository.transaction() as connection:
             connection.execute(
                 "UPDATE project SET name=?",
                 ("Recovered",),
             )
-        assert repository.catalog.get_project().name == "Recovered"
+        assert repository.projects.get_project().name == "Recovered"
 
 
 def test_base_exception_during_create_archives_partial_database_and_releases_lock(
@@ -232,8 +227,8 @@ def test_create_project_starts_with_dynamic_empty_timeline(tmp_path: Path) -> No
         bit_depth=10,
     )
     with ProjectRepository.create(root, "Demo", profile) as repository:
-        project = repository.catalog.get_project()
-        sequences = repository.catalog.list_sequences()
+        project = repository.projects.get_project()
+        sequences = repository.sequences.list_sequences()
         timeline = repository.timeline.load_timeline(project.main_sequence_id)
         buses = repository.audio.list_audio_buses(project.main_sequence_id)
 
@@ -250,7 +245,7 @@ def test_failed_first_creation_is_archived_and_same_name_can_be_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "AtomicCreate"
-    original = AudioRepository._insert_bus_record
+    original = AudioRepository.insert_bus_record
     calls = 0
 
     def fail_after_schema(connection: sqlite3.Connection, bus) -> None:
@@ -262,7 +257,7 @@ def test_failed_first_creation_is_archived_and_same_name_can_be_retried(
 
     monkeypatch.setattr(
         AudioRepository,
-        "_insert_bus_record",
+        "insert_bus_record",
         staticmethod(fail_after_schema),
     )
     with pytest.raises(OSError, match="injected seed failure"):
@@ -276,11 +271,11 @@ def test_failed_first_creation_is_archived_and_same_name_can_be_retried(
 
     monkeypatch.setattr(
         AudioRepository,
-        "_insert_bus_record",
+        "insert_bus_record",
         staticmethod(original),
     )
     with ProjectRepository.create(root, "AtomicCreate") as repository:
-        assert repository.catalog.get_project().name == "AtomicCreate"
+        assert repository.projects.get_project().name == "AtomicCreate"
 
 
 def test_schema_upgrade_rolls_back_every_version_when_a_late_step_fails(
@@ -288,7 +283,7 @@ def test_schema_upgrade_rolls_back_every_version_when_a_late_step_fails(
 ) -> None:
     root = tmp_path / "AtomicMigration"
     with ProjectRepository.create(root, "AtomicMigration") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         sequence_id = project.main_sequence_id
     with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
         connection.execute(
@@ -364,22 +359,18 @@ def test_version_forty_project_gains_durable_inverse_commands_and_undo_groups(
                )"""
         )
         connection.execute("DROP TABLE project_event_v41")
-        connection.execute(
-            "UPDATE schema_info SET version=40 WHERE component='project'"
-        )
+        connection.execute("UPDATE schema_info SET version=40 WHERE component='project'")
 
     with _open_writable(root) as repository:
-        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
-            PROJECT_SCHEMA_VERSION
-        )
-        event_columns = {
-            str(row["name"])
-            for row in repository._fetchall("PRAGMA table_info(project_event)")
-        }
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (PROJECT_SCHEMA_VERSION)
+        event_columns = {str(row["name"]) for row in repository._fetchall("PRAGMA table_info(project_event)")}
         assert "inverse_command_json" in event_columns
-        assert repository._fetchone(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='undo_group'"
-        )["name"] == "undo_group"
+        assert (
+            repository._fetchone("SELECT name FROM sqlite_master WHERE type='table' AND name='undo_group'")[
+                "name"
+            ]
+            == "undo_group"
+        )
 
 
 def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
@@ -389,8 +380,8 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
     source_path = tmp_path / "history-source.mp4"
     source_path.write_bytes(b"history-source")
     with ProjectRepository.create(root, "MigratedV42TimelineHistory") as repository:
-        asset = repository.catalog.import_external_asset(source_path, AssetKind.VIDEO)
-        project = repository.catalog.get_project()
+        asset = repository.assets.import_external_asset(source_path, AssetKind.VIDEO)
+        project = repository.projects.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         clips = editor.add_clips(
@@ -409,9 +400,7 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
         after = before.model_copy(
             update={
                 "clips": [
-                    item.model_copy(update={"timeline_start": 1_000})
-                    if item.id == clips[-1].id
-                    else item
+                    item.model_copy(update={"timeline_start": 1_000}) if item.id == clips[-1].id else item
                     for item in before.clips
                 ]
             }
@@ -482,27 +471,20 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
 
     snapshot_path = root / version.snapshot_path
     with closing(sqlite3.connect(snapshot_path)) as snapshot, snapshot:
-        snapshot.execute(
-            "UPDATE schema_info SET version=42 WHERE component='project'"
-        )
+        snapshot.execute("UPDATE schema_info SET version=42 WHERE component='project'")
     with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
-        connection.execute(
-            "UPDATE schema_info SET version=42 WHERE component='project'"
-        )
+        connection.execute("UPDATE schema_info SET version=42 WHERE component='project'")
         connection.execute(
             "UPDATE project_version SET sha256=? WHERE id=?",
             (sha256_file(snapshot_path), version.id),
         )
 
     with _open_writable(root) as migrated:
-        assert (
-            migrated._fetchone("SELECT version FROM schema_info")["version"]
-            == PROJECT_SCHEMA_VERSION
-        )
+        assert migrated._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
         current_command = json.loads(
-            migrated._fetchone(
-                "SELECT command_json FROM undo_group WHERE id='legacy-full-state'"
-            )["command_json"]
+            migrated._fetchone("SELECT command_json FROM undo_group WHERE id='legacy-full-state'")[
+                "command_json"
+            ]
         )
         current_event_command = json.loads(
             migrated._fetchone(
@@ -522,13 +504,16 @@ def test_version_forty_two_compacts_timeline_history_in_project_and_versions(
 
     with closing(sqlite3.connect(snapshot_path)) as snapshot:
         snapshot.row_factory = sqlite3.Row
-        assert snapshot.execute(
-            "SELECT version FROM schema_info WHERE component='project'"
-        ).fetchone()["version"] == PROJECT_SCHEMA_VERSION
+        assert (
+            snapshot.execute("SELECT version FROM schema_info WHERE component='project'").fetchone()[
+                "version"
+            ]
+            == PROJECT_SCHEMA_VERSION
+        )
         snapshot_command = json.loads(
-            snapshot.execute(
-                "SELECT command_json FROM undo_group WHERE id='legacy-full-state'"
-            ).fetchone()["command_json"]
+            snapshot.execute("SELECT command_json FROM undo_group WHERE id='legacy-full-state'").fetchone()[
+                "command_json"
+            ]
         )
     assert snapshot_command["undo_actions"][0]["payload"]["mode"] == "patch"
     assert len(snapshot_command["undo_actions"][0]["payload"]["source"]["clips"]) == 1
@@ -547,9 +532,7 @@ def test_v45_adds_native_freeze_and_subtitle_style_to_project_and_versions(
         with closing(sqlite3.connect(path)) as connection, connection:
             connection.execute("ALTER TABLE track DROP COLUMN subtitle_style_json")
             connection.execute("ALTER TABLE clip DROP COLUMN freeze_source_frame")
-            connection.execute(
-                "UPDATE schema_info SET version=44 WHERE component='project'"
-            )
+            connection.execute("UPDATE schema_info SET version=44 WHERE component='project'")
 
     downgrade_to_v44(snapshot_path)
     downgrade_to_v44(root / "project.mfp")
@@ -560,10 +543,7 @@ def test_v45_adds_native_freeze_and_subtitle_style_to_project_and_versions(
         )
 
     with _open_writable(root) as repository:
-        assert (
-            repository._fetchone("SELECT version FROM schema_info")["version"]
-            == PROJECT_SCHEMA_VERSION
-        )
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
         repository.records.restore_project_version(version.id)
 
     for path in (root / "project.mfp", snapshot_path):
@@ -571,12 +551,8 @@ def test_v45_adds_native_freeze_and_subtitle_style_to_project_and_versions(
             version_value = connection.execute(
                 "SELECT version FROM schema_info WHERE component='project'"
             ).fetchone()[0]
-            track_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(track)")
-            }
-            clip_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(clip)")
-            }
+            track_columns = {row[1] for row in connection.execute("PRAGMA table_info(track)")}
+            clip_columns = {row[1] for row in connection.execute("PRAGMA table_info(clip)")}
         assert version_value == PROJECT_SCHEMA_VERSION
         assert "subtitle_style_json" in track_columns
         assert "freeze_source_frame" in clip_columns
@@ -587,15 +563,13 @@ def test_encoded_project_path_opens_through_every_read_only_database_boundary(
 ) -> None:
     root = tmp_path / "客户 #100% 项目"
     with ProjectRepository.create(root, "Encoded Path") as repository:
-        project_id = repository.catalog.get_project().id
+        project_id = repository.projects.get_project().id
         version = repository.records.create_project_version("可读取")
         assert (root / version.snapshot_path).is_file()
 
     with ProjectRepository.open(root, writable=False) as repository:
-        assert repository.catalog.get_project().id == project_id
-        assert [item.id for item in repository.records.list_project_versions()] == [
-            version.id
-        ]
+        assert repository.projects.get_project().id == project_id
+        assert [item.id for item in repository.records.list_project_versions()] == [version.id]
         assert TaskRepository(repository).list() == []
 
 
@@ -610,7 +584,7 @@ def test_version_thirty_one_project_gains_automation_request_journal(
         connection.execute("UPDATE schema_info SET version=31")
 
     with _open_writable(root) as repository:
-        stored = repository.save_automation_result(
+        stored = repository.operations.save_result(
             "request-31",
             "timeline.track.add",
             "input-hash",
@@ -619,7 +593,7 @@ def test_version_thirty_one_project_gains_automation_request_journal(
 
         assert stored == {"track_id": "track-31"}
         assert (
-            repository.automation_result(
+            repository.operations.result(
                 "request-31",
                 "timeline.track.add",
                 "input-hash",
@@ -634,14 +608,14 @@ def test_version_thirty_three_project_migrates_task_leases_and_request_state(
 ) -> None:
     root = tmp_path / "MigratedV33"
     with ProjectRepository.create(root, "MigratedV33") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         task = TaskRepository(repository).create(
             Task(
                 project_id=project.id,
                 command=AnalyzeDownloadCommand(url="test://migration"),
             )
         )
-        repository.save_automation_result(
+        repository.operations.save_result(
             "completed-request",
             "task.start",
             "completed-hash",
@@ -681,9 +655,7 @@ def test_version_thirty_three_project_migrates_task_leases_and_request_state(
             "UPDATE task_event SET payload_json=? WHERE cursor=?",
             (json.dumps(payload), event["cursor"]),
         )
-        connection.execute(
-            "UPDATE schema_info SET version=33 WHERE component='project'"
-        )
+        connection.execute("UPDATE schema_info SET version=33 WHERE component='project'")
 
     with _open_writable(root) as repository:
         migrated = TaskRepository(repository).get(task.id)
@@ -691,28 +663,22 @@ def test_version_thirty_three_project_migrates_task_leases_and_request_state(
         assert migrated.execution_owner_id == f"expired:migration:v34:{task.id}"
         assert migrated.heartbeat_at == 0
         assert migrated.lease_expires_at == 1
-        assert [
-            item.id
-            for item in TaskRepository(repository).list_claimable(2)
-        ] == [
-            task.id
-        ]
-        assert repository.automation_result(
+        assert [item.id for item in TaskRepository(repository).list_claimable(2)] == [task.id]
+        assert repository.operations.result(
             "pre-v44:completed-request",
             "task.start",
             "completed-hash",
         ) == {"task_id": task.id}
         event = TaskRepository(repository).latest_event(task.id)
-        assert Task.model_validate(event.payload).execution_owner_id == (
-            f"expired:migration:v34:{task.id}"
-        )
-        assert repository._fetchone(
-            "SELECT version FROM schema_info"
-        )["version"] == PROJECT_SCHEMA_VERSION
-        assert repository._fetchone(
-            """SELECT name FROM sqlite_master
+        assert Task.model_validate(event.payload).execution_owner_id == (f"expired:migration:v34:{task.id}")
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
+        assert (
+            repository._fetchone(
+                """SELECT name FROM sqlite_master
                WHERE type='table' AND name='task_consumption'"""
-        ) is not None
+            )
+            is not None
+        )
 
 
 def test_incomplete_automation_request_is_retryable_until_result_is_committed(
@@ -722,34 +688,37 @@ def test_incomplete_automation_request_is_retryable_until_result_is_committed(
         tmp_path / "AutomationReceipt",
         "AutomationReceipt",
     ) as repository:
-        first, retrying = repository.begin_automation_request(
+        first, retrying = repository.operations.begin(
             "request-in-flight",
             "task.resume",
             "input-hash",
         )
         assert first is None
         assert retrying is False
-        repeated, retrying = repository.begin_automation_request(
+        repeated, retrying = repository.operations.begin(
             "request-in-flight",
             "task.resume",
             "input-hash",
         )
         assert repeated is None
         assert retrying is True
-        assert repository.automation_result(
-            "request-in-flight",
-            "task.resume",
-            "input-hash",
-        ) is None
+        assert (
+            repository.operations.result(
+                "request-in-flight",
+                "task.resume",
+                "input-hash",
+            )
+            is None
+        )
 
-        stored = repository.save_automation_result(
+        stored = repository.operations.save_result(
             "request-in-flight",
             "task.resume",
             "input-hash",
             {"status": "completed"},
         )
         assert stored == {"status": "completed"}
-        assert repository.begin_automation_request(
+        assert repository.operations.begin(
             "request-in-flight",
             "task.resume",
             "input-hash",
@@ -761,12 +730,12 @@ def test_blank_project_profile_stays_provisional_until_media_or_manual_choice(
 ) -> None:
     root = tmp_path / "Blank"
     with ProjectRepository.create(root, "Blank") as repository:
-        project = repository.catalog.get_project()
-        assert repository.catalog.get_sequence(project.main_sequence_id).profile_confirmed is False
+        project = repository.projects.get_project()
+        assert repository.sequences.get_sequence(project.main_sequence_id).profile_confirmed is False
 
     with ProjectRepository.open(root) as repository:
-        project = repository.catalog.get_project()
-        assert repository.catalog.get_sequence(project.main_sequence_id).profile_confirmed is False
+        project = repository.projects.get_project()
+        assert repository.sequences.get_sequence(project.main_sequence_id).profile_confirmed is False
 
 
 def test_version_eighteen_project_gains_compound_clip_storage(tmp_path: Path) -> None:
@@ -833,7 +802,7 @@ def test_version_twenty_four_tasks_migrate_to_structured_progress(
 ) -> None:
     root = tmp_path / "MigratedV24Progress"
     with ProjectRepository.create(root, "MigratedV24Progress") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         sequence_id = project.main_sequence_id
 
     command_json = json.dumps(
@@ -907,10 +876,7 @@ def test_version_twenty_four_tasks_migrate_to_structured_progress(
 
     with _open_writable(root) as repository:
         columns = {row["name"] for row in repository._fetchall("PRAGMA table_info(task)")}
-        tasks = {
-            task.id: task
-            for task in TaskRepository(repository).list()
-        }
+        tasks = {task.id: task for task in TaskRepository(repository).list()}
 
         assert "progress_json" in columns
         assert "progress" not in columns
@@ -929,7 +895,7 @@ def test_version_twenty_five_transcription_tasks_migrate_to_plan_boundary(
 ) -> None:
     root = tmp_path / "MigratedV25Transcription"
     with ProjectRepository.create(root, "MigratedV25Transcription") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         sequence_id = project.main_sequence_id
 
     progress = json.dumps(
@@ -969,10 +935,7 @@ def test_version_twenty_five_transcription_tasks_migrate_to_plan_boundary(
         connection.execute("UPDATE schema_info SET version=25")
 
     with _open_writable(root) as repository:
-        tasks = {
-            task.id: task
-            for task in TaskRepository(repository).list()
-        }
+        tasks = {task.id: task for task in TaskRepository(repository).list()}
 
     historical = tasks["historical-transcription"]
     queued = tasks["queued-transcription"]
@@ -990,8 +953,8 @@ def test_named_version_restores_complete_project_and_preserves_version_catalog(
     source = tmp_path / "source.mp4"
     source.write_bytes(b"versioned-source")
     with ProjectRepository.create(tmp_path / "Versioned", "Versioned") as repository:
-        project = repository.catalog.get_project()
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
         state = repository.timeline.load_timeline(project.main_sequence_id)
         track = Track(
             sequence_id=project.main_sequence_id,
@@ -1076,18 +1039,12 @@ def test_failed_named_version_creation_never_publishes_a_catalog_record(
 
         versions_root = repository.project_dir / "generated" / "versions"
         assert observed_temporary is not None
-        assert (
-            utf16_units(str(observed_temporary))
-            <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        )
+        assert utf16_units(str(observed_temporary)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
         assert repository.records.list_project_versions() == []
         assert list(versions_root.glob("*.mfp")) == []
         archived = list((versions_root / "archive").glob("failed-*.mfp"))
         assert len(archived) == 1
-        assert (
-            utf16_units(str(archived[0]))
-            <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        )
+        assert utf16_units(str(archived[0])) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
         with closing(sqlite3.connect(archived[0])) as snapshot:
             assert snapshot.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
@@ -1099,7 +1056,7 @@ def test_named_versions_reject_in_flight_task_state_at_the_repository_boundary(
         tmp_path / "BusyVersion",
         "BusyVersion",
     ) as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         version = repository.records.create_project_version("任务前")
         task = TaskRepository(repository).create(
             Task(
@@ -1114,9 +1071,7 @@ def test_named_versions_reject_in_flight_task_state_at_the_repository_boundary(
             repository.records.restore_project_version(version.id)
 
         assert TaskRepository(repository).get(task.id).status == TaskStatus.PENDING
-        assert [item.id for item in repository.records.list_project_versions()] == [
-            version.id
-        ]
+        assert [item.id for item in repository.records.list_project_versions()] == [version.id]
 
 
 def test_version_nineteen_video_audio_is_migrated_to_linked_dynamic_tracks(
@@ -1126,8 +1081,8 @@ def test_version_nineteen_video_audio_is_migrated_to_linked_dynamic_tracks(
     source = tmp_path / "linked.mp4"
     source.write_bytes(b"linked-av")
     with ProjectRepository.create(root, "MigratedV19") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": MediaMetadata(
@@ -1138,7 +1093,7 @@ def test_version_nineteen_video_audio_is_migrated_to_linked_dynamic_tracks(
                 }
             )
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         state = repository.timeline.load_timeline(sequence_id)
         video_track = Track(
             sequence_id=sequence_id,
@@ -1163,7 +1118,7 @@ def test_version_nineteen_video_audio_is_migrated_to_linked_dynamic_tracks(
         connection.execute("UPDATE schema_info SET version=19")
 
     with _open_writable(root) as repository:
-        state = repository.timeline.load_timeline(repository.catalog.get_project().main_sequence_id)
+        state = repository.timeline.load_timeline(repository.projects.get_project().main_sequence_id)
         migrated_video = next(track for track in state.tracks if track.kind == TrackKind.VIDEO)
         migrated_audio = next(track for track in state.tracks if track.kind == TrackKind.AUDIO)
         assert state.clips[0].media_kind == ClipMediaKind.LINKED_AV
@@ -1182,8 +1137,8 @@ def test_version_thirteen_project_migration_preserves_existing_profile(
         connection.execute("UPDATE schema_info SET version=13")
 
     with _open_writable(root) as repository:
-        project = repository.catalog.get_project()
-        assert repository.catalog.get_sequence(project.main_sequence_id).profile_confirmed is True
+        project = repository.projects.get_project()
+        assert repository.sequences.get_sequence(project.main_sequence_id).profile_confirmed is True
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == (PROJECT_SCHEMA_VERSION)
 
 
@@ -1208,7 +1163,7 @@ def test_version_fifteen_project_migrates_transcription_to_sequence_boundary(
 ) -> None:
     root = tmp_path / "MigratedV15"
     with ProjectRepository.create(root, "MigratedV15") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         sequence_id = project.main_sequence_id
 
     task_id = "legacy-transcription-task"
@@ -1271,7 +1226,7 @@ def test_second_writer_falls_back_to_read_only(tmp_path: Path) -> None:
         try:
             assert second.read_only is True
             with pytest.raises(PermissionError, match="read-only"):
-                second.catalog.create_short_sequence("Short")
+                second.sequences.create_short_sequence("Short")
         finally:
             second.close()
     finally:
@@ -1306,8 +1261,8 @@ def test_project_lock_prevents_a_second_writable_repository(tmp_path: Path) -> N
         assert second.read_only is True
         assert second.owns_project_lock is False
         with pytest.raises(PermissionError, match="read-only"):
-            second.catalog.create_short_sequence("Forbidden second writer")
-        owner.catalog.create_short_sequence("Owned write")
+            second.sequences.create_short_sequence("Forbidden second writer")
+        owner.sequences.create_short_sequence("Owned write")
         assert owner.content_revision() == 1
     finally:
         second.close()
@@ -1338,10 +1293,10 @@ def test_version_twenty_three_project_gains_primary_dialogue_and_source_transcri
         encoding="utf-8",
     )
     with ProjectRepository.create(root, "MigratedV23") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
-        subtitle_asset = repository.catalog.import_external_asset(
+        subtitle_asset = repository.assets.import_external_asset(
             subtitle_path,
             AssetKind.SUBTITLE,
         )
@@ -1375,7 +1330,7 @@ def test_version_twenty_three_project_gains_primary_dialogue_and_source_transcri
         migrated_track = next(
             track
             for track in repository.timeline.load_timeline(
-                repository.catalog.get_project().main_sequence_id
+                repository.projects.get_project().main_sequence_id
             ).tracks
             if track.id == audio_track.id
         )
@@ -1401,8 +1356,8 @@ def test_version_one_project_is_migrated_to_persisted_workflows(tmp_path: Path) 
         connection.execute("UPDATE project SET workflow_auto_continue=0")
 
     with _open_writable(root) as repository:
-        assert repository.catalog.get_project().workflow_auto_continue is None
-        assert repository.catalog.list_workflow_runs() == []
+        assert repository.projects.get_project().workflow_auto_continue is None
+        assert repository.projects.list_workflow_runs() == []
         version = repository._fetchone("SELECT version FROM schema_info")
         assert version["version"] == PROJECT_SCHEMA_VERSION
 
@@ -1419,7 +1374,7 @@ def test_version_three_project_gains_timeline_annotations_and_export_settings(tm
         connection.execute("UPDATE schema_info SET version=3")
 
     with _open_writable(root) as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         assert repository.timeline.list_timeline_markers(project.main_sequence_id) == []
         assert repository.timeline.list_timeline_ranges(project.main_sequence_id) == []
         assert repository._fetchone("SELECT version FROM schema_info")["version"] == PROJECT_SCHEMA_VERSION
@@ -1466,9 +1421,9 @@ def test_version_six_project_recovers_subtitle_media_relationship_and_clip_follo
         encoding="utf-8",
     )
     with ProjectRepository.create(root, "MigratedV6") as repository:
-        video = repository.catalog.import_external_asset(video_path, AssetKind.VIDEO)
-        subtitle = repository.catalog.import_external_asset(subtitle_path, AssetKind.SUBTITLE)
-        project = repository.catalog.get_project()
+        video = repository.assets.import_external_asset(video_path, AssetKind.VIDEO)
+        subtitle = repository.assets.import_external_asset(subtitle_path, AssetKind.SUBTITLE)
+        project = repository.projects.get_project()
         state = repository.timeline.load_timeline(project.main_sequence_id)
         video_track = Track(
             sequence_id=project.main_sequence_id,
@@ -1526,7 +1481,7 @@ def test_version_eight_project_migrates_download_tasks_and_workflows_to_requests
 ) -> None:
     root = tmp_path / "MigratedV8Downloads"
     with ProjectRepository.create(root, "MigratedV8Downloads") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         sequence_id = project.main_sequence_id
     workflow_id = "download-workflow"
     task_id = "download-task"
@@ -1614,7 +1569,7 @@ def test_version_eight_project_migrates_download_tasks_and_workflows_to_requests
         tasks = TaskRepository(repository).list()
         assert all(isinstance(task.command, DownloadMediaCommand) for task in tasks)
         requests = [task.command.request for task in tasks]
-        workflow = repository.catalog.get_workflow_run(workflow_id)
+        workflow = repository.projects.get_workflow_run(workflow_id)
 
         assert [request.entry.selector for request in requests] == [1, 3]
         assert all(task.command.workflow.run_id == workflow_id for task in tasks)
@@ -1628,7 +1583,7 @@ def test_version_eight_project_migrates_download_tasks_and_workflows_to_requests
 def test_timeline_annotations_and_sequence_export_preset_round_trip(tmp_path: Path) -> None:
     root = tmp_path / "Annotations"
     with ProjectRepository.create(root, "Annotations") as repository:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         state = repository.timeline.load_timeline(sequence_id)
         state.markers.append(TimelineMarker(sequence_id=sequence_id, frame=42, name="重点"))
         state.ranges.append(TimelineRange(sequence_id=sequence_id, start_frame=30, end_frame=90, name="候选"))
@@ -1641,10 +1596,10 @@ def test_timeline_annotations_and_sequence_export_preset_round_trip(tmp_path: Pa
             audio_codec="aac",
             pixel_format="yuv420p",
         )
-        repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        repository.sequences.save_sequence_export_preset(sequence_id, preset)
 
     with ProjectRepository.open(root) as reopened:
-        sequence = reopened.catalog.get_sequence(reopened.catalog.get_project().main_sequence_id)
+        sequence = reopened.sequences.get_sequence(reopened.projects.get_project().main_sequence_id)
         state = reopened.timeline.load_timeline(sequence.id)
         assert [(item.frame, item.name) for item in state.markers] == [(42, "重点")]
         assert [(item.start_frame, item.end_frame) for item in state.ranges] == [(30, 90)]
@@ -1664,8 +1619,8 @@ def test_v39_encoder_policy_migration_updates_named_version_snapshots(
         pixel_format="yuv420p",
     )
     with ProjectRepository.create(root, "Portable encoder snapshot migration") as repository:
-        sequence_id = repository.catalog.get_project().main_sequence_id
-        repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        sequence_id = repository.projects.get_project().main_sequence_id
+        repository.sequences.save_sequence_export_preset(sequence_id, preset)
         version = repository.records.create_project_version("Before portable policy")
 
     snapshot_path = root / version.snapshot_path
@@ -1699,9 +1654,7 @@ def test_v39_encoder_policy_migration_updates_named_version_snapshots(
                     1,
                 ),
             )
-            connection.execute(
-                "UPDATE schema_info SET version=39 WHERE component='project'"
-            )
+            connection.execute("UPDATE schema_info SET version=39 WHERE component='project'")
 
     downgrade_database(snapshot_path)
     downgrade_database(root / "project.mfp")
@@ -1712,7 +1665,7 @@ def test_v39_encoder_policy_migration_updates_named_version_snapshots(
         )
 
     with _open_writable(root) as repository:
-        migrated = repository.catalog.get_sequence(sequence_id).export_preset
+        migrated = repository.sequences.get_sequence(sequence_id).export_preset
         assert migrated is not None
         assert migrated.encoder_policy is not None
         assert migrated.encoder_policy.mode == "prefer_hardware"
@@ -1730,22 +1683,19 @@ def test_v39_encoder_policy_migration_updates_named_version_snapshots(
         migrated_version = repository.records.list_project_versions()[0]
         assert migrated_version.sha256 == sha256_file(snapshot_path)
         repository.records.restore_project_version(version.id)
-        restored = repository.catalog.get_sequence(sequence_id).export_preset
+        restored = repository.sequences.get_sequence(sequence_id).export_preset
         assert restored is not None
         assert restored.encoder_policy is not None
         assert restored.encoder_policy.mode == "prefer_hardware"
         assert restored.encoder_policy.vendor == "nvidia"
 
-    archived = list(
-        (root / "generated" / "versions" / "archive").glob(
-            f"pre-v40-{version.id}-*.mfp"
-        )
-    )
+    archived = list((root / "generated" / "versions" / "archive").glob(f"pre-v40-{version.id}-*.mfp"))
     assert len(archived) == 1
     with closing(sqlite3.connect(archived[0])) as connection:
-        assert connection.execute(
-            "SELECT version FROM schema_info WHERE component='project'"
-        ).fetchone()[0] == 39
+        assert (
+            connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone()[0]
+            == 39
+        )
 
 
 def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
@@ -1761,11 +1711,11 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
         pixel_format="yuv420p",
     )
     with ProjectRepository.create(root, "Interim encoder policy migration") as repository:
-        sequence_id = repository.catalog.get_project().main_sequence_id
-        repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        sequence_id = repository.projects.get_project().main_sequence_id
+        repository.sequences.save_sequence_export_preset(sequence_id, preset)
         task = TaskRepository(repository).create(
             Task(
-                project_id=repository.catalog.get_project().id,
+                project_id=repository.projects.get_project().id,
                 idempotency_key="automation:interim-policy:test",
                 command=AnalyzeDownloadCommand(url="test://idempotency-epoch"),
                 status=TaskStatus.COMPLETED,
@@ -1800,9 +1750,7 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
                 "VALUES(?, ?, ?, ?, ?, ?)",
                 ("interim-policy", "test", "hash", encoded, "completed", 1),
             )
-            connection.execute(
-                "UPDATE schema_info SET version=41 WHERE component='project'"
-            )
+            connection.execute("UPDATE schema_info SET version=41 WHERE component='project'")
 
     downgrade_database(snapshot_path)
     downgrade_database(root / "project.mfp")
@@ -1813,11 +1761,11 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
         )
 
     with _open_writable(root) as repository:
-        migrated = repository.catalog.get_sequence(sequence_id).export_preset
+        migrated = repository.sequences.get_sequence(sequence_id).export_preset
         assert migrated is not None and migrated.encoder_policy is not None
         assert migrated.encoder_policy.mode == "prefer_hardware"
         assert migrated.encoder_policy.vendor == "nvidia"
-        stored_result = repository.automation_result(
+        stored_result = repository.operations.result(
             "pre-v44:interim-policy",
             "test",
             "hash",
@@ -1832,20 +1780,17 @@ def test_v41_interim_encoder_policy_is_removed_from_every_persisted_snapshot(
             "pre-v44:automation:interim-policy:test"
         )
         repository.records.restore_project_version(version.id)
-        restored = repository.catalog.get_sequence(sequence_id).export_preset
+        restored = repository.sequences.get_sequence(sequence_id).export_preset
         assert restored is not None and restored.encoder_policy is not None
         assert restored.encoder_policy.vendor == "nvidia"
 
-    archived = list(
-        (root / "generated" / "versions" / "archive").glob(
-            f"pre-v42-{version.id}-*.mfp"
-        )
-    )
+    archived = list((root / "generated" / "versions" / "archive").glob(f"pre-v42-{version.id}-*.mfp"))
     assert len(archived) == 1
     with closing(sqlite3.connect(archived[0])) as connection:
-        assert connection.execute(
-            "SELECT version FROM schema_info WHERE component='project'"
-        ).fetchone()[0] == 41
+        assert (
+            connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone()[0]
+            == 41
+        )
 
 
 def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -> None:
@@ -1853,8 +1798,8 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
     source = tmp_path / "source.mp4"
     source.write_bytes(b"media")
     with ProjectRepository.create(root, "MigratedV9InOut") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        sequence_id = repository.projects.get_project().main_sequence_id
         state = repository.timeline.load_timeline(sequence_id)
         video_track = Track(
             sequence_id=sequence_id,
@@ -1882,7 +1827,7 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
             audio_codec="aac",
             pixel_format="yuv420p",
         )
-        repository.catalog.save_sequence_export_preset(sequence_id, preset)
+        repository.sequences.save_sequence_export_preset(sequence_id, preset)
 
     with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
         stored = json.loads(
@@ -1904,7 +1849,7 @@ def test_version_nine_export_range_migrates_to_sequence_in_out(tmp_path: Path) -
         connection.execute("UPDATE schema_info SET version=9")
 
     with _open_writable(root) as repository:
-        migrated = repository.catalog.get_sequence(sequence_id)
+        migrated = repository.sequences.get_sequence(sequence_id)
         assert migrated.in_out == SequenceInOut(in_frame=5, out_frame=90)
         assert migrated.export_preset == preset
         persisted = json.loads(
@@ -1921,11 +1866,11 @@ def test_external_asset_keeps_absolute_path_and_fingerprint(tmp_path: Path) -> N
     source = tmp_path / "source.mp4"
     source.write_bytes(b"real-media-fixture")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        reloaded = repository.catalog.get_asset(asset.id)
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        reloaded = repository.assets.get_asset(asset.id)
 
         assert Path(reloaded.path).is_absolute()
-        assert repository.catalog.resolve_asset_path(reloaded) == source.resolve()
+        assert repository.assets.resolve_asset_path(reloaded) == source.resolve()
         assert reloaded.fingerprint is not None
         assert fingerprint_matches(source, reloaded.fingerprint)
 
@@ -1937,34 +1882,34 @@ def test_asset_bins_persist_hierarchy_casefold_uniqueness_and_membership(
     source.write_bytes(b"real-media-fixture")
     root = tmp_path / "Asset Bins"
     with ProjectRepository.create(root, "Asset Bins") as repository:
-        parent = repository.catalog.create_asset_bin("Scenes")
-        child = repository.catalog.create_asset_bin("Street", parent.id)
-        sibling = repository.catalog.create_asset_bin("People")
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        moved = repository.catalog.move_assets_to_bin([asset.id, asset.id], child.id)
+        parent = repository.assets.create_asset_bin("Scenes")
+        child = repository.assets.create_asset_bin("Street", parent.id)
+        sibling = repository.assets.create_asset_bin("People")
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        moved = repository.assets.move_assets_to_bin([asset.id, asset.id], child.id)
 
-        assert [item.id for item in repository.catalog.list_asset_bins()] == [
+        assert [item.id for item in repository.assets.list_asset_bins()] == [
             parent.id,
             child.id,
             sibling.id,
         ]
         assert [item.id for item in moved] == [asset.id]
-        assert repository.catalog.get_asset(asset.id).bin_id == child.id
+        assert repository.assets.get_asset(asset.id).bin_id == child.id
         with pytest.raises(ValueError, match="重复名称"):
-            repository.catalog.create_asset_bin("scenes")
+            repository.assets.create_asset_bin("scenes")
         with pytest.raises(KeyError):
-            repository.catalog.move_assets_to_bin([asset.id], "missing-bin")
+            repository.assets.move_assets_to_bin([asset.id], "missing-bin")
 
     with _open_writable(root) as reopened:
-        bins = reopened.catalog.list_asset_bins()
+        bins = reopened.assets.list_asset_bins()
         assert [(item.name, item.parent_id) for item in bins] == [
             ("Scenes", None),
             ("Street", bins[0].id),
             ("People", None),
         ]
-        reloaded = reopened.catalog.list_assets()[0]
+        reloaded = reopened.assets.list_assets()[0]
         assert reloaded.bin_id == bins[1].id
-        [unfiled] = reopened.catalog.move_assets_to_bin([reloaded.id], None)
+        [unfiled] = reopened.assets.move_assets_to_bin([reloaded.id], None)
         assert unfiled.bin_id is None
 
 
@@ -1973,8 +1918,8 @@ def test_timeline_round_trip_persists_actual_asset_reference(tmp_path: Path) -> 
     source.write_bytes(b"fixture")
     root = tmp_path / "Project"
     with ProjectRepository.create(root, "Project") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        project = repository.catalog.get_project()
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        project = repository.projects.get_project()
         state = repository.timeline.load_timeline(project.main_sequence_id)
         video_track = Track(
             sequence_id=project.main_sequence_id,
@@ -1996,9 +1941,9 @@ def test_timeline_round_trip_persists_actual_asset_reference(tmp_path: Path) -> 
         repository.timeline.save_timeline(state)
 
     with ProjectRepository.open(root) as reopened:
-        state = reopened.timeline.load_timeline(reopened.catalog.get_project().main_sequence_id)
+        state = reopened.timeline.load_timeline(reopened.projects.get_project().main_sequence_id)
         assert len(state.clips) == 1
-        assert state.clips[0].asset_id == reopened.catalog.list_assets()[0].id
+        assert state.clips[0].asset_id == reopened.assets.list_assets()[0].id
 
 
 def test_managed_asset_cannot_escape_project(tmp_path: Path) -> None:
@@ -2008,9 +1953,9 @@ def test_managed_asset_cannot_escape_project(tmp_path: Path) -> None:
     outside = tmp_path / "outside.mp4"
     outside.write_bytes(b"fixture")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         with pytest.raises(ValueError, match="inside the project"):
-            repository.catalog.add_asset(
+            repository.assets.add_asset(
                 Asset(
                     project_id=project.id,
                     name=outside.name,
@@ -2026,14 +1971,14 @@ def test_changed_source_invalidates_derived_media(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"version-one")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
         proxy = repository.project_dir / "proxies" / "proxy.mp4"
         sdr_proxy = repository.project_dir / "proxies" / "proxy-sdr.mp4"
         waveform = repository.project_dir / "cache" / "waveform.json"
         proxy.write_bytes(b"proxy")
         sdr_proxy.write_bytes(b"sdr-proxy")
         waveform.write_text("{}", encoding="utf-8")
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "proxy_path": str(proxy),
@@ -2044,7 +1989,7 @@ def test_changed_source_invalidates_derived_media(tmp_path: Path) -> None:
         )
 
         source.write_bytes(b"version-two-is-different")
-        refreshed = repository.catalog.refresh_asset_status(asset.id)
+        refreshed = repository.assets.refresh_asset_status(asset.id)
 
         assert refreshed.proxy_path is None
         assert refreshed.sdr_preview_proxy_path is None
@@ -2057,16 +2002,16 @@ def test_derived_media_updates_merge_and_reject_stale_source_results(tmp_path: P
     source = tmp_path / "source.mp4"
     source.write_bytes(b"version-one")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        imported = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        imported = repository.assets.import_external_asset(source, AssetKind.VIDEO)
         proxy = repository.project_dir / "proxies" / "proxy.mp4"
         waveform = repository.project_dir / "cache" / "waveform.json"
 
-        repository.catalog.set_asset_waveform_path(
+        repository.assets.set_asset_waveform_path(
             imported.id,
             expected_fingerprint=imported.fingerprint,
             waveform_path=waveform,
         )
-        merged = repository.catalog.set_asset_proxy_paths(
+        merged = repository.assets.set_asset_proxy_paths(
             imported.id,
             expected_fingerprint=imported.fingerprint,
             proxy_path=proxy,
@@ -2077,14 +2022,14 @@ def test_derived_media_updates_merge_and_reject_stale_source_results(tmp_path: P
         assert merged.waveform_path
 
         source.write_bytes(b"version-two-is-different")
-        repository.catalog.refresh_asset_status(imported.id)
+        repository.assets.refresh_asset_status(imported.id)
         with pytest.raises(RuntimeError, match="发生了变化"):
-            repository.catalog.set_asset_waveform_path(
+            repository.assets.set_asset_waveform_path(
                 imported.id,
                 expected_fingerprint=imported.fingerprint,
                 waveform_path=waveform,
             )
-        current = repository.catalog.get_asset(imported.id)
+        current = repository.assets.get_asset(imported.id)
         assert current.proxy_path is None
         assert current.waveform_path is None
 
@@ -2095,14 +2040,14 @@ def test_relink_requires_matching_content_or_explicit_confirmation(tmp_path: Pat
     source.write_bytes(b"original")
     replacement.write_bytes(b"different")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
         source.unlink()
-        assert repository.catalog.refresh_asset_status(asset.id).status.value == "offline"
+        assert repository.assets.refresh_asset_status(asset.id).status.value == "offline"
 
         with pytest.raises(ValueError, match="does not match"):
-            repository.catalog.relink_asset(asset.id, replacement)
-        relinked = repository.catalog.relink_asset(asset.id, replacement, allow_different_content=True)
-        assert repository.catalog.resolve_asset_path(relinked) == replacement.resolve()
+            repository.assets.relink_asset(asset.id, replacement)
+        relinked = repository.assets.relink_asset(asset.id, replacement, allow_different_content=True)
+        assert repository.assets.resolve_asset_path(relinked) == replacement.resolve()
 
 
 def test_batch_relink_only_uses_exact_fingerprint_matches(tmp_path: Path) -> None:
@@ -2117,12 +2062,12 @@ def test_batch_relink_only_uses_exact_fingerprint_matches(tmp_path: Path) -> Non
     hidden_elsewhere = tmp_path / "outside-search.mp4"
 
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        asset_a = repository.catalog.import_external_asset(source_a, AssetKind.VIDEO)
-        asset_b = repository.catalog.import_external_asset(source_b, AssetKind.VIDEO)
+        asset_a = repository.assets.import_external_asset(source_a, AssetKind.VIDEO)
+        asset_b = repository.assets.import_external_asset(source_b, AssetKind.VIDEO)
         source_a.replace(exact_match)
         source_b.replace(hidden_elsewhere)
-        repository.catalog.refresh_asset_status(asset_a.id)
-        repository.catalog.refresh_asset_status(asset_b.id)
+        repository.assets.refresh_asset_status(asset_a.id)
+        repository.assets.refresh_asset_status(asset_b.id)
 
         relinked, unresolved = AssetService(
             repository,
@@ -2131,14 +2076,14 @@ def test_batch_relink_only_uses_exact_fingerprint_matches(tmp_path: Path) -> Non
         ).relink_offline_from_directory(search_root)
         assert [asset.id for asset in relinked] == [asset_a.id]
         assert [asset.id for asset in unresolved] == [asset_b.id]
-        assert repository.catalog.resolve_asset_path(relinked[0]) == exact_match.resolve()
+        assert repository.assets.resolve_asset_path(relinked[0]) == exact_match.resolve()
 
 
 def test_stale_timeline_snapshot_is_rejected_without_losing_committed_changes(
     tmp_path: Path,
 ) -> None:
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         first = repository.timeline.load_timeline(sequence_id)
         stale = repository.timeline.load_timeline(sequence_id)
         first.markers.append(TimelineMarker(sequence_id=sequence_id, frame=10, name="producer-a"))
@@ -2157,8 +2102,8 @@ def test_importing_the_same_external_file_reuses_the_persisted_asset(tmp_path: P
     source = tmp_path / "same-source.mp4"
     source.write_bytes(b"same external media")
     with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-        first = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        second = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        first = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        second = repository.assets.import_external_asset(source, AssetKind.VIDEO)
 
         assert second.id == first.id
-        assert [asset.id for asset in repository.catalog.list_assets()] == [first.id]
+        assert [asset.id for asset in repository.assets.list_assets()] == [first.id]

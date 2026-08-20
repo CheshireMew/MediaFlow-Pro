@@ -20,14 +20,14 @@ ColumnLayout {
         gopFrames.value = Number(value.gop_frames ?? gopFrames.value)
         audioCodecField.text = value.audio_codec || "aac"
         audioBitrate.value = Math.round(Number(value.audio_bitrate ?? 192000) / 1000)
-        widthField.text = String(advanced.width ?? workspaceController.profileWidth)
-        heightField.text = String(advanced.height ?? workspaceController.profileHeight)
-        fpsNumerator.text = String(advanced.fps_numerator ?? workspaceController.profileFpsNumerator)
-        fpsDenominator.text = String(advanced.fps_denominator ?? workspaceController.profileFpsDenominator)
+        widthField.text = String(advanced.width ?? mediaflow.workspaceViewController.profileWidth)
+        heightField.text = String(advanced.height ?? mediaflow.workspaceViewController.profileHeight)
+        fpsNumerator.text = String(advanced.fps_numerator ?? mediaflow.workspaceViewController.profileFpsNumerator)
+        fpsDenominator.text = String(advanced.fps_denominator ?? mediaflow.workspaceViewController.profileFpsDenominator)
         targetBitrate.text = String(Math.round(Number(advanced.target_bitrate ?? 0) / 1000))
         maxBitrate.text = String(Math.round(Number(advanced.max_bitrate ?? 0) / 1000))
         const channelIndex = audioChannels.indexOfValue(
-            Number(advanced.audio_channels ?? workspaceController.profileAudioChannels))
+            Number(advanced.audio_channels ?? mediaflow.workspaceViewController.profileAudioChannels))
         if (channelIndex >= 0)
             audioChannels.currentIndex = channelIndex
         profileField.text = value.format === "prores" ? "" : String(advanced.profile ?? "")
@@ -58,7 +58,7 @@ ColumnLayout {
             advanced.profile = profileField.text.trim()
         if (levelField.text.trim().length > 0)
             advanced.level = levelField.text.trim()
-        if (workspaceController.colorMode === "hdr10_bt2020_pq") {
+        if (mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq") {
             advanced.max_cll = maxCll.text
             advanced.master_display = masterDisplay.text
         }
@@ -132,8 +132,8 @@ ColumnLayout {
                 from: 1
                 to: 600
                 value: Math.max(1, Math.round(
-                    workspaceController.profileFpsNumerator
-                    / workspaceController.profileFpsDenominator * 2))
+                    mediaflow.workspaceViewController.profileFpsNumerator
+                    / mediaflow.workspaceViewController.profileFpsDenominator * 2))
                 editable: true
             }
         }
@@ -159,9 +159,9 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         visible: root.videoEnabled
-        AppTextField { id: widthField; Layout.fillWidth: true; text: String(workspaceController.profileWidth); placeholderText: qsTr("宽") }
+        AppTextField { id: widthField; Layout.fillWidth: true; text: String(mediaflow.workspaceViewController.profileWidth); placeholderText: qsTr("宽") }
         Text { text: "×"; color: Theme.textMuted }
-        AppTextField { id: heightField; Layout.fillWidth: true; text: String(workspaceController.profileHeight); placeholderText: qsTr("高") }
+        AppTextField { id: heightField; Layout.fillWidth: true; text: String(mediaflow.workspaceViewController.profileHeight); placeholderText: qsTr("高") }
     }
     Text {
         text: qsTr("导出范围")
@@ -171,20 +171,20 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
-        text: workspaceController.hasSequenceInOut
+        text: mediaflow.workspaceViewController.hasSequenceInOut
             ? qsTr("使用时间线入出点：%1–%2 帧").arg(
-                workspaceController.sequenceInFrame).arg(workspaceController.sequenceOutFrame)
+                mediaflow.workspaceViewController.sequenceInFrame).arg(mediaflow.workspaceViewController.sequenceOutFrame)
             : qsTr("未设置序列入出点，将导出完整时间线")
-        color: workspaceController.hasSequenceInOut ? Theme.accentHover : Theme.textMuted
+        color: mediaflow.workspaceViewController.hasSequenceInOut ? Theme.accentHover : Theme.textMuted
         font.pixelSize: Theme.fontSizeCaption
         wrapMode: Text.WordWrap
     }
     RowLayout {
         Layout.fillWidth: true
         visible: root.videoEnabled
-        AppTextField { id: fpsNumerator; Layout.fillWidth: true; text: String(workspaceController.profileFpsNumerator); placeholderText: qsTr("FPS 分子") }
+        AppTextField { id: fpsNumerator; Layout.fillWidth: true; text: String(mediaflow.workspaceViewController.profileFpsNumerator); placeholderText: qsTr("FPS 分子") }
         Text { text: "/"; color: Theme.textMuted }
-        AppTextField { id: fpsDenominator; Layout.fillWidth: true; text: String(workspaceController.profileFpsDenominator); placeholderText: qsTr("FPS 分母") }
+        AppTextField { id: fpsDenominator; Layout.fillWidth: true; text: String(mediaflow.workspaceViewController.profileFpsDenominator); placeholderText: qsTr("FPS 分母") }
     }
     AppTextField { id: targetBitrate; Layout.fillWidth: true; visible: root.videoEnabled; text: "0"; placeholderText: qsTr("目标码率 kbps（0=质量模式）") }
     AppTextField { id: maxBitrate; Layout.fillWidth: true; visible: root.videoEnabled; text: "0"; placeholderText: qsTr("最大码率 kbps（0=不限）") }
@@ -209,14 +209,14 @@ ColumnLayout {
     AppTextField {
         id: maxCll
         Layout.fillWidth: true
-        visible: workspaceController.colorMode === "hdr10_bt2020_pq" && root.videoEnabled
+        visible: mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq" && root.videoEnabled
         text: "1000,400"
         placeholderText: "MaxCLL,MaxFALL"
     }
     AppTextField {
         id: masterDisplay
         Layout.fillWidth: true
-        visible: workspaceController.colorMode === "hdr10_bt2020_pq" && root.videoEnabled
+        visible: mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq" && root.videoEnabled
         text: "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
         placeholderText: qsTr("母版显示元数据")
     }

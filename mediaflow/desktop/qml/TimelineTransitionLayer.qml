@@ -18,7 +18,7 @@ Item {
     height: tracksHeight
     z: 7
     Repeater {
-        model: timelineController.transitionsModel
+        model: mediaflow.timelineViewController.transitionsModel
         delegate: Item {
             objectName: "timelineTransition"
             required property string transitionId
@@ -28,7 +28,7 @@ Item {
             required property int boundaryFrame
             required property bool internalToCompound
             readonly property bool selected:
-                timelineController.selectedTransitionId === transitionId
+                mediaflow.timelineViewController.selectedTransitionId === transitionId
             x: (boundaryFrame - durationFrames / 2) * view.pixelsPerFrame
             y: trackPosition * view.trackPitch + 19
             width: Math.max(24, durationFrames * view.pixelsPerFrame)
@@ -37,8 +37,8 @@ Item {
             activeFocusOnTab: true
             Accessible.name: qsTr("转场 %1，持续 %2 帧").arg(kind).arg(durationFrames)
             Accessible.role: Accessible.Button
-            Keys.onReturnPressed: timelineController.selectTransition(transitionId)
-            Keys.onSpacePressed: timelineController.selectTransition(transitionId)
+            Keys.onReturnPressed: mediaflow.timelineViewController.selectTransition(transitionId)
+            Keys.onSpacePressed: mediaflow.timelineViewController.selectTransition(transitionId)
 
             Rectangle {
                 anchors.fill: parent
@@ -74,7 +74,7 @@ Item {
                 id: transitionMouse
                 anchors.fill: parent
                 hoverEnabled: true
-                onClicked: timelineController.selectTransition(transitionId)
+                onClicked: mediaflow.timelineViewController.selectTransition(transitionId)
             }
         }
     }

@@ -9,9 +9,10 @@ AbstractButton {
     required property string iconKind
     required property string toolTipText
     readonly property color iconColor: checked || hovered ? Theme.text : Theme.textMuted
+    readonly property bool usesLucideIcon: viewModeGlyph.usesLucide
 
-    implicitWidth: 32
-    implicitHeight: 32
+    implicitWidth: Theme.iconButtonSizeCompact
+    implicitHeight: Theme.iconButtonSizeCompact
     checkable: false
     padding: 0
     Accessible.name: toolTipText
@@ -23,12 +24,18 @@ AbstractButton {
         border.color: root.checked ? Theme.accent : Theme.border
     }
 
-    contentItem: AppIcon {
-        width: 20
-        height: 20
-        anchors.centerIn: parent
-        iconName: root.iconKind
-        iconColor: root.iconColor
+    contentItem: Item {
+        implicitWidth: Theme.iconSizeSmall
+        implicitHeight: Theme.iconSizeSmall
+
+        AppIcon {
+            id: viewModeGlyph
+            width: Theme.iconSizeSmall
+            height: Theme.iconSizeSmall
+            anchors.centerIn: parent
+            iconName: root.iconKind
+            iconColor: root.iconColor
+        }
     }
 
     ToolTip.visible: hovered

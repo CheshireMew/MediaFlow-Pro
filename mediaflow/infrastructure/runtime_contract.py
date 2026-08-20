@@ -52,6 +52,15 @@ class PlatformTarget:
     def case_sensitive_paths(self) -> bool:
         return self.operating_system != "windows"
 
+    def virtual_environment_python(self, environment_root: str | Path) -> Path:
+        root = Path(environment_root)
+        relative = (
+            Path("Scripts") / "python.exe"
+            if self.operating_system == "windows"
+            else Path("bin") / "python"
+        )
+        return root / relative
+
     @classmethod
     def current(cls) -> PlatformTarget:
         system = platform.system().casefold()

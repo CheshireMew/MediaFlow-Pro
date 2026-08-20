@@ -42,7 +42,7 @@ Canvas {
     onStrokeColorChanged: requestPaint()
 
     Connections {
-        target: mediaController
+        target: mediaflow.mediaController
         function onWaveformDataChanged(changedAssetId) {
             if (changedAssetId === root.assetId)
                 root.requestPaint()
@@ -52,7 +52,7 @@ Canvas {
     onPaint: {
         var context = getContext("2d")
         context.clearRect(0, 0, width, height)
-        var peaks = mediaController.waveformPeaks(
+        var peaks = mediaflow.mediaController.waveformPeaks(
             assetId, sourceIn, durationFrames, speed,
             relativeStartFrame, visibleDurationFrames,
             Math.round(width))

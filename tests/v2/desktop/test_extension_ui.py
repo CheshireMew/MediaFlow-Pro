@@ -41,7 +41,7 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path) -> Non
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Extension UI",
         )
@@ -68,20 +68,18 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path) -> Non
         assert _process_until(lambda: len(controllers.workspace.projectVersions) == 1)
         snapshot = Path(controllers.workspace.projectVersions[0]["snapshotPath"])
         if not snapshot.is_absolute():
-            snapshot = controllers.session.binding.current.project_dir / snapshot
+            snapshot = controllers.session.state.binding.current.project_dir / snapshot
         assert snapshot.is_file()
         assert QMetaObject.invokeMethod(versions_dialog, "close")
 
         source = tmp_path / "scene.mp4"
         generate_black_intro_video(source, RuntimeContext.discover().paths)
-        controllers.media.importFiles(
-            [QUrl.fromLocalFile(str(source))]
-        )
+        controllers.media.importFiles([QUrl.fromLocalFile(str(source))])
         assert _process_until(lambda: controllers.media.assetsModel.rowCount() == 1)
         asset_id = controllers.media.assetsModel.get(0)["assetId"]
-        controllers.timeline.dropAssets([asset_id], "", -1, 0, 3.0, 0, True, False)
-        assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 1)
-        controllers.timeline.selectClip(controllers.timeline.clipsModel.get(0)["clipId"])
+        controllers.timeline_clips.dropAssets([asset_id], "", -1, 0, 3.0, 0, True, False)
+        assert _process_until(lambda: controllers.timeline_view.clipsModel.rowCount() == 1)
+        controllers.timeline_view.selectClip(controllers.timeline_view.clipsModel.get(0)["clipId"])
 
         detect_button = window.findChild(QQuickItem, "detectScenesButton")
         reframe_button = window.findChild(QQuickItem, "autoReframeButton")
@@ -92,17 +90,17 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path) -> Non
         )
         assert QMetaObject.invokeMethod(detect_button, "click")
         assert _process_until(
-            lambda: controllers.timeline.timelineMarkersModel.rowCount() > 0,
+            lambda: controllers.timeline_view.timelineMarkersModel.rowCount() > 0,
             timeout=60,
         )
         assert QMetaObject.invokeMethod(reframe_button, "click")
         assert _process_until(
-            lambda: controllers.timeline.selectedClipData.get("transformKeyframeCount", 0) > 1,
+            lambda: controllers.timeline_view.selectedClipData.get("transformKeyframeCount", 0) > 1,
             timeout=60,
         )
         assert QMetaObject.invokeMethod(tracking_button, "click")
         assert _process_until(
-            lambda: controllers.timeline.selectedClipData.get("transformKeyframeSource")
+            lambda: controllers.timeline_view.selectedClipData.get("transformKeyframeSource")
             == "subject_tracking",
             timeout=60,
         )
@@ -138,8 +136,6 @@ def test_extension_entrypoints_drive_real_project_results(tmp_path: Path) -> Non
         QCoreApplication.processEvents()
 
     project_database = tmp_path / "Extension UI" / "project.mfp"
-    release_probe = project_database.with_suffix(
-        ".mfp.release-check"
-    )
+    release_probe = project_database.with_suffix(".mfp.release-check")
     project_database.replace(release_probe)
     release_probe.replace(project_database)

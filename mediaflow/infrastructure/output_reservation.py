@@ -11,6 +11,7 @@ from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.storage_names import (
     OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
     content_addressed_child_path,
+    python_io_path,
     require_windows_interop_path,
     safe_path_component,
 )
@@ -504,6 +505,12 @@ def temporary_output_path(destination: str | Path, label: str) -> Path:
     output = Path(destination).expanduser().resolve()
     temporary = unique_temporary_sibling(output, label=label)
     return require_windows_interop_path(temporary)
+
+
+def publish_python_output(temporary: str | Path, destination: str | Path) -> None:
+    """Atomically publish a Python-owned file to a validated long destination."""
+
+    os.replace(python_io_path(temporary), python_io_path(destination))
 
 
 def archive_failed_output(

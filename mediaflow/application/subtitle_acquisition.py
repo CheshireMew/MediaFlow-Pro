@@ -6,14 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mediaflow.application.ports import SubtitleAcquisitionDocuments
+from mediaflow.application.ports import SubtitleAcquisitionDocuments, SubtitleFileStore
 from mediaflow.application.subtitle_publication import (
     SubtitleDocumentPublication,
     SubtitlePublicationService,
 )
 from mediaflow.domain.asr import AsrResult, RegionAsrPipeline
 from mediaflow.domain.enums import AssetKind
-from mediaflow.domain.media_association import related_media_paths
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset, ProjectProfile
@@ -47,9 +46,11 @@ class SubtitleAcquisitionService:
         self,
         repository: SubtitleAcquisitionDocuments,
         publication: SubtitlePublicationService,
+        subtitle_files: SubtitleFileStore,
     ):
         self.repository = repository
         self.publication = publication
+        self.subtitle_files = subtitle_files
 
     def transcribe_asset_region(
         self,
@@ -64,8 +65,8 @@ class SubtitleAcquisitionService:
         check_cancelled: Callable[[], None] | None = None,
         progress: Callable[[OperationProgress], None] | None = None,
     ) -> tuple[AsrResult, bool]:
-        media_source = Path(source).resolve(strict=True)
-        asset = self.repository.catalog.get_asset(asset_id)
+        media_source = self.subtitle_files.resolve_existing_file(source)
+        asset = self.repository.assets.get_asset(asset_id)
         if (
             asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}
             or not asset.metadata.has_audio
@@ -108,12 +109,12 @@ class SubtitleAcquisitionService:
     ) -> SubtitleDocument:
         if not projected:
             raise RuntimeError("主要对白轨范围内没有识别出可用语音")
-        project = self.repository.catalog.get_project()
-        sequence_profile = self.repository.catalog.get_sequence(sequence_id).profile
-        main_profile = self.repository.catalog.get_sequence(
+        project = self.repository.projects.get_project()
+        sequence_profile = self.repository.sequences.get_sequence(sequence_id).profile
+        main_profile = self.repository.sequences.get_sequence(
             project.main_sequence_id
         ).profile
-        subtitle_asset = self.repository.catalog.get_asset(subtitle_asset_id)
+        subtitle_asset = self.repository.assets.get_asset(subtitle_asset_id)
         if subtitle_asset.kind != AssetKind.SUBTITLE:
             raise ValueError("时间线转录文档必须关联生成的字幕素材")
         existing = [
@@ -276,12 +277,12 @@ class SubtitleAcquisitionService:
         media_asset_id: str | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> PreparedSubtitleImport:
-        source = Path(path).resolve(strict=True)
+        source = self.subtitle_files.resolve_existing_file(path)
         if source.suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}:
             raise ValueError("支持导入 SRT、WebVTT、ASS 和 SSA 字幕")
-        project = self.repository.catalog.get_project()
-        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
-        cues = SubtitleFile.read(
+        project = self.repository.projects.get_project()
+        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
+        cues = self.subtitle_files.read(
             source,
             fps_numerator=profile.fps_numerator,
             fps_denominator=profile.fps_denominator,
@@ -380,7 +381,7 @@ class SubtitleAcquisitionService:
         *,
         language: str | None = None,
     ) -> SubtitleDocument:
-        asset = self.repository.catalog.get_asset(asset_id)
+        asset = self.repository.assets.get_asset(asset_id)
         document, publication = self.prepare_document_publication(
             asset,
             language=language,
@@ -408,12 +409,12 @@ class SubtitleAcquisitionService:
         ]
         if existing:
             return existing[0], None
-        source = self.repository.catalog.resolve_asset_path(asset)
+        source = self.repository.assets.resolve_asset_path(asset)
         if source.suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}:
             raise ValueError("该素材不是受支持的字幕文件")
-        project = self.repository.catalog.get_project()
-        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
-        cues = SubtitleFile.read(
+        project = self.repository.projects.get_project()
+        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
+        cues = self.subtitle_files.read(
             source,
             fps_numerator=profile.fps_numerator,
             fps_denominator=profile.fps_denominator,
@@ -443,7 +444,7 @@ class SubtitleAcquisitionService:
         language: str | None,
         media_asset_id: str | None,
     ) -> tuple[SubtitleDocument, list[SubtitleSegment]]:
-        project = self.repository.catalog.get_project()
+        project = self.repository.projects.get_project()
         document = SubtitleDocument(
             project_id=project.id,
             asset_id=asset_id,
@@ -471,7 +472,7 @@ class SubtitleAcquisitionService:
         check_cancelled: Callable[[], None] | None = None,
     ) -> tuple[Asset | None, PreparedAssetRegistration | None]:
         if media_asset_id:
-            media_asset = self.repository.catalog.get_asset(media_asset_id)
+            media_asset = self.repository.assets.get_asset(media_asset_id)
             if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 raise ValueError("关联字幕的素材必须是视频或音频")
             return media_asset, None
@@ -481,10 +482,7 @@ class SubtitleAcquisitionService:
             return existing, None
 
         if asset_service:
-            for candidate in related_media_paths(subtitle_path):
-                candidate = candidate.resolve()
-                if not candidate.is_file() or candidate.stat().st_size <= 0:
-                    continue
+            for candidate in self.subtitle_files.existing_related_media(subtitle_path):
                 prepared = asset_service.prepare_external(
                     candidate,
                 )
@@ -504,16 +502,14 @@ class SubtitleAcquisitionService:
         *,
         available_assets: Iterable[Asset] = (),
     ) -> Asset | None:
-        candidates = [
-            path.resolve() for path in related_media_paths(subtitle_path)
-        ]
+        candidates = self.subtitle_files.related_media_candidates(subtitle_path)
         candidate_positions = {
             str(path).casefold(): position
             for position, path in enumerate(candidates)
         }
         assets_by_id = {
             asset.id: asset
-            for asset in self.repository.catalog.list_assets()
+            for asset in self.repository.assets.list_assets()
         }
         assets_by_id.update(
             {asset.id: asset for asset in available_assets}
@@ -522,7 +518,9 @@ class SubtitleAcquisitionService:
         for asset in assets_by_id.values():
             if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 continue
-            path = self.repository.catalog.resolve_asset_path(asset).resolve()
+            path = self.subtitle_files.canonical_path(
+                self.repository.assets.resolve_asset_path(asset)
+            )
             position = candidate_positions.get(str(path).casefold())
             if position is not None:
                 matches.append(

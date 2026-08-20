@@ -17,6 +17,7 @@ from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.visual_source_resolver import resolve_visual_source
 from mediaflow.infrastructure.web_render_service import WebRenderService
 
 FILMSTRIP_RENDERER_VERSION = "1"
@@ -137,10 +138,8 @@ class TimelineFilmstripService:
         start = max(0, int(visible_start_frame))
         end = max(start + 1, int(visible_end_frame))
         state = self.repository.timeline.load_timeline(sequence_id)
-        assets = {asset.id: asset for asset in self.repository.catalog.list_assets()}
-        video_tracks = {
-            track.id for track in state.tracks if track.kind == TrackKind.VIDEO and track.enabled
-        }
+        assets = {asset.id: asset for asset in self.repository.assets.list_assets()}
+        video_tracks = {track.id for track in state.tracks if track.kind == TrackKind.VIDEO and track.enabled}
         step = max(1, math.ceil(FILMSTRIP_TILE_WIDTH / pixels_per_frame))
         prefetch = step
         expanded_start = max(0, start - prefetch)
@@ -171,9 +170,7 @@ class TimelineFilmstripService:
                 web_full_cache_ready = WebRenderService._cache_is_ready(web_target)
                 if web_full_cache_ready:
                     source_path = web_target.path
-                    source_identity = (
-                        f"web:{web_target.key}:{FILMSTRIP_RENDERER_VERSION}"
-                    )
+                    source_identity = f"web:{web_target.key}:{FILMSTRIP_RENDERER_VERSION}"
             else:
                 source_path = self._visual_source(asset)
                 if source_path is None:
@@ -216,10 +213,7 @@ class TimelineFilmstripService:
                         check_cancelled=check_cancelled,
                     )
                     tile_source_frame = 0
-                    tile_source_identity = (
-                        f"web:{web_target.key}:{source_frame}:"
-                        f"{FILMSTRIP_RENDERER_VERSION}"
-                    )
+                    tile_source_identity = f"web:{web_target.key}:{source_frame}:{FILMSTRIP_RENDERER_VERSION}"
                 assert tile_source_path is not None
                 path = self._render_tile(
                     tile_source_path,
@@ -316,17 +310,4 @@ class TimelineFilmstripService:
         return destination
 
     def _visual_source(self, asset) -> Path | None:
-        original = self.repository.catalog.resolve_asset_path(asset)
-        candidates: list[Path] = []
-        if asset.kind == AssetKind.VIDEO:
-            for value in (asset.sdr_preview_proxy_path, asset.proxy_path):
-                if not value:
-                    continue
-                path = Path(value)
-                candidates.append(
-                    (self.repository.project_dir / path).resolve()
-                    if not path.is_absolute()
-                    else path.resolve(),
-                )
-        candidates.append(original)
-        return next((path for path in candidates if path.is_file()), None)
+        return resolve_visual_source(self.repository, asset, prefer="proxy")

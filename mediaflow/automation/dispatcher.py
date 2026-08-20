@@ -22,7 +22,7 @@ def execute_request(
         else AutomationRequest.model_validate(request)
     )
     if envelope.operation == "describe":
-        result = call_sync("system.describe")
+        result = call_sync("system.describe", envelope.arguments)
         if not isinstance(result, dict):
             raise RuntimeError("Editor Service describe returned an invalid result")
         return result

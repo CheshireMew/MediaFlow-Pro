@@ -18,6 +18,7 @@ from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings, ServiceSettings
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
+from mediaflow.infrastructure import runtime_tools as runtime_tools_module
 from mediaflow.infrastructure.asr_engine import (
     AsrPipeline,
     ChunkedAsrEngine,
@@ -97,10 +98,10 @@ def _transcription_command(
     bounds = state.sequence.in_out
     plan = build_dialogue_transcription_plan(
         state,
-        {asset.id: asset for asset in repository.catalog.list_assets()},
+        {asset.id: asset for asset in repository.assets.list_assets()},
         settings,
-        project_profile=repository.catalog.get_sequence(
-            repository.catalog.get_project().main_sequence_id
+        project_profile=repository.sequences.get_sequence(
+            repository.projects.get_project().main_sequence_id
         ).profile,
         start_frame=min(duration, bounds.in_frame) if bounds else 0,
         end_frame=min(duration, bounds.out_frame) if bounds else duration,
@@ -117,8 +118,8 @@ def test_transcription_plan_uses_the_sequence_frame_clock(tmp_path: Path) -> Non
         "Transcription Clock",
         main_profile,
     ) as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.AUDIO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.AUDIO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(
@@ -127,7 +128,7 @@ def test_transcription_plan_uses_the_sequence_frame_clock(tmp_path: Path) -> Non
                 }
             )
         )
-        short = repository.catalog.create_short_sequence(
+        short = repository.sequences.create_short_sequence(
             "30 fps short",
             main_profile.model_copy(update={"fps_numerator": 30}),
         )
@@ -218,7 +219,7 @@ print('100%', flush=True)
         paths=paths,
     )
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -312,7 +313,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     component_catalog.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "components": [
                     {
                         "id": "faster-whisper-xxl",
@@ -320,6 +321,9 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
                         "version": "test",
                         "homepage": "https://example.invalid/xxl",
                         "license": "MIT",
+                        "distribution": "redistributable",
+                        "bundle_allowed": True,
+                        "license_notes": "Synthetic test fixture.",
                         "targets": ["windows-x86_64"],
                         "archive": {
                             "file_name": cli_archive.name,
@@ -334,6 +338,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
                             "entrypoint": "faster-whisper-xxl.exe",
                             "required_paths": ["faster-whisper-xxl.exe"],
                             "minimum_free_bytes": 0,
+                            "peak_install_bytes": cli_archive.stat().st_size,
                         },
                     }
                 ],
@@ -354,7 +359,8 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
         ["faster-whisper-xxl"],
         progress=progress.append,
     )
-    cli_path = Path(installed["faster-whisper-xxl"]) / "faster-whisper-xxl.exe"
+    installation = installed["faster-whisper-xxl"]
+    cli_path = Path(installation.entrypoint)
 
     pointer = json.loads((paths.runtime_dir / "tools" / "yt-dlp-active.json").read_text(encoding="utf-8"))
     assert updated["version"] == "2099.1"
@@ -362,6 +368,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     assert Path(pointer["path"]).joinpath("yt_dlp", "version.py").is_file()
     assert service.ytdlp_version() == "2099.1"
     assert cli_path.read_bytes() == b"observable CLI artifact"
+    assert Path(installation.root) == cli_path.parent
     assert paths.runtime_dir in cli_path.parents
     assert any(
         item.message_code == "runtime_component_downloading"
@@ -387,6 +394,73 @@ def test_windows_only_runtime_component_is_explicitly_unsupported_on_linux(
     assert status["faster-whisper-xxl"]["supported"] is False
     assert status["gpt-sovits-v2pro"]["supported"] is False
     assert "没有当前平台" in status["faster-whisper-xxl"]["reason"]
+
+
+def test_virtual_environment_python_path_is_owned_by_the_platform_contract(
+    tmp_path: Path,
+) -> None:
+    windows = PlatformTarget(operating_system="windows", architecture="x86_64")
+    linux = PlatformTarget(operating_system="linux", architecture="x86_64")
+    macos = PlatformTarget(operating_system="macos", architecture="arm64")
+
+    assert windows.virtual_environment_python(tmp_path) == (
+        tmp_path / "Scripts" / "python.exe"
+    )
+    assert linux.virtual_environment_python(tmp_path) == tmp_path / "bin" / "python"
+    assert macos.virtual_environment_python(tmp_path) == tmp_path / "bin" / "python"
+
+
+def test_speaker_clustering_installer_creates_an_isolated_verified_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _runtime_paths(tmp_path)
+    commands: list[list[str]] = []
+
+    def run(command, **_arguments):
+        values = [str(item) for item in command]
+        commands.append(values)
+        if values[1:3] == ["-m", "venv"]:
+            python = Path(values[3]) / "Scripts" / "python.exe"
+            python.parent.mkdir(parents=True, exist_ok=True)
+            python.touch()
+        return subprocess.CompletedProcess(values, 0, "1.13.5\n", "")
+
+    def download(_url, destination, size, *, progress=None, **_arguments):
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as output:
+            output.seek(size - 1)
+            output.write(b"\0")
+        if progress:
+            progress(size, size)
+        return target
+
+    monkeypatch.setattr(runtime_tools_module, "run_cancellable_streaming", run)
+    monkeypatch.setattr(runtime_tools_module, "download_with_resume", download)
+    monkeypatch.setattr(
+        runtime_tools_module,
+        "sha256_file",
+        lambda _path: runtime_tools_module.SPEAKER_CLUSTERING_MODEL_SHA256,
+    )
+    progress: list[OperationProgress] = []
+    service = RuntimeToolService(ServiceSettings(), paths)
+
+    installed = service.install_speaker_clustering(progress=progress.append)
+    status = service.speaker_clustering_status()
+
+    pip_install = next(command for command in commands if "install" in command)
+    assert "sherpa-onnx==1.13.5" in pip_install
+    assert "numpy==2.2.6" in pip_install
+    assert Path(installed["python"]).is_file()
+    assert Path(installed["model"]).stat().st_size == 28_281_164
+    assert status["ready"] is True
+    assert status["version"] == "1.13.5"
+    assert any(
+        item.message_code == "speaker_clustering_downloading_model"
+        and item.percent == 100.0
+        for item in progress
+    )
 
 
 def test_transcription_task_consumes_engine_and_smart_split_settings(tmp_path: Path) -> None:
@@ -425,7 +499,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -518,7 +592,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -600,7 +674,7 @@ print('100%', flush=True)
     second_asset = assets.import_external(second_source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         dialogue_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -715,7 +789,7 @@ print('100%', flush=True)
     asset = AssetService(repository, MediaProbe(paths)).import_external(source)
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         dialogue_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -937,7 +1011,7 @@ active.unlink()
             ),
             include_snapshot=False,
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(

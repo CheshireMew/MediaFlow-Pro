@@ -69,17 +69,17 @@ Item {
                     AppMenuItem {
                         text: qsTr("视频轨")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTrack("video")
+                        onTriggered: mediaflow.timelineStructureController.addTrack("video")
                     }
                     AppMenuItem {
                         text: qsTr("音频轨")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTrack("audio")
+                        onTriggered: mediaflow.timelineStructureController.addTrack("audio")
                     }
                     AppMenuItem {
                         text: qsTr("字幕轨")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTrack("subtitle")
+                        onTriggered: mediaflow.timelineStructureController.addTrack("subtitle")
                     }
                 }
             }
@@ -93,7 +93,7 @@ Item {
 
         Repeater {
             id: trackControlsRepeater
-            model: timelineController.tracksModel
+            model: mediaflow.timelineViewController.tracksModel
             delegate: Rectangle {
                 required property string trackId
                 required property string displayName
@@ -159,7 +159,7 @@ Item {
                                 Accessible.name: primaryDialogue ? qsTr("当前转录轨道") : qsTr("设为转录轨道")
                                 ToolTip.visible: hovered
                                 ToolTip.text: primaryDialogue ? qsTr("转录只读取这条轨道") : qsTr("设为转录轨道；转录将只读取这条轨道")
-                                onClicked: timelineController.setPrimaryDialogueTrack(trackId)
+                                onClicked: mediaflow.timelineStructureController.setPrimaryDialogueTrack(trackId)
 
                                 contentItem: Row {
                                     spacing: 4
@@ -218,7 +218,7 @@ Item {
                             implicitHeight: 22
                             Accessible.name: model.enabled ? qsTr("禁用轨道") : qsTr("启用轨道")
                             toolTipText: Accessible.name
-                            onClicked: timelineController.updateTrack(trackId, !model.enabled, locked, muted, solo, audioBusId)
+                            onClicked: mediaflow.timelineStructureController.updateTrack(trackId, !model.enabled, locked, muted, solo, audioBusId)
                         }
                         AppIconButton {
                             iconName: locked ? "lock" : "unlock"
@@ -229,7 +229,7 @@ Item {
                             implicitHeight: 22
                             Accessible.name: locked ? qsTr("解锁轨道") : qsTr("锁定轨道")
                             toolTipText: Accessible.name
-                            onClicked: timelineController.updateTrack(trackId, model.enabled, !locked, muted, solo, audioBusId)
+                            onClicked: mediaflow.timelineStructureController.updateTrack(trackId, model.enabled, !locked, muted, solo, audioBusId)
                         }
                         Loader {
                             active: kind === "video" || kind === "audio"
@@ -250,7 +250,7 @@ Item {
                                 Accessible.name: muted ? qsTr("取消静音") : qsTr("静音")
                                 ToolTip.visible: hovered
                                 ToolTip.text: Accessible.name
-                                onClicked: timelineController.updateTrack(trackId, model.enabled, locked, !muted, solo, audioBusId)
+                                onClicked: mediaflow.timelineStructureController.updateTrack(trackId, model.enabled, locked, !muted, solo, audioBusId)
                             }
                         }
                         AppButton {
@@ -266,7 +266,7 @@ Item {
                             Accessible.name: solo ? qsTr("取消独奏") : qsTr("独奏")
                             ToolTip.visible: hovered
                             ToolTip.text: Accessible.name
-                            onClicked: timelineController.updateTrack(trackId, model.enabled, locked, muted, !solo, audioBusId)
+                            onClicked: mediaflow.timelineStructureController.updateTrack(trackId, model.enabled, locked, muted, !solo, audioBusId)
                         }
                         Item {
                             Layout.fillWidth: true
@@ -280,18 +280,18 @@ Item {
                             implicitHeight: 22
                             Accessible.name: qsTr("轨道上移")
                             toolTipText: Accessible.name
-                            onClicked: timelineController.moveTrack(trackId, position - 1)
+                            onClicked: mediaflow.timelineStructureController.moveTrack(trackId, position - 1)
                         }
                         AppIconButton {
                             iconName: "down"
                             iconSize: 14
                             flat: false
-                            enabled: view.canEdit && position + 1 < timelineController.tracksModel.rowCount()
+                            enabled: view.canEdit && position + 1 < mediaflow.timelineViewController.tracksModel.rowCount()
                             implicitWidth: 24
                             implicitHeight: 22
                             Accessible.name: qsTr("轨道下移")
                             toolTipText: Accessible.name
-                            onClicked: timelineController.moveTrack(trackId, position + 1)
+                            onClicked: mediaflow.timelineStructureController.moveTrack(trackId, position + 1)
                         }
                     }
                 }

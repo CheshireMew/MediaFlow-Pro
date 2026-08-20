@@ -16,7 +16,7 @@ Item {
     height: timelineCanvas.contentHeight
     z: 8
     Repeater {
-        model: timelineController.timelineMarkersModel
+        model: mediaflow.timelineViewController.timelineMarkersModel
         delegate: Rectangle {
             required property string markerId
             required property int frame
@@ -64,7 +64,7 @@ Item {
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: function (mouse) {
                     if (mouse.button === Qt.RightButton && view.canEdit)
-                        timelineController.removeTimelineMarker(markerId);
+                        mediaflow.timelineStructureController.removeTimelineMarker(markerId);
                     else
                         view.seekToFrame(frame);
                 }

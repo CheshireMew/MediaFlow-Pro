@@ -2,7 +2,7 @@ pragma Singleton
 import QtQuick
 
 QtObject {
-    readonly property bool highContrast: settingsController.settingsData.theme === "high_contrast"
+    readonly property bool highContrast: mediaflow.settingsController.settingsData.theme === "high_contrast"
 
     function canvasMonospaceFont(pixelSize) {
         return String(pixelSize) + "px " + JSON.stringify(monoFontFamily)
@@ -113,7 +113,7 @@ QtObject {
     readonly property int spacing: 12
     readonly property int workspaceOuterGutter: 10
     readonly property int workspacePanelGap: 10
-    readonly property int workspaceNavigationHeight: 68
+    readonly property int workspaceNavigationHeight: 58
     readonly property int workspacePanelHeaderHeight: 50
     readonly property int workspaceToolMinimumWidth: 340
     readonly property int workspaceInspectorMinimumWidth: 300
@@ -124,6 +124,7 @@ QtObject {
     readonly property int controlHeightLarge: 42
     readonly property int iconSizeSmall: 14
     readonly property int iconSizeToolbar: 16
+    readonly property int iconButtonSizeCompact: 28
     readonly property int iconButtonSize: 32
     readonly property real iconStrokeWidth: 1.45
     readonly property int dialogPadding: 18

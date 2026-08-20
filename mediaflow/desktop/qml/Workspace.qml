@@ -7,20 +7,22 @@ Rectangle {
     id: root
     objectName: "workspace"
     color: Theme.window
-    property string activeMode: workspaceController.workspaceModes.length > 0
-        ? String(workspaceController.workspaceModes[0].key) : ""
+    property string activeMode: mediaflow.workspaceViewController.workspaceModes.length > 0
+        ? String(mediaflow.workspaceViewController.workspaceModes[0].key) : ""
     property var exportPreviewOptions: ({})
     property alias previewMode: previewPanel.previewMode
     readonly property var previewViewport: previewPanel.viewport
+    readonly property Item tourToolPanel: toolPanelContainer
+    readonly property Item tourPreviewPanel: previewPanel
+    readonly property Item tourInspectorPanel: inspectorPanel
+    readonly property Item tourTimelinePanel: timeline
     readonly property int workspaceNavigationHeight: Theme.workspaceNavigationHeight
     readonly property int workspaceGutter: Theme.workspaceOuterGutter
     readonly property Item focusedItem: root.Window.window
         ? root.Window.window.activeFocusItem : null
     readonly property bool textInputActive: focusedItem instanceof TextInput
         || focusedItem instanceof TextEdit
-    readonly property bool modalOpen: settingsDialog.opened
-        || profileDialog.opened
-        || sequenceProfileDialog.opened
+    readonly property bool modalOpen: workspaceChrome.modalOpen
         || Boolean(mediaPanelLoader.item && mediaPanelLoader.item.modalOpen)
         || Boolean(taskCenterPanelLoader.item
             && taskCenterPanelLoader.item.modalOpen)
@@ -31,9 +33,9 @@ Rectangle {
         && !previewPanel.webInputActive
         && !root.modalOpen
     readonly property bool canEdit:
-        workspaceController.actionCapabilities.canEdit
+        mediaflow.workspaceViewController.actionCapabilities.canEdit
     property string layoutPreset: String(
-        settingsController.settingsData.workspaceLayoutPreset || "standard")
+        mediaflow.settingsController.settingsData.workspaceLayoutPreset || "standard")
     property string maximizedPanel: ""
     property real toolPanelWidth: 520
     property real inspectorPanelWidth: 400
@@ -52,13 +54,13 @@ Rectangle {
         ? maximizedPanel === "timeline" : timelinePanelVisible
 
     function layoutData(preset) {
-        const layouts = settingsController.settingsData.workspaceLayouts || {};
+        const layouts = mediaflow.settingsController.settingsData.workspaceLayouts || {};
         return layouts[String(preset)] || {};
     }
 
     function syncWorkspaceLayout() {
         const preset = String(
-            settingsController.settingsData.workspaceLayoutPreset || "standard");
+            mediaflow.settingsController.settingsData.workspaceLayoutPreset || "standard");
         const layout = root.layoutData(preset);
         root.layoutPreset = preset;
         root.toolPanelWidth = Number(layout.left_panel_width || 520);
@@ -74,7 +76,7 @@ Rectangle {
 
     function setWorkspaceLayoutPreset(preset) {
         root.maximizedPanel = "";
-        settingsController.setWorkspaceLayoutPreset(String(preset));
+        mediaflow.settingsController.setWorkspaceLayoutPreset(String(preset));
     }
 
     function toggleWorkspacePanel(panel) {
@@ -96,11 +98,11 @@ Rectangle {
     Component.onCompleted: root.syncWorkspaceLayout()
 
     Connections {
-        target: settingsController
+        target: mediaflow.settingsController
         function onSettingsChanged() { root.syncWorkspaceLayout(); }
     }
     function panelIndexForMode(modeKey) {
-        const modes = workspaceController.workspaceModes;
+        const modes = mediaflow.workspaceViewController.workspaceModes;
         let panelObjectName = "";
         for (let modeIndex = 0; modeIndex < modes.length; ++modeIndex) {
             if (String(modes[modeIndex].key) === String(modeKey)) {
@@ -147,7 +149,7 @@ Rectangle {
     }
 
     function persistPanelLayout() {
-        settingsController.saveWorkspaceLayout(
+        mediaflow.settingsController.saveWorkspaceLayout(
             root.layoutPreset,
             Math.round(toolPanelWidth),
             Math.round(inspectorPanelWidth),
@@ -166,8 +168,8 @@ Rectangle {
     }
 
     function openSourceMonitor(assetId, frame) {
-        mediaController.openSourceMonitor(String(assetId));
-        if (mediaController.sourceMonitorData.assetId) {
+        mediaflow.mediaController.openSourceMonitor(String(assetId));
+        if (mediaflow.mediaController.sourceMonitorData.assetId) {
             root.previewMode = "source";
             Qt.callLater(function () { previewViewport.seek(Math.max(0, frame || 0)); });
         }
@@ -179,25 +181,25 @@ Rectangle {
 
     function activeSequenceName() {
         for (let index = 0;
-                index < workspaceController.sequencesModel.rowCount();
+                index < mediaflow.workspaceViewController.sequencesModel.rowCount();
                 ++index) {
-            const sequence = workspaceController.sequencesModel.get(index);
+            const sequence = mediaflow.workspaceViewController.sequencesModel.get(index);
             if (String(sequence.sequenceId)
-                    === String(workspaceController.activeSequenceId))
+                    === String(mediaflow.workspaceViewController.activeSequenceId))
                 return String(sequence.displayName);
         }
         return qsTr("时间线");
     }
 
     Connections {
-        target: workspaceController
+        target: mediaflow.workspaceViewController
         function onPreviewRangeRequested(startFrame, endFrame) {
             previewViewport.playRequestedRange(startFrame, endFrame);
         }
     }
 
     Connections {
-        target: taskController
+        target: mediaflow.taskController
         function onTaskCenterRequested() {
             root.activeMode = "tasks";
         }
@@ -241,7 +243,7 @@ Rectangle {
                             onModeRequested: function (mode) {
                                 root.activeMode = mode;
                             }
-                            onSettingsRequested: settingsDialog.open()
+                            onSettingsRequested: workspaceChrome.openSettings()
                         }
 
                         StackLayout {
@@ -260,7 +262,7 @@ Rectangle {
                                 active: root.activeMode === "media"
                                     || status === Loader.Ready
                                 sourceComponent: MediaPanel {
-                                    dragPreview: mediaDragPreview
+                                    dragPreview: workspaceChrome.dragPreview
                                     playheadFrame: timeline.visiblePlayheadFrame
                                     pixelsPerFrame: timeline.pixelsPerFrame
                                     snapEnabled: timeline.snapEnabled
@@ -432,7 +434,7 @@ Rectangle {
                     Layout.fillWidth: root.maximizedPanel === "inspector"
                     Layout.fillHeight: true
                     playheadFrame: previewViewport.position
-                    onEditProfileRequested: sequenceProfileDialog.open()
+                    onEditProfileRequested: workspaceChrome.openSequenceProfile()
                     onSeekRequested: function(frame) {
                         previewViewport.seek(frame);
                     }
@@ -504,96 +506,19 @@ Rectangle {
                 onSeekRequested: function (frame) {
                     previewViewport.seek(frame);
                 }
-                onEditProfileRequested: sequenceProfileDialog.open()
+                onEditProfileRequested: workspaceChrome.openSequenceProfile()
             }
     }
 
-    WorkspaceStatusOverlays {
+    WorkspaceChrome {
+        id: workspaceChrome
         anchors.fill: parent
-        toolPanelWidth: toolPanelContainer.width
-        previewPanelWidth: previewPanel.width
-        gutter: root.workspaceGutter
-        z: 300
-        onOpenSettingsRequested: settingsDialog.open()
-        onOpenExportRequested: root.activeMode = "export"
-    }
-
-    Rectangle {
-        id: mediaDragPreview
-        objectName: "mediaDragPreview"
-        property bool dragActive: false
-        property var draggedAssetIds: []
-        property string assetName: ""
-        width: Math.min(320, root.toolPanelWidth - 28)
-        height: 64
-        radius: Theme.radiusSmall
-        color: Theme.accentSoft
-        border.width: 2
-        border.color: Theme.accent
-        opacity: Drag.active ? 0.92 : 0
-        visible: Drag.active
-        z: 500
-        Drag.active: dragActive
-        Drag.source: mediaDragPreview
-        Drag.keys: ["mediaflowAsset"]
-        Drag.hotSpot.x: width / 2
-        Drag.hotSpot.y: height / 2
-
-        Text {
-            anchors.fill: parent
-            anchors.margins: 10
-            text: mediaDragPreview.draggedAssetIds.length > 1
-                ? qsTr("%1 个素材").arg(mediaDragPreview.draggedAssetIds.length)
-                : mediaDragPreview.assetName
-            color: Theme.text
-            font.pixelSize: Theme.fontSizeBodySmall
-            font.weight: Font.Medium
-            elide: Text.ElideRight
-            verticalAlignment: Text.AlignVCenter
-        }
-    }
-
-    SettingsDialog {
-        id: settingsDialog
-        anchors.centerIn: parent
-    }
-
-    AppDialog {
-        id: profileDialog
-        anchors.centerIn: parent
-        implicitWidth: 460
-        width: 460
-        modal: true
-        title: qsTr("采用视频项目配置？")
-        standardButtons: Dialog.Yes | Dialog.No
-        closePolicy: Popup.NoAutoClose
-        onAccepted: workspaceController.resolveProfileAdoption(true)
-        onRejected: workspaceController.resolveProfileAdoption(false)
-        contentItem: Text {
-            width: 430
-            color: Theme.text
-            wrapMode: Text.WordWrap
-            text: qsTr("主时间线中已经有图片或音频编辑。这个视频建议使用 %1。采用后会按实际时长重新换算现有编辑；选择“否”则保持当前项目配置。").arg(workspaceController.pendingProfileLabel)
-        }
-    }
-
-    SequenceProfileDialog {
-        id: sequenceProfileDialog
-    }
-
-    Connections {
-        target: workspaceController
-        function onProfileConfirmationChanged() {
-            if (workspaceController.profileConfirmationPending)
-                profileDialog.open();
-            else
-                profileDialog.close();
-        }
-    }
-
-    WorkspaceShortcuts {
         host: root
         preview: previewViewport
         timelineView: timeline
+        toolPanelWidth: toolPanelContainer.width
+        previewPanelWidth: previewPanel.width
+        gutter: root.workspaceGutter
+        onOpenExportRequested: root.activeMode = "export"
     }
 }

@@ -23,7 +23,7 @@ _TERMINAL_TASK_STATUSES = tuple(
 
 class ProjectRecordsRepository(ProjectRepositoryComponent):
     def save_export_history(self, record: ExportHistoryRecord) -> ExportHistoryRecord:
-        self._owner.catalog.get_sequence(record.sequence_id)
+        self._relations.sequences.get_sequence(record.sequence_id)
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO export_history(
@@ -96,7 +96,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                 # The repository transaction holds BEGIN IMMEDIATE, so task
                 # writers cannot change the database while this separate
                 # read-only connection captures the last committed state.
-                with closing(self._open_database(self._owner.database_path)) as source:
+                with closing(self._open_database(self._database.database_path)) as source:
                     with closing(sqlite3.connect(temporary)) as snapshot, snapshot:
                         source.backup(snapshot)
                 self._validate_snapshot_database(
@@ -126,7 +126,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                         record_id,
                     )
 
-                self._owner.enlist_transaction_publication(
+                self._enlist_transaction_publication(
                     on_commit=lambda: None,
                     on_rollback=rollback_snapshot,
                 )
@@ -137,7 +137,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
             raise
 
     def list_project_versions(self) -> list[ProjectVersionRecord]:
-        project = self._owner.catalog.get_project()
+        project = self._relations.projects.get_project()
         rows = self._fetchall(
             """SELECT id, name, snapshot_path, sha256, content_revision, created_at
                FROM project_version WHERE project_id=? ORDER BY created_at DESC, id""",
@@ -158,7 +158,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
             if sha256_file(snapshot_path) != record.sha256:
                 raise RuntimeError("命名版本快照校验失败")
 
-            project = self._owner.catalog.get_project()
+            project = self._relations.projects.get_project()
             self._validate_snapshot_database(
                 snapshot_path,
                 expected_project_id=project.id,

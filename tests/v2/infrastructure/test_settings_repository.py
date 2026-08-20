@@ -30,6 +30,18 @@ def test_split_repositories_use_distinct_explicit_files(
     service = service_repository.load()
     desktop = desktop_repository.load()
     service.download.last_url = "https://example.com/media"
+    service.speaker_diarization.python_executable = str(
+        tmp_path / "pyannote" / "python.exe"
+    )
+    service.speaker_diarization.backend = "community_1"
+    service.speaker_diarization.clustering_python_executable = str(
+        tmp_path / "speaker-clustering" / "python.exe"
+    )
+    service.speaker_diarization.embedding_model_path = str(
+        tmp_path / "speaker-clustering" / "campplus.onnx"
+    )
+    service.speaker_diarization.hugging_face_token = "hf_test"
+    service.speaker_diarization.device = "cuda"
     desktop.ui.language = "en"
     service_repository.save(service)
     desktop_repository.save(desktop)
@@ -37,8 +49,28 @@ def test_split_repositories_use_distinct_explicit_files(
     assert service_repository.path == service_path.resolve()
     assert desktop_repository.path == desktop_path.resolve()
     assert ServiceSettingsRepository().load().download.last_url.endswith("/media")
+    diarization = ServiceSettingsRepository().load().speaker_diarization
+    assert diarization.python_executable is not None
+    assert diarization.backend == "community_1"
+    assert diarization.clustering_python_executable is not None
+    assert diarization.embedding_model_path is not None
+    assert diarization.hugging_face_token == "hf_test"
+    assert diarization.device == "cuda"
     assert DesktopSettingsRepository().load().ui.language == "en"
     assert not (service_path.parent / "settings.json").exists()
+
+
+def test_legacy_diarization_settings_default_to_account_free_clustering() -> None:
+    settings = ServiceSettings.model_validate(
+        {
+            "speaker_diarization": {
+                "python_executable": "D:/Tools/MediaFlow/pyannote/Scripts/python.exe",
+                "model": "pyannote/speaker-diarization-community-1",
+            }
+        }
+    )
+
+    assert settings.speaker_diarization.backend == "transcript_clustering"
 
 
 def test_split_repositories_reject_the_other_settings_boundary(

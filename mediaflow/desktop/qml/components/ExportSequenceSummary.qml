@@ -18,7 +18,7 @@ Panel {
             }
             Text {
                 Layout.fillWidth: true
-                text: workspaceController.profileLabel
+                text: mediaflow.workspaceViewController.profileLabel
                 color: Theme.text
                 font.pixelSize: Theme.fontSizeBody
                 font.weight: Font.DemiBold
@@ -26,10 +26,10 @@ Panel {
             }
         }
         Text {
-            visible: workspaceController.profileConfirmed
-            text: workspaceController.colorMode === "hdr10_bt2020_pq"
+            visible: mediaflow.workspaceViewController.profileConfirmed
+            text: mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq"
                 ? "HDR10" : "SDR"
-            color: workspaceController.colorMode === "hdr10_bt2020_pq"
+            color: mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq"
                 ? Theme.warning : Theme.accentHover
             font.pixelSize: Theme.fontSizeCaption
         }

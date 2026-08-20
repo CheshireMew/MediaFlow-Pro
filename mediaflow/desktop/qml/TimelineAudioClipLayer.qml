@@ -19,7 +19,7 @@ Item {
     z: 3
 
     Repeater {
-        model: timelineController.clipsModel
+        model: mediaflow.timelineViewController.clipsModel
         delegate: Rectangle {
             id: embeddedAudioDelegate
             required property string clipId
@@ -37,7 +37,7 @@ Item {
             required property int audioTrackPosition
             required property bool waveformReady
             required property string compoundId
-            readonly property bool selected: timelineController.isClipSelected(clipId)
+            readonly property bool selected: mediaflow.timelineViewController.isClipSelected(clipId)
 
             objectName: "embeddedAudioClip"
             readonly property string displayedTrackKind: view.draggingClipId === clipId ? view.draggingClipTrackKind : trackKind
@@ -57,8 +57,8 @@ Item {
             activeFocusOnTab: true
             Accessible.name: qsTr("%1 的音频，起始帧 %2，持续 %3 帧").arg(assetName).arg(startFrame).arg(durationFrames)
             Accessible.role: Accessible.ListItem
-            Keys.onReturnPressed: timelineController.selectClip(clipId)
-            Keys.onSpacePressed: timelineController.selectClip(clipId)
+            Keys.onReturnPressed: mediaflow.timelineViewController.selectClip(clipId)
+            Keys.onSpacePressed: mediaflow.timelineViewController.selectClip(clipId)
 
             Rectangle {
                 anchors.right: parent.right
@@ -113,50 +113,19 @@ Item {
                 font.weight: Font.Medium
                 elide: Text.ElideRight
             }
-            MouseArea {
+            TimelineClipInteraction {
                 id: embeddedAudioMouse
                 anchors.fill: parent
-                hoverEnabled: true
-                preventStealing: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                property real pressContentX: 0
-                property real pressContentY: 0
-                cursorShape: view.canEdit
-                    ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
-                    : Qt.ArrowCursor
-                onPressed: function (mouse) {
-                    if (mouse.button === Qt.RightButton) {
-                        if (!timelineController.isClipSelected(clipId))
-                            timelineController.selectClip(clipId, false);
-                        return;
-                    }
-                    const toggle = view.multiSelectMode || (mouse.modifiers & Qt.ControlModifier) !== 0;
-                    if (toggle || !timelineController.isClipSelected(clipId))
-                        timelineController.selectClip(clipId, toggle);
-                    if (view.canEdit) {
-                        const point = embeddedAudioDelegate.mapToItem(
-                            embeddedAudioLayer, mouse.x, mouse.y);
-                        pressContentX = point.x;
-                        pressContentY = point.y;
-                        view.beginClipDrag(
-                            clipId, trackPosition, trackKind, audioTrackPosition);
-                    }
-                }
-                onPositionChanged: function (mouse) {
-                    if (!pressed || view.draggingClipId !== clipId)
-                        return;
-                    const point = embeddedAudioDelegate.mapToItem(embeddedAudioLayer, mouse.x, mouse.y);
-                    view.updateLinkedAudioDrag(clipId, startFrame, audioTrackPosition, point.x - pressContentX, point.y - pressContentY);
-                }
-                onReleased: function (mouse) {
-                    if (mouse.button === Qt.RightButton) {
-                        view.cancelClipDrag();
-                        view.openClipContextMenu(clipId);
-                        return;
-                    }
-                    view.finishClipDrag(clipId, startFrame, trackPosition, view.snapEnabled && (mouse.modifiers & Qt.ShiftModifier) === 0);
-                }
-                onCanceled: view.cancelClipDrag()
+                view: embeddedAudioLayer.view
+                clipItem: embeddedAudioDelegate
+                layerItem: embeddedAudioLayer
+                clipId: embeddedAudioDelegate.clipId
+                startFrame: embeddedAudioDelegate.startFrame
+                trackPosition: embeddedAudioDelegate.trackPosition
+                trackKind: embeddedAudioDelegate.trackKind
+                audioTrackPosition: embeddedAudioDelegate.audioTrackPosition
+                linkedAudio: true
+                dragEnabled: view.canEdit
             }
         }
     }

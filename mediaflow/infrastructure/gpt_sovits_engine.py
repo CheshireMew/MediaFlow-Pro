@@ -9,6 +9,7 @@ import threading
 import time
 import wave
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -66,14 +67,23 @@ class GptSoVitsEngine:
         timeout_seconds: int = 900,
         overwrite: bool = False,
     ) -> GptSoVitsResult:
-        reference = Path(reference_audio).resolve(strict=True)
-        auxiliaries = [Path(item).resolve(strict=True) for item in auxiliary_reference_audio or ()]
-        output = Path(output_path).expanduser().resolve()
-        if output.suffix.lower() != ".wav":
-            raise ValueError("GPT-SoVITS 公共操作只输出 WAV")
-        if output.exists() and not overwrite:
-            raise FileExistsError(f"输出已存在：{output}")
-        output.parent.mkdir(parents=True, exist_ok=True)
+        with self.session() as session:
+            return session.synthesize(
+                text=text,
+                text_language=text_language,
+                reference_audio=reference_audio,
+                reference_text=reference_text,
+                reference_language=reference_language,
+                output_path=output_path,
+                auxiliary_reference_audio=auxiliary_reference_audio,
+                speed_factor=speed_factor,
+                seed=seed,
+                timeout_seconds=timeout_seconds,
+                overwrite=overwrite,
+            )
+
+    @contextmanager
+    def session(self):
         config = self._write_config()
         port = self._available_port()
         command = [
@@ -106,9 +116,39 @@ class GptSoVitsEngine:
             daemon=True,
         )
         reader.start()
-        temporary = unique_temporary_sibling(output, label="gpt-sovits")
         try:
             self._wait_until_ready(process, port, captured)
+            yield GptSoVitsSession(self, port)
+        finally:
+            self._stop(process)
+            reader.join(timeout=2)
+
+    def _synthesize_with_server(
+        self,
+        port: int,
+        *,
+        text: str,
+        text_language: str,
+        reference_audio: str | Path,
+        reference_text: str,
+        reference_language: str,
+        output_path: str | Path,
+        auxiliary_reference_audio: list[str | Path] | None = None,
+        speed_factor: float = 1.0,
+        seed: int = -1,
+        timeout_seconds: int = 900,
+        overwrite: bool = False,
+    ) -> GptSoVitsResult:
+        reference = Path(reference_audio).resolve(strict=True)
+        auxiliaries = [Path(item).resolve(strict=True) for item in auxiliary_reference_audio or ()]
+        output = Path(output_path).expanduser().resolve()
+        if output.suffix.lower() != ".wav":
+            raise ValueError("GPT-SoVITS 公共操作只输出 WAV")
+        if output.exists() and not overwrite:
+            raise FileExistsError(f"输出已存在：{output}")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = unique_temporary_sibling(output, label="gpt-sovits")
+        try:
             payload = {
                 "text": text,
                 "text_lang": text_language,
@@ -159,8 +199,6 @@ class GptSoVitsEngine:
         finally:
             if temporary.exists():
                 temporary.unlink()
-            self._stop(process)
-            reader.join(timeout=2)
 
     def _write_config(self) -> Path:
         is_half = self.device == "cuda"
@@ -251,3 +289,39 @@ class GptSoVitsEngine:
         if value == "auto":
             return "cuda" if shutil.which("nvidia-smi") else "cpu"
         return "cuda" if value == "cuda" else "cpu"
+
+
+class GptSoVitsSession:
+    def __init__(self, engine: GptSoVitsEngine, port: int) -> None:
+        self._engine = engine
+        self._port = port
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        text_language: str,
+        reference_audio: str | Path,
+        reference_text: str,
+        reference_language: str,
+        output_path: str | Path,
+        auxiliary_reference_audio: list[str | Path] | None = None,
+        speed_factor: float = 1.0,
+        seed: int = -1,
+        timeout_seconds: int = 900,
+        overwrite: bool = False,
+    ) -> GptSoVitsResult:
+        return self._engine._synthesize_with_server(
+            self._port,
+            text=text,
+            text_language=text_language,
+            reference_audio=reference_audio,
+            reference_text=reference_text,
+            reference_language=reference_language,
+            output_path=output_path,
+            auxiliary_reference_audio=auxiliary_reference_audio,
+            speed_factor=speed_factor,
+            seed=seed,
+            timeout_seconds=timeout_seconds,
+            overwrite=overwrite,
+        )

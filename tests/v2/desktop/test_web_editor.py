@@ -53,7 +53,7 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
     engine, controllers = create_engine(app)
     shut_down = False
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Unified V6 Web Import",
         )
@@ -68,7 +68,7 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
         imported = controllers.media.assetsModel.get(0)
         assert imported["kind"] == "web"
 
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.dropAssets(
             [imported["assetId"]],
             "",
             -1,
@@ -78,8 +78,10 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
             True,
             False,
         )
-        assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 1)
-        state = controllers.session.binding.current.load_timeline(controllers.workspace.activeSequenceId)
+        assert _process_until(lambda: controllers.timeline_view.clipsModel.rowCount() == 1)
+        state = controllers.session.state.binding.current.load_timeline(
+            controllers.workspace.activeSequenceId
+        )
         assert len(state.clips) == 1
         assert state.clips[0].id in state.web_states
 
@@ -130,7 +132,7 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
             "ease_out",
             15,
         )
-        clip_state = controllers.session.binding.current.get_web_clip(state.clips[0].id)
+        clip_state = controllers.session.state.binding.current.get_web_clip(state.clips[0].id)
         assert clip_state.parameters["spring_strength"] == 0.86
         assert (
             clip_state.scenes["opening"].parameter_animations["spring_strength"].keyframes[0].time_ms == 500
@@ -139,9 +141,9 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
             item.get("target") == "parameter" and item.get("sourceId") == "spring_strength"
             for item in controllers.web_timeline.timelineItemsData
         )
-        project_dir = controllers.session.binding.current.project_dir
-        controllers.timeline.requestFilmstrip(0, state.duration_frames, 12, 46)
-        filmstrip_future = controllers.session.requests.filmstrip_future
+        project_dir = controllers.session.state.binding.current.project_dir
+        controllers.timeline_view.requestFilmstrip(0, state.duration_frames, 12, 46)
+        filmstrip_future = controllers.session.state.requests.filmstrip_future
         assert filmstrip_future is not None
         assert _process_until(filmstrip_future.running, 3)
         shutdown_started = time.monotonic()
@@ -186,8 +188,8 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
     errors: list[str] = []
     controllers.web.errorOccurred.connect(errors.append)
     try:
-        controllers.workspace.openProject(QUrl.fromLocalFile(str(project_path)).toString())
-        controllers.timeline.selectClip(clip.id)
+        controllers.workspace_project.openProject(QUrl.fromLocalFile(str(project_path)).toString())
+        controllers.timeline_view.selectClip(clip.id)
         window = engine.rootObjects()[0]
         loader = window.findChild(QObject, "pageLoader")
         assert loader is not None
@@ -278,11 +280,11 @@ def test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page(
 
         assert _process_until(
             lambda: controllers.web.selectedLayerId == "title"
-            and controllers.session.binding.current.get_web_clip(clip.id).revision > 0,
+            and controllers.session.state.binding.current.get_web_clip(clip.id).revision > 0,
             15,
         ), (
             controllers.web.selectedLayerId,
-            controllers.session.binding.current.get_web_clip(clip.id).revision,
+            controllers.session.state.binding.current.get_web_clip(clip.id).revision,
             (
                 metrics["x"],
                 metrics["y"],

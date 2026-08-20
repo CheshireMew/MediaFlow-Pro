@@ -17,12 +17,13 @@ from pathlib import Path
 from mediaflow.domain.asr import AsrEngine, AsrProgress, AsrResult, AsrSegment, AsrWord
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.settings import AsrSettings
-from mediaflow.domain.subtitle_file import SubtitleFile
+from mediaflow.domain.settings import AsrSettings, ServiceSettings
+from mediaflow.infrastructure.subtitle_file_store import LocalSubtitleFileStore
 
 from .asr_models import FasterWhisperModelStore
 from .audio_chunking import AudioChunkingService, AudioPreparationService
 from .cache_manager import CacheManager
+from .runtime_components import RuntimeComponentService
 from .runtime_paths import RuntimePaths
 from .system_resources import available_physical_memory_bytes
 
@@ -581,7 +582,7 @@ class FasterWhisperCliEngine:
                 raise RuntimeError(f"Faster-Whisper CLI 失败（{returncode}）：{detail}")
             if srt_path is None:
                 raise RuntimeError("Faster-Whisper CLI 没有生成可用的 SRT")
-            cues = SubtitleFile.read(
+            cues = LocalSubtitleFileStore().read(
                 srt_path,
                 fps_numerator=1000,
                 fps_denominator=1,
@@ -649,19 +650,20 @@ class FasterWhisperCliEngine:
         return command
 
     def _cli_path(self) -> Path:
-        if self.paths.target.key != "windows-x86_64":
+        components = RuntimeComponentService(
+            ServiceSettings(asr=self.settings),
+            self.paths,
+        )
+        definition = components.catalog["faster-whisper-xxl"]
+        if self.paths.target.key not in definition.targets:
             raise RuntimeError(
                 "Faster-Whisper XXL is not available for "
                 f"{self.paths.target.key}; use the built-in faster-whisper engine"
             )
-        candidates = [
-            Path(self.settings.cli_path).expanduser() if self.settings.cli_path else None,
-            self.paths.runtime_dir / "tools" / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe",
-        ]
-        path = next((item for item in candidates if item and item.is_file()), None)
-        if path is None:
+        installation = components.resolve(definition.id)
+        if installation is None:
             raise FileNotFoundError("请先安装或选择 Faster-Whisper XXL 可执行文件")
-        return path.resolve()
+        return installation.entrypoint
 
     def _run(
         self,

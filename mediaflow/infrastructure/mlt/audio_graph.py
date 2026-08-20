@@ -16,6 +16,10 @@ from mediaflow.domain.sequence_audio import (
 from mediaflow.domain.timeline import Clip, TimelineState, Track, Transition
 from mediaflow.infrastructure.mlt.clip_graph import MltClipGraph
 from mediaflow.infrastructure.mlt.graph import MltGraph
+from mediaflow.infrastructure.mlt.playlist_layout import (
+    append_playlist_layout,
+    plan_playlist_layout,
+)
 
 
 class MltAudioGraph:
@@ -136,43 +140,16 @@ class MltAudioGraph:
 
         playlist = ET.SubElement(root, "playlist", {"id": MltGraph.audio_playlist_id(track.id)})
         MltGraph.property(playlist, "mediaflow:audio_track_name", track.name)
-        incoming = {item.right_clip_id: item for item in transitions}
-        cursor = 0
-        for clip in clips:
-            incoming_after = MltGraph.transition_parts(incoming[clip.id])[1] if clip.id in incoming else 0
-            outgoing_before = MltGraph.transition_parts(outgoing[clip.id])[0] if clip.id in outgoing else 0
-            visible_start = clip.timeline_start + incoming_after
-            visible_end = clip.timeline_end - outgoing_before
-            if visible_start > cursor:
-                ET.SubElement(playlist, "blank", {"length": str(visible_start - cursor)})
-            if visible_end > visible_start:
-                producer_in = MltGraph.producer_frame(
-                    clip,
-                    assets[clip.asset_id],
-                    incoming_after,
-                )
-                ET.SubElement(
-                    playlist,
-                    "entry",
-                    {
-                        "producer": MltGraph.audio_producer_id(clip.id),
-                        "in": str(producer_in),
-                        "out": str(producer_in + visible_end - visible_start - 1),
-                    },
-                )
-                cursor = visible_end
-            if clip.id in outgoing:
-                transition = outgoing[clip.id]
-                ET.SubElement(
-                    playlist,
-                    "entry",
-                    {
-                        "producer": MltGraph.audio_transition_id(transition.id),
-                        "in": "0",
-                        "out": str(transition.duration - 1),
-                    },
-                )
-                cursor += transition.duration
+        append_playlist_layout(
+            playlist,
+            plan_playlist_layout(
+                clips,
+                assets,
+                transitions,
+                producer_id=MltGraph.audio_producer_id,
+                transition_id=MltGraph.audio_transition_id,
+            ),
+        )
 
     def append_audio_producer(
         self,

@@ -12,8 +12,14 @@ from mediaflow.application.edit_history import (
     ProjectEditHistory,
 )
 from mediaflow.application.ports import TranscriptEditingDocuments
+from mediaflow.application.project_changes import (
+    entity_sequence_change_set,
+    project_path_segment,
+    timeline_change_set,
+)
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.domain.collaboration import ProjectChangeSet
 from mediaflow.domain.enums import TrackKind
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timebase import reframe_interval
@@ -77,9 +83,7 @@ class TranscriptEditingService:
                 )
                 for segment in segments
             ],
-            recognized_word_count=sum(
-                word.timing_source == "recognized" for word in words
-            ),
+            recognized_word_count=sum(word.timing_source == "recognized" for word in words),
             estimated_word_count=sum(word.timing_source == "estimated" for word in words),
         )
 
@@ -92,10 +96,8 @@ class TranscriptEditingService:
         document = self._source_transcript(request.sequence_id, request.document_id)
         if timeline.sequence_id != request.sequence_id:
             raise ValueError("转录剪辑计划与当前时间轴不一致")
-        project = self.repository.catalog.get_project()
-        main_profile = self.repository.catalog.get_sequence(
-            project.main_sequence_id
-        ).profile
+        project = self.repository.projects.get_project()
+        main_profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
         sequence_profile = timeline.state.sequence.profile
         segments = self.repository.subtitles.list_subtitle_segments(document.id)
         words = self.repository.subtitles.list_subtitle_words(document.id)
@@ -132,17 +134,14 @@ class TranscriptEditingService:
                     (word.start_frame, word.end_frame) for word in selected_words
                 )
                 text = self._join_words(selected_words)
-                timing: Literal["recognized_words", "subtitle_segments"] = (
-                    "recognized_words"
-                )
+                timing: Literal["recognized_words", "subtitle_segments"] = "recognized_words"
             else:
                 selected_segments = sorted(
                     (segments_by_id[item_id] for item_id in selection.ids),
                     key=lambda item: (item.start_frame, item.end_frame, item.id),
                 )
                 selection_intervals = self._merged_intervals(
-                    (segment.start_frame, segment.end_frame)
-                    for segment in selected_segments
+                    (segment.start_frame, segment.end_frame) for segment in selected_segments
                 )
                 text = "\n".join(segment.text.strip() for segment in selected_segments)
                 timing = "subtitle_segments"
@@ -172,9 +171,7 @@ class TranscriptEditingService:
             for start, end in subtitle_intervals
         )
         before_state = timeline.state
-        after_state = timeline.preview_ripple_delete_intervals(
-            timeline_intervals
-        )
+        after_state = timeline.preview_ripple_delete_intervals(timeline_intervals)
         before_clips = {clip.id: clip for clip in before_state.clips}
         after_clips = {clip.id: clip for clip in after_state.clips}
         changed_clip_ids = sorted(
@@ -184,13 +181,8 @@ class TranscriptEditingService:
         )
         created_clip_ids = sorted(set(after_clips).difference(before_clips))
         affected_track_ids = {
-            clip.track_id
-            for clip_id, clip in before_clips.items()
-            if clip_id in changed_clip_ids
-        } | {
-            after_clips[clip_id].track_id
-            for clip_id in created_clip_ids
-        }
+            clip.track_id for clip_id, clip in before_clips.items() if clip_id in changed_clip_ids
+        } | {after_clips[clip_id].track_id for clip_id in created_clip_ids}
         subtitle_track_ids = {
             track.id
             for track in before_state.tracks
@@ -217,10 +209,7 @@ class TranscriptEditingService:
             }
         )
         warnings = (
-            [
-                "锁定轨道不会随删除区间移动，应用后可能与其它轨道失去同步："
-                + ", ".join(locked_track_ids)
-            ]
+            ["锁定轨道不会随删除区间移动，应用后可能与其它轨道失去同步：" + ", ".join(locked_track_ids)]
             if locked_track_ids
             else []
         )
@@ -233,19 +222,15 @@ class TranscriptEditingService:
             selections=request.selections,
             resolved_selections=resolved,
             subtitle_intervals=[
-                TranscriptFrameInterval(start_frame=start, end_frame=end)
-                for start, end in subtitle_intervals
+                TranscriptFrameInterval(start_frame=start, end_frame=end) for start, end in subtitle_intervals
             ],
             timeline_intervals=[
-                TranscriptFrameInterval(start_frame=start, end_frame=end)
-                for start, end in timeline_intervals
+                TranscriptFrameInterval(start_frame=start, end_frame=end) for start, end in timeline_intervals
             ],
             impact=TranscriptEditImpact(
                 before_duration_frames=before_state.duration_frames,
                 after_duration_frames=after_state.duration_frames,
-                removed_duration_frames=sum(
-                    end - start for start, end in timeline_intervals
-                ),
+                removed_duration_frames=sum(end - start for start, end in timeline_intervals),
                 affected_track_ids=sorted(affected_track_ids),
                 changed_clip_ids=changed_clip_ids,
                 created_clip_ids=created_clip_ids,
@@ -284,21 +269,14 @@ class TranscriptEditingService:
             for item_id in selection.ids
         }
         selected_word_ids = {
-            item_id
-            for selection in plan.selections
-            if selection.kind == "words"
-            for item_id in selection.ids
+            item_id for selection in plan.selections if selection.kind == "words" for item_id in selection.ids
         }
-        selected_word_ids.update(
-            word.id for word in before_words if word.segment_id in selected_segment_ids
-        )
+        selected_word_ids.update(word.id for word in before_words if word.segment_id in selected_segment_ids)
         subtitle_intervals = [
-            (interval.start_frame, interval.end_frame)
-            for interval in plan.subtitle_intervals
+            (interval.start_frame, interval.end_frame) for interval in plan.subtitle_intervals
         ]
         timeline_intervals = [
-            (interval.start_frame, interval.end_frame)
-            for interval in plan.timeline_intervals
+            (interval.start_frame, interval.end_frame) for interval in plan.timeline_intervals
         ]
         history_checkpoint = self.history.checkpoint()
         try:
@@ -314,29 +292,20 @@ class TranscriptEditingService:
                         timeline.sequence_id,
                         temporary_history,
                     )
-                    temporary_timeline.apply_ripple_delete_intervals(
-                        timeline_intervals
-                    )
+                    temporary_timeline.apply_ripple_delete_intervals(timeline_intervals)
                     after_words = [
                         self._remap_word(
                             word,
                             subtitle_intervals,
-                            excluded=(
-                                word.excluded
-                                or word.id in selected_word_ids
-                            ),
+                            excluded=(word.excluded or word.id in selected_word_ids),
                         )
                         for word in before_words
                     ]
-                    after_segments, retained_words = (
-                        self._rebuild_segments(
-                            before_segments,
-                            after_words,
-                            subtitle_intervals,
-                            removed_segment_ids=(
-                                selected_segment_ids
-                            ),
-                        )
+                    after_segments, retained_words = self._rebuild_segments(
+                        before_segments,
+                        after_words,
+                        subtitle_intervals,
+                        removed_segment_ids=(selected_segment_ids),
                     )
                     self.repository.subtitles.save_subtitle_segments(
                         plan.document_id,
@@ -346,28 +315,17 @@ class TranscriptEditingService:
                         plan.document_id,
                         retained_words,
                     )
-                    return self.repository.timeline.load_timeline(
-                        timeline.sequence_id
-                    )
+                    return self.repository.timeline.load_timeline(timeline.sequence_id)
 
-                after_state, _output = (
-                    self.publication.commit_document_change(
-                        plan.document_id,
-                        apply_change,
-                    )
+                after_state, _output = self.publication.commit_document_change(
+                    plan.document_id,
+                    apply_change,
                 )
                 timeline.reload()
-                after_segments = (
-                    self.repository.subtitles.list_subtitle_segments(
-                        plan.document_id
-                    )
-                )
-                after_words = (
-                    self.repository.subtitles.list_subtitle_words(
-                        plan.document_id
-                    )
-                )
+                after_segments = self.repository.subtitles.list_subtitle_segments(plan.document_id)
+                after_words = self.repository.subtitles.list_subtitle_words(plan.document_id)
 
+                subtitle_root = f"/subtitles/documents/{project_path_segment(plan.document_id)}"
                 self.history.push(
                     ProjectEditCommand(
                         label="AI 转录剪辑",
@@ -391,38 +349,40 @@ class TranscriptEditingService:
                                 after_words,
                             )
                         ],
-                    )
+                    ),
+                    ProjectChangeSet.combine(
+                        [
+                            timeline_change_set(before_state, after_state),
+                            entity_sequence_change_set(
+                                f"{subtitle_root}/segments",
+                                before_segments,
+                                after_segments,
+                            ),
+                            entity_sequence_change_set(
+                                f"{subtitle_root}/words",
+                                before_words,
+                                after_words,
+                            ),
+                        ]
+                    ),
                 )
                 return TranscriptEditResult(
                     plan_digest=plan.plan_digest,
                     recovery_version=recovery,
                     removed_word_count=sum(
-                        not word.excluded
-                        and word.id in selected_word_ids
-                        for word in before_words
+                        not word.excluded and word.id in selected_word_ids for word in before_words
                     ),
-                    removed_segment_count=(
-                        len(before_segments) - len(after_segments)
-                    ),
-                    before_duration_frames=(
-                        before_state.duration_frames
-                    ),
-                    after_duration_frames=(
-                        after_state.duration_frames
-                    ),
-                    content_revision=(
-                        self.repository.content_revision()
-                    ),
+                    removed_segment_count=(len(before_segments) - len(after_segments)),
+                    before_duration_frames=(before_state.duration_frames),
+                    after_duration_frames=(after_state.duration_frames),
+                    content_revision=(self.repository.content_revision()),
                 )
         except BaseException as error:
             self.history.restore(history_checkpoint)
             try:
                 timeline.reload()
             except BaseException as reload_error:
-                error.add_note(
-                    "转录剪辑回滚后重新载入时间轴失败："
-                    f"{reload_error}"
-                )
+                error.add_note(f"转录剪辑回滚后重新载入时间轴失败：{reload_error}")
             raise
 
     @staticmethod
@@ -439,20 +399,10 @@ class TranscriptEditingService:
             payload={
                 "sequence_id": sequence_id,
                 "document_id": document_id,
-                "source_state": source_state.model_dump(
-                    mode="json", exclude_computed_fields=True
-                ),
-                "destination_state": destination_state.model_dump(
-                    mode="json", exclude_computed_fields=True
-                ),
-                "segments": [
-                    item.model_dump(mode="json", exclude_computed_fields=True)
-                    for item in segments
-                ],
-                "words": [
-                    item.model_dump(mode="json", exclude_computed_fields=True)
-                    for item in words
-                ],
+                "source_state": source_state.model_dump(mode="json", exclude_computed_fields=True),
+                "destination_state": destination_state.model_dump(mode="json", exclude_computed_fields=True),
+                "segments": [item.model_dump(mode="json", exclude_computed_fields=True) for item in segments],
+                "words": [item.model_dump(mode="json", exclude_computed_fields=True) for item in words],
             },
         )
 
@@ -469,17 +419,11 @@ class TranscriptEditingService:
         def restore_change() -> None:
             self.repository.subtitles.save_subtitle_segments(
                 document_id,
-                [
-                    SubtitleSegment.model_validate(item)
-                    for item in payload.get("segments") or []
-                ],
+                [SubtitleSegment.model_validate(item) for item in payload.get("segments") or []],
             )
             self.repository.subtitles.save_subtitle_words(
                 document_id,
-                [
-                    SubtitleWord.model_validate(item)
-                    for item in payload.get("words") or []
-                ],
+                [SubtitleWord.model_validate(item) for item in payload.get("words") or []],
             )
             timeline.restore_snapshot(
                 TimelineState.model_validate(payload.get("source_state")),
@@ -514,8 +458,7 @@ class TranscriptEditingService:
         current = self.repository.content_revision()
         if current != expected:
             raise RuntimeError(
-                "Transcript edit conflict: "
-                f"expected project revision {expected}, current revision {current}"
+                f"Transcript edit conflict: expected project revision {expected}, current revision {current}"
             )
 
     def _require_plan_profiles(
@@ -525,21 +468,15 @@ class TranscriptEditingService:
     ) -> None:
         if timeline.sequence_id != plan.sequence_id:
             raise ValueError("转录剪辑计划与当前时间轴不一致")
-        project = self.repository.catalog.get_project()
-        main_profile = self.repository.catalog.get_sequence(
-            project.main_sequence_id
-        ).profile
-        sequence_profile = self.repository.catalog.get_sequence(
-            plan.sequence_id
-        ).profile
+        project = self.repository.projects.get_project()
+        main_profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
+        sequence_profile = self.repository.sequences.get_sequence(plan.sequence_id).profile
         if (
             main_profile != plan.main_profile
             or sequence_profile != plan.sequence_profile
             or timeline.state.sequence.profile != plan.sequence_profile
         ):
-            raise RuntimeError(
-                "Transcript edit conflict: frame rate changed after preview"
-            )
+            raise RuntimeError("Transcript edit conflict: frame rate changed after preview")
 
     @staticmethod
     def _validate_targets(
@@ -565,14 +502,11 @@ class TranscriptEditingService:
                 + ", ".join(sorted(estimated))
             )
         duplicated_by_segment = [
-            word.id
-            for word in selected_words
-            if word.segment_id in selected_segment_ids
+            word.id for word in selected_words if word.segment_id in selected_segment_ids
         ]
         if duplicated_by_segment:
             raise ValueError(
-                "同一计划不能同时选择完整字幕段及其中词语："
-                + ", ".join(sorted(duplicated_by_segment))
+                "同一计划不能同时选择完整字幕段及其中词语：" + ", ".join(sorted(duplicated_by_segment))
             )
 
     @staticmethod
@@ -613,9 +547,7 @@ class TranscriptEditingService:
         end = cls._collapse_frame(word.end_frame, intervals)
         if excluded or end <= start:
             end = start + 1
-        return word.model_copy(
-            update={"start_frame": start, "end_frame": end, "excluded": excluded}
-        )
+        return word.model_copy(update={"start_frame": start, "end_frame": end, "excluded": excluded})
 
     @classmethod
     def _rebuild_segments(
@@ -644,9 +576,7 @@ class TranscriptEditingService:
             if not segment_words:
                 start = cls._collapse_frame(segment.start_frame, intervals)
                 end = max(start + 1, cls._collapse_frame(segment.end_frame, intervals))
-                output_segments.append(
-                    segment.model_copy(update={"start_frame": start, "end_frame": end})
-                )
+                output_segments.append(segment.model_copy(update={"start_frame": start, "end_frame": end}))
                 continue
             rebuilt = segment.model_copy(
                 update={
@@ -658,13 +588,10 @@ class TranscriptEditingService:
             )
             output_segments.append(rebuilt)
             output_words.extend(
-                word.model_copy(update={"position": position})
-                for position, word in enumerate(segment_words)
+                word.model_copy(update={"position": position}) for position, word in enumerate(segment_words)
             )
         retained_ids = {segment.id for segment in output_segments}
-        return output_segments, [
-            word for word in output_words if word.segment_id in retained_ids
-        ]
+        return output_segments, [word for word in output_words if word.segment_id in retained_ids]
 
     @staticmethod
     def _collapse_frame(frame: int, intervals: list[tuple[int, int]]) -> int:

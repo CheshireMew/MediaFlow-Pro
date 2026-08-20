@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 import threading
@@ -22,28 +21,21 @@ from mediaflow.domain.project import (
 )
 from mediaflow.domain.storage_names import require_project_root_path
 
-from .audio_repository import AudioRepository
 from .editable_media_project_migration import (
     reconcile_editable_media_v4_archives,
 )
-from .highlight_repository import HighlightRepository
-from .project_catalog_repository import ProjectCatalogRepository
-from .project_event_repository import ProjectEventRepository
-from .project_history_repository import ProjectHistoryRepository
+from .project_database_session import ProjectDatabaseSession
 from .project_lock import ProcessFileLock
 from .project_migration_runner import ProjectSchemaMigrator
-from .project_records_repository import ProjectRecordsRepository
+from .project_repository_assembly import assemble_project_repositories
+from .project_repository_relations import ProjectRepositoryRelations
 from .project_schema_definition import (
     MANAGED_DIRECTORIES,
     PROJECT_FILE_NAME,
     PROJECT_SCHEMA_VERSION,
     SCHEMA_SQL,
 )
-from .project_serialization import json_value as _json
 from .sqlite_uri import read_only_database_uri
-from .subtitle_repository import SubtitleRepository
-from .timeline_repository import TimelineRepository
-from .web_media_repository import WebMediaRepository
 
 logger = logging.getLogger(__name__)
 
@@ -73,21 +65,41 @@ class ProjectRepository:
         self._revision_coalescing_depth = 0
         self._revision_dirty = False
         self._savepoint_serial = 0
-        self._transaction_publications: list[
-            _TransactionPublication
-        ] = []
+        self._transaction_publications: list[_TransactionPublication] = []
         self.read_only = read_only
         self._write_lock = write_lock
         self._known_content_revision: int | None = None
-        self.catalog = ProjectCatalogRepository(self)
-        self.events = ProjectEventRepository(self)
-        self.history = ProjectHistoryRepository(self)
-        self.timeline = TimelineRepository(self)
-        self.audio = AudioRepository(self)
-        self.subtitles = SubtitleRepository(self)
-        self.highlights = HighlightRepository(self)
-        self.web = WebMediaRepository(self)
-        self.records = ProjectRecordsRepository(self)
+        relations = ProjectRepositoryRelations()
+        self._database = ProjectDatabaseSession(
+            project_dir=self.project_dir,
+            database_path=self.database_path,
+            read_only=self.read_only,
+            relations=relations,
+            connection=self._connection,
+            connection_lock=self._connection_lock,
+            transaction_factory=lambda: self.transaction(),
+            content_revision_reader=self.content_revision,
+            content_revision_acknowledger=self.acknowledge_content_revision,
+            transaction_depth_reader=lambda: self._transaction_depth,
+            available_content_revision_reader=self._content_revision_if_available,
+            project_touch=self._touch_project,
+            publication_enlister=self.enlist_transaction_publication,
+        )
+        components = assemble_project_repositories(self._database)
+        self.projects = components.projects
+        self.sequences = components.sequences
+        self.assets = components.assets
+        self.observations = components.observations
+        self.events = components.events
+        self.history = components.history
+        self.operations = components.operations
+        self.timeline = components.timeline
+        self.audio = components.audio
+        self.dubbing = components.dubbing
+        self.subtitles = components.subtitles
+        self.highlights = components.highlights
+        self.web = components.web
+        self.records = components.records
 
     def _bind_mutation_gate(self, gate: Any) -> None:
         """Route every writable transaction through the owning project session."""
@@ -157,8 +169,8 @@ class ProjectRepository:
             if integrity is None or str(integrity[0]).lower() != "ok":
                 raise RuntimeError("New project database failed its integrity check")
             ProjectSchemaMigrator(repository).validate()
-            project = repository.catalog.get_project()
-            repository.catalog.get_sequence(project.main_sequence_id)
+            project = repository.projects.get_project()
+            repository.sequences.get_sequence(project.main_sequence_id)
             repository.acknowledge_content_revision()
             with repository._connection_lock:
                 repository._connection.close()
@@ -184,18 +196,12 @@ class ProjectRepository:
                 else:
                     lock.release()
             except BaseException as cleanup_error:
-                error.add_note(
-                    f"创建项目失败后的资源释放失败：{cleanup_error}"
-                )
-            failed_path = (
-                database_path if published else temporary_path
-            )
+                error.add_note(f"创建项目失败后的资源释放失败：{cleanup_error}")
+            failed_path = database_path if published else temporary_path
             try:
                 cls._archive_failed_creation(root, failed_path)
             except BaseException as archive_error:
-                error.add_note(
-                    f"创建失败数据库归档失败：{archive_error}"
-                )
+                error.add_note(f"创建失败数据库归档失败：{archive_error}")
             raise
 
     @staticmethod
@@ -262,9 +268,7 @@ class ProjectRepository:
                     if lock is not None:
                         lock.release()
             except BaseException as cleanup_error:
-                error.add_note(
-                    f"打开项目失败后的资源释放失败：{cleanup_error}"
-                )
+                error.add_note(f"打开项目失败后的资源释放失败：{cleanup_error}")
             raise
 
     @property
@@ -287,227 +291,6 @@ class ProjectRepository:
         revision = self.content_revision()
         self._known_content_revision = revision
         return revision
-
-    def automation_result(
-        self,
-        request_id: str,
-        operation: str,
-        input_hash: str,
-    ) -> dict[str, Any] | None:
-        row = self._fetchone(
-            """SELECT operation, input_hash, result_json, state
-               FROM automation_request WHERE request_id=?""",
-            (request_id,),
-        )
-        if row is None:
-            return None
-        if row["operation"] != operation or row["input_hash"] != input_hash:
-            raise ValueError("Automation request_id was reused with different input")
-        if row["state"] == "running":
-            return None
-        if row["state"] != "completed":
-            raise RuntimeError(
-                f"Unknown automation request state: {row['state']}"
-            )
-        result = json.loads(str(row["result_json"]))
-        if not isinstance(result, dict):
-            raise RuntimeError("Persisted automation result is not a JSON object")
-        return result
-
-    def _automation_request_is_running(
-        self,
-        request_id: str,
-        operation: str,
-        input_hash: str,
-    ) -> bool:
-        row = self._fetchone(
-            """SELECT operation, input_hash, state
-               FROM automation_request WHERE request_id=?""",
-            (request_id,),
-        )
-        if row is None:
-            return False
-        if row["operation"] != operation or row["input_hash"] != input_hash:
-            raise ValueError("Automation request_id was reused with different input")
-        state = str(row["state"])
-        if state not in {"running", "completed"}:
-            raise RuntimeError(f"Unknown automation request state: {state}")
-        return state == "running"
-
-    def begin_automation_request(
-        self,
-        request_id: str,
-        operation: str,
-        input_hash: str,
-    ) -> tuple[dict[str, Any] | None, bool]:
-        with self.transaction() as connection:
-            cursor = connection.execute(
-                """INSERT INTO automation_request(
-                       request_id, operation, input_hash, result_json,
-                       state, created_at
-                   ) VALUES (?, ?, ?, '{}', 'running', ?)
-                   ON CONFLICT(request_id) DO NOTHING""",
-                (request_id, operation, input_hash, now_ms()),
-            )
-            row = connection.execute(
-                """SELECT operation, input_hash, result_json, state
-                   FROM automation_request WHERE request_id=?""",
-                (request_id,),
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("Automation request was not persisted")
-            if row["operation"] != operation or row["input_hash"] != input_hash:
-                raise ValueError(
-                    "Automation request_id was reused with different input"
-                )
-            retrying = cursor.rowcount == 0
-            if row["state"] == "running":
-                return None, retrying
-            if row["state"] != "completed":
-                raise RuntimeError(
-                    f"Unknown automation request state: {row['state']}"
-                )
-            stored = json.loads(str(row["result_json"]))
-            if not isinstance(stored, dict):
-                raise RuntimeError(
-                    "Persisted automation result is not a JSON object"
-                )
-            return stored, retrying
-
-    def save_automation_result(
-        self,
-        request_id: str,
-        operation: str,
-        input_hash: str,
-        result: dict[str, Any],
-    ) -> dict[str, Any]:
-        payload = _json(result)
-        with self.transaction() as connection:
-            row = connection.execute(
-                """SELECT operation, input_hash, result_json, state
-                   FROM automation_request WHERE request_id=?""",
-                (request_id,),
-            ).fetchone()
-            if row is not None and (
-                row["operation"] != operation
-                or row["input_hash"] != input_hash
-            ):
-                raise ValueError("Automation request_id was reused with different input")
-            if row is None:
-                connection.execute(
-                    """INSERT INTO automation_request(
-                           request_id, operation, input_hash, result_json,
-                           state, created_at
-                       ) VALUES (?, ?, ?, ?, 'completed', ?)""",
-                    (
-                        request_id,
-                        operation,
-                        input_hash,
-                        payload,
-                        now_ms(),
-                    ),
-                )
-            elif row["state"] == "running":
-                connection.execute(
-                    """UPDATE automation_request
-                       SET result_json=?, state='completed'
-                       WHERE request_id=? AND state='running'""",
-                    (payload, request_id),
-                )
-            elif row["state"] != "completed":
-                raise RuntimeError(
-                    f"Unknown automation request state: {row['state']}"
-                )
-            row = connection.execute(
-                """SELECT result_json, state FROM automation_request
-                   WHERE request_id=?""",
-                (request_id,),
-            ).fetchone()
-            if row is None or row["state"] != "completed":
-                raise RuntimeError("Automation result was not persisted")
-            stored = json.loads(str(row["result_json"]))
-            if not isinstance(stored, dict):
-                raise RuntimeError("Persisted automation result is not a JSON object")
-            return stored
-
-    def consume_task_result_once(
-        self,
-        task_id: str,
-        project_id: str,
-        task_revision: int,
-        action: Callable[[], dict[str, Any]],
-    ) -> tuple[dict[str, Any], bool]:
-        with self.transaction() as connection:
-            task_row = connection.execute(
-                """SELECT project_id, status, revision
-                   FROM task WHERE id=?""",
-                (task_id,),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(task_id)
-            if (
-                task_row["project_id"] != project_id
-                or int(task_row["revision"]) != task_revision
-            ):
-                raise RuntimeError(
-                    "Task changed before its result could be consumed"
-                )
-            if task_row["status"] not in {
-                "completed",
-                "failed",
-                "cancelled",
-            }:
-                raise ValueError("Only terminal task results can be consumed")
-            stored_row = connection.execute(
-                """SELECT project_id, task_revision, result_json
-                   FROM task_consumption WHERE task_id=?""",
-                (task_id,),
-            ).fetchone()
-            if stored_row is not None:
-                if (
-                    stored_row["project_id"] != project_id
-                    or int(stored_row["task_revision"]) != task_revision
-                ):
-                    raise RuntimeError(
-                        "Persisted task consumption does not match the task"
-                    )
-                stored = json.loads(str(stored_row["result_json"]))
-                if not isinstance(stored, dict):
-                    raise RuntimeError(
-                        "Persisted task consumption is not a JSON object"
-                    )
-                return stored, False
-
-            result = action()
-            if not isinstance(result, dict):
-                raise TypeError("Task result consumer must return a dictionary")
-            payload = _json(result)
-            connection.execute(
-                """INSERT INTO task_consumption(
-                       task_id, project_id, task_revision,
-                       result_json, created_at
-                   ) VALUES (?, ?, ?, ?, ?)""",
-                (
-                    task_id,
-                    project_id,
-                    task_revision,
-                    payload,
-                    now_ms(),
-                ),
-            )
-            return json.loads(payload), True
-
-    def _committed_task_result(self, task_id: str) -> dict[str, Any] | None:
-        row = self._fetchone(
-            "SELECT result_json FROM task_consumption WHERE task_id=?",
-            (task_id,),
-        )
-        if row is None:
-            return None
-        stored = json.loads(str(row["result_json"]))
-        if not isinstance(stored, dict):
-            raise RuntimeError("Persisted task consumption is not a JSON object")
-        return stored
 
     @staticmethod
     def _connect(database_path: Path, *, read_only: bool) -> sqlite3.Connection:
@@ -603,9 +386,9 @@ class ProjectRepository:
                     project.updated_at,
                 ),
             )
-            self.catalog._insert_sequence_record(connection, sequence)
+            self.sequences._insert_sequence_record(connection, sequence)
             for bus in (master_bus, dialogue_bus, music_bus, effects_bus):
-                self.audio._insert_bus_record(connection, bus)
+                self.audio.insert_bus_record(connection, bus)
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -613,34 +396,20 @@ class ProjectRepository:
             raise PermissionError("Project is open read-only")
         with self._mutation_gate or nullcontext(), self._connection_lock:
             if self._transaction_depth:
-                publication_start = len(
-                    self._transaction_publications
-                )
+                publication_start = len(self._transaction_publications)
                 self._savepoint_serial += 1
-                savepoint = (
-                    f"mediaflow_nested_{self._transaction_depth}_"
-                    f"{self._savepoint_serial}"
-                )
+                savepoint = f"mediaflow_nested_{self._transaction_depth}_{self._savepoint_serial}"
                 self._connection.execute(f"SAVEPOINT {savepoint}")
                 self._transaction_depth += 1
                 try:
                     yield self._connection
-                    self._connection.execute(
-                        f"RELEASE SAVEPOINT {savepoint}"
-                    )
+                    self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
                 except BaseException as error:
                     try:
-                        self._connection.execute(
-                            f"ROLLBACK TO SAVEPOINT {savepoint}"
-                        )
-                        self._connection.execute(
-                            f"RELEASE SAVEPOINT {savepoint}"
-                        )
+                        self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
                     except BaseException as rollback_error:
-                        error.add_note(
-                            "嵌套项目事务回滚失败："
-                            f"{rollback_error}"
-                        )
+                        error.add_note(f"嵌套项目事务回滚失败：{rollback_error}")
                     self._rollback_publications(
                         publication_start,
                         error,
@@ -650,14 +419,18 @@ class ProjectRepository:
                     self._transaction_depth -= 1
                 return
             if self._transaction_publications:
-                raise RuntimeError(
-                    "Project transaction publication state leaked "
-                    "from a previous transaction"
-                )
+                raise RuntimeError("Project transaction publication state leaked from a previous transaction")
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 self._transaction_depth = 1
                 transaction_base_revision = self._content_revision_if_available()
+                fallback_observation = None
+                if transaction_base_revision is not None and not self.events.has_change_scope():
+                    fallback_observation = (
+                        self.observations.capture(["/project"])
+                        if self._schema_is_current()
+                        else self.observations.capture_schema_upgrade_baseline()
+                    )
                 if self._known_content_revision is not None:
                     current_revision = self.content_revision()
                     if current_revision != self._known_content_revision:
@@ -665,16 +438,17 @@ class ProjectRepository:
                             "Project content changed in another process; reload before editing"
                         )
                 yield self._connection
-                self.events.append_implicit_change(transaction_base_revision)
+                self.events.append_implicit_change(
+                    transaction_base_revision,
+                    fallback_observation,
+                )
                 self._connection.commit()
                 self._known_content_revision = self._content_revision_if_available()
             except BaseException as error:
                 try:
                     self._connection.rollback()
                 except BaseException as rollback_error:
-                    error.add_note(
-                        f"项目数据库回滚失败：{rollback_error}"
-                    )
+                    error.add_note(f"项目数据库回滚失败：{rollback_error}")
                 # Publication callbacks may need SQLite operations such as
                 # DETACH DATABASE.  Run them only after the outer transaction
                 # is observably over, not while the repository still reports
@@ -696,9 +470,7 @@ class ProjectRepository:
         on_rollback: Callable[[BaseException], None],
     ) -> None:
         if self._transaction_depth <= 0:
-            raise RuntimeError(
-                "File publication must join an active project transaction"
-            )
+            raise RuntimeError("File publication must join an active project transaction")
         self._transaction_publications.append(
             _TransactionPublication(
                 on_commit=on_commit,
@@ -744,10 +516,7 @@ class ProjectRepository:
             try:
                 publication.on_rollback(error)
             except BaseException as rollback_error:
-                error.add_note(
-                    "项目文件发布回滚失败："
-                    f"{rollback_error}"
-                )
+                error.add_note(f"项目文件发布回滚失败：{rollback_error}")
 
     def _commit_publications(self) -> None:
         publications = tuple(self._transaction_publications)
@@ -756,10 +525,7 @@ class ProjectRepository:
             try:
                 publication.on_commit()
             except BaseException:
-                logger.exception(
-                    "Project transaction committed, but publication "
-                    "finalization failed"
-                )
+                logger.exception("Project transaction committed, but publication finalization failed")
 
     def close(self) -> None:
         try:
@@ -793,13 +559,19 @@ class ProjectRepository:
             raise
         return int(row["content_revision"]) if row is not None else None
 
+    def _schema_is_current(self) -> bool:
+        try:
+            row = self._connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return row is not None and int(row["version"]) == PROJECT_SCHEMA_VERSION
+
     def _touch_project(self, connection: sqlite3.Connection) -> None:
         task_id = getattr(self._task_preparation_state, "task_id", None)
         if task_id is not None:
-            raise RuntimeError(
-                "后台任务准备阶段不能直接修改项目；"
-                f"任务 {task_id} 必须延迟到完成命令提交"
-            )
+            raise RuntimeError(f"后台任务准备阶段不能直接修改项目；任务 {task_id} 必须延迟到完成命令提交")
         if self._revision_coalescing_depth:
             self._revision_dirty = True
             connection.execute(

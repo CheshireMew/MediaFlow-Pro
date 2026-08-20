@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QTimer, QUrl, Slot
 
-from mediaflow.desktop.presentation_catalogs import (
+from mediaflow.desktop.presentation_messages import (
     system_name,
 )
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, ColorMode, TrackKind
@@ -23,7 +23,7 @@ class TimelineProjector(Projector):
         self._preview_timer.stop()
 
     def refresh_sequences(self) -> None:
-        if not self._session.binding.current:
+        if not self._session.state.binding.current:
             self._session.models.sequences.set_items([])
             return
         self._session.models.sequences.set_items(
@@ -36,7 +36,7 @@ class TimelineProjector(Projector):
                     "profile": f"{sequence.profile.width}×{sequence.profile.height}",
                     "colorMode": sequence.profile.color_mode.value,
                 }
-                for sequence in self._session.binding.current.list_sequences()
+                for sequence in self._session.state.binding.require_current().list_sequences()
             ]
         )
 
@@ -57,17 +57,17 @@ class TimelineProjector(Projector):
 
     def refresh_timeline(self, *, defer_clip_updates: bool = False) -> None:
         self._session.projectors.audio.invalidate_audio_metrics()
-        if not self._session.binding.timeline or not self._session.binding.current:
+        if not self._session.state.binding.timeline or not self._session.state.binding.current:
             self._session.models.tracks.set_items([])
             self._session.models.clips.set_items([])
             self._session.models.compound_clips.set_items([])
             self._session.models.transitions.set_items([])
             self._session.models.markers.set_items([])
             self._session.models.ranges.set_items([])
-            self._session.events.exportCapabilityChanged.emit()
+            self._session.updates.commit(export_capability=True)
             return
-        state = self._session.binding.timeline.state
-        assets = {asset.id: asset for asset in self._session.binding.current.list_assets()}
+        state = self._session.state.binding.require_timeline().state
+        assets = {asset.id: asset for asset in self._session.state.binding.require_current().list_assets()}
         tracks_by_id = {track.id: track for track in state.tracks}
         track_positions = {track.id: index for index, track in enumerate(state.tracks)}
         audio_lane_positions = self._audio_lane_projection(state)
@@ -117,7 +117,7 @@ class TimelineProjector(Projector):
                         **item,
                         "url": QUrl.fromLocalFile(str(item["path"])).toString(),
                     }
-                    for item in self._session.presentation.filmstrip_frames.get(clip.id, [])
+                    for item in self._session.state.presentation.filmstrip_frames.get(clip.id, [])
                 ],
                 "x": clip.transform.x,
                 "y": clip.transform.y,
@@ -169,12 +169,12 @@ class TimelineProjector(Projector):
             )
         self._session.models.compound_clips.set_items(compound_rows)
         available_clip_ids = {item["clipId"] for item in clip_rows}
-        self._session.selection.clip_ids = [
-            clip_id for clip_id in self._session.selection.clip_ids if clip_id in available_clip_ids
+        self._session.state.selection.clip_ids = [
+            clip_id for clip_id in self._session.state.selection.clip_ids if clip_id in available_clip_ids
         ]
         available_compound_ids = {item["compoundId"] for item in compound_rows}
-        if self._session.selection.compound_id not in available_compound_ids:
-            self._session.selection.compound_id = ""
+        if self._session.state.selection.compound_id not in available_compound_ids:
+            self._session.state.selection.compound_id = ""
         clips = clips_by_id
         self._session.models.transitions.set_items(
             [
@@ -219,39 +219,39 @@ class TimelineProjector(Projector):
                 for item in state.ranges
             ]
         )
-        self._session.events.exportCapabilityChanged.emit()
+        self._session.updates.commit(export_capability=True)
         self.schedule_preview_graph()
 
     def schedule_preview_graph(self) -> None:
         if (
-            not self._session.binding.current
-            or not self._session.binding.timeline
-            or not self._session.binding.timeline.state.clips
+            not self._session.state.binding.current
+            or not self._session.state.binding.timeline
+            or not self._session.state.binding.require_timeline().state.clips
         ):
-            if self._session.presentation.preview_graph_path:
-                self._session.presentation.preview_graph_path = ""
-                self._session.events.previewGraphChanged.emit()
+            if self._session.state.presentation.preview_graph_path:
+                self._session.state.presentation.preview_graph_path = ""
+                self._session.updates.commit(preview_graph=True)
             return
         self._preview_timer.start()
 
     @Slot()
     def compile_preview_graph(self) -> None:
-        if not self._session.binding.current or not self._session.binding.timeline:
+        if not self._session.state.binding.current or not self._session.state.binding.timeline:
             return
-        state = self._session.binding.timeline.state
+        state = self._session.state.binding.require_timeline().state
         if not state.clips:
             return
-        assets = {asset.id: asset for asset in self._session.binding.current.list_assets()}
+        assets = {asset.id: asset for asset in self._session.state.binding.require_current().list_assets()}
         missing_web_clips = [
             clip
             for clip in state.clips
             if assets[clip.asset_id].kind == AssetKind.WEB
-            and not self._session.binding.current.web_render_cache_ready(state, clip.id)
+            and not self._session.state.binding.require_current().web_render_cache_ready(state, clip.id)
         ]
         if missing_web_clips:
             active_clip_ids = {
                 task.command.clip_id
-                for task in self._session.task_state.items.values()
+                for task in self._session.state.tasks.items.values()
                 if isinstance(task.command, RenderWebClipCommand) and task.status.is_active
             }
             for clip in missing_web_clips:
@@ -262,21 +262,21 @@ class TimelineProjector(Projector):
                         sequence_id=state.sequence.id,
                     )
             return
-        self._session.requests.preview_id += 1
-        request_id = self._session.requests.preview_id
-        generation = self._session.binding.generation
-        project_dir = self._session.binding.current.project_dir
-        use_proxies = self._session.service_settings.preview.preview_quality != "source"
+        self._session.state.requests.preview_id += 1
+        request_id = self._session.state.requests.preview_id
+        generation = self._session.state.binding.generation
+        project_dir = self._session.state.binding.require_current().project_dir
+        use_proxies = self._session.state.service_settings.preview.preview_quality != "source"
         prefer_sdr_preview_proxy = (
             state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
-            and not self._session.presentation.hdr_preview_active
+            and not self._session.state.presentation.hdr_preview_active
         )
         if (
-            self._session.requests.preview_future is not None
-            and not self._session.requests.preview_future.running()
+            self._session.state.requests.preview_future is not None
+            and not self._session.state.requests.preview_future.running()
         ):
-            self._session.requests.preview_future.cancel()
-        self._session.requests.preview_future = self._session.background.submit(
+            self._session.state.requests.preview_future.cancel()
+        self._session.state.requests.preview_future = self._session.background.submit(
             "preview",
             (generation, request_id, state.sequence.id),
             lambda: self._session._api.write_preview_snapshot(
@@ -289,20 +289,22 @@ class TimelineProjector(Projector):
         )
 
     def refresh_preview_subtitles(self) -> None:
-        self._session.presentation.preview_subtitles = []
-        self._session.presentation.preview_subtitles_by_track = {}
-        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+        self._session.state.presentation.preview_subtitles = []
+        self._session.state.presentation.preview_subtitles_by_track = {}
+        if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
             self._session.models.subtitle_placements.set_items([])
             return
-        state = self._session.binding.current.load_timeline(self._session.binding.active_sequence_id)
+        state = self._session.state.binding.require_current().load_timeline(
+            self._session.state.binding.active_sequence_id
+        )
         tracks = [track for track in state.tracks if track.kind == TrackKind.SUBTITLE and track.enabled]
         if not tracks:
             self._session.models.subtitle_placements.set_items([])
             return
         segments = {
             segment.id: segment
-            for document in self._session.binding.current.list_subtitle_documents()
-            for segment in self._session.binding.current.list_subtitle_segments(document.id)
+            for document in self._session.state.binding.require_current().list_subtitle_documents()
+            for segment in self._session.state.binding.require_current().list_subtitle_segments(document.id)
         }
         audio_lane_positions = self._audio_lane_projection(state)
         default_audio_position = next(
@@ -312,7 +314,7 @@ class TimelineProjector(Projector):
         placement_rows = []
         for track in tracks:
             track_subtitles: list[tuple[int, int, str]] = []
-            for placement in self._session.binding.current.list_subtitle_placements(track.id):
+            for placement in self._session.state.binding.require_current().list_subtitle_placements(track.id):
                 segment = segments.get(placement.segment_id)
                 if segment:
                     text = placement.text_override or segment.text
@@ -336,14 +338,14 @@ class TimelineProjector(Projector):
                         }
                     )
                     if track.id == tracks[0].id:
-                        self._session.presentation.preview_subtitles.append(
+                        self._session.state.presentation.preview_subtitles.append(
                             (placement.start_frame, placement.end_frame, text)
                         )
                     track_subtitles.append((placement.start_frame, placement.end_frame, text))
             track_subtitles.sort(key=lambda item: (item[0], item[1]))
-            self._session.presentation.preview_subtitles_by_track[track.id] = track_subtitles
-        self._session.presentation.preview_subtitles.sort(key=lambda item: (item[0], item[1]))
+            self._session.state.presentation.preview_subtitles_by_track[track.id] = track_subtitles
+        self._session.state.presentation.preview_subtitles.sort(key=lambda item: (item[0], item[1]))
         self._session.models.subtitle_placements.set_items(placement_rows)
         placement_ids = {item["placementId"] for item in placement_rows}
-        if self._session.selection.subtitle_placement_id not in placement_ids:
-            self._session.selection.subtitle_placement_id = ""
+        if self._session.state.selection.subtitle_placement_id not in placement_ids:
+            self._session.state.selection.subtitle_placement_id = ""

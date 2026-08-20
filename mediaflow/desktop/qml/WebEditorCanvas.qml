@@ -20,7 +20,7 @@ Rectangle {
                     return;
                 window.__mediaFlowBridgeInstalling = true;
                 const bind = () => new QWebChannel(qt.webChannelTransport, channel => {
-                    const bridge = channel.objects.webController;
+                    const bridge = channel.objects.mediaflowWebController;
                     window.addEventListener("editablemediaselection", event => {
                         if (!window.__mediaFlowSynchronizing)
                             bridge.selectBrowserLayer(String(event.detail.layerId || ""));
@@ -44,11 +44,11 @@ Rectangle {
     }
 
     function synchronize() {
-        if (!visible || webView.loading || !webController.isWebClip)
+        if (!visible || webView.loading || !mediaflow.webController.isWebClip)
             return;
         const generation = ++root.syncGeneration;
-        webTimelineController.setActiveFrame(root.playheadFrame);
-        const selected = JSON.stringify(webController.selectedLayerId);
+        mediaflow.webTimelineController.setActiveFrame(root.playheadFrame);
+        const selected = JSON.stringify(mediaflow.webController.selectedLayerId);
         webView.runJavaScript(`
             (() => {
                 const generation = ${generation};
@@ -59,11 +59,11 @@ Rectangle {
                         return false;
                     window.__mediaFlowSynchronizing = true;
                     try {
-                        window.editableMedia.setState(${webController.stateJson});
-                        window.editableMedia.setTime(${webTimelineController.timeMsForFrame(root.playheadFrame)});
+                        window.editableMedia.setState(${mediaflow.webController.stateJson});
+                        window.editableMedia.setTime(${mediaflow.webTimelineController.timeMsForFrame(root.playheadFrame)});
                         if (typeof window.editableMedia.setEditCapabilities === "function")
-                            window.editableMedia.setEditCapabilities(${webController.capabilitiesJson});
-                        window.editableMedia.setEditMode(${webController.editMode});
+                            window.editableMedia.setEditCapabilities(${mediaflow.webController.capabilitiesJson});
+                        window.editableMedia.setEditMode(${mediaflow.webController.editMode});
                         window.editableMedia.selectLayer(${selected});
                     } finally {
                         window.__mediaFlowSynchronizing = false;
@@ -75,15 +75,15 @@ Rectangle {
             if (!applied || generation !== root.syncGeneration)
                 return;
             root.installBridge();
-            webView.runJavaScript(webController.browserSnapshotScript, function (snapshot) {
+            webView.runJavaScript(mediaflow.webController.browserSnapshotScript, function (snapshot) {
                 if (snapshot && generation === root.syncGeneration)
-                    webController.applyBrowserSnapshot(String(snapshot));
+                    mediaflow.webController.applyBrowserSnapshot(String(snapshot));
             });
         });
     }
 
     function synchronizeSelection(layerId) {
-        if (!visible || webView.loading || !webController.isWebClip)
+        if (!visible || webView.loading || !mediaflow.webController.isWebClip)
             return;
         const selected = JSON.stringify(String(layerId || ""));
         webView.runJavaScript(`
@@ -92,7 +92,7 @@ Rectangle {
     }
 
     function previewRuntimeState(payload) {
-        if (!visible || webView.loading || !webController.isWebClip)
+        if (!visible || webView.loading || !mediaflow.webController.isWebClip)
             return;
         webView.runJavaScript(`
             Promise.resolve(window.editableMedia.ready).then(() => {
@@ -100,7 +100,7 @@ Rectangle {
                 try {
                     window.editableMedia.setState(${payload});
                     window.editableMedia.setTime(
-                        ${webTimelineController.timeMsForFrame(root.playheadFrame)});
+                        ${mediaflow.webTimelineController.timeMsForFrame(root.playheadFrame)});
                 } finally {
                     window.__mediaFlowSynchronizing = false;
                 }
@@ -109,15 +109,15 @@ Rectangle {
 
     QtObject {
         id: webBridge
-        WebChannel.id: "webController"
+        WebChannel.id: "mediaflowWebController"
         function selectBrowserLayer(layerId) {
-            webController.selectBrowserLayer(String(layerId || ""));
+            mediaflow.webController.selectBrowserLayer(String(layerId || ""));
         }
         function commitBrowserState(payload) {
-            webController.commitBrowserState(String(payload || ""));
+            mediaflow.webController.commitBrowserState(String(payload || ""));
         }
         function browserBridgeReady() {
-            webController.browserBridgeReady();
+            mediaflow.webController.browserBridgeReady();
         }
     }
 
@@ -130,14 +130,14 @@ Rectangle {
         id: webView
         objectName: "webEditorWebView"
         anchors.centerIn: parent
-        width: Math.min(parent.width, (webController.activeCanvasData.width || 1080) * zoomFactor)
-        height: Math.min(parent.height, (webController.activeCanvasData.height || 1080) * zoomFactor)
-        url: webController.entryUrl
+        width: Math.min(parent.width, (mediaflow.webController.activeCanvasData.width || 1080) * zoomFactor)
+        height: Math.min(parent.height, (mediaflow.webController.activeCanvasData.height || 1080) * zoomFactor)
+        url: mediaflow.webController.entryUrl
         webChannel: channel
         backgroundColor: "transparent"
         zoomFactor: Math.max(0.1, Math.min(
-            root.width / (webController.activeCanvasData.width || 1080),
-            root.height / (webController.activeCanvasData.height || 1080),
+            root.width / (mediaflow.webController.activeCanvasData.width || 1080),
+            root.height / (mediaflow.webController.activeCanvasData.height || 1080),
             1
         ))
         onLoadingChanged: function (request) {
@@ -147,7 +147,7 @@ Rectangle {
     }
 
     Connections {
-        target: webController
+        target: mediaflow.webController
         function onWebStateChanged() {
             Qt.callLater(root.synchronize);
         }
@@ -157,18 +157,18 @@ Rectangle {
     }
 
     Connections {
-        target: webTimelineController
+        target: mediaflow.webTimelineController
         function onBrowserRuntimePreviewRequested(payload) {
             root.previewRuntimeState(payload);
         }
     }
 
     onPlayheadFrameChanged: {
-        if (!visible || webView.loading || !webController.isWebClip)
+        if (!visible || webView.loading || !mediaflow.webController.isWebClip)
             return;
-        webTimelineController.setActiveFrame(root.playheadFrame);
+        mediaflow.webTimelineController.setActiveFrame(root.playheadFrame);
         webView.runJavaScript(`Promise.resolve(window.editableMedia.ready).then(() =>
-            window.editableMedia.setTime(${webTimelineController.timeMsForFrame(root.playheadFrame)}))`);
+            window.editableMedia.setTime(${mediaflow.webTimelineController.timeMsForFrame(root.playheadFrame)}))`);
     }
 
     Rectangle {

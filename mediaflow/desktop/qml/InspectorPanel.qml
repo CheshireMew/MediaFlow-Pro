@@ -13,17 +13,17 @@ Rectangle {
     signal seekRequested(int frame)
 
     readonly property bool hasTimelineSelection:
-        timelineController.selectedClipId.length > 0
-        || timelineController.selectedCompoundId.length > 0
-        || timelineController.selectedTransitionId.length > 0
-        || webController.isWebClip
+        mediaflow.timelineViewController.selectedClipId.length > 0
+        || mediaflow.timelineViewController.selectedCompoundId.length > 0
+        || mediaflow.timelineViewController.selectedTransitionId.length > 0
+        || mediaflow.webController.isWebClip
     readonly property bool hasAssetSelection:
-        !hasTimelineSelection && mediaController.selectedAssetId.length > 0
+        !hasTimelineSelection && mediaflow.mediaController.selectedAssetId.length > 0
     readonly property bool hasMultipleClips:
-        timelineController.selectedClipIds.length > 1
-        && timelineController.selectedCompoundId.length === 0
+        mediaflow.timelineViewController.selectedClipIds.length > 1
+        && mediaflow.timelineViewController.selectedCompoundId.length === 0
     readonly property var assetData:
-        hasAssetSelection ? mediaController.selectedAssetData : ({})
+        hasAssetSelection ? mediaflow.mediaController.selectedAssetData : ({})
     readonly property string panelTitle:
         hasMultipleClips ? qsTr("批量片段参数")
         : hasTimelineSelection ? qsTr("片段参数")
@@ -37,11 +37,11 @@ Rectangle {
 
     function activeSequenceName() {
         for (let index = 0;
-                index < workspaceController.sequencesModel.rowCount();
+                index < mediaflow.workspaceViewController.sequencesModel.rowCount();
                 ++index) {
-            const sequence = workspaceController.sequencesModel.get(index);
+            const sequence = mediaflow.workspaceViewController.sequencesModel.get(index);
             if (String(sequence.sequenceId)
-                    === String(workspaceController.activeSequenceId))
+                    === String(mediaflow.workspaceViewController.activeSequenceId))
                 return String(sequence.displayName);
         }
         return qsTr("主时间线");
@@ -140,19 +140,19 @@ Rectangle {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("草稿名称")
-                        valueText: workspaceController.projectName
+                        valueText: mediaflow.workspaceViewController.projectName
                     }
                     InfoRow {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("保存位置")
-                        valueText: workspaceController.projectPath
+                        valueText: mediaflow.workspaceViewController.projectPath
                     }
                     InfoRow {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("色彩空间")
-                        valueText: workspaceController.colorMode
+                        valueText: mediaflow.workspaceViewController.colorMode
                             === "hdr10_bt2020_pq" ? "HDR10 · BT.2020 PQ"
                             : "Rec.709 SDR"
                     }
@@ -160,7 +160,7 @@ Rectangle {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("项目状态")
-                        valueText: workspaceController.readOnly
+                        valueText: mediaflow.workspaceViewController.readOnly
                             ? qsTr("只读") : qsTr("可编辑")
                     }
 
@@ -187,20 +187,20 @@ Rectangle {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("规格")
-                        valueText: workspaceController.profileLabel
+                        valueText: mediaflow.workspaceViewController.profileLabel
                     }
                     InfoRow {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("声道")
-                        valueText: workspaceController.profileAudioChannels === 1
+                        valueText: mediaflow.workspaceViewController.profileAudioChannels === 1
                             ? qsTr("单声道") : qsTr("立体声")
                     }
                     InfoRow {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         labelText: qsTr("总帧数")
-                        valueText: String(workspaceController.timelineDurationFrames)
+                        valueText: String(mediaflow.workspaceViewController.timelineDurationFrames)
                     }
 
                     Item { Layout.fillHeight: true; Layout.minimumHeight: 12 }
@@ -210,7 +210,7 @@ Rectangle {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
                         text: qsTr("修改时间线设置")
-                        enabled: workspaceController.actionCapabilities.canEdit
+                        enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
                         onClicked: root.editProfileRequested()
                     }
                     Item { Layout.preferredHeight: 16 }

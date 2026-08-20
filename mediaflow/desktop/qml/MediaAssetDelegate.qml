@@ -25,14 +25,14 @@ Rectangle {
     readonly property bool hasVisualPreview: status === "online"
         && (kind === "video" || kind === "image") && previewUrl.length > 0
     readonly property bool canEdit:
-        workspaceController.actionCapabilities.canEdit
-    property var draggedAssetIds: mediaController.isAssetSelected(assetId)
-        ? mediaController.selectedAssetIds : [assetId]
+        mediaflow.workspaceViewController.actionCapabilities.canEdit
+    property var draggedAssetIds: mediaflow.mediaController.isAssetSelected(assetId)
+        ? mediaflow.mediaController.selectedAssetIds : [assetId]
 
     radius: listMode ? Theme.radiusSmall : Theme.radius
-    color: mediaController.isAssetSelected(assetId)
+    color: mediaflow.mediaController.isAssetSelected(assetId)
         ? Theme.accentSoft : pointer.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-    border.color: mediaController.isAssetSelected(assetId)
+    border.color: mediaflow.mediaController.isAssetSelected(assetId)
         ? Theme.accent
         : pointer.containsMouse ? Theme.borderStrong : Theme.borderSubtle
     border.width: activeFocus ? 2 : 1
@@ -40,15 +40,15 @@ Rectangle {
     Accessible.name: name
     Accessible.description: detailLabel()
     Accessible.role: Accessible.ListItem
-    Accessible.selected: mediaController.isAssetSelected(assetId)
+    Accessible.selected: mediaflow.mediaController.isAssetSelected(assetId)
 
     Keys.onSpacePressed: function (event) {
-        mediaController.selectAsset(
+        mediaflow.mediaController.selectAsset(
             root.assetId, (event.modifiers & Qt.ControlModifier) !== 0);
         event.accepted = true;
     }
     Keys.onReturnPressed: function (event) {
-        mediaController.selectAsset(root.assetId, false);
+        mediaflow.mediaController.selectAsset(root.assetId, false);
         if (root.status === "online"
                 && ["video", "audio", "image"].indexOf(root.kind) >= 0)
             root.openRequested(root.assetId);
@@ -190,7 +190,7 @@ Rectangle {
                 root.contextRequested(root.assetId);
                 return;
             }
-            mediaController.selectAsset(
+            mediaflow.mediaController.selectAsset(
                 root.assetId, (mouse.modifiers & Qt.ControlModifier) !== 0);
         }
         onReleased: {

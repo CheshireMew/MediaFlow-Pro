@@ -54,12 +54,12 @@ Rectangle {
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumWidth: workspaceController.hasProject ? 80 : 0
+            Layout.minimumWidth: mediaflow.workspaceViewController.hasProject ? 80 : 0
 
             Text {
                 id: projectName
                 objectName: "windowProjectName"
-                visible: workspaceController.hasProject
+                visible: mediaflow.workspaceViewController.hasProject
                 anchors.centerIn: parent
                 width: Math.min(320, parent.width)
                 text: root.hostWindow.title
@@ -72,7 +72,7 @@ Rectangle {
         }
 
         WorkspaceHeader {
-            visible: workspaceController.hasProject
+            visible: mediaflow.workspaceViewController.hasProject
             workspaceItem: root.workspaceItem
             Layout.fillHeight: true
             Layout.minimumWidth: implicitWidth
@@ -82,6 +82,8 @@ Rectangle {
         }
         RowLayout {
             id: windowControls
+            objectName: "windowControls"
+            Layout.leftMargin: 2
             spacing: 0
             WindowControlButton {
                 objectName: "minimizeWindowButton"
@@ -93,7 +95,7 @@ Rectangle {
             WindowControlButton {
                 objectName: "maximizeWindowButton"
                 iconName: root.hostWindow.visibility === Window.Maximized
-                    ? "restore" : "maximize"
+                    ? "window-restore" : "window-maximize"
                 Accessible.name: root.hostWindow.visibility === Window.Maximized
                     ? qsTr("还原窗口") : qsTr("最大化窗口")
                 toolTipText: Accessible.name

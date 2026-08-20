@@ -26,7 +26,7 @@ Item {
         }
     }
     Repeater {
-        model: timelineController.clipsModel
+        model: mediaflow.timelineViewController.clipsModel
         delegate: Rectangle {
             id: clipDelegate
             objectName: "timelineClip"
@@ -54,7 +54,7 @@ Item {
             property real leftTrimOffset: 0
             property real rightTrimOffset: 0
             readonly property string displayedTrackKind: view.draggingClipId === clipId ? view.draggingClipTrackKind : trackKind
-            readonly property bool selected: timelineController.isClipSelected(clipId)
+            readonly property bool selected: mediaflow.timelineViewController.isClipSelected(clipId)
             readonly property color clipAccent: displayedTrackKind === "audio"
                 ? Theme.audio
                 : assetKind === "image"
@@ -80,8 +80,8 @@ Item {
             activeFocusOnTab: true
             Accessible.name: qsTr("片段 %1，起始帧 %2，持续 %3 帧").arg(assetName).arg(startFrame).arg(durationFrames)
             Accessible.role: Accessible.ListItem
-            Keys.onReturnPressed: timelineController.selectClip(clipId)
-            Keys.onSpacePressed: timelineController.selectClip(clipId)
+            Keys.onReturnPressed: mediaflow.timelineViewController.selectClip(clipId)
+            Keys.onSpacePressed: mediaflow.timelineViewController.selectClip(clipId)
 
             Rectangle {
                 anchors.right: parent.right
@@ -173,7 +173,7 @@ Item {
                         const next = Math.max(0, Math.min(
                             clipDelegate.durationFrames - clipDelegate.fadeOutFrames,
                             Math.round((fadeInHandle.x + width / 2) / view.pixelsPerFrame)));
-                        timelineController.setClipAudio(
+                        mediaflow.timelineClipController.setClipAudio(
                             clipDelegate.clipId, clipDelegate.gainDb,
                             clipDelegate.pan, next, clipDelegate.fadeOutFrames);
                     }
@@ -208,7 +208,7 @@ Item {
                             clipDelegate.durationFrames - clipDelegate.fadeInFrames,
                             Math.round((clipDelegate.width - fadeOutHandle.x
                                 - width / 2) / view.pixelsPerFrame)));
-                        timelineController.setClipAudio(
+                        mediaflow.timelineClipController.setClipAudio(
                             clipDelegate.clipId, clipDelegate.gainDb,
                             clipDelegate.pan, clipDelegate.fadeInFrames, next);
                     }
@@ -218,7 +218,7 @@ Item {
                 HoverHandler { id: fadeOutHover }
             }
             Repeater {
-                model: assetKind === "web" && webController.isWebClip && timelineController.isClipSelected(clipId) ? webTimelineController.keyframesData : []
+                model: assetKind === "web" && mediaflow.webController.isWebClip && mediaflow.timelineViewController.isClipSelected(clipId) ? mediaflow.webTimelineController.keyframesData : []
                 delegate: Rectangle {
                     id: keyframeMarker
                     required property var modelData
@@ -252,7 +252,7 @@ Item {
                             if (active) {
                                 initialFrame = Number(keyframeMarker.modelData.frame);
                             } else if (keyframeMarker.previewFrame !== initialFrame) {
-                                webTimelineController.moveTimelineKeyframe(
+                                mediaflow.webTimelineController.moveTimelineKeyframe(
                                     String(keyframeMarker.modelData.target),
                                     String(keyframeMarker.modelData.sourceId),
                                     Number(keyframeMarker.modelData.timeMs),
@@ -271,7 +271,7 @@ Item {
                                         + clipDelegate.durationFrames - 1,
                                     Math.round(rawFrame)));
                             view.seekToFrame(keyframeMarker.previewFrame);
-                            webTimelineController.previewTimelineKeyframe(
+                            mediaflow.webTimelineController.previewTimelineKeyframe(
                                 String(keyframeMarker.modelData.target),
                                 String(keyframeMarker.modelData.sourceId),
                                 Number(keyframeMarker.modelData.timeMs),
@@ -279,49 +279,22 @@ Item {
                         }
                         onCanceled: {
                             keyframeMarker.previewFrame = initialFrame;
-                            webTimelineController.cancelTimelinePreview();
+                            mediaflow.webTimelineController.cancelTimelinePreview();
                         }
                     }
                 }
             }
-            MouseArea {
+            TimelineClipInteraction {
                 id: clipMouse
                 anchors.fill: parent
-                hoverEnabled: true
-                preventStealing: true
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                property real pressContentX: 0
-                property real pressContentY: 0
-                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-                onPressed: function (mouse) {
-                    if (mouse.button === Qt.RightButton) {
-                        if (!timelineController.isClipSelected(clipId))
-                            timelineController.selectClip(clipId, false);
-                        return;
-                    }
-                    const toggle = view.multiSelectMode || (mouse.modifiers & Qt.ControlModifier) !== 0;
-                    if (toggle || !timelineController.isClipSelected(clipId))
-                        timelineController.selectClip(clipId, toggle);
-                    const point = clipDelegate.mapToItem(clipLayer, mouse.x, mouse.y);
-                    pressContentX = point.x;
-                    pressContentY = point.y;
-                    view.beginClipDrag(clipId, trackPosition, trackKind, audioTrackPosition);
-                }
-                onPositionChanged: function (mouse) {
-                    if (!pressed || view.draggingClipId !== clipId)
-                        return;
-                    const point = clipDelegate.mapToItem(clipLayer, mouse.x, mouse.y);
-                    view.updateClipDrag(clipId, startFrame, trackPosition, point.x - pressContentX, point.y - pressContentY);
-                }
-                onReleased: function (mouse) {
-                    if (mouse.button === Qt.RightButton) {
-                        view.cancelClipDrag();
-                        view.openClipContextMenu(clipId);
-                        return;
-                    }
-                    view.finishClipDrag(clipId, startFrame, trackPosition, view.snapEnabled && (mouse.modifiers & Qt.ShiftModifier) === 0);
-                }
-                onCanceled: view.cancelClipDrag()
+                view: clipLayer.view
+                clipItem: clipDelegate
+                layerItem: clipLayer
+                clipId: clipDelegate.clipId
+                startFrame: clipDelegate.startFrame
+                trackPosition: clipDelegate.trackPosition
+                trackKind: clipDelegate.trackKind
+                audioTrackPosition: clipDelegate.audioTrackPosition
             }
             Rectangle {
                 width: 6
@@ -340,7 +313,7 @@ Item {
                     onTranslationChanged: clipDelegate.leftTrimOffset = Math.max(-clipDelegate.startFrame * view.pixelsPerFrame, Math.min(clipDelegate.durationFrames * view.pixelsPerFrame - 8, translation.x))
                     onActiveChanged: if (!active && clipDelegate.leftTrimOffset !== 0) {
                         const delta = Math.round(clipDelegate.leftTrimOffset / view.pixelsPerFrame);
-                        timelineController.trimClipEdges(clipDelegate.clipId, clipDelegate.startFrame + delta, clipDelegate.durationFrames - delta, true);
+                        mediaflow.timelineClipController.trimClipEdges(clipDelegate.clipId, clipDelegate.startFrame + delta, clipDelegate.durationFrames - delta, true);
                         clipDelegate.leftTrimOffset = 0;
                     }
                 }
@@ -362,7 +335,7 @@ Item {
                     onTranslationChanged: clipDelegate.rightTrimOffset = Math.max(-(clipDelegate.durationFrames * view.pixelsPerFrame - 8), translation.x)
                     onActiveChanged: if (!active && clipDelegate.rightTrimOffset !== 0) {
                         const delta = Math.round(clipDelegate.rightTrimOffset / view.pixelsPerFrame);
-                        timelineController.trimClipEdges(clipDelegate.clipId, clipDelegate.startFrame, clipDelegate.durationFrames + delta, false);
+                        mediaflow.timelineClipController.trimClipEdges(clipDelegate.clipId, clipDelegate.startFrame, clipDelegate.durationFrames + delta, false);
                         clipDelegate.rightTrimOffset = 0;
                     }
                 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
@@ -11,12 +12,19 @@ from mediaflow.domain.runtime_capabilities import (
     RuntimeInspection,
 )
 from mediaflow.domain.settings import ServiceSettings
+from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
+from mediaflow.infrastructure.ffprobe_runner import FfprobeRunner
 from mediaflow.infrastructure.runtime_components import RuntimeComponentService
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_contract import (
     PlatformTarget,
 )
+from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.runtime_tools import RuntimeToolService
 from mediaflow.infrastructure.settings_repository import ServiceSettingsRepository
+from mediaflow.infrastructure.speaker_diarization import (
+    pyannote_model_ready_marker,
+)
 from mediaflow.infrastructure.subprocess_runner import run_cancellable
 
 
@@ -35,10 +43,12 @@ class RuntimeCapabilityInspector:
         paths = self.runtime.paths
         ffmpeg_version = contract.ffmpeg_version
         melt_version = contract.melt_version
+        ffmpeg = FfmpegRunner(paths.ffmpeg)
+        ffprobe = FfprobeRunner(paths.ffprobe)
         capabilities = [
-            self._probe_command(
+            self._probe_media_command(
                 "ffmpeg",
-                paths.ffmpeg,
+                ffmpeg,
                 contract.ffmpeg_probe_arguments,
                 expected=(
                     lambda first, output: (
@@ -51,9 +61,9 @@ class RuntimeCapabilityInspector:
                     f"FFmpeg {ffmpeg_version} with the reviewed GPLv3 configuration"
                 ),
             ),
-            self._probe_command(
+            self._probe_media_command(
                 "ffprobe",
-                paths.ffprobe,
+                ffprobe,
                 contract.ffmpeg_probe_arguments,
                 expected=(
                     lambda first, _output: first.startswith(
@@ -81,8 +91,8 @@ class RuntimeCapabilityInspector:
                 contract.qt_version,
             ),
         ]
+        settings = self.settings or ServiceSettingsRepository().load()
         try:
-            settings = self.settings or ServiceSettingsRepository().load()
             component_status = RuntimeComponentService(
                 settings,
                 paths,
@@ -106,10 +116,132 @@ class RuntimeCapabilityInspector:
                 )
                 for component_id in ("faster-whisper-xxl", "gpt-sovits-v2pro")
             )
+        capabilities.append(self._probe_speaker_diarization(settings, paths))
         return RuntimeInspection(
             checked_at=now_ms(),
             runtime_root=str(paths.runtime_dir),
             capabilities=capabilities,
+        )
+
+    @staticmethod
+    def _probe_speaker_diarization(
+        settings: ServiceSettings,
+        paths: RuntimePaths,
+    ) -> RuntimeCapabilityStatus:
+        configured = settings.speaker_diarization
+        if configured.backend == "transcript_clustering":
+            status = RuntimeToolService(settings, paths).speaker_clustering_status()
+            if not status["ready"]:
+                return RuntimeCapabilityStatus(
+                    id="speaker-diarization",
+                    status="unavailable",
+                    path=str(status["python"]),
+                    reason=str(status["reason"]),
+                )
+            return RuntimeCapabilityStatus(
+                id="speaker-diarization",
+                status="ready",
+                version=str(status["version"]),
+                path=str(status["model"]),
+            )
+        if not configured.python_executable:
+            return RuntimeCapabilityStatus(
+                id="speaker-diarization",
+                status="unavailable",
+                reason="尚未选择安装了 pyannote.audio 的独立 Python 环境",
+            )
+        executable = Path(configured.python_executable).expanduser()
+        if not executable.is_file():
+            return RuntimeCapabilityStatus(
+                id="speaker-diarization",
+                status="unavailable",
+                path=str(executable),
+                reason="说话人识别 Python 不存在",
+            )
+        model_path = Path(configured.model).expanduser()
+        token = configured.hugging_face_token.strip() or os.environ.get("HF_TOKEN", "").strip()
+        if (
+            not model_path.exists()
+            and not token
+            and not pyannote_model_ready_marker(
+                executable,
+                configured.model,
+            ).is_file()
+        ):
+            return RuntimeCapabilityStatus(
+                id="speaker-diarization",
+                status="unavailable",
+                path=str(executable.resolve()),
+                reason="Community-1 尚未完成首次授权识别，且没有配置 Hugging Face 访问令牌",
+            )
+        try:
+            completed = run_cancellable(
+                [
+                    str(executable),
+                    "-c",
+                    (
+                        "import pyannote.audio, torch; "
+                        "print(getattr(pyannote.audio, '__version__', 'unknown'))"
+                    ),
+                ],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return RuntimeCapabilityStatus(
+                id="speaker-diarization",
+                status="unavailable",
+                path=str(executable.resolve()),
+                reason=f"pyannote.audio 探测失败：{error}",
+            )
+        output = "\n".join(
+            part for part in (completed.stdout, completed.stderr) if part
+        ).strip()
+        version_line = next(
+            (line.strip() for line in output.splitlines() if line.strip()),
+            "",
+        )
+        if completed.returncode != 0 or not version_line:
+            return RuntimeCapabilityStatus(
+                id="speaker-diarization",
+                status="unavailable",
+                path=str(executable.resolve()),
+                reason=output[-2000:] or f"探测退出码 {completed.returncode}",
+            )
+        return RuntimeCapabilityStatus(
+            id="speaker-diarization",
+            status="ready",
+            version=version_line,
+            path=str(executable.resolve()),
+        )
+
+    @staticmethod
+    def _probe_media_command(
+        capability_id: str,
+        runner: FfmpegRunner | FfprobeRunner,
+        arguments: tuple[str, ...],
+        *,
+        expected: Callable[[str, str], bool],
+        expected_description: str,
+    ) -> RuntimeCapabilityStatus:
+        try:
+            completed = runner.run(arguments, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return RuntimeCapabilityStatus(
+                id=capability_id,
+                status="unavailable",
+                path=str(runner.executable),
+                reason=f"Probe failed: {error}",
+            )
+        return RuntimeCapabilityInspector._probe_result(
+            capability_id,
+            runner.executable,
+            completed,
+            expected=expected,
+            expected_description=expected_description,
         )
 
     @staticmethod
@@ -143,6 +275,23 @@ class RuntimeCapabilityInspector:
                 path=str(executable),
                 reason=f"Probe failed: {error}",
             )
+        return RuntimeCapabilityInspector._probe_result(
+            capability_id,
+            executable,
+            completed,
+            expected=expected,
+            expected_description=expected_description,
+        )
+
+    @staticmethod
+    def _probe_result(
+        capability_id: str,
+        executable: Path,
+        completed: subprocess.CompletedProcess,
+        *,
+        expected: Callable[[str, str], bool],
+        expected_description: str,
+    ) -> RuntimeCapabilityStatus:
         output = "\n".join(
             part for part in (completed.stdout, completed.stderr) if part
         )
@@ -275,3 +424,19 @@ class RuntimeCapabilityInspector:
             version=pyside_version,
             path=str(plugin),
         )
+
+
+class RuntimeInspectionService:
+    def __init__(
+        self,
+        runtime: RuntimeContext,
+        settings: Callable[[], ServiceSettings],
+    ) -> None:
+        self._runtime = runtime
+        self._settings = settings
+
+    def inspect(self) -> RuntimeInspection:
+        return RuntimeCapabilityInspector(
+            settings=self._settings(),
+            runtime=self._runtime,
+        ).inspect()

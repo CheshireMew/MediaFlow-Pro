@@ -15,27 +15,27 @@ AppScrollView {
     property bool manualCandidateOpen: false
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
-    readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
-    readonly property bool canStartTasks: Boolean(workspaceController.actionCapabilities.canStartTasks)
+    readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+    readonly property bool canStartTasks: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
 
     function syncDocumentSelector() {
-        const documentId = String(subtitleController.selectedDocumentId || "");
-        const row = subtitleController.subtitleDocumentsModel.findRow(
+        const documentId = String(mediaflow.subtitleViewController.selectedDocumentId || "");
+        const row = mediaflow.subtitleViewController.subtitleDocumentsModel.findRow(
             "documentId", documentId);
         if (row >= 0) {
             sourceDocument.currentIndex = row;
         } else if (sourceDocument.count > 0 && documentId.length === 0) {
             sourceDocument.currentIndex = 0;
-            subtitleController.selectSubtitleDocument(
+            mediaflow.subtitleViewController.selectSubtitleDocument(
                 String(sourceDocument.currentValue || ""));
         }
     }
 
     function refreshTask() {
-        const analysis = taskController.latestCommandTask(
-            "analyze_highlights", subtitleController.selectedDocumentId);
-        const exporting = taskController.latestCommandTask(
-            "export_highlights", workspaceController.activeSequenceId);
+        const analysis = mediaflow.taskController.latestCommandTask(
+            "analyze_highlights", mediaflow.subtitleViewController.selectedDocumentId);
+        const exporting = mediaflow.taskController.latestCommandTask(
+            "export_highlights", mediaflow.workspaceViewController.activeSequenceId);
         const analysisActive = analysis.status === "pending" || analysis.status === "running"
             || analysis.status === "paused";
         const exportActive = exporting.status === "pending" || exporting.status === "running"
@@ -46,11 +46,11 @@ AppScrollView {
     }
 
     Connections {
-        target: taskController
+        target: mediaflow.taskController
         function onTasksChanged() { root.refreshTask(); }
     }
     Connections {
-        target: subtitleController
+        target: mediaflow.subtitleViewController
         function onSelectionChanged() {
             root.syncDocumentSelector();
             root.refreshTask();
@@ -70,7 +70,7 @@ AppScrollView {
             title: qsTr("选择批量导出文件夹")
             onAccepted: {
                 if (root.canStartTasks)
-                    highlightController.exportSelectedHighlights(selectedFolder.toString());
+                    mediaflow.highlightController.exportSelectedHighlights(selectedFolder.toString());
             }
         }
         RowLayout {
@@ -81,11 +81,11 @@ AppScrollView {
                 id: sourceDocument
                 objectName: "highlightSourceDocument"
                 Layout.fillWidth: true
-                model: subtitleController.subtitleDocumentsModel
+                model: mediaflow.subtitleViewController.subtitleDocumentsModel
                 textRole: "language"
                 valueRole: "documentId"
                 displayText: count > 0 ? currentText : qsTr("需要先生成字幕")
-                onActivated: subtitleController.selectSubtitleDocument(currentValue)
+                onActivated: mediaflow.subtitleViewController.selectSubtitleDocument(currentValue)
                 onCountChanged: Qt.callLater(root.syncDocumentSelector)
             }
             AppButton {
@@ -95,7 +95,7 @@ AppScrollView {
                 enabled: root.canStartTasks
                     && String(sourceDocument.currentValue || "").length > 0
                     && !root.taskActive
-                onClicked: highlightController.analyzeHighlights(
+                onClicked: mediaflow.highlightController.analyzeHighlights(
                     String(sourceDocument.currentValue || ""))
             }
         }
@@ -173,7 +173,7 @@ AppScrollView {
                     id: manualStart
                     Layout.fillWidth: true
                     from: 0
-                    to: Math.max(1, Number(mediaController.selectedAssetData.durationFrames || 2147483647))
+                    to: Math.max(1, Number(mediaflow.mediaController.selectedAssetData.durationFrames || 2147483647))
                     editable: true
                 }
                 Text {
@@ -185,14 +185,14 @@ AppScrollView {
                     id: manualEnd
                     Layout.fillWidth: true
                     from: 1
-                    to: Math.max(1, Number(mediaController.selectedAssetData.durationFrames || 2147483647))
+                    to: Math.max(1, Number(mediaflow.mediaController.selectedAssetData.durationFrames || 2147483647))
                     value: Math.max(1, Math.min(to, 450))
                     editable: true
                 }
                 AppButton {
                     text: qsTr("添加候选")
-                    enabled: root.canEdit && mediaController.selectedAssetId.length > 0 && manualEnd.value > manualStart.value
-                    onClicked: highlightController.addManualHighlight(manualStart.value, manualEnd.value, manualTitle.text)
+                    enabled: root.canEdit && mediaflow.mediaController.selectedAssetId.length > 0 && manualEnd.value > manualStart.value
+                    onClicked: mediaflow.highlightController.addManualHighlight(manualStart.value, manualEnd.value, manualTitle.text)
                 }
             }
         }
@@ -204,14 +204,14 @@ AppScrollView {
             Layout.fillWidth: true
             text: qsTr("生成短视频")
             enabled: root.canEdit && highlightList.count > 0
-            onClicked: highlightController.createAllHighlightShorts()
+            onClicked: mediaflow.highlightController.createAllHighlightShorts()
         }
         AppButton {
             Layout.fillWidth: true
             primary: true
             text: qsTr("快速导出")
             enabled: root.canStartTasks && highlightList.count > 0 && !root.taskActive
-            onClicked: highlightController.exportSelectedHighlightsToDefaultLocation()
+            onClicked: mediaflow.highlightController.exportSelectedHighlightsToDefaultLocation()
         }
         AppButton {
             text: qsTr("另存为…")
@@ -233,7 +233,7 @@ AppScrollView {
         Layout.preferredHeight: Math.max(240, Math.min(520, contentHeight))
         clip: true
         spacing: 8
-        model: highlightController.highlightsModel
+        model: mediaflow.highlightController.highlightsModel
         delegate: Rectangle {
             required property string highlightId
             required property string sequenceId
@@ -248,8 +248,8 @@ AppScrollView {
             height: highlightBody.implicitHeight + 24
             radius: Theme.radius
             opacity: selected ? 1.0 : 0.55
-            color: highlightController.selectedHighlightId === highlightId ? Theme.accentSoft : highlightMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-            border.color: highlightController.selectedHighlightId === highlightId ? Theme.accent : Theme.border
+            color: mediaflow.highlightController.selectedHighlightId === highlightId ? Theme.accentSoft : highlightMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+            border.color: mediaflow.highlightController.selectedHighlightId === highlightId ? Theme.accent : Theme.border
             ColumnLayout {
                 id: highlightBody
                 anchors.left: parent.left
@@ -291,14 +291,14 @@ AppScrollView {
                     AppButton {
                         Layout.fillWidth: true
                         text: qsTr("预览")
-                        onClicked: highlightController.previewHighlight(highlightId)
+                        onClicked: mediaflow.highlightController.previewHighlight(highlightId)
                     }
                     AppButton {
                         Layout.fillWidth: true
                         visible: sourceSequenceId.length === 0
                         text: qsTr("添加到主序列")
                         enabled: root.canEdit
-                        onClicked: highlightController.addHighlightToMainSequence(highlightId)
+                        onClicked: mediaflow.highlightController.addHighlightToMainSequence(highlightId)
                     }
                 }
                 RowLayout {
@@ -307,12 +307,12 @@ AppScrollView {
                         Layout.fillWidth: true
                         text: selected ? qsTr("已纳入导出") : qsTr("纳入导出")
                         enabled: root.canEdit
-                        onClicked: highlightController.setHighlightSelected(highlightId, !selected)
+                        onClicked: mediaflow.highlightController.setHighlightSelected(highlightId, !selected)
                     }
                     AppButton {
                         text: qsTr("删除")
                         enabled: root.canEdit
-                        onClicked: highlightController.deleteHighlight(highlightId)
+                        onClicked: mediaflow.highlightController.deleteHighlight(highlightId)
                     }
                 }
                 AppButton {
@@ -322,9 +322,9 @@ AppScrollView {
                     enabled: sequenceId.length > 0 || root.canEdit
                     onClicked: {
                         if (sequenceId.length > 0)
-                            workspaceController.selectSequence(sequenceId);
+                            mediaflow.workspaceSequenceController.selectSequence(sequenceId);
                         else
-                            highlightController.createShortFromHighlight(highlightId);
+                            mediaflow.highlightController.createShortFromHighlight(highlightId);
                     }
                 }
             }
@@ -335,7 +335,7 @@ AppScrollView {
                 acceptedButtons: Qt.LeftButton
                 propagateComposedEvents: true
                 onClicked: {
-                    highlightController.selectHighlight(highlightId);
+                    mediaflow.highlightController.selectHighlight(highlightId);
                     mouse.accepted = false;
                 }
             }
@@ -351,7 +351,7 @@ AppScrollView {
     Panel {
         Layout.fillWidth: true
         implicitHeight: 132
-        visible: highlightController.selectedHighlightId.length > 0
+        visible: mediaflow.highlightController.selectedHighlightId.length > 0
         enabled: root.canEdit
         ColumnLayout {
             anchors.fill: parent
@@ -366,9 +366,9 @@ AppScrollView {
             AppTextField {
                 id: editTitle
                 collaborationPath: "/highlights/"
-                    + highlightController.selectedHighlightId + "/title"
+                    + mediaflow.highlightController.selectedHighlightId + "/title"
                 Layout.fillWidth: true
-                text: highlightController.selectedHighlightData.title || ""
+                text: mediaflow.highlightController.selectedHighlightData.title || ""
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -382,7 +382,7 @@ AppScrollView {
                     Layout.fillWidth: true
                     from: 0
                     to: 2147483647
-                    value: Number(highlightController.selectedHighlightData.startFrame || 0)
+                    value: Number(mediaflow.highlightController.selectedHighlightData.startFrame || 0)
                     editable: true
                 }
                 Text {
@@ -395,13 +395,13 @@ AppScrollView {
                     Layout.fillWidth: true
                     from: 1
                     to: 2147483647
-                    value: Number(highlightController.selectedHighlightData.endFrame || 1)
+                    value: Number(mediaflow.highlightController.selectedHighlightData.endFrame || 1)
                     editable: true
                 }
                 AppButton {
                     text: qsTr("保存候选")
                     primary: true
-                    onClicked: highlightController.updateHighlight(highlightController.selectedHighlightId, editStart.value, editEnd.value, editTitle.text)
+                    onClicked: mediaflow.highlightController.updateHighlight(mediaflow.highlightController.selectedHighlightId, editStart.value, editEnd.value, editTitle.text)
                 }
             }
         }

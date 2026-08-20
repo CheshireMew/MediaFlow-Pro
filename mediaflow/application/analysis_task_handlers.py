@@ -13,12 +13,9 @@ from mediaflow.application.ports import (
 from mediaflow.application.task_handler_support import ProjectTaskHandler
 from mediaflow.application.task_service import TaskCompletion, TaskContext
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import AssetKind
-from mediaflow.domain.model_base import new_id
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import ServiceSettings
-from mediaflow.domain.storage_names import content_addressed_child_path
 from mediaflow.domain.task_commands import (
     AnalyzeDownloadCommand,
     AnalyzeLoudnessCommand,
@@ -38,11 +35,13 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         documents: AnalysisTaskDocuments,
         runtime: AnalysisTaskRuntime,
         settings: Callable[[], ServiceSettings],
+        timeline_provider: Callable[[str], TimelineEditor],
     ):
         super().__init__(documents.project_dir)
         self.documents = documents
         self.runtime = runtime
         self.settings = settings
+        self.timeline_provider = timeline_provider
 
     def handle(self, context: TaskContext) -> TaskCompletion:
         command = context.task.command
@@ -81,12 +80,12 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
     ) -> TaskCompletion:
         state = self.documents.timeline.load_timeline(command.sequence_id)
         clip = next(item for item in state.clips if item.id == command.clip_id)
-        asset = self.documents.catalog.get_asset(clip.asset_id)
+        asset = self.documents.assets.get_asset(clip.asset_id)
         if asset.kind != AssetKind.VIDEO:
             raise ValueError("场景检测只适用于视频片段")
         context.report(OperationProgress.indeterminate("scene_detection_preparing"))
         frames = self.runtime.detect_scenes(
-            self.documents.catalog.resolve_asset_path(asset),
+            self.documents.assets.resolve_asset_path(asset),
             clip,
             state.sequence.profile,
             threshold=command.threshold,
@@ -95,10 +94,7 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         )
 
         def apply_result() -> None:
-            TimelineEditor(
-                self.documents,
-                command.sequence_id,
-            ).replace_scene_markers(
+            self.timeline_provider(command.sequence_id).replace_scene_markers(
                 clip.id,
                 frames,
                 expected_clip=clip,
@@ -125,12 +121,12 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
     ) -> TaskCompletion:
         state = self.documents.timeline.load_timeline(command.sequence_id)
         clip = next(item for item in state.clips if item.id == command.clip_id)
-        asset = self.documents.catalog.get_asset(clip.asset_id)
+        asset = self.documents.assets.get_asset(clip.asset_id)
         if asset.kind != AssetKind.VIDEO:
             raise ValueError("自动构图和主体跟踪只适用于视频片段")
         context.report(OperationProgress.indeterminate("subject_tracking_preparing"))
         keyframes = self.runtime.track_subject(
-            self.documents.catalog.resolve_asset_path(asset),
+            self.documents.assets.resolve_asset_path(asset),
             clip,
             state.sequence.profile,
             mode=command.mode,
@@ -139,10 +135,7 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         )
 
         def apply_result() -> None:
-            TimelineEditor(
-                self.documents,
-                command.sequence_id,
-            ).set_clip_transform_keyframes(
+            self.timeline_provider(command.sequence_id).set_clip_transform_keyframes(
                 clip.id,
                 keyframes,
                 expected_clip=clip,
@@ -175,9 +168,9 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         destination = self.project_dir / "cache" / "download-analysis" / f"{context.task.id}.json"
         context.report(OperationProgress.indeterminate("download_analysis_saving"))
         context.cancellation.raise_if_requested()
-        atomic_write_text(
+        self.runtime.write_download_analysis(
             destination,
-            plan.model_dump_json(indent=2),
+            plan,
         )
         return self.completion(
             destination,
@@ -203,7 +196,7 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         context.cancellation.raise_if_requested()
         try:
             written = self.runtime.write_visual_analysis(staged, payload)
-            if written.resolve() != staged.resolve():
+            if written != staged:
                 raise RuntimeError("Visual analysis runtime wrote outside the staged result path")
         except BaseException as error:
             output_scope.__exit__(type(error), error, error.__traceback__)
@@ -259,11 +252,7 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         output_scope: AnalysisOutputTransaction,
         publication: AnalysisOutputPublication,
     ) -> None:
-        publication.finalize(
-            archive_replaced_to=(
-                self.project_dir / "archive" / "replaced-visual-analysis"
-            )
-        )
+        publication.finalize(archive_replaced_to=(self.project_dir / "archive" / "replaced-visual-analysis"))
         output_scope.__exit__(None, None, None)
 
     def _archive_visual_analysis_failures(
@@ -272,20 +261,10 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         task_id: str,
         error: BaseException,
     ) -> None:
-        for source in publication.archived_outputs:
-            if not source.is_file():
-                continue
-            archive_path = content_addressed_child_path(
-                self.project_dir / "archive" / "failed-task-artifacts",
-                f"visual-analysis:{task_id}:{source.name}:{new_id()}",
-                namespace="va",
-                suffix=".json",
-            )
-            try:
-                archive_path.parent.mkdir(parents=True, exist_ok=True)
-                source.replace(archive_path)
-            except OSError as archive_error:
-                error.add_note(
-                    "Failed visual-analysis artifact could not be archived: "
-                    f"{archive_error}"
-                )
+        archive_errors = self.runtime.archive_failed_visual_analysis(
+            publication.archived_outputs,
+            self.project_dir / "archive" / "failed-task-artifacts",
+            task_id,
+        )
+        for archive_error in archive_errors:
+            error.add_note(f"Failed visual-analysis artifact could not be archived: {archive_error}")

@@ -32,7 +32,7 @@ class AudioRepository(ProjectRepositoryComponent):
         ]
 
     def save_audio_bus(self, bus: AudioBus) -> AudioBus:
-        sequence = self._owner.catalog.get_sequence(bus.sequence_id)
+        sequence = self._relations.sequences.get_sequence(bus.sequence_id)
         del sequence
         buses = {item.id: item for item in self.list_audio_buses(bus.sequence_id)}
         if bus.parent_bus_id == bus.id:
@@ -82,7 +82,7 @@ class AudioRepository(ProjectRepositoryComponent):
     ) -> None:
         """Replace one sequence's complete routing graph inside the caller transaction."""
 
-        self._owner.catalog.get_sequence(sequence_id)
+        self._relations.sequences.get_sequence(sequence_id)
         by_id = {bus.id: bus for bus in buses}
         if not buses or len(by_id) != len(buses):
             raise ValueError("Audio graph buses must be non-empty and unique")
@@ -135,7 +135,7 @@ class AudioRepository(ProjectRepositoryComponent):
             ):
                 connection.execute("DELETE FROM audio_bus WHERE id=?", (bus.id,))
             for bus in sorted(buses, key=depth):
-                self._insert_bus_record(connection, bus)
+                self.insert_bus_record(connection, bus)
             for effect in sorted(effects, key=lambda item: (item.bus_id, item.position, item.id)):
                 connection.execute(
                     """INSERT INTO audio_effect(
@@ -236,7 +236,7 @@ class AudioRepository(ProjectRepositoryComponent):
             self._touch_project(connection)
 
     @staticmethod
-    def _insert_bus_record(connection: sqlite3.Connection, bus: AudioBus) -> None:
+    def insert_bus_record(connection: sqlite3.Connection, bus: AudioBus) -> None:
         connection.execute(
             """INSERT INTO audio_bus(
                 id, sequence_id, name, parent_bus_id, position, gain_db,

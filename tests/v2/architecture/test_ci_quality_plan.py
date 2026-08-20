@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,13 @@ from scripts.ci.prepare_python_environment import (
     expected_state,
 )
 from scripts.ci.quality_plan import forced_plan, normalize_path, plan_for_paths
-from scripts.ci.run_quality import build_quality_stages, local_changed_paths
+from scripts.ci.run_quality import (
+    build_quality_stages,
+    local_changed_paths,
+    quality_expected_bytes,
+    quality_run_roots,
+    recommended_runtime_workers,
+)
 from scripts.ci.test_resources import requires_reviewed_runtime, select_resource_profile
 from scripts.ci.test_shard import (
     node_matches_prefix,
@@ -36,6 +43,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
         (("AGENTS.md", "ARCHITECTURE.md"), "maintenance", False, False),
         (("mediaflow/domain/tasks.py",), "core", False, False),
         (("mediaflow/application/task_service.py",), "core", False, False),
+        (("mediaflow/composition.py",), "full", False, False),
         (("mediaflow/domain/project.py",), "full", False, True),
         (("mediaflow/infrastructure/project_repository.py",), "full", False, True),
         (("mediaflow/infrastructure/runtime_paths.py",), "full", True, False),
@@ -108,9 +116,7 @@ def test_test_node_shards_are_deterministic_disjoint_complete_and_split_large_fi
     ]
     assert max(large_counts) - min(large_counts) <= 1
     raw_node = r"tests\v2\test_large.py::test_case[param-\u4e2d]"
-    assert normalize_collected_node_id(raw_node) == (
-        r"tests/v2/test_large.py::test_case[param-\u4e2d]"
-    )
+    assert normalize_collected_node_id(raw_node) == (r"tests/v2/test_large.py::test_case[param-\u4e2d]")
     assert node_matches_prefix(
         "tests/v2/test_large.py::test_case[param-1]",
         "tests/v2/test_large.py::test_case",
@@ -152,6 +158,56 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
 
 def test_local_changed_paths_never_selects_ignored_quality_evidence() -> None:
     assert not any(path.startswith(".test-runs/") for path in local_changed_paths("HEAD"))
+
+
+def test_quality_work_root_uses_an_owned_short_namespace(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 16, tzinfo=UTC)
+
+    run_root, work_root = quality_run_roots(tmp_path, now, 1234)
+
+    assert run_root.is_relative_to(tmp_path.resolve())
+    assert work_root.is_relative_to(tmp_path.resolve())
+    assert not work_root.is_relative_to(run_root)
+    assert run_root.parent == tmp_path.resolve() / "q"
+    assert work_root.parent == tmp_path.resolve() / "qw"
+    assert len(work_root.name) == 8
+    assert len(run_root.name) <= 28
+
+
+def test_quality_peak_estimates_are_explicit_and_bounded() -> None:
+    maintenance = quality_expected_bytes(forced_plan("maintenance", reason="test"))
+    core = quality_expected_bytes(forced_plan("core", reason="test"))
+    full = quality_expected_bytes(forced_plan("full", reason="test"))
+
+    assert 0 < maintenance < core < full
+    assert full == 16 * 1024**3
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "physical_gib", "commit_gib", "expected"),
+    (
+        (16, 30, 30, 4),
+        (16, 30, 20, 2),
+        (16, 10, 30, 1),
+        (8, 16, 16, 2),
+        (4, 64, 64, 1),
+    ),
+)
+def test_runtime_parallelism_respects_physical_and_commit_headroom(
+    cpu_count: int,
+    physical_gib: int,
+    commit_gib: int,
+    expected: int,
+) -> None:
+    gib = 1024**3
+    assert (
+        recommended_runtime_workers(
+            cpu_count=cpu_count,
+            available_memory=physical_gib * gib,
+            available_commit_memory=commit_gib * gib,
+        )
+        == expected
+    )
 
 
 def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
@@ -199,20 +255,10 @@ def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
     assert len(runtime.commands) == 4
     interactive_qml = next(stage for stage in full if stage.name == "interactive-qml")
     assert interactive_qml.max_workers == 1
-    assert [command.name for command in interactive_qml.commands] == [
-        "qml-project-chain"
-    ]
-    assert next(
-        stage for stage in full if stage.name == "interactive-chains"
-    ).max_workers == 2
-    assert next(
-        stage for stage in full if stage.name == "offline-parallel"
-    ).max_workers == 2
-    command_lines = [
-        command.arguments
-        for stage in full
-        for command in stage.commands
-    ]
+    assert [command.name for command in interactive_qml.commands] == ["qml-project-chain"]
+    assert next(stage for stage in full if stage.name == "interactive-chains").max_workers == 2
+    assert next(stage for stage in full if stage.name == "offline-parallel").max_workers == 2
+    command_lines = [command.arguments for stage in full for command in stage.commands]
     assert not any(
         arguments[:4]
         == (
@@ -264,7 +310,7 @@ def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional()
     assert "needs.plan.outputs.run_interchange == 'true'" in workflow
     assert "needs.plan.outputs.run_portable == 'true'" not in workflow
     assert "python -m scripts.ci.test_shard" in workflow
-    assert "--marker \"not integration and not slow\"" in workflow
+    assert '--marker "not integration and not slow"' in workflow
     assert "--resource-profile lightweight" in workflow
     assert "--resource-profile runtime" in workflow
     assert "--timings-file scripts/ci/test_timings.windows.json" in workflow
@@ -295,9 +341,7 @@ def test_complete_python_cache_is_reused_and_lightweight_core_has_no_media_sdk_s
 
 def test_portable_native_preview_smoke_precedes_expensive_contracts() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    portable = workflow.split("  portable-core:", 1)[1].split(
-        "  interchange-produce:", 1
-    )[0]
+    portable = workflow.split("  portable-core:", 1)[1].split("  interchange-produce:", 1)[0]
 
     smoke = portable.index("Run native preview smoke before portable contracts")
     contracts = portable.index("Verify portable contracts and service core")
@@ -310,9 +354,7 @@ def test_portable_native_preview_smoke_precedes_expensive_contracts() -> None:
 
 def test_project_interchange_has_an_independent_trigger_and_no_browser_setup() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    interchange = workflow.split("  interchange-produce:", 1)[1].split(
-        "  quality-gate:", 1
-    )[0]
+    interchange = workflow.split("  interchange-produce:", 1)[1].split("  quality-gate:", 1)[0]
 
     assert interchange.count("needs.plan.outputs.run_interchange == 'true'") == 2
     assert "playwright install-deps chromium" not in interchange
@@ -322,16 +364,9 @@ def test_project_interchange_has_an_independent_trigger_and_no_browser_setup() -
 def test_browser_scenarios_and_failure_diagnostics_have_process_boundaries() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert workflow.count(
-        "test_unified_import_opens_the_v6_package_through_local_preview_server"
-    ) == 1
-    assert workflow.count(
-        "test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page"
-    ) == 1
-    assert (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-        in workflow
-    )
+    assert workflow.count("test_unified_import_opens_the_v6_package_through_local_preview_server") == 1
+    assert workflow.count("test_real_dom_drag_crosses_webchannel_persists_and_is_read_back_by_page") == 1
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert "if-no-files-found: ignore" in workflow
 
 

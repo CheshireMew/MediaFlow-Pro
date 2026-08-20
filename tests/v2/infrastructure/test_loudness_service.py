@@ -68,7 +68,7 @@ def test_real_sequence_audio_graph_reports_peak_and_ebu_r128_metrics(
         assets = AssetService(repository, MediaProbe(paths))
         asset = assets.import_external(source)
         asset = assets.adopt_main_profile_from_video(asset.id)
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=video_track.id,
@@ -293,7 +293,7 @@ def test_same_loudness_snapshot_has_one_real_producer_across_processes(
         assets = AssetService(repository, MediaProbe(paths))
         asset = assets.import_external(source)
         asset = assets.adopt_main_profile_from_video(asset.id)
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(

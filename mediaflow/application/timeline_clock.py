@@ -4,7 +4,11 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from fractions import Fraction
 
-from mediaflow.application.ports import ProjectCatalogDocuments
+from mediaflow.application.project_storage_ports import (
+    AssetDocuments,
+    ProjectMetadataDocuments,
+    SequenceDocuments,
+)
 from mediaflow.application.timeline_rules import TimelineRules
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.project import (
@@ -24,27 +28,35 @@ class TimelineClockChange:
     assets: tuple[Asset, ...]
 
 
-def project_frame_profile(catalog: ProjectCatalogDocuments) -> ProjectProfile:
-    project = catalog.get_project()
-    return catalog.get_sequence(project.main_sequence_id).profile
+def project_frame_profile(
+    projects: ProjectMetadataDocuments,
+    sequences: SequenceDocuments,
+) -> ProjectProfile:
+    project = projects.get_project()
+    return sequences.get_sequence(project.main_sequence_id).profile
 
 
 def asset_in_timeline_clock(
-    catalog: ProjectCatalogDocuments,
+    projects: ProjectMetadataDocuments,
+    sequences: SequenceDocuments,
     asset: Asset,
     sequence: Sequence,
 ) -> Asset:
-    return asset.in_frame_clock(project_frame_profile(catalog), sequence.profile)
+    return asset.in_frame_clock(
+        project_frame_profile(projects, sequences),
+        sequence.profile,
+    )
 
 
 def assets_in_timeline_clock(
-    catalog: ProjectCatalogDocuments,
+    projects: ProjectMetadataDocuments,
+    sequences: SequenceDocuments,
+    assets: AssetDocuments,
     sequence: Sequence,
 ) -> dict[str, Asset]:
-    project_profile = project_frame_profile(catalog)
+    project_profile = project_frame_profile(projects, sequences)
     return {
-        asset.id: asset.in_frame_clock(project_profile, sequence.profile)
-        for asset in catalog.list_assets()
+        asset.id: asset.in_frame_clock(project_profile, sequence.profile) for asset in assets.list_assets()
     }
 
 
@@ -142,8 +154,7 @@ def reframe_timeline_clock(
             )
         if left.timeline_end != right.timeline_start:
             raise ValueError(
-                f"Transition {transition.id} cannot preserve its clip boundary "
-                "in the destination frame clock"
+                f"Transition {transition.id} cannot preserve its clip boundary in the destination frame clock"
             )
         candidate = transition.model_copy(
             update={
@@ -155,9 +166,7 @@ def reframe_timeline_clock(
             }
         )
         if not TimelineRules.transition_is_valid(candidate, clips_by_id):
-            raise ValueError(
-                f"Transition {transition.id} is invalid in the destination frame clock"
-            )
+            raise ValueError(f"Transition {transition.id} is invalid in the destination frame clock")
         reframed_transitions.append(candidate)
 
     reframed = TimelineState(
@@ -179,10 +188,7 @@ def reframe_timeline_clock(
         clips=reframed_clips,
         compounds=list(state.compounds),
         transitions=reframed_transitions,
-        markers=[
-            marker.model_copy(update={"frame": reframe(marker.frame)})
-            for marker in state.markers
-        ],
+        markers=[marker.model_copy(update={"frame": reframe(marker.frame)}) for marker in state.markers],
         ranges=reframed_ranges,
         web_states=dict(state.web_states),
     )
@@ -199,10 +205,7 @@ def _reframe_clip(
 ) -> Clip:
     timeline_start = reframe(clip.timeline_start)
     source_in = reframe(clip.source_in)
-    if (
-        asset.kind not in {AssetKind.IMAGE, AssetKind.WEB}
-        and asset.metadata.duration_frames > 0
-    ):
+    if asset.kind not in {AssetKind.IMAGE, AssetKind.WEB} and asset.metadata.duration_frames > 0:
         source_in = min(source_in, asset.metadata.duration_frames - 1)
     values = clip.model_dump(mode="python", exclude_computed_fields=True)
     candidate = Clip.model_validate(
@@ -227,9 +230,7 @@ def _reframe_clip(
     if maximum_duration is None or candidate.duration <= maximum_duration:
         duration = candidate.duration
     elif maximum_duration <= 0:
-        raise ValueError(
-            f"Clip {clip.id} has no source frames available after changing the frame clock"
-        )
+        raise ValueError(f"Clip {clip.id} has no source frames available after changing the frame clock")
     else:
         duration = maximum_duration
 
@@ -249,17 +250,13 @@ def _reframe_clip(
         if keyframe.source_frame is not None:
             target_frame = reframe(keyframe.source_frame)
             if first_source_frame <= target_frame <= last_source_frame:
-                keyframes_by_frame[target_frame] = keyframe.model_copy(
-                    update={"source_frame": target_frame}
-                )
+                keyframes_by_frame[target_frame] = keyframe.model_copy(update={"source_frame": target_frame})
             continue
         if keyframe.timeline_offset is None:
             raise RuntimeError("Transform keyframe has no time anchor")
         target_offset = reframe(keyframe.timeline_offset)
         if target_offset < duration:
-            keyframes_by_frame[target_offset] = keyframe.model_copy(
-                update={"timeline_offset": target_offset}
-            )
+            keyframes_by_frame[target_offset] = keyframe.model_copy(update={"timeline_offset": target_offset})
     return Clip.model_validate(
         {
             **candidate.model_dump(
@@ -267,9 +264,6 @@ def _reframe_clip(
                 exclude_computed_fields=True,
             ),
             "duration": duration,
-            "transform_keyframes": [
-                keyframes_by_frame[frame]
-                for frame in sorted(keyframes_by_frame)
-            ],
+            "transform_keyframes": [keyframes_by_frame[frame] for frame in sorted(keyframes_by_frame)],
         }
     )

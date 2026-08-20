@@ -11,6 +11,10 @@ from mediaflow.desktop.controllers.controller_hub import EditorControllers
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.subtitle_file_store import LocalSubtitleFileStore
+from mediaflow.infrastructure.subtitle_publication_storage import (
+    LocalSubtitlePublicationStorage,
+)
 from tests.v2.real_media import generate_real_media
 
 
@@ -29,8 +33,12 @@ def test_asset_search_uses_real_linked_transcript_and_multilingual_concepts(
     with ProjectRepository.create(project_dir, "Search Project") as repository:
         assets = AssetService(repository, MediaProbe(paths))
         media = assets.import_external(source)
-        publication = SubtitlePublicationService(repository)
-        SubtitleAcquisitionService(repository, publication).import_subtitle_file(
+        publication = SubtitlePublicationService(repository, LocalSubtitlePublicationStorage())
+        SubtitleAcquisitionService(
+            repository,
+            publication,
+            LocalSubtitleFileStore(),
+        ).import_subtitle_file(
             subtitle,
             assets,
             media_asset_id=media.id,
@@ -39,7 +47,7 @@ def test_asset_search_uses_real_linked_transcript_and_multilingual_concepts(
     QCoreApplication.instance() or QCoreApplication([])
     controllers = EditorControllers()
     try:
-        controllers.workspace.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
+        controllers.workspace_project.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
         source_model = controllers.media.assetsModel
         media_row = source_model.findRow("assetId", media.id)
         assert media_row >= 0

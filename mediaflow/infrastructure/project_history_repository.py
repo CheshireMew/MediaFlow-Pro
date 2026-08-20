@@ -30,15 +30,15 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         write_set: list[str],
         command: ProjectEditCommand,
     ) -> ProjectUndoGroup:
-        if self._owner._transaction_depth <= 0:
+        if self.transaction_depth <= 0:
             raise RuntimeError("Undo groups must join the active project transaction")
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         timestamp = now_ms()
         self._connection.execute(
             """UPDATE undo_group
                SET state='discarded', updated_at=?
                WHERE project_id=? AND state='undone'""",
-            (timestamp, project.id),
+            (timestamp, project_id),
         )
         self._connection.execute(
             """INSERT INTO undo_group(
@@ -48,7 +48,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?, ?)""",
             (
                 group_id,
-                project.id,
+                project_id,
                 source_revision,
                 source_revision,
                 label,
@@ -61,7 +61,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         )
         return ProjectUndoGroup(
             id=group_id,
-            project_id=project.id,
+            project_id=project_id,
             source_revision=source_revision,
             state_revision=source_revision,
             label=label,
@@ -74,24 +74,24 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         )
 
     def discard_redo(self) -> None:
-        if self._owner._transaction_depth <= 0:
+        if self.transaction_depth <= 0:
             raise RuntimeError("Redo invalidation must join the active project transaction")
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         self._connection.execute(
             """UPDATE undo_group
                SET state='discarded', updated_at=?
                WHERE project_id=? AND state='undone'""",
-            (now_ms(), project.id),
+            (now_ms(), project_id),
         )
 
     def get(self, group_id: str) -> ProjectUndoGroup | None:
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         row = self._fetchone(
             """SELECT id, project_id, source_revision, state_revision, label,
                       actor_json, write_set_json, command_json, state,
                       created_at, updated_at
                FROM undo_group WHERE project_id=? AND id=?""",
-            (project.id, group_id),
+            (project_id, group_id),
         )
         return None if row is None else self._document(row)
 
@@ -100,7 +100,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         *,
         include_discarded: bool = False,
     ) -> list[ProjectUndoGroup]:
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         rows = self._fetchall(
             """SELECT id, project_id, source_revision, state_revision, label,
                       actor_json, write_set_json, command_json, state,
@@ -108,7 +108,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
                FROM undo_group
                WHERE project_id=? AND (? OR state!='discarded')
                ORDER BY source_revision, created_at, id""",
-            (project.id, int(include_discarded)),
+            (project_id, int(include_discarded)),
         )
         return self._documents(rows)
 
@@ -132,9 +132,9 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         state: ActiveUndoGroupState,
         state_revision: int,
     ) -> ProjectUndoGroup:
-        if self._owner._transaction_depth <= 0:
+        if self.transaction_depth <= 0:
             raise RuntimeError("Undo state transitions must join the project transaction")
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         changed = self._connection.execute(
             """UPDATE undo_group
                SET state=?, state_revision=?, updated_at=?
@@ -143,7 +143,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
                 state,
                 state_revision,
                 now_ms(),
-                project.id,
+                project_id,
                 group_id,
                 expected,
             ),
@@ -161,7 +161,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         self,
         state: Literal["applied", "undone"],
     ) -> ProjectUndoGroup | None:
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         row = self._fetchone(
             """SELECT id, project_id, source_revision, state_revision, label,
                       actor_json, write_set_json, command_json, state,
@@ -170,7 +170,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
                WHERE project_id=? AND state=?
                ORDER BY state_revision DESC, updated_at DESC, id DESC
                LIMIT 1""",
-            (project.id, state),
+            (project_id, state),
         )
         return None if row is None else self._document(row)
 
@@ -178,10 +178,10 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
         self,
         state: Literal["applied", "undone"],
     ) -> bool:
-        project = self._owner.catalog.get_project()
+        project_id = self.project_id()
         return self._fetchone(
             "SELECT 1 FROM undo_group WHERE project_id=? AND state=? LIMIT 1",
-            (project.id, state),
+            (project_id, state),
         ) is not None
 
     def _documents(self, rows: Sequence[Any]) -> list[ProjectUndoGroup]:

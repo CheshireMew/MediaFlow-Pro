@@ -27,6 +27,13 @@ from .output_reservation import (
 from .platform_media import PlatformMediaResolver
 from .runtime_paths import RuntimePaths
 from .runtime_tools import prepare_ytdlp_import
+from .storage_budget import (
+    estimate_download_peak_bytes,
+    finalize_storage_receipt,
+    load_storage_policy,
+    require_download_budget,
+    start_storage_receipt,
+)
 
 DownloadProgress = Callable[[OperationProgress], None]
 CancellationCheck = Callable[[], None]
@@ -156,6 +163,29 @@ class YtDlpDownloadService:
         # starting network traffic.  The download itself is isolated from the
         # user-visible destination until every requested file is complete.
         self._output_template(output_dir, request)
+        estimated_peak = estimate_download_peak_bytes(
+            request.entry.duration,
+            media_kind=("audio" if request.resolution == "audio" else "video"),
+            resolution=request.resolution,
+        )
+        if estimated_peak is None:
+            estimated_peak = load_storage_policy().download_operation_max_bytes
+        preflight = require_download_budget(
+            output_dir,
+            expected_new_bytes=estimated_peak,
+            label=f"MediaFlow download {request.entry.title}",
+        )
+        receipt = start_storage_receipt(
+            self.paths.runtime_dir,
+            producer="media-download",
+            operation_id=f"{uuid.uuid4().hex}:{request.entry.page_url}",
+            owned_root=output_dir,
+            preflight=preflight,
+        )
+        maximum_file_bytes = max(
+            64 * 1024**2,
+            (estimated_peak - 64 * 1024**2) // 4,
+        )
         staging_root = _create_download_staging_root(output_dir)
         try:
             staged_paths = self._download_to_directory(
@@ -164,6 +194,7 @@ class YtDlpDownloadService:
                 cookie_file=cookie_file,
                 browser_cookies=browser_cookies,
                 proxy=proxy,
+                maximum_file_bytes=maximum_file_bytes,
                 progress=progress,
                 check_cancelled=check_cancelled,
             )
@@ -190,8 +221,16 @@ class YtDlpDownloadService:
                 error.add_note(
                     f"未完成的下载内容已保留在：{archived}"
                 )
+            retained = archived or (staging_root if staging_root.exists() else None)
+            finalize_storage_receipt(
+                receipt,
+                status=("interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed"),
+                outputs=(() if retained is None else (retained,)),
+                error=str(error),
+            )
             raise
         _remove_empty_download_staging(staging_root)
+        finalize_storage_receipt(receipt, status="passed", outputs=tuple(outputs))
         return outputs
 
     def _download_to_directory(
@@ -202,6 +241,7 @@ class YtDlpDownloadService:
         cookie_file: str | None,
         browser_cookies: str | None,
         proxy: str | None,
+        maximum_file_bytes: int,
         progress: DownloadProgress | None,
         check_cancelled: CancellationCheck | None,
     ) -> list[Path]:
@@ -250,6 +290,7 @@ class YtDlpDownloadService:
             {
                 "outtmpl": str(output_template),
                 "format": download_format,
+                "max_filesize": maximum_file_bytes,
                 "noplaylist": request.entry.selector is None,
                 "playlist_items": (
                     str(request.entry.selector) if request.entry.selector is not None else None
@@ -533,11 +574,16 @@ class YtDlpDownloadService:
         output_dir = Path(output_dir).expanduser().resolve()
         if request.collection_title:
             return _collection_output_template(output_dir, request)
-        if request.filename_prefix.strip():
+        requested_name = request.filename_prefix.strip()
+        preferred_name = requested_name or request.entry.suggested_filename.strip()
+        if preferred_name:
             filename_units = _available_filename_units(output_dir)
-            prefix_budget = min(48, filename_units - 1 - _EXTENSION_BUDGET)
+            prefix_budget = min(
+                48 if requested_name else 160,
+                filename_units - 1 - _EXTENSION_BUDGET,
+            )
             prefix = _literal_template_component(
-                request.filename_prefix,
+                preferred_name,
                 max_utf16_units=_require_literal_budget(prefix_budget),
             )
             template = output_dir / f"{prefix}.{_placeholder('ext', _EXTENSION_BUDGET)}"

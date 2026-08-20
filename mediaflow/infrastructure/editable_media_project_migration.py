@@ -9,14 +9,16 @@ from mediaflow.application import web_package_contract as web_contract
 from mediaflow.application import web_package_files as web_files
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.model_base import new_id, now_ms
-from mediaflow.domain.web_media import (
+from mediaflow.domain.web_manifest import (
     EditableMediaManifest,
-    WebClipState,
-    WebMediaSourcesManifest,
     editable_media_manifest_document,
     parse_editable_media_manifest,
 )
+from mediaflow.domain.web_media_sources import WebMediaSourcesManifest
+from mediaflow.domain.web_state import WebClipState
 from mediaflow.file_digest import sha256_file
+from mediaflow.infrastructure import web_package_storage as web_storage
+from mediaflow.infrastructure.editable_media_contract import editable_media_contract
 from mediaflow.infrastructure.project_serialization import json_value
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
 
@@ -30,6 +32,16 @@ LEGACY_STANDARD_RUNTIME_SHA256 = {
     4: V4_STANDARD_RUNTIME_SHA256,
     5: V5_STANDARD_RUNTIME_SHA256,
 }
+_WEB_PACKAGE_STORAGE = web_storage.LocalWebPackageStorage()
+_EDITABLE_MEDIA_CONTRACT = editable_media_contract()
+
+
+def _read_package_media_sources(
+    tree: web_files.WebPackageTree,
+    manifest: EditableMediaManifest,
+) -> WebMediaSourcesManifest:
+    path = tree.root.joinpath(*PurePosixPath(manifest.media_sources).parts)
+    return WebMediaSourcesManifest.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +119,7 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
         raise ValueError("Project web asset is not editable-media")
     version = manifest.get("version")
     if version == 6:
-        return parse_editable_media_manifest(manifest)
+        return parse_editable_media_manifest(manifest, _EDITABLE_MEDIA_CONTRACT)
     if version not in {4, 5}:
         raise ValueError(f"Project web asset uses unsupported editable-media v{version}")
     migrated = _required_object(
@@ -138,9 +150,7 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
             }
             missing = required - set(parameter)
             if missing:
-                raise ValueError(
-                    f"editable-media v5 parameter is incomplete: {sorted(missing)}"
-                )
+                raise ValueError(f"editable-media v5 parameter is incomplete: {sorted(missing)}")
             constraints = _required_object(
                 parameter.get("constraints", {}),
                 f"manifest.parameters[{index}].constraints",
@@ -160,20 +170,11 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
                         "default": parameter["default"],
                         "unit": parameter.get("unit") or None,
                         "constraints": {
-                            **{
-                                key: value
-                                for key, value in constraints.items()
-                                if key != "choices"
-                            },
-                            "choices": [
-                                {"value": value, "label": str(value)}
-                                for value in choices
-                            ],
+                            **{key: value for key, value in constraints.items() if key != "choices"},
+                            "choices": [{"value": value, "label": str(value)} for value in choices],
                         },
                         "options_source": None,
-                        "timeline": (
-                            "keyframe" if parameter["animatable"] else "none"
-                        ),
+                        "timeline": ("keyframe" if parameter["animatable"] else "none"),
                     },
                     "binding": {
                         "scope": parameter["scope"],
@@ -193,7 +194,7 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
                 f"manifest.scenes[{scene_index}].motion",
             )
             motion.setdefault("camera", None)
-        return parse_editable_media_manifest(migrated)
+        return parse_editable_media_manifest(migrated, _EDITABLE_MEDIA_CONTRACT)
 
     if "parameters" in manifest:
         raise ValueError("editable-media v4 manifest unexpectedly contains parameters")
@@ -204,8 +205,7 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
         for field in ("parameters", "motion"):
             if field in scene:
                 raise ValueError(
-                    "editable-media v4 scene unexpectedly contains "
-                    f"{field}: {scene.get('id', scene_index)}"
+                    f"editable-media v4 scene unexpectedly contains {field}: {scene.get('id', scene_index)}"
                 )
         scene["parameters"] = {}
         steps = _required_array(scene.get("steps"), f"manifest.scenes[{scene_index}].steps")
@@ -218,8 +218,7 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
             for field in ("state_kind", "review", "description"):
                 if field in step:
                     raise ValueError(
-                        "editable-media v4 step unexpectedly contains "
-                        f"{field}: {step.get('id', step_index)}"
+                        f"editable-media v4 step unexpectedly contains {field}: {step.get('id', step_index)}"
                     )
             step["state_kind"] = (
                 "start" if step_index == 0 else "result" if step_index == last_index else "change"
@@ -240,7 +239,7 @@ def migrate_editable_media_manifest_to_v6(document: object) -> EditableMediaMani
             "key_state_review": "none",
             "camera": None,
         }
-    return parse_editable_media_manifest(migrated)
+    return parse_editable_media_manifest(migrated, _EDITABLE_MEDIA_CONTRACT)
 
 
 def _managed_asset_path(project_dir: Path, stored_path: str) -> Path:
@@ -286,16 +285,16 @@ def _copy_migrated_package(
                     + "\n",
                 )
             elif relative == STANDARD_RUNTIME_PACKAGE_PATH:
-                web_files.copy_web_package_file(
+                web_storage.copy_web_package_file(
                     str(V6_RUNTIME_PATH),
                     str(destination),
                 )
             else:
-                web_files.copy_web_package_file(
+                web_storage.copy_web_package_file(
                     str(source_tree.root.joinpath(*PurePosixPath(relative).parts)),
                     str(destination),
                 )
-        return web_files.scan_web_package(staging)
+        return web_storage.scan_web_package(staging)
     except BaseException:
         raise
 
@@ -361,11 +360,12 @@ def _stage_v6_publication(
             manifest,
             source_version,
         )
-        media_sources = web_contract.validate_package_files(
-            migrated_tree,
+        media_sources = _read_package_media_sources(migrated_tree, manifest)
+        web_contract.validate_package_files(migrated_tree, manifest, media_sources)
+        BrowserWebPackageValidator(chromium, _EDITABLE_MEDIA_CONTRACT).validate(
+            staging,
             manifest,
         )
-        BrowserWebPackageValidator(chromium).validate(staging, manifest)
         publication = web_files.WebPackagePublication(
             asset_id=asset_id,
             manifest=manifest,
@@ -403,21 +403,14 @@ def _find_publication_receipt(
         return None
     matches: list[Path] = []
     for receipt in receipt_root.glob("r-*.json"):
-        payload = web_files.read_publication_receipt(receipt)
-        if (
-            payload.get("asset_id") == asset_id
-            and payload.get("directory") == package.name
-        ):
+        payload = web_storage.read_publication_receipt(receipt).as_dict()
+        if payload.get("asset_id") == asset_id and payload.get("directory") == package.name:
             if payload.get("status") != "committed" and not (
                 allow_pending and payload.get("status") == "pending"
             ):
-                raise RuntimeError(
-                    f"Editable-media publication is not committed: {package}"
-                )
+                raise RuntimeError(f"Editable-media publication is not committed: {package}")
             if source_hash is not None and payload.get("source_hash") != source_hash:
-                raise RuntimeError(
-                    f"Editable-media publication receipt hash does not match: {package}"
-                )
+                raise RuntimeError(f"Editable-media publication receipt hash does not match: {package}")
             matches.append(receipt)
     if len(matches) > 1:
         raise RuntimeError(f"Editable-media package has more than one publication receipt: {package}")
@@ -505,9 +498,7 @@ def _migrated_clip_state_json(
         f"web_clip_state[{row['clip_id']}]",
     )
     if payload.get("source_hash") != old_source_hash:
-        raise RuntimeError(
-            f"Web clip state source hash does not match its asset: {row['clip_id']}"
-        )
+        raise RuntimeError(f"Web clip state source hash does not match its asset: {row['clip_id']}")
     payload.setdefault("parameters", {})
     payload.setdefault("parameter_locks", [])
     scenes = payload.get("scenes", {})
@@ -573,9 +564,7 @@ def migrate_project_editable_media_to_v6(
     for plan in plans:
         row = plan.row
         if chromium is None:
-            raise RuntimeError(
-                "Editable-media v6 migration requires the service RuntimeContext"
-            )
+            raise RuntimeError("Editable-media v6 migration requires the service RuntimeContext")
         publication = _stage_v6_publication(
             project_dir,
             str(row["asset_id"]),
@@ -606,22 +595,24 @@ def migrate_project_editable_media_to_v6(
                 )
                 for clip_row in plan.clip_rows
             ]
-            publication.publish()
+            _WEB_PACKAGE_STORAGE.publish(publication)
 
             def commit_publication(
                 publication: web_files.WebPackagePublication = publication,
                 archive: _LegacyPackageArchive = archive,
             ) -> None:
-                publication.mark_committed()
+                _WEB_PACKAGE_STORAGE.mark_committed(publication)
                 archive.archive()
 
             workspace.enlist_transaction_publication(
                 on_commit=commit_publication,
-                on_rollback=lambda _error, publication=publication: (publication.archive_failed()),
+                on_rollback=lambda _error, publication=publication: (
+                    _WEB_PACKAGE_STORAGE.archive_failed(publication)
+                ),
             )
         except BaseException as error:
             try:
-                publication.archive_failed()
+                _WEB_PACKAGE_STORAGE.archive_failed(publication)
             except BaseException as archive_error:
                 error.add_note(f"editable-media v6 migration failure archival failed: {archive_error}")
             raise
@@ -693,9 +684,7 @@ def _validate_v6_clip_state(
         }
     )
     if state.source_hash != source_hash:
-        raise RuntimeError(
-            f"Web clip state source hash does not match its asset: {row['clip_id']}"
-        )
+        raise RuntimeError(f"Web clip state source hash does not match its asset: {row['clip_id']}")
     web_contract.validate_media_bindings(manifest, media_sources, state)
 
 
@@ -744,12 +733,10 @@ def _preflight_project_web_assets(
             entry,
             str(raw_manifest.get("entry", "")),
         )
-        source_tree = web_files.scan_web_package(package)
+        source_tree = web_storage.scan_web_package(package)
         source_hash = str(row["source_hash"])
         if source_tree.source_hash != source_hash:
-            raise RuntimeError(
-                f"Editable-media package changed after import: {asset_id}"
-            )
+            raise RuntimeError(f"Editable-media package changed after import: {asset_id}")
         receipt = _required_publication_receipt(
             project_dir,
             asset_id,
@@ -775,27 +762,20 @@ def _preflight_project_web_assets(
             raise RuntimeError(
                 f"Editable-media package manifest is invalid: {asset_id}/{package_manifest_path}"
             ) from error
-        if editable_media_manifest_document(package_manifest) != editable_media_manifest_document(
-            manifest
-        ):
-            raise RuntimeError(
-                f"Editable-media project and package manifests do not match: {asset_id}"
-            )
+        if editable_media_manifest_document(package_manifest) != editable_media_manifest_document(manifest):
+            raise RuntimeError(f"Editable-media project and package manifests do not match: {asset_id}")
         if source_version not in {4, 5, 6}:
-            raise ValueError(
-                f"Project web asset uses unsupported editable-media v{source_version}"
-            )
+            raise ValueError(f"Project web asset uses unsupported editable-media v{source_version}")
         if source_version in {4, 5}:
             if chromium is None:
-                raise RuntimeError(
-                    "Editable-media v6 migration requires the service RuntimeContext"
-                )
+                raise RuntimeError("Editable-media v6 migration requires the service RuntimeContext")
             if STANDARD_RUNTIME_PACKAGE_PATH not in manifest.resources:
                 raise ValueError(
                     f"editable-media v{source_version} package does not declare its standard runtime"
                 )
             _validate_legacy_standard_runtime(source_tree, source_version)
-        media_sources = web_contract.validate_package_files(source_tree, manifest)
+        media_sources = _read_package_media_sources(source_tree, manifest)
+        web_contract.validate_package_files(source_tree, manifest, media_sources)
         clip_rows = _asset_clip_rows(connection, asset_id)
         if source_version == 6:
             for clip_row in clip_rows:
@@ -862,10 +842,7 @@ def reconcile_editable_media_v4_archives(workspace: Any) -> None:
             ),
             receipt_destination=(
                 destination.parent
-                / (
-                    f"{destination.name.split('-', 1)[0]}-r-"
-                    f"{destination.name.split('-', 1)[1]}.json"
-                )
+                / (f"{destination.name.split('-', 1)[0]}-r-{destination.name.split('-', 1)[1]}.json")
             ),
         )
         archive.archive()

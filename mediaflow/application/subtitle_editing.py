@@ -9,7 +9,13 @@ from mediaflow.application.edit_history import (
     ProjectEditHistory,
 )
 from mediaflow.application.ports import SubtitleEditingDocuments
+from mediaflow.application.project_changes import (
+    entity_change_set,
+    entity_sequence_change_set,
+    project_path_segment,
+)
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
+from mediaflow.domain.collaboration import ProjectChangeSet
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
 from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timebase import seconds_to_frames
@@ -27,6 +33,7 @@ def recorded_subtitle_edit(label: str):
             after = self.repository.subtitles.list_subtitle_segments(document_id)
             after_words = self.repository.subtitles.list_subtitle_words(document_id)
             if before != after or before_words != after_words:
+                root = f"/subtitles/documents/{project_path_segment(document_id)}"
                 self.history.push(
                     ProjectEditCommand(
                         label=label,
@@ -44,7 +51,21 @@ def recorded_subtitle_edit(label: str):
                                 list(after_words),
                             )
                         ],
-                    )
+                    ),
+                    ProjectChangeSet.combine(
+                        [
+                            entity_sequence_change_set(
+                                f"{root}/segments",
+                                before,
+                                after,
+                            ),
+                            entity_sequence_change_set(
+                                f"{root}/words",
+                                before_words,
+                                after_words,
+                            ),
+                        ]
+                    ),
                 )
             return result
 
@@ -95,7 +116,12 @@ class SubtitleEditingService:
                     label="调整序列字幕时间",
                     undo_actions=[self._placement_history_action(before)],
                     redo_actions=[self._placement_history_action(after)],
-                )
+                ),
+                entity_change_set(
+                    f"/subtitles/placements/{project_path_segment(placement_id)}",
+                    before,
+                    after,
+                ),
             )
         return after
 
@@ -108,7 +134,12 @@ class SubtitleEditingService:
                     label="恢复序列字幕时间",
                     undo_actions=[self._placement_history_action(before)],
                     redo_actions=[self._placement_history_action(after)],
-                )
+                ),
+                entity_change_set(
+                    f"/subtitles/placements/{project_path_segment(placement_id)}",
+                    before,
+                    after,
+                ),
             )
         return after
 
@@ -256,8 +287,8 @@ class SubtitleEditingService:
     @recorded_subtitle_edit("智能拆分字幕")
     def smart_split_document(self, document_id: str, *, text_limit: int = 24) -> int:
         limit = max(1, int(text_limit))
-        project = self.repository.catalog.get_project()
-        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
+        project = self.repository.projects.get_project()
+        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
         minimum_duration = max(
             2,
             seconds_to_frames(1.6, profile.fps_numerator, profile.fps_denominator),
@@ -319,8 +350,8 @@ class SubtitleEditingService:
 
     @recorded_subtitle_edit("修复字幕重叠")
     def fix_overlaps(self, document_id: str) -> int:
-        project = self.repository.catalog.get_project()
-        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
+        project = self.repository.projects.get_project()
+        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
         tolerance = max(
             1,
             seconds_to_frames(0.05, profile.fps_numerator, profile.fps_denominator),
@@ -346,8 +377,8 @@ class SubtitleEditingService:
 
     def selected_segments_srt(self, document_id: str, segment_ids: list[str]) -> str:
         selected = self._selected_segments(document_id, segment_ids)
-        project = self.repository.catalog.get_project()
-        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
+        project = self.repository.projects.get_project()
+        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
         return SubtitleFile.dumps_srt(
             [
                 SubtitleCue(
@@ -372,8 +403,8 @@ class SubtitleEditingService:
         if not value:
             raise ValueError("剪贴板中没有可用文本")
         selected = self._selected_segments(document_id, segment_ids)
-        project = self.repository.catalog.get_project()
-        profile = self.repository.catalog.get_sequence(project.main_sequence_id).profile
+        project = self.repository.projects.get_project()
+        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
         replacements: list[str] = []
         if "-->" in value:
             try:
@@ -492,16 +523,12 @@ class SubtitleEditingService:
             if resolved_words is None:
                 previous = {
                     segment.id: segment
-                    for segment in self.repository.subtitles.list_subtitle_segments(
-                        document_id
-                    )
+                    for segment in self.repository.subtitles.list_subtitle_segments(document_id)
                 }
                 current = {segment.id: segment for segment in segments}
                 resolved_words = [
                     word
-                    for word in self.repository.subtitles.list_subtitle_words(
-                        document_id
-                    )
+                    for word in self.repository.subtitles.list_subtitle_words(document_id)
                     if word.segment_id in current
                     and previous.get(word.segment_id) == current[word.segment_id]
                 ]
@@ -544,14 +571,8 @@ class SubtitleEditingService:
             kind="subtitle.document.restore",
             payload={
                 "document_id": document_id,
-                "segments": [
-                    item.model_dump(mode="json", exclude_computed_fields=True)
-                    for item in segments
-                ],
-                "words": [
-                    item.model_dump(mode="json", exclude_computed_fields=True)
-                    for item in words
-                ],
+                "segments": [item.model_dump(mode="json", exclude_computed_fields=True) for item in segments],
+                "words": [item.model_dump(mode="json", exclude_computed_fields=True) for item in words],
             },
         )
 
@@ -559,25 +580,15 @@ class SubtitleEditingService:
     def _placement_history_action(value: SubtitlePlacement) -> ProjectEditAction:
         return ProjectEditAction(
             kind="subtitle.placement.restore",
-            payload={
-                "placement": value.model_dump(
-                    mode="json", exclude_computed_fields=True
-                )
-            },
+            payload={"placement": value.model_dump(mode="json", exclude_computed_fields=True)},
         )
 
     def _apply_document_history_action(self, action: ProjectEditAction) -> None:
         payload = action.payload
         self._restore_document_state(
             str(payload.get("document_id") or ""),
-            [
-                SubtitleSegment.model_validate(item)
-                for item in payload.get("segments") or []
-            ],
-            [
-                SubtitleWord.model_validate(item)
-                for item in payload.get("words") or []
-            ],
+            [SubtitleSegment.model_validate(item) for item in payload.get("segments") or []],
+            [SubtitleWord.model_validate(item) for item in payload.get("words") or []],
         )
 
     def _apply_placement_history_action(self, action: ProjectEditAction) -> None:
@@ -607,14 +618,10 @@ class SubtitleEditingService:
             if word.segment_id == source.id
         ]
         first_words = [
-            word
-            for word in source_words
-            if (word.start_frame + word.end_frame) / 2 < first.end_frame
+            word for word in source_words if (word.start_frame + word.end_frame) / 2 < first.end_frame
         ]
         second_words = [
-            word
-            for word in source_words
-            if (word.start_frame + word.end_frame) / 2 >= first.end_frame
+            word for word in source_words if (word.start_frame + word.end_frame) / 2 >= first.end_frame
         ]
         output.extend(
             word.model_copy(update={"segment_id": first.id, "position": position})

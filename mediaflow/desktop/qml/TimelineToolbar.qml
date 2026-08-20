@@ -8,7 +8,7 @@ Rectangle {
     required property var view
     required property var timelineViewport
     Layout.fillWidth: true
-    Layout.preferredHeight: 48
+    Layout.preferredHeight: 42
     color: Theme.surface
     border.color: Theme.transparent
 
@@ -36,16 +36,16 @@ Rectangle {
 
         RowLayout {
             id: toolbarRow
-            x: 14
-            height: toolbarFlick.height - 6
-            spacing: 6
+            x: 10
+            height: toolbarFlick.height - 4
+            spacing: 4
             SequenceToolbar {
                 Layout.preferredWidth: implicitWidth
                 Layout.preferredHeight: implicitHeight
                 actionsEnabled: view.canEdit
                 onCreateShortRequested: {
                     if (view.canEdit)
-                        workspaceController.createShortSequence("");
+                        mediaflow.workspaceSequenceController.createShortSequence("");
                 }
                 onEditProfileRequested: view.editProfileRequested()
             }
@@ -61,8 +61,8 @@ Rectangle {
                 ToolTip.text: qsTr("开启后直接点击多个片段即可选择；不需要按快捷键")
             }
             Text {
-                visible: timelineController.selectedClipIds.length > 0
-                text: timelineController.selectedCompoundId.length > 0 ? qsTr("已选复合片段") : qsTr("已选 %1 个").arg(timelineController.selectedClipIds.length)
+                visible: mediaflow.timelineViewController.selectedClipIds.length > 0
+                text: mediaflow.timelineViewController.selectedCompoundId.length > 0 ? qsTr("已选复合片段") : qsTr("已选 %1 个").arg(mediaflow.timelineViewController.selectedClipIds.length)
                 color: Theme.accentHover
                 font.pixelSize: Theme.fontSizeBodySmall
                 font.weight: Font.DemiBold
@@ -72,7 +72,7 @@ Rectangle {
                 text: qsTr("清除选择")
                 compact: true
                 quiet: true
-                visible: timelineController.selectedClipIds.length > 0
+                visible: mediaflow.timelineViewController.selectedClipIds.length > 0
                 onClicked: view.clearTimelineSelection()
             }
             AppButton {
@@ -80,9 +80,9 @@ Rectangle {
                 text: qsTr("创建复合片段")
                 compact: true
                 quiet: true
-                enabled: view.canEdit && timelineController.canCreateCompoundClip
-                visible: timelineController.selectedCompoundId.length === 0
-                onClicked: timelineController.createCompoundClip()
+                enabled: view.canEdit && mediaflow.timelineViewController.canCreateCompoundClip
+                visible: mediaflow.timelineViewController.selectedCompoundId.length === 0
+                onClicked: mediaflow.timelineStructureController.createCompoundClip()
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("把同一轨道上首尾相接的所选片段合成一个整体")
             }
@@ -91,36 +91,39 @@ Rectangle {
                 text: qsTr("解除复合")
                 compact: true
                 quiet: true
-                visible: timelineController.selectedCompoundId.length > 0
+                visible: mediaflow.timelineViewController.selectedCompoundId.length > 0
                 enabled: view.canEdit
-                onClicked: timelineController.dissolveSelectedCompoundClip()
+                onClicked: mediaflow.timelineStructureController.dissolveSelectedCompoundClip()
             }
             AppIconButton {
                 objectName: "timelineSplitButton"
                 iconName: "cut"
+                compact: true
                 flat: true
                 Accessible.name: qsTr("分割片段")
-                enabled: view.canEdit && timelineController.selectedClipId.length > 0
-                onClicked: timelineController.splitClip(timelineController.selectedClipId, view.playheadFrame)
+                enabled: view.canEdit && mediaflow.timelineViewController.selectedClipId.length > 0
+                onClicked: mediaflow.timelineClipController.splitClip(mediaflow.timelineViewController.selectedClipId, view.playheadFrame)
                 toolTipText: qsTr("在播放头处分割所选片段（Ctrl+K / Ctrl+B）")
             }
             AppIconButton {
                 objectName: "timelineDuplicateButton"
                 iconName: "duplicate"
+                compact: true
                 flat: true
                 Accessible.name: qsTr("创建片段副本")
-                enabled: view.canEdit && timelineController.selectedClipId.length > 0
-                onClicked: timelineController.duplicateClip(timelineController.selectedClipId, view.pixelsPerFrame, view.playheadFrame)
+                enabled: view.canEdit && mediaflow.timelineViewController.selectedClipId.length > 0
+                onClicked: mediaflow.timelineClipController.duplicateClip(mediaflow.timelineViewController.selectedClipId, view.pixelsPerFrame, view.playheadFrame)
                 toolTipText: qsTr("在片段末尾创建副本（Ctrl+D）")
             }
             AppIconButton {
                 objectName: "timelineDeleteButton"
                 iconName: "delete"
+                compact: true
                 flat: true
                 danger: true
                 Accessible.name: qsTr("删除所选片段")
-                enabled: view.canEdit && timelineController.selectedClipIds.length > 0
-                onClicked: timelineController.deleteSelectedClips(false)
+                enabled: view.canEdit && mediaflow.timelineViewController.selectedClipIds.length > 0
+                onClicked: mediaflow.timelineClipController.deleteSelectedClips(false)
                 toolTipText: qsTr("删除所选片段并保留空隙（Delete）")
             }
             AppButton {
@@ -147,72 +150,72 @@ Rectangle {
                     AppMenuItem {
                         text: qsTr("波纹删除所选片段")
                         enabled: view.canEdit
-                            && timelineController.selectedClipIds.length > 0
-                        onTriggered: timelineController.deleteSelectedClips(true)
+                            && mediaflow.timelineViewController.selectedClipIds.length > 0
+                        onTriggered: mediaflow.timelineClipController.deleteSelectedClips(true)
                     }
                     AppMenuItem {
                         text: qsTr("添加标记")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTimelineMarker(
+                        onTriggered: mediaflow.timelineStructureController.addTimelineMarker(
                             view.playheadFrame)
                     }
                     AppMenuItem {
                         text: qsTr("设置入点")
                         enabled: view.canEdit
-                            && workspaceController.timelineDurationFrames > 0
-                        onTriggered: timelineController.setSequenceInPoint(
+                            && mediaflow.workspaceViewController.timelineDurationFrames > 0
+                        onTriggered: mediaflow.timelineStructureController.setSequenceInPoint(
                             view.playheadFrame)
                     }
                     AppMenuItem {
                         text: qsTr("设置出点")
                         enabled: view.canEdit
-                            && workspaceController.timelineDurationFrames > 0
-                        onTriggered: timelineController.setSequenceOutPoint(
+                            && mediaflow.workspaceViewController.timelineDurationFrames > 0
+                        onTriggered: mediaflow.timelineStructureController.setSequenceOutPoint(
                             view.playheadFrame)
                     }
                     AppMenuSeparator {}
                     AppMenuItem {
                         objectName: "smartSequenceBoundsButton"
-                        text: timelineController.sequenceBoundaryAnalysisRunning ? qsTr("正在分析入出点…") : qsTr("智能设置入出点")
-                        enabled: view.canEdit && workspaceController.timelineDurationFrames > 0 && !timelineController.sequenceBoundaryAnalysisRunning
-                        onTriggered: timelineController.analyzeSequenceBoundaries()
+                        text: mediaflow.timelineViewController.sequenceBoundaryAnalysisRunning ? qsTr("正在分析入出点…") : qsTr("智能设置入出点")
+                        enabled: view.canEdit && mediaflow.workspaceViewController.timelineDurationFrames > 0 && !mediaflow.timelineViewController.sequenceBoundaryAnalysisRunning
+                        onTriggered: mediaflow.timelineAnalysisController.analyzeSequenceBoundaries()
                     }
                     AppMenuItem {
                         text: qsTr("清除入点和出点")
-                        enabled: view.canEdit && workspaceController.hasSequenceInOut
-                        onTriggered: timelineController.clearSequenceInOut()
+                        enabled: view.canEdit && mediaflow.workspaceViewController.hasSequenceInOut
+                        onTriggered: mediaflow.timelineStructureController.clearSequenceInOut()
                     }
                     AppMenuSeparator {}
                     AppMenuItem {
-                        text: timelineController.rangeInFrame < 0 ? qsTr("设置短视频选区起点") : qsTr("重新设置短视频选区起点")
+                        text: mediaflow.timelineViewController.rangeInFrame < 0 ? qsTr("设置短视频选区起点") : qsTr("重新设置短视频选区起点")
                         enabled: view.canEdit
-                        onTriggered: timelineController.setRangeIn(view.playheadFrame)
+                        onTriggered: mediaflow.timelineStructureController.setRangeIn(view.playheadFrame)
                     }
                     AppMenuItem {
                         text: qsTr("设置短视频选区终点")
-                        enabled: view.canEdit && timelineController.rangeInFrame >= 0
-                        onTriggered: timelineController.commitTimelineRange(view.playheadFrame)
+                        enabled: view.canEdit && mediaflow.timelineViewController.rangeInFrame >= 0
+                        onTriggered: mediaflow.timelineStructureController.commitTimelineRange(view.playheadFrame)
                     }
                     AppMenuItem {
                         text: qsTr("从所选区间创建短视频")
-                        enabled: view.canEdit && timelineController.selectedRangeId.length > 0
-                        onTriggered: timelineController.createShortFromRange(timelineController.selectedRangeId)
+                        enabled: view.canEdit && mediaflow.timelineViewController.selectedRangeId.length > 0
+                        onTriggered: mediaflow.timelineStructureController.createShortFromRange(mediaflow.timelineViewController.selectedRangeId)
                     }
                     AppMenuSeparator {}
                     AppMenuItem {
                         text: qsTr("添加视频轨")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTrack("video")
+                        onTriggered: mediaflow.timelineStructureController.addTrack("video")
                     }
                     AppMenuItem {
                         text: qsTr("添加音频轨")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTrack("audio")
+                        onTriggered: mediaflow.timelineStructureController.addTrack("audio")
                     }
                     AppMenuItem {
                         text: qsTr("添加字幕轨")
                         enabled: view.canEdit
-                        onTriggered: timelineController.addTrack("subtitle")
+                        onTriggered: mediaflow.timelineStructureController.addTrack("subtitle")
                     }
                 }
             }
@@ -227,6 +230,7 @@ Rectangle {
             AppSlider {
                 id: timelineZoomSlider
                 objectName: "timelineZoomSlider"
+                compact: true
                 from: view.minimumPixelsPerFrame
                 to: 12
                 value: view.pixelsPerFrame

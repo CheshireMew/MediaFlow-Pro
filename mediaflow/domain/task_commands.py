@@ -12,11 +12,12 @@ from pydantic import (
 
 from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.downloads import DownloadRequest
+from mediaflow.domain.dubbing import DubbingSettings
 from mediaflow.domain.enums import ExportFormat, TaskKind, WorkflowStage
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.translation import TranslationMode
-from mediaflow.domain.web_media import (
+from mediaflow.domain.web_exports import (
     WebExportFormat,
     require_web_export_destination,
 )
@@ -96,9 +97,7 @@ class ExportSequenceCommand(CommandModel):
 
     def validate_for_execution(self) -> None:
         if self.preset is not None and self.preset.format != self.format:
-            raise ValueError(
-                "导出预设格式必须与请求的导出格式一致"
-            )
+            raise ValueError("导出预设格式必须与请求的导出格式一致")
         if self.preset is not None:
             self.preset.validate_destination(self.output_path)
 
@@ -138,9 +137,7 @@ class BuildSequenceCommand(CommandModel):
         previous_end: int | None = None
         for unit in self.units:
             if previous_end is not None and unit.start_frame != previous_end:
-                raise ValueError(
-                    "Build units must be ordered and contiguous for deterministic assembly"
-                )
+                raise ValueError("Build units must be ordered and contiguous for deterministic assembly")
             previous_end = unit.end_frame
         if self.preset is not None and self.preset.format != self.format:
             raise ValueError("Build preset format must match the requested format")
@@ -173,10 +170,7 @@ class ExportHighlightsCommand(CommandModel):
         return values
 
     def validate_for_execution(self) -> None:
-        if (
-            self.preset is not None
-            and self.preset.format == ExportFormat.AUDIO
-        ):
+        if self.preset is not None and self.preset.format == ExportFormat.AUDIO:
             raise ValueError("高光批量导出必须使用视频预设")
 
     @property
@@ -225,9 +219,7 @@ class TranscribeSequenceCommand(CommandModel):
 
     def validate_for_execution(self) -> None:
         if not self.plan.sources or self.plan.recognition_frames <= 0:
-            raise ValueError(
-                "转录计划没有可识别的源音频区间"
-            )
+            raise ValueError("转录计划没有可识别的源音频区间")
 
     @property
     def task_kind(self) -> TaskKind:
@@ -290,6 +282,50 @@ class AnalyzeHighlightsCommand(CommandModel):
     @property
     def task_kind(self) -> TaskKind:
         return TaskKind.HIGHLIGHT
+
+
+class PrepareDubbingCommand(CommandModel):
+    command_type: Literal["prepare_dubbing"] = "prepare_dubbing"
+    sequence_id: NonEmptyText
+    source_document_id: NonEmptyText
+    target_language: NonEmptyText = "zh_CN"
+    target_document_id: NonEmptyText | None = None
+    settings: DubbingSettings = Field(default_factory=DubbingSettings)
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.DUBBING
+
+
+class SynthesizeDubbingCommand(CommandModel):
+    command_type: Literal["synthesize_dubbing"] = "synthesize_dubbing"
+    sequence_id: NonEmptyText
+    session_id: NonEmptyText
+    utterance_ids: list[NonEmptyText] = Field(default_factory=list)
+    regenerate: bool = False
+
+    @field_validator("utterance_ids")
+    @classmethod
+    def unique_utterance_ids(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("Dubbing utterance identifiers must be unique")
+        return values
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.DUBBING
+
+
+class CommitDubbingCommand(CommandModel):
+    command_type: Literal["commit_dubbing"] = "commit_dubbing"
+    sequence_id: NonEmptyText
+    session_id: NonEmptyText
+    track_name: NonEmptyText = "中文配音"
+    mute_source_dialogue: bool = True
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.DUBBING
 
 
 class AnalyzeDownloadCommand(CommandModel):
@@ -356,6 +392,9 @@ type TaskCommand = Annotated[
     | DiagnosticsBundleCommand
     | TranslateDocumentCommand
     | TranslateSegmentsCommand
+    | PrepareDubbingCommand
+    | SynthesizeDubbingCommand
+    | CommitDubbingCommand
     | AnalyzeHighlightsCommand
     | AnalyzeDownloadCommand
     | AnalyzeSequenceBoundsCommand

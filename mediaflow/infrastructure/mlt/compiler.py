@@ -22,7 +22,7 @@ from mediaflow.domain.timeline import (
     TimelineState,
 )
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.web_render_service import WebRenderCache
+from mediaflow.infrastructure.web_render_target import WebRenderCache
 
 from .audio_graph import MltAudioGraph
 from .clip_graph import MltClipGraph
@@ -93,7 +93,10 @@ class TimelineCompiler:
             },
         )
 
-        assets = assets_in_timeline_clock(self.repository.catalog, state.sequence)
+        assets = assets_in_timeline_clock(
+            self.repository.projects,
+            self.repository.sequences,
+            self.repository.assets, state.sequence)
         effective_video_tracks = state.effective_tracks(TrackKind.VIDEO)
         buses = self.repository.audio.list_audio_buses(state.sequence.id)
         audible_audio_track_ids = set(
@@ -106,9 +109,7 @@ class TimelineCompiler:
             ).track_ids
         )
         active_clip_ids = {
-            clip.id
-            for track in effective_video_tracks
-            for clip in state.clips_for_track(track.id)
+            clip.id for track in effective_video_tracks for clip in state.clips_for_track(track.id)
         }
         active_clip_ids.update(
             clip.id
@@ -134,7 +135,9 @@ class TimelineCompiler:
                 WebRenderCache(
                     self.repository,
                     self.paths,
-                ).target(state, clip, asset).path
+                )
+                .target(state, clip, asset)
+                .path
                 if asset.kind == AssetKind.WEB
                 else MltGraph.source_path(
                     self.repository,
@@ -182,9 +185,7 @@ class TimelineCompiler:
             duration,
         )
         if watermark_track is not None:
-            source_paths.append(
-                require_windows_interop_path(watermark_track[2])
-            )
+            source_paths.append(require_windows_interop_path(watermark_track[2]))
 
         audio_root_id = self._audio_graph.append_audio_graph(
             root,

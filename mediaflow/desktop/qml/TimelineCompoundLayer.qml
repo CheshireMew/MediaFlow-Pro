@@ -20,7 +20,7 @@ Item {
 
     Repeater {
         objectName: "compoundClipRepeater"
-        model: timelineController.compoundClipsModel
+        model: mediaflow.timelineViewController.compoundClipsModel
         delegate: Rectangle {
             id: compoundDelegate
             objectName: "timelineCompoundClip"
@@ -35,7 +35,7 @@ Item {
             required property int startFrame
             required property int durationFrames
             readonly property bool selected:
-                timelineController.selectedCompoundId === compoundId
+                mediaflow.timelineViewController.selectedCompoundId === compoundId
 
             x: startFrame * view.pixelsPerFrame + (view.draggingClipId === primaryClipId ? view.draggingClipOffsetX : 0)
             y: (view.draggingClipId === primaryClipId ? view.draggingClipTrackPosition : trackPosition) * view.trackPitch + 12
@@ -51,8 +51,8 @@ Item {
             activeFocusOnTab: true
             Accessible.name: qsTr("复合片段 %1，包含 %2 个片段").arg(name).arg(memberCount)
             Accessible.role: Accessible.ListItem
-            Keys.onReturnPressed: timelineController.selectCompoundClip(compoundId)
-            Keys.onSpacePressed: timelineController.selectCompoundClip(compoundId)
+            Keys.onReturnPressed: mediaflow.timelineViewController.selectCompoundClip(compoundId)
+            Keys.onSpacePressed: mediaflow.timelineViewController.selectCompoundClip(compoundId)
 
             Rectangle {
                 anchors.left: parent.left
@@ -105,7 +105,7 @@ Item {
                     ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
                     : Qt.ArrowCursor
                 onPressed: function (mouse) {
-                    timelineController.selectCompoundClip(compoundId);
+                    mediaflow.timelineViewController.selectCompoundClip(compoundId);
                     if (view.canEdit) {
                         const point = compoundDelegate.mapToItem(
                             compoundClipLayer, mouse.x, mouse.y);

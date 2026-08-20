@@ -15,6 +15,7 @@ from mediaflow.desktop.presentation_catalogs import (
     asr_parallel_options,
     encoder_label,
     export_recovery_configuration_label,
+    llm_provider_presets,
     no_subtitle_burn_label,
     status_message,
     system_name,
@@ -32,6 +33,18 @@ from mediaflow.domain.tasks import (
     ExportTaskOutcome,
     Task,
 )
+
+
+def test_llm_provider_presets_publish_model_variants_from_one_catalog() -> None:
+    presets = llm_provider_presets()
+    deepseek = next(item for item in presets if item["value"] == "deepseek")
+    custom = next(item for item in presets if item["custom"] is True)
+
+    assert deepseek["standardModel"] == "deepseek-chat"
+    assert deepseek["reasoningModel"] == "deepseek-reasoner"
+    assert "deepseek-reasoner" in str(deepseek["reasoningLabel"])
+    assert custom["standardModel"] == ""
+    assert custom["reasoningModel"] == ""
 
 
 def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
@@ -74,8 +87,8 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         assert all((message.find("translation").text or "").strip() for message in messages)
         assert all(message.find("translation").get("type") != "unfinished" for message in messages)
         required_technical_keys = {
-            ("SettingsDialog", "Cookie JSON"),
-            ("SettingsDialog", "API 密钥"),
+            ("SettingsMediaPage", "Cookie JSON"),
+            ("SettingsAiPage", "API 密钥"),
             ("ExportTechnicalSettings", "单声道"),
             ("ExportTechnicalSettings", "立体声"),
             ("ExportTechnicalSettings", "FPS 分子"),
@@ -87,11 +100,11 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         assert translator.load(str(catalog.with_suffix(".qm")))
         assert app.installTranslator(translator)
         assert QCoreApplication.translate("HomeView", "新建项目") == translations[0]
-        assert QCoreApplication.translate("WorkspaceNavigation", "音频") == translations[1]
+        assert QCoreApplication.translate("InspectorPanel", "音频") == translations[1]
         assert QCoreApplication.translate("ExportFileDialogs", "导出序列") == translations[2]
         technical_labels = expected_technical_labels[language]
-        assert QCoreApplication.translate("SettingsDialog", "Cookie JSON") == technical_labels[0]
-        assert QCoreApplication.translate("SettingsDialog", "API 密钥") == technical_labels[1]
+        assert QCoreApplication.translate("SettingsMediaPage", "Cookie JSON") == technical_labels[0]
+        assert QCoreApplication.translate("SettingsAiPage", "API 密钥") == technical_labels[1]
         assert QCoreApplication.translate("ExportTechnicalSettings", "单声道") == technical_labels[2]
         assert QCoreApplication.translate("ExportTechnicalSettings", "立体声") == technical_labels[3]
         assert QCoreApplication.translate("ExportTechnicalSettings", "FPS 分子") == technical_labels[4]

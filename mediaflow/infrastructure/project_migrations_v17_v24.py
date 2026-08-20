@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.model_base import new_id
-from mediaflow.domain.web_media import WebClipState
+from mediaflow.domain.web_state import WebClipState
 from mediaflow.infrastructure.editable_media_project_migration import (
     migrate_editable_media_manifest_to_v6,
 )
@@ -15,17 +15,12 @@ from mediaflow.infrastructure.project_serialization import json_value as _json
 
 def migrate_v17_to_v18(workspace) -> None:
     with workspace.transaction() as connection:
-        for asset_row in connection.execute(
-            "SELECT asset_id, manifest_json FROM web_asset"
-        ).fetchall():
+        for asset_row in connection.execute("SELECT asset_id, manifest_json FROM web_asset").fetchall():
             try:
-                migrate_editable_media_manifest_to_v6(
-                    json.loads(str(asset_row["manifest_json"]))
-                )
+                migrate_editable_media_manifest_to_v6(json.loads(str(asset_row["manifest_json"])))
             except (TypeError, ValueError, ValidationError) as error:
                 raise RuntimeError(
-                    "项目中的历史 editable-media 网页素材不符合最终 v4 "
-                    "合同，无法进入一次性 v6 项目升级流程。"
+                    "项目中的历史 editable-media 网页素材不符合最终 v4 合同，无法进入一次性 v6 项目升级流程。"
                 ) from error
         state_rows = connection.execute(
             """SELECT state.clip_id, state.state_json, state.revision
@@ -43,8 +38,7 @@ def migrate_v17_to_v18(workspace) -> None:
                 )
             except (TypeError, ValueError, ValidationError) as error:
                 raise RuntimeError(
-                    "项目中的历史 editable-media 网页片段状态无法进入"
-                    "一次性 v6 项目升级流程。"
+                    "项目中的历史 editable-media 网页片段状态无法进入一次性 v6 项目升级流程。"
                 ) from error
         connection.execute(
             "UPDATE schema_info SET version=? WHERE component='project'",

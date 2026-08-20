@@ -15,24 +15,24 @@ AppScrollView {
         width: scrollRoot.availableWidth
         spacing: 10
         property var taskData: ({})
-        readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
-        readonly property bool canStartTasks: Boolean(workspaceController.actionCapabilities.canStartTasks)
+        readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+        readonly property bool canStartTasks: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
         function refreshTask() {
-            taskData = taskController.latestCommandTask(
-                "analyze_loudness", workspaceController.activeSequenceId);
+            taskData = mediaflow.taskController.latestCommandTask(
+                "analyze_loudness", mediaflow.workspaceViewController.activeSequenceId);
         }
         Connections {
-            target: taskController
+            target: mediaflow.taskController
             function onTasksChanged() { root.refreshTask(); }
         }
         Component.onCompleted: refreshTask()
         function metric(name, suffix) {
-            const value = audioController.audioMetrics[name];
+            const value = mediaflow.audioController.audioMetrics[name];
             return value === undefined ? "—" : Number(value).toFixed(1) + " " + suffix;
         }
         function selectedEffectKind() {
-            const row = audioController.audioEffectsModel.findRow("effectId", audioController.selectedAudioEffectId);
-            return row < 0 ? "" : String(audioController.audioEffectsModel.get(row).kind);
+            const row = mediaflow.audioController.audioEffectsModel.findRow("effectId", mediaflow.audioController.selectedAudioEffectId);
+            return row < 0 ? "" : String(mediaflow.audioController.audioEffectsModel.get(row).kind);
         }
         readonly property var channelLayoutOptions: [
             {
@@ -59,7 +59,7 @@ AppScrollView {
             objectName: "audioClipProperties"
             Layout.fillWidth: true
             implicitHeight: clipAudioContent.implicitHeight + 22
-            visible: timelineController.selectedClipId.length > 0
+            visible: mediaflow.timelineViewController.selectedClipId.length > 0
             enabled: root.canEdit
             ColumnLayout {
                 id: clipAudioContent
@@ -70,7 +70,7 @@ AppScrollView {
                 spacing: 7
                 Text {
                     Layout.fillWidth: true
-                    text: timelineController.selectedClipData.assetName || qsTr("所选片段")
+                    text: mediaflow.timelineViewController.selectedClipData.assetName || qsTr("所选片段")
                     color: Theme.text
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.DemiBold
@@ -91,26 +91,26 @@ AppScrollView {
                         objectName: "audioClipGain"
                         Layout.fillWidth: true
                         label: qsTr("增益 dB")
-                        text: String(timelineController.selectedClipData.gainDb ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.gainDb ?? 0)
                     }
                     PropertyField {
                         id: clipPan
                         objectName: "audioClipPan"
                         Layout.fillWidth: true
                         label: qsTr("声像")
-                        text: String(timelineController.selectedClipData.pan ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.pan ?? 0)
                     }
                     PropertyField {
                         id: clipFadeIn
                         Layout.fillWidth: true
                         label: qsTr("淡入帧")
-                        text: String(timelineController.selectedClipData.fadeInFrames ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.fadeInFrames ?? 0)
                     }
                     PropertyField {
                         id: clipFadeOut
                         Layout.fillWidth: true
                         label: qsTr("淡出帧")
-                        text: String(timelineController.selectedClipData.fadeOutFrames ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.fadeOutFrames ?? 0)
                     }
                 }
                 AppButton {
@@ -118,7 +118,7 @@ AppScrollView {
                     Layout.fillWidth: true
                     primary: true
                     text: qsTr("应用片段音频参数")
-                    onClicked: timelineController.setClipAudio(timelineController.selectedClipId, Number(clipGain.text), Number(clipPan.text), Number(clipFadeIn.text), Number(clipFadeOut.text))
+                    onClicked: mediaflow.timelineClipController.setClipAudio(mediaflow.timelineViewController.selectedClipId, Number(clipGain.text), Number(clipPan.text), Number(clipFadeIn.text), Number(clipFadeOut.text))
                 }
             }
         }
@@ -139,7 +139,7 @@ AppScrollView {
                 text: qsTr("添加总线")
                 enabled: root.canEdit
                 onClicked: {
-                    audioController.addAudioBus(newBusName.text);
+                    mediaflow.audioController.addAudioBus(newBusName.text);
                     newBusName.clear();
                 }
             }
@@ -166,14 +166,14 @@ AppScrollView {
                         Layout.fillWidth: true
                     }
                     Text {
-                        text: qsTr("目标 %1 LUFS / %2 dBTP").arg(settingsController.settingsData.loudnessTarget).arg(settingsController.settingsData.truePeak)
+                        text: qsTr("目标 %1 LUFS / %2 dBTP").arg(mediaflow.settingsController.settingsData.loudnessTarget).arg(mediaflow.settingsController.settingsData.truePeak)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSizeCaption
                     }
                     AppButton {
-                        text: audioController.audioAnalysisRunning ? qsTr("测量中…") : qsTr("重新测量")
-                        enabled: root.canStartTasks && !audioController.audioAnalysisRunning
-                        onClicked: audioController.analyzeLoudness()
+                        text: mediaflow.audioController.audioAnalysisRunning ? qsTr("测量中…") : qsTr("重新测量")
+                        enabled: root.canStartTasks && !mediaflow.audioController.audioAnalysisRunning
+                        onClicked: mediaflow.audioController.analyzeLoudness()
                     }
                 }
                 GridLayout {
@@ -216,7 +216,7 @@ AppScrollView {
             Layout.preferredHeight: Math.min(540, contentHeight)
             clip: true
             spacing: 6
-            model: audioController.audioBusesModel
+            model: mediaflow.audioController.audioBusesModel
             delegate: Rectangle {
                 required property string busId
                 required property string name
@@ -229,8 +229,8 @@ AppScrollView {
                 width: busList.width
                 height: 126
                 radius: Theme.radiusSmall
-                color: audioController.selectedAudioBusId === busId ? Theme.accentSoft : busMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-                border.color: audioController.selectedAudioBusId === busId ? Theme.accent : Theme.border
+                color: mediaflow.audioController.selectedAudioBusId === busId ? Theme.accentSoft : busMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                border.color: mediaflow.audioController.selectedAudioBusId === busId ? Theme.accent : Theme.border
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 8
@@ -250,7 +250,7 @@ AppScrollView {
                             Accessible.name: muted ? qsTr("取消静音") : qsTr("静音")
                             ToolTip.visible: hovered
                             ToolTip.text: Accessible.name
-                            onClicked: audioController.updateAudioBus(busId, gainDb, !muted, solo)
+                            onClicked: mediaflow.audioController.updateAudioBus(busId, gainDb, !muted, solo)
                         }
                         AppButton {
                             text: solo ? qsTr("取消独奏") : qsTr("独奏")
@@ -258,7 +258,7 @@ AppScrollView {
                             Accessible.name: solo ? qsTr("取消独奏") : qsTr("独奏")
                             ToolTip.visible: hovered
                             ToolTip.text: Accessible.name
-                            onClicked: audioController.updateAudioBus(busId, gainDb, muted, !solo)
+                            onClicked: mediaflow.audioController.updateAudioBus(busId, gainDb, muted, !solo)
                         }
                     }
                     RowLayout {
@@ -276,7 +276,7 @@ AppScrollView {
                             to: 12
                             value: gainDb
                             onPressedChanged: if (!pressed)
-                                audioController.updateAudioBus(busId, value, muted, solo)
+                                mediaflow.audioController.updateAudioBus(busId, value, muted, solo)
                         }
                     }
                     RowLayout {
@@ -297,11 +297,11 @@ AppScrollView {
                             Layout.fillWidth: true
                             enabled: root.canEdit
                             visible: parentBusId.length > 0
-                            model: audioController.audioBusesModel
+                            model: mediaflow.audioController.audioBusesModel
                             textRole: "displayName"
                             valueRole: "busId"
-                            currentIndex: audioController.audioBusesModel.findRow("busId", parentBusId)
-                            onActivated: audioController.updateAudioBus(busId, gainDb, muted, solo, String(currentValue), channelLayout)
+                            currentIndex: mediaflow.audioController.audioBusesModel.findRow("busId", parentBusId)
+                            onActivated: mediaflow.audioController.updateAudioBus(busId, gainDb, muted, solo, String(currentValue), channelLayout)
                         }
                         AppComboBox {
                             Layout.preferredWidth: 124
@@ -310,7 +310,7 @@ AppScrollView {
                             textRole: "label"
                             valueRole: "value"
                             currentIndex: root.channelLayoutIndex(channelLayout)
-                            onActivated: audioController.updateAudioBus(busId, gainDb, muted, solo, parentBusId, String(currentValue))
+                            onActivated: mediaflow.audioController.updateAudioBus(busId, gainDb, muted, solo, parentBusId, String(currentValue))
                         }
                     }
                 }
@@ -319,7 +319,7 @@ AppScrollView {
                     anchors.fill: parent
                     anchors.bottomMargin: 72
                     hoverEnabled: true
-                    onClicked: audioController.selectAudioBus(busId)
+                    onClicked: mediaflow.audioController.selectAudioBus(busId)
                 }
             }
         }
@@ -335,7 +335,7 @@ AppScrollView {
             Layout.preferredHeight: Math.min(112, contentHeight)
             clip: true
             spacing: 4
-            model: timelineController.tracksModel
+            model: mediaflow.timelineViewController.tracksModel
             delegate: Rectangle {
                 id: routeDelegate
                 required property string trackId
@@ -365,11 +365,11 @@ AppScrollView {
                     AppComboBox {
                         Layout.preferredWidth: 126
                         enabled: root.canEdit
-                        model: audioController.audioBusesModel
+                        model: mediaflow.audioController.audioBusesModel
                         textRole: "displayName"
                         valueRole: "busId"
-                        currentIndex: audioController.audioBusesModel.findRow("busId", routeDelegate.audioBusId)
-                        onActivated: timelineController.updateTrack(routeDelegate.trackId, routeDelegate.model.enabled, routeDelegate.locked, routeDelegate.muted, routeDelegate.solo, String(currentValue))
+                        currentIndex: mediaflow.audioController.audioBusesModel.findRow("busId", routeDelegate.audioBusId)
+                        onActivated: mediaflow.timelineStructureController.updateTrack(routeDelegate.trackId, routeDelegate.model.enabled, routeDelegate.locked, routeDelegate.muted, routeDelegate.solo, String(currentValue))
                     }
                 }
             }
@@ -438,8 +438,8 @@ AppScrollView {
                 flat: false
                 Accessible.name: qsTr("添加音频效果")
                 toolTipText: Accessible.name
-                enabled: root.canEdit && audioController.selectedAudioBusId.length > 0
-                onClicked: audioController.addAudioEffect(audioController.selectedAudioBusId, effectKind.currentValue)
+                enabled: root.canEdit && mediaflow.audioController.selectedAudioBusId.length > 0
+                onClicked: mediaflow.audioController.addAudioEffect(mediaflow.audioController.selectedAudioBusId, effectKind.currentValue)
             }
         }
         ListView {
@@ -448,7 +448,7 @@ AppScrollView {
             Layout.preferredHeight: Math.min(180, contentHeight)
             clip: true
             spacing: 5
-            model: audioController.audioEffectsModel
+            model: mediaflow.audioController.audioEffectsModel
             delegate: Rectangle {
                 id: effectDelegate
                 required property string effectId
@@ -459,8 +459,8 @@ AppScrollView {
                 width: effectList.width
                 height: 48
                 radius: Theme.radiusSmall
-                color: audioController.selectedAudioEffectId === effectId ? Theme.accentSoft : Theme.surfaceRaised
-                border.color: audioController.selectedAudioEffectId === effectId ? Theme.accent : Theme.border
+                color: mediaflow.audioController.selectedAudioEffectId === effectId ? Theme.accentSoft : Theme.surfaceRaised
+                border.color: mediaflow.audioController.selectedAudioEffectId === effectId ? Theme.accent : Theme.border
                 z: dragHandle.drag.active ? 10 : 0
                 RowLayout {
                     anchors.fill: parent
@@ -485,7 +485,7 @@ AppScrollView {
                         enabled: root.canEdit && position > 0
                         implicitWidth: 28
                         implicitHeight: 26
-                        onClicked: audioController.moveAudioEffect(effectId, position - 1)
+                        onClicked: mediaflow.audioController.moveAudioEffect(effectId, position - 1)
                     }
                     AppIconButton {
                         iconName: "down"
@@ -495,13 +495,13 @@ AppScrollView {
                         enabled: root.canEdit && position + 1 < effectList.count
                         implicitWidth: 28
                         implicitHeight: 26
-                        onClicked: audioController.moveAudioEffect(effectId, position + 1)
+                        onClicked: mediaflow.audioController.moveAudioEffect(effectId, position + 1)
                     }
                     AppSwitch {
                         checked: model.enabled
                         enabled: root.canEdit
                         Accessible.name: checked ? qsTr("停用音频效果") : qsTr("启用音频效果")
-                        onToggled: audioController.setAudioEffectEnabled(effectId, checked)
+                        onToggled: mediaflow.audioController.setAudioEffectEnabled(effectId, checked)
                     }
                 }
                 MouseArea {
@@ -511,7 +511,7 @@ AppScrollView {
                     anchors.rightMargin: 118
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
-                    onClicked: audioController.selectAudioEffect(effectId)
+                    onClicked: mediaflow.audioController.selectAudioEffect(effectId)
                 }
                 MouseArea {
                     id: dragHandle
@@ -523,10 +523,10 @@ AppScrollView {
                     cursorShape: Qt.SizeVerCursor
                     drag.target: effectDelegate
                     drag.axis: Drag.YAxis
-                    onPressed: audioController.selectAudioEffect(effectId)
+                    onPressed: mediaflow.audioController.selectAudioEffect(effectId)
                     onReleased: {
                         var target = Math.max(0, Math.min(effectList.count - 1, Math.round(effectDelegate.y / (effectDelegate.height + effectList.spacing))));
-                        audioController.moveAudioEffect(effectId, target);
+                        mediaflow.audioController.moveAudioEffect(effectId, target);
                     }
                 }
             }
@@ -542,7 +542,7 @@ AppScrollView {
             objectName: "audioParameterPanel"
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(190, parameterList.contentHeight + 58)
-            visible: audioController.selectedAudioEffectId.length > 0
+            visible: mediaflow.audioController.selectedAudioEffectId.length > 0
             enabled: root.canEdit
             ColumnLayout {
                 anchors.fill: parent
@@ -560,16 +560,16 @@ AppScrollView {
                         Layout.fillWidth: true
                         textRole: "label"
                         valueRole: "presetId"
-                        model: audioController.audioEffectPresets(root.selectedEffectKind())
+                        model: mediaflow.audioController.audioEffectPresets(root.selectedEffectKind())
                     }
                     AppButton {
                         text: qsTr("应用")
                         enabled: effectPreset.count > 0
-                        onClicked: audioController.applyAudioEffectPreset(audioController.selectedAudioEffectId, String(effectPreset.currentValue))
+                        onClicked: mediaflow.audioController.applyAudioEffectPreset(mediaflow.audioController.selectedAudioEffectId, String(effectPreset.currentValue))
                     }
                     AppButton {
                         text: qsTr("移除效果")
-                        onClicked: audioController.removeAudioEffect(audioController.selectedAudioEffectId)
+                        onClicked: mediaflow.audioController.removeAudioEffect(mediaflow.audioController.selectedAudioEffectId)
                     }
                 }
                 ListView {
@@ -579,7 +579,7 @@ AppScrollView {
                     Layout.fillHeight: true
                     clip: true
                     spacing: 6
-                    model: audioController.audioEffectParametersModel
+                    model: mediaflow.audioController.audioEffectParametersModel
                     delegate: ColumnLayout {
                         id: parameterDelegate
                         required property string key
@@ -593,7 +593,7 @@ AppScrollView {
                         EditorFieldControl {
                             Layout.fillWidth: true
                             field: ({
-                                "path": "audio-effects." + audioController.selectedAudioEffectId + "." + parameterDelegate.key,
+                                "path": "audio-effects." + mediaflow.audioController.selectedAudioEffectId + "." + parameterDelegate.key,
                                 "target": "audio-effect",
                                 "source_id": parameterDelegate.key,
                                 "descriptor": parameterDelegate.descriptor,
@@ -601,8 +601,8 @@ AppScrollView {
                                 "locked": false
                             })
                             options: parameterDelegate.options
-                            onValueCommitted: value => audioController.setAudioEffectParameter(
-                                audioController.selectedAudioEffectId,
+                            onValueCommitted: value => mediaflow.audioController.setAudioEffectParameter(
+                                mediaflow.audioController.selectedAudioEffectId,
                                 parameterDelegate.key,
                                 value)
                         }

@@ -12,11 +12,11 @@ AppDialog {
     width: Math.min(760, parent ? parent.width - 48 : 760)
     height: Math.min(720, parent ? parent.height - 48 : 720)
     modal: true
-    title: automationController.requestTitle || qsTr("CLI 请求")
+    title: mediaflow.automationController.requestTitle || qsTr("CLI 请求")
     standardButtons: Dialog.Close
 
     Connections {
-        target: automationController
+        target: mediaflow.automationController
         function onRequestPrepared() { root.open() }
     }
 
@@ -32,7 +32,7 @@ AppDialog {
         AppTextField {
             Layout.fillWidth: true
             readOnly: true
-            text: automationController.executionCommand
+            text: mediaflow.automationController.executionCommand
             selectByMouse: true
         }
         TextArea {
@@ -43,7 +43,7 @@ AppDialog {
             readOnly: true
             selectByMouse: true
             wrapMode: TextEdit.NoWrap
-            text: automationController.requestPreviewJson
+            text: mediaflow.automationController.requestPreviewJson
             color: Theme.text
             selectionColor: Theme.accent
             selectedTextColor: Theme.onAccent
