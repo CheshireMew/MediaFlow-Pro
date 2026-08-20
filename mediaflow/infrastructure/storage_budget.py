@@ -727,6 +727,26 @@ def require_project_cache_budget(
     }
 
 
+def reserve_project_cache(
+    root: str | Path,
+    project_dir: str | Path,
+    *,
+    expected_new_bytes: int | None,
+    label: str,
+    case_sensitive_paths: bool,
+) -> None:
+    require_project_cache_budget(
+        root,
+        expected_new_bytes=expected_new_bytes,
+        label=label,
+    )
+    register_project_cache_owner(
+        root,
+        project_dir,
+        case_sensitive_paths=case_sensitive_paths,
+    )
+
+
 def require_test_artifact_budget(
     root: str | Path,
     *,

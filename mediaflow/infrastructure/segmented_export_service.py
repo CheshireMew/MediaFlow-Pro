@@ -34,8 +34,7 @@ from mediaflow.infrastructure.output_reservation import output_set_transaction
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.storage_budget import (
     estimate_video_cache_bytes,
-    register_project_cache_owner,
-    require_project_cache_budget,
+    reserve_project_cache,
 )
 from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.infrastructure.web_render_target import WEB_RENDERER_VERSION
@@ -151,18 +150,15 @@ class SegmentedExportService:
         self._validate_units(state, units)
         total_frames = sum(unit.end_frame - unit.start_frame for unit in units)
         project_cache = self.paths.project_cache_dir(self.documents.project_dir)
-        require_project_cache_budget(
+        reserve_project_cache(
             project_cache,
+            self.documents.project_dir,
             expected_new_bytes=estimate_video_cache_bytes(
                 state.sequence.profile.width,
                 state.sequence.profile.height,
                 total_frames,
             ),
             label="MediaFlow segmented export cache",
-        )
-        register_project_cache_owner(
-            project_cache,
-            self.documents.project_dir,
             case_sensitive_paths=self.paths.target.case_sensitive_paths,
         )
         return total_frames
