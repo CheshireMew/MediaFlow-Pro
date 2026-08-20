@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from scripts.documentation_screenshot_contract import ROOT, documentation_ui_sources
+from scripts.documentation_screenshot_contract import (
+    ROOT,
+    documentation_ui_sources,
+    normalized_source_contents,
+)
 
 
 def test_documentation_ui_sources_use_platform_independent_order() -> None:
@@ -11,3 +15,9 @@ def test_documentation_ui_sources_use_platform_independent_order() -> None:
     ]
 
     assert qml_sources == sorted(qml_sources)
+
+
+def test_documentation_source_digest_normalizes_checkout_line_endings() -> None:
+    assert normalized_source_contents(b"first\r\nsecond\r\n") == normalized_source_contents(
+        b"first\nsecond\n"
+    )

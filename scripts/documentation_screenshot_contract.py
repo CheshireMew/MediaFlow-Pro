@@ -34,10 +34,15 @@ def documentation_ui_digest() -> str:
         relative = path.relative_to(ROOT).as_posix().encode("utf-8")
         digest.update(len(relative).to_bytes(4, "big"))
         digest.update(relative)
-        contents = path.read_bytes()
+        contents = normalized_source_contents(path.read_bytes())
         digest.update(len(contents).to_bytes(8, "big"))
         digest.update(contents)
     return digest.hexdigest()
+
+
+def normalized_source_contents(contents: bytes) -> bytes:
+    """Return text source bytes with one repository-independent newline form."""
+    return contents.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 def file_sha256(path: Path) -> str:

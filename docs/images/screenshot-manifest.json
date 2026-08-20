@@ -1,7 +1,7 @@
 {
   "schema": "mediaflow-documentation-screenshots/v1",
   "generator": "scripts/update_documentation_screenshots.py",
-  "ui_source_digest": "cf4319131278db5ea2360a108739a4a3a6a97008d22f4df0cda03a6e2ead9199",
+  "ui_source_digest": "7ecda75538d230195c096c7eaf08e1663b761835465b22340556158dcc7f13fa",
   "images": [
     {
       "path": "docs/images/mediaflow-home-zh-cn.png",
@@ -16,7 +16,7 @@
       "scenario": "sample-workspace-zh-cn",
       "width": 1920,
       "height": 1080,
-      "sha256": "7e1db34c11cbd6e71e1b1dbe17a6cde8ae20fb5f9d183a813ef8dd578325f79f",
+      "sha256": "ea37f5339c54b42373849da0774e79ca57da84f92808ea18ed83be771d4304be",
       "local_paths_exposed": false
     }
   ]
