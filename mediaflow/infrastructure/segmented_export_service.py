@@ -163,6 +163,7 @@ class SegmentedExportService:
         register_project_cache_owner(
             project_cache,
             self.documents.project_dir,
+            case_sensitive_paths=self.paths.target.case_sensitive_paths,
         )
         return total_frames
 

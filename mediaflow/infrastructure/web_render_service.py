@@ -311,7 +311,11 @@ class WebRenderService:
             ),
             label=label,
         )
-        register_project_cache_owner(cache_root, self.documents.project_dir)
+        register_project_cache_owner(
+            cache_root,
+            self.documents.project_dir,
+            case_sensitive_paths=self.paths.target.case_sensitive_paths,
+        )
 
     @classmethod
     def _acquire_cache_lock(
