@@ -19,6 +19,7 @@ ApplicationWindow {
     title: mediaflow.workspaceViewController.hasProject ? mediaflow.workspaceViewController.projectName : Qt.application.name
     readonly property bool downloadPlanVisible: downloadPlanDialog.visible
     property bool projectVersionsVisible: false
+    property bool shortcutReferenceVisible: false
     readonly property int downloadPlanEntryCount: downloadEntries.count
     readonly property bool downloadPlanIsAudio:
         mediaflow.taskController.downloadPlanData.media_kind === "audio"
@@ -145,6 +146,7 @@ ApplicationWindow {
                 if (pageLoader.item && pageLoader.item.openExportPanel)
                     pageLoader.item.openExportPanel();
             }
+            onShortcutReferenceRequested: shortcutReferenceDialog.open()
         }
         Loader {
             id: pageLoader
@@ -161,7 +163,23 @@ ApplicationWindow {
         id: workspaceTour
         anchors.fill: parent
         workspaceItem: mediaflow.workspaceViewController.hasProject
+            && pageLoader.item && pageLoader.item.objectName === "workspace"
             ? pageLoader.item : null
+    }
+
+    ShortcutReferenceDialog {
+        id: shortcutReferenceDialog
+        parent: Overlay.overlay
+        anchors.centerIn: Overlay.overlay
+        onOpened: window.shortcutReferenceVisible = true
+        onClosed: window.shortcutReferenceVisible = false
+    }
+
+    Shortcut {
+        sequence: "Ctrl+/"
+        enabled: mediaflow.workspaceViewController.hasProject
+            && !shortcutReferenceDialog.opened
+        onActivated: shortcutReferenceDialog.open()
     }
 
     AppDialog {
@@ -491,6 +509,7 @@ ApplicationWindow {
 
     AppPopover {
         id: errorPopup
+        objectName: "globalErrorPopup"
         x: (window.width - width) / 2
         y: 54
         width: Math.min(560, window.width - 48)
@@ -518,6 +537,13 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
+                AppButton {
+                    text: qsTr("前往任务中心")
+                    onClicked: {
+                        errorPopup.close()
+                        mediaflow.taskController.openTaskCenter()
+                    }
+                }
                 AppButton {
                     text: qsTr("复制详情")
                     onClicked: mediaflow.taskController.copyErrorDetails(errorText.text)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Slot
 
+from mediaflow.desktop import timeline_annotation_actions
 from mediaflow.domain.enums import TrackKind, TransitionKind
 
 from .controller_facet import ControllerFacet, report_ui_errors
@@ -142,29 +143,21 @@ class TimelineStructureController(ControllerFacet[TimelinePresentationScope]):
     @Slot(int)
     @report_ui_errors
     def addTimelineMarker(self, frame: int) -> None:
-        self._session._require_writable()
-        marker = self._session.state.binding.require_timeline().add_marker(
-            max(0, frame), f"标记 {len(self._session.state.binding.require_timeline().state.markers) + 1}"
-        )
-        self._session.state.selection.marker_id = marker.id
-        self._session.projectors.timeline.refresh_timeline()
-        self._session.updates.commit(selection=True)
-        self._session.updates.commit(history=True)
+        timeline_annotation_actions.add_marker(self._session, frame)
+
+    @Slot(str, str)
+    @report_ui_errors
+    def renameTimelineMarker(self, marker_id: str, name: str) -> None:
+        timeline_annotation_actions.rename_marker(self._session, marker_id, name)
 
     @Slot(str)
     @report_ui_errors
     def removeTimelineMarker(self, marker_id: str) -> None:
-        self._session._require_writable()
-        self._session.state.binding.require_timeline().remove_marker(marker_id)
-        self._session.state.selection.marker_id = ""
-        self._session.projectors.timeline.refresh_timeline()
-        self._session.updates.commit(selection=True)
-        self._session.updates.commit(history=True)
+        timeline_annotation_actions.remove_marker(self._session, marker_id)
 
     @Slot(int)
     def setRangeIn(self, frame: int) -> None:
-        self._session.state.selection.range_in_frame = max(0, frame)
-        self._session.updates.commit(selection=True)
+        timeline_annotation_actions.set_range_in(self._session, frame)
 
     @Slot(int)
     @report_ui_errors
@@ -201,32 +194,17 @@ class TimelineStructureController(ControllerFacet[TimelinePresentationScope]):
     @Slot(int)
     @report_ui_errors
     def commitTimelineRange(self, frame: int) -> None:
-        self._session._require_writable()
-        if self._session.state.selection.range_in_frame is None:
-            raise ValueError("请先设置选区入点")
-        start_frame, end_frame = sorted((self._session.state.selection.range_in_frame, max(0, frame)))
-        if start_frame == end_frame:
-            raise ValueError("选区必须包含至少一帧")
-        item = self._session.state.binding.require_timeline().add_range(
-            start_frame,
-            end_frame,
-            f"选区 {len(self._session.state.binding.require_timeline().state.ranges) + 1}",
-        )
-        self._session.state.selection.range_id = item.id
-        self._session.state.selection.range_in_frame = None
-        self._session.projectors.timeline.refresh_timeline()
-        self._session.updates.commit(selection=True)
-        self._session.updates.commit(history=True)
+        timeline_annotation_actions.commit_range(self._session, frame)
+
+    @Slot(str, str)
+    @report_ui_errors
+    def renameTimelineRange(self, range_id: str, name: str) -> None:
+        timeline_annotation_actions.rename_range(self._session, range_id, name)
 
     @Slot(str)
     @report_ui_errors
     def removeTimelineRange(self, range_id: str) -> None:
-        self._session._require_writable()
-        self._session.state.binding.require_timeline().remove_range(range_id)
-        self._session.state.selection.range_id = ""
-        self._session.projectors.timeline.refresh_timeline()
-        self._session.updates.commit(selection=True)
-        self._session.updates.commit(history=True)
+        timeline_annotation_actions.remove_range(self._session, range_id)
 
     @Slot(str)
     @report_ui_errors

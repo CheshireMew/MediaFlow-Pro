@@ -64,7 +64,7 @@ class WorkspaceProjector(Projector):
                     "baseUrl": provider.base_url,
                     "apiKey": provider.api_key,
                     "model": provider.model,
-                    "enabled": provider.enabled,
+                    "providerEnabled": provider.enabled,
                     "active": provider.id == active_id,
                 }
                 for provider in self._session.state.service_settings.llm_providers

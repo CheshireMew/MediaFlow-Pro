@@ -520,6 +520,7 @@ Item {
                         || root.searchResultMode === "files")
                     && root.filteredAssetCount === 0
                 iconName: "add"
+                iconVisible: height >= 150
                 title: search.text.length === 0
                     ? qsTr("导入第一个素材") : qsTr("没有匹配的素材")
                 description: search.text.length === 0
@@ -532,6 +533,7 @@ Item {
                     && root.searchResultMode === "moments"
                     && mediaflow.mediaController.filteredAssetMomentsModel.rowCount() === 0
                 iconName: "search"
+                iconVisible: height >= 150
                 title: qsTr("没有匹配的内容时刻")
                 description: qsTr("内容时刻来自真实转写片段和画面高光分析。")
             }

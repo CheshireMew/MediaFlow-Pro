@@ -287,6 +287,21 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 navigation_item = navigation_items.get(f"navigationItem_{mode}")
                 if navigation_item is None or not navigation_item.isVisible():
                     raise RuntimeError(f"Persistent navigation label is missing for {mode}")
+            if (width, height) == (1280, 720):
+                empty_descriptions = [
+                    item
+                    for item in visual_items(tool_panel)
+                    if item.objectName() == "emptyStateDescription" and item.isVisible()
+                ]
+                if not empty_descriptions:
+                    raise RuntimeError("Media empty-state description is missing at minimum size")
+                description = empty_descriptions[0]
+                description_origin = description.mapToItem(tool_panel, QPointF(0, 0))
+                if (
+                    description_origin.y() + float(description.property("height"))
+                    > float(tool_panel.property("height")) - 4
+                ):
+                    raise RuntimeError("Media empty-state description is clipped at minimum size")
             # QQuickWindow.grabWindow() captures the entire scene at device-pixel
             # resolution. QScreen.grabWindow() only returned the top-left physical
             # portion of a high-DPI offscreen window and could hide real clipping.
@@ -316,6 +331,71 @@ def probe(root: Path, language: str, scale: str) -> dict:
             for _ in range(4):
                 QCoreApplication.processEvents()
                 time.sleep(0.01)
+
+        window.setWidth(1280)
+        window.setHeight(720)
+        source_path = ROOT / "tests" / "fixtures" / "media-timeline-v1-project" / "sources" / "moving.mp4"
+        controllers.media.importFiles([QUrl.fromLocalFile(str(source_path))])
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and controllers.media.assetsModel.rowCount() == 0:
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+        if controllers.media.assetsModel.rowCount() == 0:
+            raise RuntimeError("Dynamic minimum-size probe could not import its source media")
+        asset_id = controllers.media.assetsModel.get(0)["assetId"]
+        controllers.media.openSourceMonitor(asset_id)
+        source_tab = workspace.findChild(QObject, "sourceMonitorTab")
+        if source_tab is None or not QMetaObject.invokeMethod(source_tab, "click"):
+            raise RuntimeError("Dynamic minimum-size probe could not open the source monitor")
+        for _ in range(20):
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+        source_insert = workspace.findChild(QObject, "sourceInsertRangeButton")
+        source_menu = workspace.findChild(QObject, "sourceActionsMenuButton")
+        workflow_banner = workspace.findChild(QObject, "workflowBanner")
+        workflow_menu = workspace.findChild(QObject, "workflowCompactMenuButton")
+        if any(item is None for item in (source_insert, source_menu, workflow_banner, workflow_menu)):
+            raise RuntimeError("Responsive dynamic-state controls were not created")
+        for item, ancestor, label in (
+            (source_insert, preview_panel, "source insert action"),
+            (source_menu, preview_panel, "source overflow action"),
+            (workflow_menu, workflow_banner, "workflow overflow action"),
+        ):
+            left, right = horizontal_bounds(item, ancestor)
+            if not item.isVisible() or left < -1 or right > float(ancestor.property("width")) + 1:
+                raise RuntimeError(f"{label} is unreachable at 1280x720: {left:.1f}..{right:.1f}")
+        dynamic_image = quick_window.grabWindow()
+        dynamic_screenshot = root / f"{language}-{scale}x-dynamic-source-workflow-1280x720.png"
+        if dynamic_image.isNull() or not dynamic_image.save(str(dynamic_screenshot)):
+            raise RuntimeError(f"Unable to render {dynamic_screenshot}")
+        controllers.session.updates.report_error("UI matrix retained error")
+        for _ in range(6):
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+        workspace.setProperty("activeMode", "tasks")
+        for _ in range(8):
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+        error_history_button = workspace.findChild(QObject, "openErrorHistoryButton")
+        if (
+            len(workspace_controller.recentErrors) != 1
+            or error_history_button is None
+            or not error_history_button.isVisible()
+        ):
+            raise RuntimeError("Retained error history is not reachable from the task center")
+        workspace_controller.clearErrorHistory()
+        error_popup = window.findChild(QObject, "globalErrorPopup")
+        if error_popup is not None:
+            QMetaObject.invokeMethod(error_popup, "close")
+        workspace.setProperty("activeMode", "media")
+        dynamic_result = {
+            "size": [1280, 720],
+            "source_insert_visible": bool(source_insert.property("visible")),
+            "source_overflow_visible": bool(source_menu.property("visible")),
+            "workflow_overflow_visible": bool(workflow_menu.property("visible")),
+            "error_history_reachable": True,
+            "screenshot": str(dynamic_screenshot),
+        }
         window.setWidth(1920)
         window.setHeight(1080)
         mode_results = []
@@ -418,6 +498,20 @@ def probe(root: Path, language: str, scale: str) -> dict:
         if not QMetaObject.invokeMethod(settings_close, "click"):
             raise RuntimeError("Settings dialog could not be closed")
 
+        shortcut_dialog = window.findChild(QObject, "shortcutReferenceDialog")
+        shortcut_search = window.findChild(QObject, "shortcutSearchField")
+        shortcut_list = window.findChild(QObject, "shortcutReferenceList")
+        if any(item is None for item in (shortcut_dialog, shortcut_search, shortcut_list)):
+            raise RuntimeError("Shortcut reference controls were not created")
+        if not QMetaObject.invokeMethod(shortcut_dialog, "open"):
+            raise RuntimeError("Shortcut reference could not be opened")
+        for _ in range(8):
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+        if not shortcut_dialog.property("visible") or int(shortcut_list.property("count")) < 20:
+            raise RuntimeError("Shortcut reference does not expose the complete command list")
+        QMetaObject.invokeMethod(shortcut_dialog, "close")
+
         translated = QCoreApplication.translate("HomeView", "新建项目")
         expected = {"zh_CN": "新建项目", "en": "New Project", "ja": "新規プロジェクト"}
         if translated != expected[language]:
@@ -429,6 +523,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             "sizes": results,
             "modes": mode_results,
             "settings": settings_results,
+            "dynamic": dynamic_result,
         }
     finally:
         try:
@@ -488,7 +583,7 @@ def orchestrate(root: Path) -> dict:
         "worker_count": worker_count,
         "scenario_seconds": [round(seconds, 3) for _result, seconds in completed_scenarios],
         "render_count": len(results)
-        * (len(HOME_SIZES) + len(SIZES) + len(WORKSPACE_MODE_KEYS) + len(SETTINGS_TABS)),
+        * (len(HOME_SIZES) + len(SIZES) + len(WORKSPACE_MODE_KEYS) + len(SETTINGS_TABS) + 1),
         "results": results,
     }
     report_path = root / "ui-matrix-report.json"

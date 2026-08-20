@@ -7,6 +7,7 @@ ColumnLayout {
     id: root
 
     property bool videoEnabled: true
+    readonly property bool modalOpen: removeStyleDialog.opened
     property var builtInPresets: mediaflow.settingsController.builtInSubtitleStylePresets
     property var presetOptions: {
         const values = root.builtInPresets.slice()
@@ -25,6 +26,14 @@ ColumnLayout {
     Layout.fillWidth: true
     visible: videoEnabled
     spacing: 8
+
+    AppConfirmationDialog {
+        id: removeStyleDialog
+        onConfirmed: function (presetId) {
+            if (presetId.length > 0)
+                mediaflow.settingsController.removeSubtitleStylePreset(presetId)
+        }
+    }
 
     function currentStyle() {
         return {
@@ -146,8 +155,11 @@ ColumnLayout {
             danger: true
             visible: subtitleStylePreset.currentIndex >= 0
                 && root.presetOptions[subtitleStylePreset.currentIndex].custom
-            onClicked: mediaflow.settingsController.removeSubtitleStylePreset(
-                String(subtitleStylePreset.currentValue))
+            onClicked: removeStyleDialog.request(
+                String(subtitleStylePreset.currentValue),
+                qsTr("移除这个字幕样式？"),
+                qsTr("自定义样式预设会永久移除，无法撤销。已经保存到导出预设中的样式参数不会改变。"),
+                qsTr("永久移除"))
         }
     }
     RowLayout {

@@ -8,6 +8,7 @@ ColumnLayout {
     property alias currentIndex: format.currentIndex
     property bool taskActive: false
     property bool actionsEnabled: true
+    property string blockedReason: ""
     property string defaultDirectory: ""
     readonly property var selectedFormat: formats[Math.max(0, currentIndex)]
     signal exportRequested
@@ -63,5 +64,14 @@ ColumnLayout {
             enabled: root.actionsEnabled && !root.taskActive
             onClicked: root.saveAsRequested()
         }
+    }
+    Text {
+        objectName: "exportBlockedReason"
+        Layout.fillWidth: true
+        visible: root.blockedReason.length > 0
+        text: root.blockedReason
+        color: Theme.warning
+        font.pixelSize: Theme.fontSizeCaption
+        wrapMode: Text.WordWrap
     }
 }

@@ -122,6 +122,7 @@ class TaskViewState:
 class PresentationState:
     status_message: str = ""
     last_error_id: str = ""
+    recent_errors: list[dict] = field(default_factory=list)
     collaboration_conflict: dict = field(default_factory=dict)
     preview_graph_path: str = ""
     hdr_preview_active: bool = False

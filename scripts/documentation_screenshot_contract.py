@@ -13,7 +13,12 @@ DOCUMENTATION_SCREENSHOTS = {
 
 
 def documentation_ui_sources() -> tuple[Path, ...]:
-    qml = tuple(sorted((ROOT / "mediaflow/desktop/qml").rglob("*.qml")))
+    qml = tuple(
+        sorted(
+            (ROOT / "mediaflow/desktop/qml").rglob("*.qml"),
+            key=lambda path: path.relative_to(ROOT).as_posix(),
+        )
+    )
     fixed = (
         ROOT / "mediaflow/desktop/app.py",
         ROOT / "mediaflow/desktop/presentation_catalogs.py",

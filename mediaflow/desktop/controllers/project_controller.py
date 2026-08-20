@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 import uuid
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QUrl, Slot
@@ -100,7 +102,17 @@ class ProjectSession(QObject):
     def _log_ui_error(self, message: str) -> None:
         error_id = uuid.uuid4().hex[:10]
         self.state.presentation.last_error_id = error_id
-        self.updates.commit(error_reference=True)
+        self.state.presentation.recent_errors.insert(
+            0,
+            {
+                "errorId": error_id,
+                "message": message,
+                "timestamp": time.time(),
+                "timeLabel": datetime.now().astimezone().strftime("%H:%M:%S"),
+            },
+        )
+        del self.state.presentation.recent_errors[50:]
+        self.updates.commit(error_reference=True, error_history=True)
         logger.error(
             "UI operation failed [%s]: %s",
             error_id,

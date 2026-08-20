@@ -6,6 +6,7 @@ import ".."
 Item {
     id: root
     signal exportRequested
+    signal shortcutReferenceRequested
     property var workspaceItem: null
     readonly property string layoutPreset: workspaceItem
         ? String(workspaceItem.layoutPreset) : "standard"
@@ -116,7 +117,10 @@ Item {
                 anchors.fill: parent
                 iconName: "tasks"
                 compact: true
-                Accessible.name: mediaflow.taskController.activeTaskCount > 0
+                Accessible.name: mediaflow.workspaceViewController.recentErrors.length > 0
+                    ? qsTr("任务中心，%1 条错误记录").arg(
+                        mediaflow.workspaceViewController.recentErrors.length)
+                    : mediaflow.taskController.activeTaskCount > 0
                     ? qsTr("任务中心，%1 个活动任务").arg(mediaflow.taskController.activeTaskCount)
                     : qsTr("任务中心")
                 toolTipText: Accessible.name
@@ -124,17 +128,22 @@ Item {
             }
             Rectangle {
                 visible: mediaflow.taskController.activeTaskCount > 0
+                    || mediaflow.workspaceViewController.recentErrors.length > 0
                 anchors.right: parent.right
                 anchors.top: parent.top
                 width: Math.max(14, taskCount.implicitWidth + 6)
                 height: 14
                 radius: 7
-                color: mediaflow.taskController.pausedTaskCount > 0
+                color: mediaflow.workspaceViewController.recentErrors.length > 0
+                    ? Theme.danger
+                    : mediaflow.taskController.pausedTaskCount > 0
                     ? Theme.warning : Theme.accent
                 Text {
                     id: taskCount
                     anchors.centerIn: parent
-                    text: mediaflow.taskController.activeTaskCount > 99
+                    text: mediaflow.workspaceViewController.recentErrors.length > 0
+                        ? "!"
+                        : mediaflow.taskController.activeTaskCount > 99
                         ? "99+" : String(mediaflow.taskController.activeTaskCount)
                     color: Theme.onAccent
                     font.pixelSize: 9
@@ -182,6 +191,11 @@ Item {
                 AppMenuItem {
                     text: qsTr("界面导览")
                     onTriggered: mediaflow.workspaceProjectController.showWorkspaceTour()
+                }
+                AppMenuItem {
+                    objectName: "workspaceShortcutReference"
+                    text: qsTr("键盘快捷键") + "\tCtrl+/"
+                    onTriggered: root.shortcutReferenceRequested()
                 }
                 AppMenuSeparator {}
                 AppMenuItem {

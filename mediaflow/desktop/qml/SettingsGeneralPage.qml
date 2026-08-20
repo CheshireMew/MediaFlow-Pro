@@ -7,6 +7,8 @@ import "components"
 AppScrollView {
     id: page
     property var settingsDialog
+    property string selectedRuntimeDirectory: ""
+    readonly property bool modalOpen: runtimeChangeDialog.opened
 
     function sync(data) {
         language.currentIndex = settingsDialog.indexOfValue(language.model, data.language)
@@ -42,6 +44,14 @@ AppScrollView {
                 onActivated: page.settingsDialog.updateDraft("language", language.currentValue)
             }
         }
+        Text {
+            Layout.fillWidth: true
+            visible: mediaflow.settingsController.languageRestartRequired
+            text: qsTr("界面语言将在重新启动 MediaFlow Pro 后生效。")
+            color: Theme.warning
+            font.pixelSize: Theme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
         RowLayout {
             Layout.fillWidth: true
             Text { text: qsTr("主题"); color: Theme.textMuted; Layout.preferredWidth: 150 }
@@ -74,6 +84,85 @@ AppScrollView {
                 readOnly: true
             }
             AppButton { text: qsTr("选择"); onClicked: projectDirectoryDialog.open() }
+        }
+        Text {
+            text: qsTr("运行环境")
+            color: Theme.text
+            font.pixelSize: Theme.fontSizeBodyLarge
+            font.weight: Font.DemiBold
+        }
+        Text {
+            Layout.fillWidth: true
+            text: qsTr("媒体组件、浏览器、模型、代理文件和缓存保存在这里。迁移会在下次启动、运行时尚未加载前执行，并保留旧目录。")
+            color: Theme.textMuted
+            wrapMode: Text.WordWrap
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: qsTr("当前位置")
+                color: Theme.textMuted
+                Layout.preferredWidth: 150
+            }
+            AppTextField {
+                objectName: "runtimeDirectoryField"
+                Layout.fillWidth: true
+                readOnly: true
+                text: String(mediaflow.settingsController.runtimeDirectoryInfo.currentPath || "")
+                ToolTip.visible: hovered
+                ToolTip.text: text
+            }
+            AppButton {
+                objectName: "selectRuntimeDirectoryButton"
+                text: qsTr("迁移…")
+                enabled: !mediaflow.settingsController.runtimeDirectoryInfo.managedExternally
+                onClicked: runtimeDirectoryDialog.open()
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            text: mediaflow.settingsController.runtimeDirectoryInfo.managedExternally
+                ? qsTr("当前目录由 MEDIAFLOW_RUNTIME_DIR 或开发环境配置管理，请修改对应配置。")
+                : qsTr("当前磁盘可用空间：%1").arg(
+                    mediaflow.settingsController.runtimeDirectoryInfo.freeLabel || qsTr("未知"))
+            color: mediaflow.settingsController.runtimeDirectoryInfo.managedExternally
+                ? Theme.warning : Theme.textMuted
+            font.pixelSize: Theme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
+        Panel {
+            Layout.fillWidth: true
+            visible: String(mediaflow.settingsController.runtimeDirectoryInfo.pendingPath || "").length > 0
+            implicitHeight: pendingRuntimeContent.implicitHeight + 18
+            ColumnLayout {
+                id: pendingRuntimeContent
+                anchors.fill: parent
+                anchors.margins: 9
+                spacing: 6
+                Text {
+                    Layout.fillWidth: true
+                    text: mediaflow.settingsController.runtimeDirectoryInfo.pendingMigration
+                        ? qsTr("下次启动将迁移到：%1").arg(
+                            mediaflow.settingsController.runtimeDirectoryInfo.pendingPath)
+                        : qsTr("下次启动将切换到：%1").arg(
+                            mediaflow.settingsController.runtimeDirectoryInfo.pendingPath)
+                    color: Theme.text
+                    wrapMode: Text.WrapAnywhere
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("切换完成前会继续使用当前目录。")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSizeCaption
+                    }
+                    AppButton {
+                        text: qsTr("取消变更")
+                        onClicked: mediaflow.settingsController.cancelRuntimeDirectoryChange()
+                    }
+                }
+            }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -276,6 +365,66 @@ AppScrollView {
         onAccepted: {
             defaultProjectDirectory.text = selectedFolder.toLocalFile()
             page.settingsDialog.updateDraft("defaultProjectDirectory", defaultProjectDirectory.text)
+        }
+    }
+    FolderDialog {
+        id: runtimeDirectoryDialog
+        title: qsTr("选择新的运行环境目录")
+        onAccepted: {
+            page.selectedRuntimeDirectory = selectedFolder.toLocalFile()
+            runtimeChangeDialog.open()
+        }
+    }
+    AppDialog {
+        id: runtimeChangeDialog
+        parent: Overlay.overlay
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, Overlay.overlay ? Overlay.overlay.width - 48 : 560)
+        title: qsTr("如何使用新的运行环境目录？")
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+        standardButtons: Dialog.NoButton
+        contentItem: ColumnLayout {
+            width: runtimeChangeDialog.availableWidth
+            spacing: 12
+            Text {
+                Layout.fillWidth: true
+                text: page.selectedRuntimeDirectory
+                color: Theme.text
+                font.family: Theme.monoFontFamily
+                wrapMode: Text.WrapAnywhere
+            }
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("推荐迁移现有数据。复制和校验会在下次启动时进行，旧目录不会删除。只有目标目录已经包含完整运行环境时，才应选择“仅切换”。")
+                color: Theme.textMuted
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: qsTr("取消")
+                    onClicked: runtimeChangeDialog.close()
+                }
+                AppButton {
+                    text: qsTr("仅切换")
+                    onClicked: {
+                        if (mediaflow.settingsController.scheduleRuntimeDirectoryChange(
+                                page.selectedRuntimeDirectory, false))
+                            runtimeChangeDialog.close()
+                    }
+                }
+                AppButton {
+                    primary: true
+                    text: qsTr("迁移现有数据")
+                    onClicked: {
+                        if (mediaflow.settingsController.scheduleRuntimeDirectoryChange(
+                                page.selectedRuntimeDirectory, true))
+                            runtimeChangeDialog.close()
+                    }
+                }
+            }
         }
     }
     FileDialog {

@@ -9,6 +9,21 @@ AppScrollView {
     objectName: "downloadSettingsScroll"
     property var settingsDialog
     readonly property bool valid: downloadDirectory.text.length > 0
+    readonly property bool managedCookieDirty: cookieJsonText.text.trim().length > 0
+    readonly property bool modalOpen: clearCookieDialog.opened
+
+    function discardManagedCookieDraft() {
+        cookieDomain.clear()
+        cookieJsonText.clear()
+    }
+
+    AppConfirmationDialog {
+        id: clearCookieDialog
+        onConfirmed: function (domain) {
+            if (domain.length > 0)
+                mediaflow.settingsController.clearManagedCookies(domain)
+        }
+    }
 
     function sync(data) {
         resolution.text = data.downloadResolution
@@ -122,6 +137,7 @@ AppScrollView {
                     Text { text: qsTr("网站域名"); color: Theme.textMuted; Layout.preferredWidth: 180 }
                     AppTextField {
                         id: cookieDomain
+                        objectName: "cookieDomainField"
                         Layout.fillWidth: true
                         placeholderText: qsTr("例如 douyin.com")
                     }
@@ -133,6 +149,7 @@ AppScrollView {
                 }
                 AppTextArea {
                     id: cookieJsonText
+                    objectName: "cookieJsonField"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     placeholderText: qsTr("粘贴浏览器导出的 Cookie JSON 数组")
@@ -151,12 +168,24 @@ AppScrollView {
                         font.pixelSize: Theme.fontSizeCaption
                     }
                     AppButton { text: qsTr("检查"); onClicked: mediaflow.settingsController.inspectManagedCookies(cookieDomain.text) }
-                    AppButton { text: qsTr("清除"); onClicked: mediaflow.settingsController.clearManagedCookies(cookieDomain.text) }
+                    AppButton {
+                        text: qsTr("清除")
+                        enabled: cookieDomain.text.trim().length > 0
+                        onClicked: clearCookieDialog.request(
+                            cookieDomain.text.trim(),
+                            qsTr("清除这个网站的 Cookie？"),
+                            qsTr("保存的 Cookie 会永久移除，之后下载可能需要重新登录并导出 Cookie。"),
+                            qsTr("永久清除"))
+                    }
                     AppButton {
                         primary: true
                         text: qsTr("保存")
                         enabled: cookieDomain.text.trim().length > 0 && cookieJsonText.text.trim().length > 0
-                        onClicked: mediaflow.settingsController.saveManagedCookies(cookieDomain.text, cookieJsonText.text)
+                        onClicked: {
+                            if (mediaflow.settingsController.saveManagedCookies(
+                                    cookieDomain.text, cookieJsonText.text))
+                                page.discardManagedCookieDraft()
+                        }
                     }
                 }
             }

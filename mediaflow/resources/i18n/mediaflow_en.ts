@@ -1,6 +1,20 @@
 <?xml version='1.0' encoding='utf-8'?>
 <TS version="2.1" language="en" sourcelanguage="zh_CN">
     <context>
+        <name>AppConfirmationDialog</name>
+        <message>
+            <location filename="../../desktop/qml/components/AppConfirmationDialog.qml" line="+11" />
+            <location line="+8" />
+            <source>确认</source>
+            <translation>Confirm</translation>
+        </message>
+        <message>
+            <location line="+26" />
+            <source>取消</source>
+            <translation>Cancel</translation>
+        </message>
+    </context>
+    <context>
         <name>AsrLanguageCatalog</name>
         <message>
             <location filename="../../desktop/presentation_asr.py" line="+94" />
@@ -1005,9 +1019,52 @@
         </message>
     </context>
     <context>
+        <name>ErrorHistoryDialog</name>
+        <message>
+            <location filename="../../desktop/qml/ErrorHistoryDialog.qml" line="+10" />
+            <source>错误记录</source>
+            <translation>Error history</translation>
+        </message>
+        <message>
+            <location line="+14" />
+            <source>这里保留本次运行中最近 50 条界面错误。任务失败仍保留在任务列表中。</source>
+            <translation>This keeps the 50 most recent interface errors from this run. Task failures remain in the task list.</translation>
+        </message>
+        <message>
+            <location line="+28" />
+            <source>错误 %1 · %2</source>
+            <translation>Error %1 · %2</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>复制详情</source>
+            <translation>Copy Details</translation>
+        </message>
+        <message>
+            <location line="+22" />
+            <source>没有错误记录</source>
+            <translation>No error records</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>界面操作发生错误后，可以从这里重新查看和复制详情。</source>
+            <translation>After an interface action fails, you can review and copy its details here.</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>清空显示记录</source>
+            <translation>Clear displayed records</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>关闭</source>
+            <translation>Close</translation>
+        </message>
+    </context>
+    <context>
         <name>ExportCatalog</name>
         <message>
-            <location line="+10" />
+            <location filename="../../desktop/presentation_export.py" line="+10" />
             <source>不烧录</source>
             <translation>Do not burn in</translation>
         </message>
@@ -1106,7 +1163,12 @@
     <context>
         <name>ExportPanel</name>
         <message>
-            <location filename="../../desktop/qml/ExportPanel.qml" line="+96" />
+            <location filename="../../desktop/qml/ExportPanel.qml" line="+82" />
+            <source>当前编码器不可用。请切换到软件编码器或其它可用编码器。</source>
+            <translation>The selected encoder is unavailable. Switch to the software encoder or another available encoder.</translation>
+        </message>
+        <message>
+            <location line="+17" />
             <source>导出 FCPXML（Final Cut Pro / DaVinci Resolve）</source>
             <translation>Export FCPXML (Final Cut Pro / DaVinci Resolve)</translation>
         </message>
@@ -1132,12 +1194,12 @@
     <context>
         <name>ExportSettings</name>
         <message>
-            <location filename="../../desktop/qml/components/ExportSettings.qml" line="+31" />
+            <location filename="../../desktop/qml/components/ExportSettings.qml" line="+37" />
             <source>当前项目要求：%1（本机不可用）</source>
             <translation>Required by this project: %1 (unavailable on this machine)</translation>
         </message>
         <message>
-            <location line="+86" />
+            <location line="+92" />
             <source>推荐设置</source>
             <translation>Recommended Settings</translation>
         </message>
@@ -1148,11 +1210,16 @@
         </message>
         <message>
             <location line="+22" />
-            <source>这个项目要求的硬件编码器在本机不可用。导出会停止并说明原因，不会悄悄改用其它编码器。</source>
-            <translation>The hardware encoder required by this project is unavailable on this machine. Export will stop with an explanation instead of silently switching encoders.</translation>
+            <source>这个项目要求的硬件编码器在本机不可用。请选择可用编码器后再开始导出。</source>
+            <translation>The hardware encoder required by this project is unavailable on this machine. Select an available encoder before starting export.</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+9" />
+            <source>切换到软件编码器</source>
+            <translation>Switch to software encoder</translation>
+        </message>
+        <message>
+            <location line="+6" />
             <source>编码器和封装会根据所选音频格式自动匹配。</source>
             <translation>The codec and container are matched automatically to the selected audio format.</translation>
         </message>
@@ -1170,7 +1237,7 @@
     <context>
         <name>ExportSubtitleSettings</name>
         <message>
-            <location filename="../../desktop/qml/components/ExportSubtitleSettings.qml" line="+101" />
+            <location filename="../../desktop/qml/components/ExportSubtitleSettings.qml" line="+110" />
             <source>烧录字幕（其余启用轨道仍导出 SRT）</source>
             <translation>Burn-in subtitle (other enabled tracks still export as SRT)</translation>
         </message>
@@ -1195,7 +1262,22 @@
             <translation>Remove Style</translation>
         </message>
         <message>
-            <location line="+15" />
+            <location line="+6" />
+            <source>移除这个字幕样式？</source>
+            <translation>Remove this subtitle style?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>自定义样式预设会永久移除，无法撤销。已经保存到导出预设中的样式参数不会改变。</source>
+            <translation>The custom style preset will be permanently removed and cannot be undone. Style parameters already saved in export presets will not change.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>永久移除</source>
+            <translation>Remove permanently</translation>
+        </message>
+        <message>
+            <location line="+10" />
             <source>字体名称</source>
             <translation>Font Family</translation>
         </message>
@@ -1293,7 +1375,7 @@
     <context>
         <name>ExportTargetBar</name>
         <message>
-            <location filename="../../desktop/qml/components/ExportTargetBar.qml" line="+21" />
+            <location filename="../../desktop/qml/components/ExportTargetBar.qml" line="+22" />
             <source>格式</source>
             <translation>Format</translation>
         </message>
@@ -1537,7 +1619,7 @@
     <context>
         <name>HighlightPanel</name>
         <message>
-            <location filename="../../desktop/qml/HighlightPanel.qml" line="+93" />
+            <location filename="../../desktop/qml/HighlightPanel.qml" line="+102" />
             <source>分析</source>
             <translation>Analyze</translation>
         </message>
@@ -1598,18 +1680,18 @@
         </message>
         <message>
             <location line="+8" />
-            <location line="+208" />
+            <location line="+212" />
             <source>开始帧</source>
             <translation>Start Frame</translation>
         </message>
         <message>
-            <location line="-196" />
-            <location line="+209" />
+            <location line="-200" />
+            <location line="+213" />
             <source>结束帧</source>
             <translation>End Frame</translation>
         </message>
         <message>
-            <location line="-196" />
+            <location line="-200" />
             <source>添加候选</source>
             <translation>Add Candidate</translation>
         </message>
@@ -1659,7 +1741,22 @@
             <translation>Delete</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+4" />
+            <source>删除这个高光候选？</source>
+            <translation>Delete this highlight candidate?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>该候选及其分析结果会从项目中永久删除，无法撤销。已经添加到时间线的片段不会删除。</source>
+            <translation>This candidate and its analysis result will be permanently removed from the project and cannot be undone. Clips already added to the timeline will remain.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>永久删除</source>
+            <translation>Delete permanently</translation>
+        </message>
+        <message>
+            <location line="+6" />
             <source>创建短视频序列</source>
             <translation>Create Short-Video Sequence</translation>
         </message>
@@ -2064,7 +2161,7 @@
     <context>
         <name>Main</name>
         <message>
-            <location filename="../../desktop/qml/Main.qml" line="+247" />
+            <location filename="../../desktop/qml/Main.qml" line="+265" />
             <source>确认下载</source>
             <translation>Confirm Download</translation>
         </message>
@@ -2079,7 +2176,7 @@
             <translation>Link analysis complete</translation>
         </message>
         <message>
-            <location line="-225" />
+            <location line="-242" />
             <source>最佳可用质量</source>
             <translation>Best available quality</translation>
         </message>
@@ -2090,7 +2187,7 @@
             <translation>Download Audio Only</translation>
         </message>
         <message>
-            <location line="+130" />
+            <location line="+147" />
             <source>这项内容刚刚被其他协作者修改</source>
             <translation>This item was just changed by another collaborator</translation>
         </message>
@@ -2245,7 +2342,12 @@
             <translation>Download &amp; Create Project</translation>
         </message>
         <message>
-            <location line="+58" />
+            <location line="+59" />
+            <source>前往任务中心</source>
+            <translation>Go to Task Center</translation>
+        </message>
+        <message>
+            <location line="+7" />
             <source>复制详情</source>
             <translation>Copy Details</translation>
         </message>
@@ -2469,7 +2571,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Visual</translation>
         </message>
         <message>
-            <location line="+32" />
+            <location line="+33" />
             <source>导入第一个素材</source>
             <translation>Import Your First Media</translation>
         </message>
@@ -2489,7 +2591,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Try another keyword, or clear the search to show all media.</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+9" />
             <source>没有匹配的内容时刻</source>
             <translation>No matching content moments</translation>
         </message>
@@ -2837,7 +2939,37 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SettingsAiPage</name>
         <message>
-            <location filename="../../desktop/qml/SettingsAiPage.qml" line="+62" />
+            <location filename="../../desktop/qml/SettingsAiPage.qml" line="+80" />
+            <source>放弃未保存的提供商更改？</source>
+            <translation>Discard unsaved provider changes?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>名称、服务地址、密钥或模型的未保存更改会丢失。</source>
+            <translation>Unsaved changes to the name, service URL, key, or model will be lost.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>放弃并切换</source>
+            <translation>Discard and switch</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>移除这个 LLM 提供商？</source>
+            <translation>Remove this LLM provider?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>提供商配置和已保存的 API 密钥会永久移除，无法撤销。</source>
+            <translation>The provider configuration and saved API key will be permanently removed and cannot be undone.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>永久移除</source>
+            <translation>Remove permanently</translation>
+        </message>
+        <message>
+            <location line="+28" />
             <source>OpenAI 兼容 LLM 提供商</source>
             <translation>OpenAI-Compatible LLM Provider</translation>
         </message>
@@ -2847,7 +2979,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Add Provider</translation>
         </message>
         <message>
-            <location line="+34" />
+            <location line="+35" />
             <source>当前</source>
             <translation>Current</translation>
         </message>
@@ -2902,12 +3034,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Remove</translation>
         </message>
         <message>
-            <location line="+6" />
+            <location line="+7" />
             <source>保存</source>
             <translation>Save</translation>
         </message>
         <message>
-            <location line="+14" />
+            <location line="+16" />
             <source>设为当前提供商</source>
             <translation>Set as Active Provider</translation>
         </message>
@@ -2940,7 +3072,22 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Settings</translation>
         </message>
         <message>
-            <location line="+80" />
+            <location line="+16" />
+            <source>放弃未保存的内容？</source>
+            <translation>Discard unsaved content?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>LLM 提供商或 Cookie 表单中仍有未保存内容。关闭后这些内容会丢失。</source>
+            <translation>The LLM provider or cookie form still has unsaved content. Closing will discard it.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>放弃并关闭</source>
+            <translation>Discard and close</translation>
+        </message>
+        <message>
+            <location line="+93" />
             <source>常规</source>
             <translation>General</translation>
         </message>
@@ -2955,12 +3102,27 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>AI</translation>
         </message>
         <message>
-            <location line="+27" />
-            <source>更改会自动保存</source>
-            <translation>Changes are saved automatically</translation>
+            <location line="+28" />
+            <source>常规设置已保存；界面语言将在重启后生效</source>
+            <translation>General settings saved; the interface language changes after restart</translation>
         </message>
         <message>
-            <location line="+6" />
+            <location line="+2" />
+            <source>提供商或 Cookie 有未保存内容</source>
+            <translation>Provider or cookie content is unsaved</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>正在保存更改…</source>
+            <translation>Saving changes…</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>常规设置自动保存；提供商和 Cookie 请点击各自的保存按钮</source>
+            <translation>General settings save automatically; use Save for providers and cookies</translation>
+        </message>
+        <message>
+            <location line="+7" />
             <source>关闭</source>
             <translation>Close</translation>
         </message>
@@ -2968,7 +3130,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SettingsGeneralPage</name>
         <message>
-            <location filename="../../desktop/qml/SettingsGeneralPage.qml" line="+33" />
+            <location filename="../../desktop/qml/SettingsGeneralPage.qml" line="+35" />
             <source>界面</source>
             <translation>Interface</translation>
         </message>
@@ -2978,7 +3140,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Language</translation>
         </message>
         <message>
-            <location line="+11" />
+            <location line="+12" />
+            <source>界面语言将在重新启动 MediaFlow Pro 后生效。</source>
+            <translation>The interface language changes after restarting MediaFlow Pro.</translation>
+        </message>
+        <message>
+            <location line="+7" />
             <source>主题</source>
             <translation>Theme</translation>
         </message>
@@ -3009,12 +3176,67 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+3" />
-            <location line="+155" />
+            <location line="+234" />
             <source>选择</source>
             <translation>Choose</translation>
         </message>
         <message>
-            <location line="-150" />
+            <location line="-231" />
+            <source>运行环境</source>
+            <translation>Runtime storage</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>媒体组件、浏览器、模型、代理文件和缓存保存在这里。迁移会在下次启动、运行时尚未加载前执行，并保留旧目录。</source>
+            <translation>Media components, the browser, models, proxies, and caches are stored here. Migration runs before the runtime loads on the next launch and keeps the old directory.</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>当前位置</source>
+            <translation>Current location</translation>
+        </message>
+        <message>
+            <location line="+14" />
+            <source>迁移…</source>
+            <translation>Migrate…</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>当前目录由 MEDIAFLOW_RUNTIME_DIR 或开发环境配置管理，请修改对应配置。</source>
+            <translation>The current directory is managed by MEDIAFLOW_RUNTIME_DIR or the development environment. Change that configuration instead.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>当前磁盘可用空间：%1</source>
+            <translation>Free space on current disk: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>未知</source>
+            <translation>Unknown</translation>
+        </message>
+        <message>
+            <location line="+18" />
+            <source>下次启动将迁移到：%1</source>
+            <translation>Will migrate on next launch to: %1</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>下次启动将切换到：%1</source>
+            <translation>Will switch on next launch to: %1</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>切换完成前会继续使用当前目录。</source>
+            <translation>The current directory remains in use until the switch completes.</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>取消变更</source>
+            <translation>Cancel change</translation>
+        </message>
+        <message>
+            <location line="+9" />
             <source>默认导入位置</source>
             <translation>Default Import Location</translation>
         </message>
@@ -3176,6 +3398,36 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+9" />
+            <source>选择新的运行环境目录</source>
+            <translation>Choose a new runtime directory</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>如何使用新的运行环境目录？</source>
+            <translation>How should the new runtime directory be used?</translation>
+        </message>
+        <message>
+            <location line="+16" />
+            <source>推荐迁移现有数据。复制和校验会在下次启动时进行，旧目录不会删除。只有目标目录已经包含完整运行环境时，才应选择“仅切换”。</source>
+            <translation>Migrating existing data is recommended. Copying and verification run on the next launch, and the old directory is not deleted. Choose Switch only only when the destination already contains a complete runtime.</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>取消</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>仅切换</source>
+            <translation>Switch only</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>迁移现有数据</source>
+            <translation>Migrate existing data</translation>
+        </message>
+        <message>
+            <location line="+12" />
             <source>选择 pyannote.audio Python</source>
             <translation>Select pyannote.audio Python</translation>
         </message>
@@ -3198,7 +3450,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SettingsMediaPage</name>
         <message>
-            <location filename="../../desktop/qml/SettingsMediaPage.qml" line="+38" />
+            <location filename="../../desktop/qml/SettingsMediaPage.qml" line="+53" />
             <source>yt-dlp 下载</source>
             <translation>yt-dlp Downloads</translation>
         </message>
@@ -3273,7 +3525,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Website Domain</translation>
         </message>
         <message>
-            <location line="+4" />
+            <location line="+5" />
             <source>例如 douyin.com</source>
             <translation>For example, douyin.com</translation>
         </message>
@@ -3283,7 +3535,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Cookie JSON</translation>
         </message>
         <message>
-            <location line="+8" />
+            <location line="+9" />
             <source>粘贴浏览器导出的 Cookie JSON 数组</source>
             <translation>Paste a Cookie JSON array exported from the browser</translation>
         </message>
@@ -3308,17 +3560,32 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Check</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+2" />
             <source>清除</source>
             <translation>Remove</translation>
         </message>
         <message>
-            <location line="+3" />
+            <location line="+4" />
+            <source>清除这个网站的 Cookie？</source>
+            <translation>Clear cookies for this site?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>保存的 Cookie 会永久移除，之后下载可能需要重新登录并导出 Cookie。</source>
+            <translation>Saved cookies will be permanently removed. Future downloads may require signing in and exporting cookies again.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>永久清除</source>
+            <translation>Clear permanently</translation>
+        </message>
+        <message>
+            <location line="+4" />
             <source>保存</source>
             <translation>Save</translation>
         </message>
         <message>
-            <location line="+9" />
+            <location line="+13" />
             <source>视频编码</source>
             <translation>Video Codec</translation>
         </message>
@@ -3585,9 +3852,232 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>ShortcutReferenceDialog</name>
+        <message>
+            <location filename="../../desktop/qml/ShortcutReferenceDialog.qml" line="+10" />
+            <source>键盘快捷键</source>
+            <translation>Keyboard shortcuts</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <source>播放与定位</source>
+            <translation>Playback and navigation</translation>
+        </message>
+        <message>
+            <location line="-4" />
+            <source>播放或暂停</source>
+            <translation>Play or pause</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>空格</source>
+            <translation>Space</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>反向播放 / 暂停 / 正向播放</source>
+            <translation>Reverse / pause / forward playback</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>上一帧 / 下一帧</source>
+            <translation>Previous / next frame</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>跳到开头 / 结尾</source>
+            <translation>Go to start / end</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>切换全屏</source>
+            <translation>Toggle Full Screen</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <source>时间线编辑</source>
+            <translation>Timeline editing</translation>
+        </message>
+        <message>
+            <location line="-10" />
+            <source>分割所选片段</source>
+            <translation>Split selected clip</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>复制所选片段</source>
+            <translation>Duplicate selected clip</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>删除 / 波纹删除</source>
+            <translation>Delete / ripple delete</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>撤销 / 重做</source>
+            <translation>Undo / redo</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>全选 / 清除选择</source>
+            <translation>Select all / clear selection</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>设置序列入点 / 出点</source>
+            <translation>Set sequence In / Out</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>清除序列入出点</source>
+            <translation>Clear sequence In/Out</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>添加时间线标记</source>
+            <translation>Add timeline marker</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>切换吸附</source>
+            <translation>Toggle snapping</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>放大 / 缩小时间线</source>
+            <translation>Zoom timeline in / out</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>适配整个时间线</source>
+            <translation>Fit Entire Timeline</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <location line="+1" />
+            <source>项目与面板</source>
+            <translation>Project and panels</translation>
+        </message>
+        <message>
+            <location line="-6" />
+            <source>导入素材</source>
+            <translation>Import Media</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>打开导出页</source>
+            <translation>Open Export</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>保存项目状态</source>
+            <translation>Save project state</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>标准 / 媒体 / 竖屏布局</source>
+            <translation>Standard / media / vertical layout</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>最大化播放器 / 时间线</source>
+            <translation>Maximize player / timeline</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>退出面板最大化 / 清除选择</source>
+            <translation>Exit panel maximization / clear selection</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>打开快捷键总览</source>
+            <translation>Open shortcut reference</translation>
+        </message>
+        <message>
+            <location line="+21" />
+            <source>搜索操作或按键</source>
+            <translation>Search actions or keys</translation>
+        </message>
+        <message>
+            <location line="+53" />
+            <source>输入框和网页交互获得焦点时，单键快捷键会暂停响应。</source>
+            <translation>Single-key shortcuts are suspended while a text field or web interaction has focus.</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>关闭</source>
+            <translation>Close</translation>
+        </message>
+    </context>
+    <context>
         <name>StatusMessageCatalog</name>
         <message>
             <location filename="../../desktop/presentation_messages.py" line="+31" />
+            <source>已安排在下次启动时迁移并切换运行环境目录</source>
+            <translation>Runtime directory migration and switch scheduled for next launch</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已安排在下次启动时切换运行环境目录</source>
+            <translation>Runtime directory switch scheduled for next launch</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已取消运行环境目录变更</source>
+            <translation>Runtime directory change cancelled</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>时间线标记已添加</source>
+            <translation>Timeline marker added</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>时间线标记已重命名</source>
+            <translation>Timeline marker renamed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>时间线标记已删除；可使用撤销恢复</source>
+            <translation>Timeline marker deleted; use Undo to restore it</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>时间线选区已添加</source>
+            <translation>Timeline range added</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>时间线选区已重命名</source>
+            <translation>Timeline range renamed</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>时间线选区已删除；可使用撤销恢复</source>
+            <translation>Timeline range deleted; use Undo to restore it</translation>
+        </message>
+        <message>
+            <location line="+3" />
             <source>%1 连接测试成功</source>
             <translation>%1 connection test succeeded</translation>
         </message>
@@ -4483,7 +4973,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_messages.py" line="-202" />
+            <location filename="../../desktop/presentation_messages.py" line="-221" />
             <source>主序列</source>
             <translation>Main Sequence</translation>
         </message>
@@ -4659,7 +5149,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TaskCenterPanel</name>
         <message>
-            <location filename="../../desktop/qml/TaskCenterPanel.qml" line="+63" />
+            <location filename="../../desktop/qml/TaskCenterPanel.qml" line="+80" />
             <source>全部取消</source>
             <translation>Cancel All</translation>
         </message>
@@ -4684,7 +5174,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Waiting · Queue position %1</translation>
         </message>
         <message>
-            <location line="-137" />
+            <location line="-149" />
             <source>取消全部任务？</source>
             <translation>Cancel All Tasks?</translation>
         </message>
@@ -4694,7 +5184,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Running and queued tasks will be cancelled; existing results will not be deleted.</translation>
         </message>
         <message>
-            <location line="+14" />
+            <location line="+16" />
             <source>进行中 %1 · 已暂停 %2</source>
             <translation>%1 in progress · %2 paused</translation>
         </message>
@@ -4704,7 +5194,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>%1 in progress</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="+7" />
+            <source>错误记录 %1</source>
+            <translation>Error history %1</translation>
+        </message>
+        <message>
+            <location line="+16" />
             <source>暂停进行中</source>
             <translation>Pause Active</translation>
         </message>
@@ -5261,7 +5756,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Sequence Out %1</translation>
         </message>
         <message>
-            <location line="+163" />
+            <location line="+162" />
             <source>释放以新建轨道</source>
             <translation>Drop to Create a New Track</translation>
         </message>
@@ -5318,9 +5813,57 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>TimelineItemMenu</name>
+        <message>
+            <location filename="../../desktop/qml/components/TimelineItemMenu.qml" line="+35" />
+            <source>重命名标记…</source>
+            <translation>Rename marker…</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>重命名选区…</source>
+            <translation>Rename range…</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>删除标记（可撤销）</source>
+            <translation>Delete marker (undoable)</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>删除选区（可撤销）</source>
+            <translation>Delete range (undoable)</translation>
+        </message>
+        <message>
+            <location line="+14" />
+            <source>重命名标记</source>
+            <translation>Rename marker</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>重命名选区</source>
+            <translation>Rename range</translation>
+        </message>
+        <message>
+            <location line="+20" />
+            <source>输入一个容易识别的名称</source>
+            <translation>Enter an easy-to-recognize name</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>取消</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>保存</source>
+            <translation>Save</translation>
+        </message>
+    </context>
+    <context>
         <name>TimelineMarkerLayer</name>
         <message>
-            <location filename="../../desktop/qml/TimelineMarkerLayer.qml" line="+32" />
+            <location filename="../../desktop/qml/TimelineMarkerLayer.qml" line="+33" />
             <source>标记 %1，位于第 %2 帧</source>
             <translation>Marker %1 at frame %2</translation>
         </message>
@@ -5666,7 +6209,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TimelineView</name>
         <message>
-            <location filename="../../desktop/qml/TimelineView.qml" line="+250" />
+            <location filename="../../desktop/qml/TimelineView.qml" line="+255" />
             <source>删除所选片段</source>
             <translation>Delete Selected Clips</translation>
         </message>
@@ -5822,7 +6365,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TranscriptWorkspace</name>
         <message>
-            <location filename="../../desktop/qml/TranscriptWorkspace.qml" line="+21" />
+            <location filename="../../desktop/qml/TranscriptWorkspace.qml" line="+22" />
             <source>转写</source>
             <translation>Transcript</translation>
         </message>
@@ -5913,7 +6456,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TranslationPanel</name>
         <message>
-            <location filename="../../desktop/qml/TranslationPanel.qml" line="+186" />
+            <location filename="../../desktop/qml/TranslationPanel.qml" line="+195" />
             <source>翻译</source>
             <translation>Translation</translation>
         </message>
@@ -6078,7 +6621,22 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Remove</translation>
         </message>
         <message>
-            <location line="+9" />
+            <location line="+4" />
+            <source>移除这个术语？</source>
+            <translation>Remove this term?</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>术语及其翻译规则会永久移除，无法撤销。</source>
+            <translation>The term and its translation rule will be permanently removed and cannot be undone.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>永久移除</source>
+            <translation>Remove permanently</translation>
+        </message>
+        <message>
+            <location line="+7" />
             <source>保存术语</source>
             <translation>Save Term</translation>
         </message>
@@ -6366,7 +6924,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WindowTitleBar</name>
         <message>
-            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+91" />
+            <location filename="../../desktop/qml/components/WindowTitleBar.qml" line="+93" />
             <source>最小化窗口</source>
             <translation>Minimize Window</translation>
         </message>
@@ -6389,7 +6947,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WorkflowBanner</name>
         <message>
-            <location filename="../../desktop/qml/WorkflowBanner.qml" line="+40" />
+            <location filename="../../desktop/qml/WorkflowBanner.qml" line="+41" />
             <source>下载</source>
             <translation>Download</translation>
         </message>
@@ -6484,7 +7042,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>The workflow is paused. Resolve the current stage.</translation>
         </message>
         <message>
-            <location line="+56" />
+            <location line="+62" />
             <source>选择目标语言</source>
             <translation>Choose Target Language</translation>
         </message>
@@ -6524,15 +7082,30 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Skip</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="+11" />
             <source>取消</source>
             <translation>Cancel</translation>
+        </message>
+        <message>
+            <location line="+12" />
+            <source>更多工作流操作</source>
+            <translation>More workflow actions</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>跳过当前阶段</source>
+            <translation>Skip current stage</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>取消工作流</source>
+            <translation>Cancel Workflow</translation>
         </message>
     </context>
     <context>
         <name>Workspace</name>
         <message>
-            <location filename="../../desktop/qml/Workspace.qml" line="+191" />
+            <location filename="../../desktop/qml/Workspace.qml" line="+196" />
             <source>时间线</source>
             <translation>Timeline</translation>
         </message>
@@ -6558,7 +7131,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WorkspaceHeader</name>
         <message>
-            <location filename="../../desktop/qml/components/WorkspaceHeader.qml" line="+71" />
+            <location filename="../../desktop/qml/components/WorkspaceHeader.qml" line="+72" />
             <source>只读</source>
             <translation>Read Only</translation>
         </message>
@@ -6579,6 +7152,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+19" />
+            <source>任务中心，%1 条错误记录</source>
+            <translation>Task Center, %1 error records</translation>
+        </message>
+        <message>
+            <location line="+3" />
             <source>任务中心，%1 个活动任务</source>
             <translation>Task Center, %1 active tasks</translation>
         </message>
@@ -6588,7 +7166,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Task Center</translation>
         </message>
         <message>
-            <location line="+28" />
+            <location line="+33" />
             <location line="+20" />
             <source>媒体布局</source>
             <translation>Media Layout</translation>
@@ -6609,6 +7187,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+21" />
             <source>界面导览</source>
             <translation>Interface Tour</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>键盘快捷键</source>
+            <translation>Keyboard shortcuts</translation>
         </message>
         <message>
             <location line="+6" />
@@ -6723,22 +7306,24 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>WorkspacePreviewPanel</name>
         <message>
-            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+69" />
+            <location filename="../../desktop/qml/components/WorkspacePreviewPanel.qml" line="+70" />
             <source>节目</source>
             <translation>Program</translation>
         </message>
         <message>
             <location line="+9" />
+            <location line="+10" />
             <source>源 · %1</source>
             <translation>Source · %1</translation>
         </message>
         <message>
-            <location line="+0" />
+            <location line="-11" />
+            <location line="+1" />
             <source>源</source>
             <translation>Source</translation>
         </message>
         <message>
-            <location line="+19" />
+            <location line="+25" />
             <source>入点 %1</source>
             <translation>In %1</translation>
         </message>
@@ -6756,6 +7341,26 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+9" />
             <source>插入选段</source>
             <translation>Insert Selection</translation>
+        </message>
+        <message>
+            <location line="+16" />
+            <source>更多源监视器操作</source>
+            <translation>More source monitor actions</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>设置入点：%1</source>
+            <translation>Set In point: %1</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>设置出点：%1</source>
+            <translation>Set Out point: %1</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>截取当前帧</source>
+            <translation>Capture current frame</translation>
         </message>
     </context>
     <context>

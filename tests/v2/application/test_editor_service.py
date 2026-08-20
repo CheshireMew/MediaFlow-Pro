@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from aiohttp import ClientSession
 
+import mediaflow.service.client as service_client_module
+import mediaflow.service.discovery as service_discovery_module
 import mediaflow.service.remote_project as desktop_proxy_module
 from mediaflow.application.asset_task_handlers import AssetTaskHandlers
 from mediaflow.composition import EditorApplication
@@ -125,6 +127,51 @@ def test_sync_shutdown_waits_until_the_resident_service_process_exits(
 
     assert discovery.belongs_to_live_process() is False
     assert not (service_root / "discovery.json").exists()
+
+
+def test_service_discovery_does_not_treat_a_zombie_as_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started_at = time.time() - 1
+    discovery = ServiceDiscovery(
+        pid=1234,
+        process_started_at=started_at,
+        started_at=started_at,
+        port=49_152,
+        token="x" * 32,
+    )
+
+    class ZombieProcess:
+        def is_running(self) -> bool:
+            return True
+
+        def status(self) -> str:
+            return "zombie"
+
+        def create_time(self) -> float:
+            return started_at
+
+    monkeypatch.setattr(
+        service_discovery_module.psutil,
+        "Process",
+        lambda _pid: ZombieProcess(),
+    )
+
+    assert discovery.belongs_to_live_process() is False
+
+
+def test_started_service_process_is_reaped_after_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CompletedProcess:
+        def poll(self) -> int:
+            return 0
+
+    process = CompletedProcess()
+    monkeypatch.setitem(service_client_module._started_processes, 1234, process)
+
+    assert service_client_module._started_process_exit(1234) == 0
+    assert 1234 not in service_client_module._started_processes
 
 
 @pytest.mark.asyncio

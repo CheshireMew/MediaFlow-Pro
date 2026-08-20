@@ -24,6 +24,7 @@ class SessionChangeSet:
     runtime_tools: bool = False
     export_capability: bool = False
     error_reference: bool = False
+    error_history: bool = False
     collaboration_conflict: bool = False
     waveform_asset_id: str | None = None
 
@@ -54,6 +55,7 @@ class SessionUpdates(QObject):
         runtime_tools: bool = False,
         export_capability: bool = False,
         error_reference: bool = False,
+        error_history: bool = False,
         collaboration_conflict: bool = False,
         waveform_asset_id: str | None = None,
     ) -> None:
@@ -73,6 +75,7 @@ class SessionUpdates(QObject):
             runtime_tools=runtime_tools,
             export_capability=export_capability,
             error_reference=error_reference,
+            error_history=error_history,
             collaboration_conflict=collaboration_conflict,
             waveform_asset_id=waveform_asset_id,
         )
@@ -95,6 +98,7 @@ class SessionUpdates(QObject):
             (resolved.runtime_tools, self._events.runtimeToolsChanged),
             (resolved.export_capability, self._events.exportCapabilityChanged),
             (resolved.error_reference, self._events.errorReferenceChanged),
+            (resolved.error_history, self._events.errorHistoryChanged),
             (resolved.collaboration_conflict, self._events.collaborationConflictChanged),
         )
         for changed, signal in ordered_signals:

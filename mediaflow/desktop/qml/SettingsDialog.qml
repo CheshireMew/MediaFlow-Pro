@@ -9,14 +9,28 @@ AppDialog {
     objectName: "settingsDialog"
     modal: true
     title: qsTr("设置")
-    closePolicy: Popup.CloseOnEscape
+    closePolicy: Popup.NoAutoClose
     anchors.centerIn: parent
     width: Math.min(780, parent ? parent.width - 48 : 780)
     height: Math.min(820, parent ? parent.height - 48 : 820)
     property var llmProviderPresets: mediaflow.settingsController.llmProviderPresets
     property var settingsDraft: mediaflow.settingsController.settingsDraft
     property bool syncingFromController: false
+    readonly property bool explicitDraftDirty: aiPage.providerDirty
+        || mediaPage.managedCookieDirty
 
+    function requestClose() {
+        settingsDraft.flush()
+        if (explicitDraftDirty) {
+            discardDraftDialog.request(
+                "close",
+                qsTr("放弃未保存的内容？"),
+                qsTr("LLM 提供商或 Cookie 表单中仍有未保存内容。关闭后这些内容会丢失。"),
+                qsTr("放弃并关闭"))
+            return
+        }
+        close()
+    }
     function indexOfValue(model, value) {
         for (var i = 0; i < model.length; ++i) {
             if (model[i].value === value)
@@ -24,13 +38,11 @@ AppDialog {
         }
         return 0
     }
-
     function runtimeComponent(componentId) {
         const status = mediaflow.settingsController.runtimeToolStatus || {}
         const components = status.components || {}
         return components[componentId] || {}
     }
-
     function syncFromController() {
         syncForm(settingsDraft.data)
         loadLlmProvider()
@@ -68,6 +80,25 @@ AppDialog {
         Qt.callLater(function() { root.syncingFromController = false })
     }
     onClosed: settingsDraft.finish()
+
+    Shortcut {
+        sequence: "Escape"
+        enabled: root.opened && !discardDraftDialog.opened
+            && !generalPage.modalOpen && !aiPage.modalOpen && !mediaPage.modalOpen
+        onActivated: root.requestClose()
+    }
+
+    AppConfirmationDialog {
+        id: discardDraftDialog
+        objectName: "discardSettingsDraftDialog"
+        onConfirmed: function (actionId) {
+            if (actionId !== "close")
+                return
+            aiPage.discardProviderChanges()
+            mediaPage.discardManagedCookieDraft()
+            root.close()
+        }
+    }
 
     Connections {
         target: mediaflow.settingsController
@@ -117,15 +148,22 @@ AppDialog {
             Text {
                 objectName: "settingsAutoSaveNotice"
                 Layout.fillWidth: true
-                text: qsTr("更改会自动保存")
-                color: Theme.textMuted
+                text: mediaflow.settingsController.languageRestartRequired
+                    ? qsTr("常规设置已保存；界面语言将在重启后生效")
+                    : root.explicitDraftDirty
+                    ? qsTr("提供商或 Cookie 有未保存内容")
+                    : root.settingsDraft.dirty
+                    ? qsTr("正在保存更改…")
+                    : qsTr("常规设置自动保存；提供商和 Cookie 请点击各自的保存按钮")
+                color: root.explicitDraftDirty || mediaflow.settingsController.languageRestartRequired
+                    ? Theme.warning : Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
             }
             AppButton {
                 objectName: "settingsCloseButton"
                 text: qsTr("关闭")
                 enabled: mediaPage.valid
-                onClicked: root.close()
+                onClicked: root.requestClose()
             }
         }
     }

@@ -14,10 +14,16 @@ from PySide6.QtCore import QCoreApplication, QSettings, QTranslator, QUrl
 from PySide6.QtGui import QColorSpace, QFontDatabase, QGuiApplication, QIcon, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.desktop.controllers import EditorControllers
+from mediaflow.desktop.runtime_directory_management import (
+    apply_pending_runtime_directory_change,
+    choose_first_launch_runtime_directory,
+    configure_runtime_environment,
+    set_saved_runtime_directory,
+)
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.infrastructure.application_logging import (
     configure_application_logging,
@@ -244,30 +250,18 @@ def show_startup_settings_recovery(settings: SettingsLoadResult) -> bool:
 def ensure_runtime_directory() -> bool:
     configured = configured_runtime_directory()
     if configured is not None:
-        os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(configured)
+        configure_runtime_environment(configured, source="external")
         return True
-    saved = _saved_runtime_directory()
+    saved = apply_pending_runtime_directory_change()
     if saved is not None:
-        os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(saved)
+        configure_runtime_environment(saved, source="bootstrap")
         return True
-    selected = QFileDialog.getExistingDirectory(
-        None,
-        f"选择 {PRODUCT_NAME} 运行环境目录",
-        str(Path.home()),
-        QFileDialog.Option.ShowDirsOnly,
-    )
-    if not selected:
-        QMessageBox.critical(
-            None,
-            PRODUCT_NAME,
-            "运行环境目录尚未配置。请选择用于依赖、模型和缓存的目录后再启动。",
-        )
+    selected = choose_first_launch_runtime_directory()
+    if selected is None:
         return False
-    runtime_directory = Path(selected).resolve()
-    os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(runtime_directory)
-    bootstrap = QSettings(PRODUCT_NAME, f"{PRODUCT_NAME} Bootstrap")
-    bootstrap.setValue("runtimeDirectory", str(runtime_directory))
-    bootstrap.sync()
+    runtime_directory = selected.resolve()
+    set_saved_runtime_directory(runtime_directory)
+    configure_runtime_environment(runtime_directory, source="bootstrap")
     return True
 
 

@@ -8,6 +8,12 @@ ColumnLayout {
     property var format
     property var restoredEncoderPolicy: null
     property bool advancedOpen: false
+    readonly property bool modalOpen: subtitles.modalOpen
+    readonly property bool selectedEncoderAvailable: !root.format
+        || root.format.value === "audio"
+        || (encoderField.currentIndex >= 0
+            && Boolean(encoderField.model[encoderField.currentIndex])
+            && encoderField.model[encoderField.currentIndex].available !== false)
     property string lastPreviewSignature: ""
     signal optionsChanged(var options)
 
@@ -65,6 +71,12 @@ ColumnLayout {
             vendor: components.length > 1 && components[1].length > 0
                 ? components[1] : "auto"
         }
+    }
+
+    function selectSoftwareEncoder() {
+        const index = encoderField.indexOfValue("software")
+        if (index >= 0)
+            encoderField.currentIndex = index
     }
 
     function exportOptions() {
@@ -143,10 +155,17 @@ ColumnLayout {
                 visible: encoderField.currentIndex >= 0
                     && encoderField.model[encoderField.currentIndex]
                     && encoderField.model[encoderField.currentIndex].available === false
-                text: qsTr("这个项目要求的硬件编码器在本机不可用。导出会停止并说明原因，不会悄悄改用其它编码器。")
+                text: qsTr("这个项目要求的硬件编码器在本机不可用。请选择可用编码器后再开始导出。")
                 color: Theme.warning
                 font.pixelSize: Theme.fontSizeCaption
                 wrapMode: Text.WordWrap
+            }
+            AppButton {
+                objectName: "switchToSoftwareEncoderButton"
+                visible: !root.selectedEncoderAvailable
+                Layout.fillWidth: true
+                text: qsTr("切换到软件编码器")
+                onClicked: root.selectSoftwareEncoder()
             }
             Text {
                 Layout.fillWidth: true

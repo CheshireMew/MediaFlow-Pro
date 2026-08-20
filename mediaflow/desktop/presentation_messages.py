@@ -28,6 +28,25 @@ def system_name(name: str) -> str:
 
 def status_message(source: str, *arguments: object) -> str:
     templates = {
+        "已安排在下次启动时迁移并切换运行环境目录": QCoreApplication.translate(
+            "StatusMessageCatalog", "已安排在下次启动时迁移并切换运行环境目录"
+        ),
+        "已安排在下次启动时切换运行环境目录": QCoreApplication.translate(
+            "StatusMessageCatalog", "已安排在下次启动时切换运行环境目录"
+        ),
+        "已取消运行环境目录变更": QCoreApplication.translate(
+            "StatusMessageCatalog", "已取消运行环境目录变更"
+        ),
+        "时间线标记已添加": QCoreApplication.translate("StatusMessageCatalog", "时间线标记已添加"),
+        "时间线标记已重命名": QCoreApplication.translate("StatusMessageCatalog", "时间线标记已重命名"),
+        "时间线标记已删除；可使用撤销恢复": QCoreApplication.translate(
+            "StatusMessageCatalog", "时间线标记已删除；可使用撤销恢复"
+        ),
+        "时间线选区已添加": QCoreApplication.translate("StatusMessageCatalog", "时间线选区已添加"),
+        "时间线选区已重命名": QCoreApplication.translate("StatusMessageCatalog", "时间线选区已重命名"),
+        "时间线选区已删除；可使用撤销恢复": QCoreApplication.translate(
+            "StatusMessageCatalog", "时间线选区已删除；可使用撤销恢复"
+        ),
         "%1 连接测试成功": QCoreApplication.translate("StatusMessageCatalog", "%1 连接测试成功"),
         "Cookie 已保存到 %1": QCoreApplication.translate("StatusMessageCatalog", "Cookie 已保存到 %1"),
         "Cookie 已清除": QCoreApplication.translate("StatusMessageCatalog", "Cookie 已清除"),

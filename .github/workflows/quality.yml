@@ -20,6 +20,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Hosted runners have smaller disks than development workstations. Keep a
+  # real safety reserve without applying the workstation's 80 GiB floor.
+  MEDIAFLOW_MINIMUM_FREE_BYTES: "8589934592"
+
 concurrency:
   group: v2-quality-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name != 'schedule' }}

@@ -17,6 +17,15 @@ AppScrollView {
         || taskData.status === "running" || taskData.status === "paused"
     readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
     readonly property bool canStartTasks: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
+    readonly property bool modalOpen: deleteHighlightDialog.opened
+
+    AppConfirmationDialog {
+        id: deleteHighlightDialog
+        onConfirmed: function (highlightId) {
+            if (highlightId.length > 0)
+                mediaflow.highlightController.deleteHighlight(highlightId)
+        }
+    }
 
     function syncDocumentSelector() {
         const documentId = String(mediaflow.subtitleViewController.selectedDocumentId || "");
@@ -312,7 +321,11 @@ AppScrollView {
                     AppButton {
                         text: qsTr("删除")
                         enabled: root.canEdit
-                        onClicked: mediaflow.highlightController.deleteHighlight(highlightId)
+                        onClicked: deleteHighlightDialog.request(
+                            highlightId,
+                            qsTr("删除这个高光候选？"),
+                            qsTr("该候选及其分析结果会从项目中永久删除，无法撤销。已经添加到时间线的片段不会删除。"),
+                            qsTr("永久删除"))
                     }
                 }
                 AppButton {

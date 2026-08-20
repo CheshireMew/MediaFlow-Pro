@@ -1,14 +1,14 @@
 {
   "schema": "mediaflow-documentation-screenshots/v1",
   "generator": "scripts/update_documentation_screenshots.py",
-  "ui_source_digest": "8d2d4cc93a2a3c89349333c83ceb9c16503da75f63c19726f294261da87857e2",
+  "ui_source_digest": "cf4319131278db5ea2360a108739a4a3a6a97008d22f4df0cda03a6e2ead9199",
   "images": [
     {
       "path": "docs/images/mediaflow-home-zh-cn.png",
       "scenario": "empty-home-zh-cn",
       "width": 1600,
       "height": 900,
-      "sha256": "2c8957f0f18a3bd47b2373f219d6bb0a7c445044f249895db21bb50f3d653da0",
+      "sha256": "8207df1e8e8dc4afe53235f978e881413f7c3a40b56374337342137cd91d419f",
       "local_paths_exposed": false
     },
     {
@@ -16,7 +16,7 @@
       "scenario": "sample-workspace-zh-cn",
       "width": 1920,
       "height": 1080,
-      "sha256": "2ffaa837b0b7fe9cbc9d0ae644df1895aace6f0e0b0db3ea87ac7b85df8a4e04",
+      "sha256": "7e1db34c11cbd6e71e1b1dbe17a6cde8ae20fb5f9d183a813ef8dd578325f79f",
       "local_paths_exposed": false
     }
   ]
