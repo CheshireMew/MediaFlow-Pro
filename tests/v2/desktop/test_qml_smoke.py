@@ -3835,48 +3835,45 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert _process_until(translation_target_is_ready), translation_observation
         translation_summary = workspace.findChild(QQuickItem, "translationComparisonSummary")
         translation_list = workspace.findChild(QQuickItem, "translationComparisonList")
-        translation_editor = next(
-            (
-                item
-                for item in _visual_items(translation_list)
-                if item.objectName() == "translationTargetEditor"
-            ),
-            None,
-        )
-        translation_save = next(
-            (
-                item
-                for item in _visual_items(translation_list)
-                if item.objectName() == "translationSaveSegmentButton"
-            ),
-            None,
-        )
         assert translation_summary is not None and translation_summary.isVisible()
         assert translation_list is not None and translation_list.property("count") == 1
-        assert translation_editor is not None and translation_editor.isVisible(), {
+
+        def visible_translation_control(object_name: str) -> QQuickItem | None:
+            return next(
+                (
+                    item
+                    for item in _visual_items(translation_list)
+                    if item.objectName() == object_name and item.isVisible()
+                ),
+                None,
+            )
+
+        assert _process_until(
+            lambda: visible_translation_control("translationTargetEditor") is not None
+            and visible_translation_control("translationSaveSegmentButton") is not None
+        ), {
             "listHeight": translation_list.height(),
             "listWidth": translation_list.width(),
             "contentHeight": translation_list.property("contentHeight"),
+            "contentY": translation_list.property("contentY"),
             "visible": translation_list.isVisible(),
         }
+        translation_editor = visible_translation_control("translationTargetEditor")
+        translation_save = visible_translation_control("translationSaveSegmentButton")
+        assert translation_editor is not None and translation_save is not None
         assert translation_editor.property("text") == "叠加在音频波形上的字幕"
         translation_editor.forceActiveFocus()
         assert _process_until(lambda: translation_editor.property("activeFocus") is True)
         translation_editor.setProperty("text", "用户校对后的译文")
         controllers.settings.selectGlossaryTerm("")
-        QCoreApplication.processEvents()
-        translation_editor = next(
-            item
-            for item in _visual_items(translation_list)
-            if item.objectName() == "translationTargetEditor" and item.isVisible()
+        assert _process_until(
+            lambda: visible_translation_control("translationTargetEditor") is not None
+            and visible_translation_control("translationSaveSegmentButton") is not None
         )
-        translation_save = next(
-            item
-            for item in _visual_items(translation_list)
-            if item.objectName() == "translationSaveSegmentButton" and item.isVisible()
-        )
+        translation_editor = visible_translation_control("translationTargetEditor")
+        translation_save = visible_translation_control("translationSaveSegmentButton")
+        assert translation_editor is not None and translation_save is not None
         assert translation_editor.property("text") == "用户校对后的译文"
-        assert translation_save is not None
         assert QMetaObject.invokeMethod(translation_save, "click")
         assert _process_until(
             lambda: controllers.session.state.binding.current.list_subtitle_segments(translated_document_id)[
