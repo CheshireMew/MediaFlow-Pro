@@ -21,8 +21,7 @@ from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.storage_budget import (
     estimate_video_cache_bytes,
-    register_project_cache_owner,
-    require_project_cache_budget,
+    reserve_project_cache,
 )
 from mediaflow.infrastructure.web_browser_cache_renderer import WebBrowserCacheRenderer
 from mediaflow.infrastructure.web_clip_export_writer import WebClipExportWriter
@@ -302,18 +301,15 @@ class WebRenderService:
 
     def _reserve_cache(self, target: WebRenderTarget, *, label: str) -> None:
         cache_root = self.paths.project_cache_dir(self.documents.project_dir)
-        require_project_cache_budget(
+        reserve_project_cache(
             cache_root,
+            self.documents.project_dir,
             expected_new_bytes=estimate_video_cache_bytes(
                 target.width,
                 target.height,
                 target.frame_count,
             ),
             label=label,
-        )
-        register_project_cache_owner(
-            cache_root,
-            self.documents.project_dir,
             case_sensitive_paths=self.paths.target.case_sensitive_paths,
         )
 

@@ -44,6 +44,7 @@ from mediaflow.infrastructure.web_capture_scheduler import (
 )
 
 _BROWSER_IDLE_SECONDS = 30.0
+_CAPTURE_PAGE_READY_TIMEOUT_MS = 15_000
 
 
 @dataclass(slots=True)
@@ -402,9 +403,9 @@ class _BrowserWorker:
                 """() => window.editableMedia
                     && window.editableMedia.ready instanceof Promise
                     && window.__hf
-                    && typeof window.__hf.seek === "function"
-                    && window.__hf.duration > 0""",
-                timeout=5000,
+                && typeof window.__hf.seek === "function"
+                && window.__hf.duration > 0""",
+                timeout=_CAPTURE_PAGE_READY_TIMEOUT_MS,
             )
             page.evaluate("() => window.editableMedia.ready")
             page.evaluate(
