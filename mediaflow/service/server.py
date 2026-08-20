@@ -16,7 +16,6 @@ import psutil
 from aiohttp import WSCloseCode, WSMsgType, web
 from pydantic import ValidationError
 
-from mediaflow.automation.contracts import describe_contract
 from mediaflow.composition import EditorApplication
 from mediaflow.domain.collaboration import ProjectRevisionConflict
 from mediaflow.infrastructure.project_lock import ProcessFileLock
@@ -27,8 +26,10 @@ from .discovery import (
     ServiceDiscovery,
     ServicePaths,
 )
-from .events import EventHub, ServiceEvent
-from .sessions import ProjectSessionManager, project_path
+from .events import EVENT_STREAM_OVERFLOW, EventHub, ServiceEvent
+from .request_dispatcher import ServiceRequestDispatcher
+from .session_registry import project_path
+from .sessions import EditorServiceOperations
 from .workspaces import WorkspaceRegistry
 
 JSON_RPC_VERSION = "2.0"
@@ -48,9 +49,7 @@ def _bind_loopback_listener() -> socket.socket:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if sys.platform != "win32":
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        port = PRIVATE_PORT_START + secrets.randbelow(
-            PRIVATE_PORT_END - PRIVATE_PORT_START + 1
-        )
+        port = PRIVATE_PORT_START + secrets.randbelow(PRIVATE_PORT_END - PRIVATE_PORT_START + 1)
         try:
             listener.bind(("127.0.0.1", port))
             listener.listen(socket.SOMAXCONN)
@@ -59,9 +58,7 @@ def _bind_loopback_listener() -> socket.socket:
         except OSError as error:
             last_error = error
             listener.close()
-    raise RuntimeError(
-        "MediaFlow Editor Service could not reserve a private loopback port"
-    ) from last_error
+    raise RuntimeError("MediaFlow Editor Service could not reserve a private loopback port") from last_error
 
 
 def _json_rpc_error(identifier: Any, code: int, message: str, data: Any = None) -> dict[str, Any]:
@@ -86,7 +83,7 @@ class EditorServiceServer:
         self._socket: socket.socket | None = None
         self._stop = asyncio.Event()
         self._event_hub: EventHub | None = None
-        self._sessions: ProjectSessionManager | None = None
+        self._operations: EditorServiceOperations | None = None
         self._workspaces: WorkspaceRegistry | None = None
         self._websockets: set[web.WebSocketResponse] = set()
         self.discovery: ServiceDiscovery | None = None
@@ -103,7 +100,7 @@ class EditorServiceServer:
             # Task recovery and every other persistent mutation happens only
             # after the per-user service lock is held.
             application = self._application_factory()
-            self._sessions = ProjectSessionManager(application, self._event_hub)
+            self._operations = EditorServiceOperations(application, self._event_hub)
             app = web.Application(
                 middlewares=[self._authenticate],
                 client_max_size=8 * 1024 * 1024,
@@ -151,13 +148,13 @@ class EditorServiceServer:
             if self._runner is not None:
                 await self._runner.cleanup()
                 self._runner = None
-            if self._sessions is not None:
+            if self._operations is not None:
                 try:
-                    await asyncio.to_thread(self._sessions.close)
+                    await asyncio.to_thread(self._operations.close)
                 except BaseException as error:
                     stop_error = error
                 finally:
-                    self._sessions = None
+                    self._operations = None
             if self._workspaces is not None:
                 self._workspaces.close()
                 self._workspaces = None
@@ -241,33 +238,21 @@ class EditorServiceServer:
             result = await self._dispatch(method, params)
             response = {"jsonrpc": JSON_RPC_VERSION, "id": identifier, "result": result}
         except (ValueError, ValidationError) as error:
-            response = _json_rpc_error(
-                identifier, -32602, str(error), {"type": type(error).__name__}
-            )
+            response = _json_rpc_error(identifier, -32602, str(error), {"type": type(error).__name__})
         except FileNotFoundError as error:
-            response = _json_rpc_error(
-                identifier, -32004, str(error), {"type": type(error).__name__}
-            )
+            response = _json_rpc_error(identifier, -32004, str(error), {"type": type(error).__name__})
         except PermissionError as error:
-            response = _json_rpc_error(
-                identifier, -32003, str(error), {"type": type(error).__name__}
-            )
+            response = _json_rpc_error(identifier, -32003, str(error), {"type": type(error).__name__})
         except ProjectRevisionConflict as error:
             try:
                 await self._publish_project_conflict(method, params, error)
             except Exception:
                 logger.exception("Failed to publish the project conflict event")
-            response = _json_rpc_error(
-                identifier, -32009, str(error), error.as_dict()
-            )
+            response = _json_rpc_error(identifier, -32009, str(error), error.as_dict())
         except RuntimeError as error:
-            response = _json_rpc_error(
-                identifier, -32000, str(error), {"type": type(error).__name__}
-            )
+            response = _json_rpc_error(identifier, -32000, str(error), {"type": type(error).__name__})
         except Exception as error:
-            response = _json_rpc_error(
-                identifier, -32603, str(error), {"type": type(error).__name__}
-            )
+            response = _json_rpc_error(identifier, -32603, str(error), {"type": type(error).__name__})
         return web.json_response(response)
 
     async def _publish_project_conflict(
@@ -276,16 +261,16 @@ class EditorServiceServer:
         params: dict[str, Any],
         error: ProjectRevisionConflict,
     ) -> None:
-        sessions = self._sessions
+        operations = self._operations
         events = self._event_hub
-        if sessions is None or events is None:
+        if operations is None or events is None:
             return
         context = self._conflict_request_context(method, params)
         project_value = str(context.get("project") or "")
         if not project_value:
             return
         identity = await asyncio.to_thread(
-            sessions.project_identity,
+            operations.desktop.project_identity,
             project_path(project_value),
         )
         events.publish(
@@ -316,9 +301,7 @@ class EditorServiceServer:
             raw_requests = params.get("requests")
             source = (
                 raw_requests[0]
-                if isinstance(raw_requests, list)
-                and raw_requests
-                and isinstance(raw_requests[0], dict)
+                if isinstance(raw_requests, list) and raw_requests and isinstance(raw_requests[0], dict)
                 else {}
             )
             request_id = str(params.get("batch_id") or "")
@@ -337,245 +320,22 @@ class EditorServiceServer:
         }
 
     async def _dispatch(self, method: str, params: dict[str, Any]) -> Any:
-        sessions = self._sessions
-        if sessions is None:
-            raise RuntimeError("Editor Service is not ready")
-        if method == "system.hello":
-            return {
-                "protocol": SERVICE_PROTOCOL,
-                "protocol_version": SERVICE_PROTOCOL_VERSION,
-                "pid": os.getpid(),
-            }
-        if method == "system.describe":
-            return describe_contract()
-        if method == "system.runtime.inspect":
-            return await asyncio.to_thread(sessions.desktop_runtime_descriptor)
-        if method == "service.status":
-            status = await asyncio.to_thread(sessions.service_status)
-            return {
-                "protocol": SERVICE_PROTOCOL,
-                "protocol_version": SERVICE_PROTOCOL_VERSION,
-                "pid": os.getpid(),
-                **status,
-            }
-        if method == "operation.execute":
-            value = params.get("request")
-            if not isinstance(value, dict):
-                raise ValueError("params.request must be an object")
-            return await asyncio.to_thread(sessions.execute, value)
-        if method == "operation.execute_batch":
-            values = params.get("requests")
-            if not isinstance(values, list) or not all(isinstance(item, dict) for item in values):
-                raise ValueError("params.requests must be an array of request objects")
-            batch_id = str(params.get("batch_id") or "")
-            label = str(params.get("label") or "Agent batch")
-            return await asyncio.to_thread(
-                sessions.execute_batch,
-                values,
-                batch_id=batch_id,
-                label=label,
-            )
-        if method == "project.create":
-            path = project_path(str(params.get("project") or ""))
-            name = str(params.get("name") or "").strip()
-            if not name:
-                raise ValueError("name is required")
-            profile_confirmed = params.get("profile_confirmed")
-            if not isinstance(profile_confirmed, bool):
-                raise ValueError("profile_confirmed must be a boolean")
-            return await asyncio.to_thread(
-                sessions.create_desktop_project,
-                path,
-                name,
-                params.get("profile"),
-                profile_confirmed,
-                str(params.get("client_id") or ""),
-            )
-        if method == "project.open":
-            path = project_path(str(params.get("project") or ""))
-            return await asyncio.to_thread(
-                sessions.open_desktop_project,
-                path,
-                str(params.get("client_id") or ""),
-            )
-        if method == "project.close":
-            path = project_path(str(params.get("project") or ""))
-            return await asyncio.to_thread(
-                sessions.release_desktop_project,
-                path,
-                str(params.get("client_id") or ""),
-                float(params.get("timeout_seconds", 5.0)),
-            )
-        if method == "project.snapshot":
-            path = project_path(str(params.get("project") or ""))
-            return await asyncio.to_thread(sessions.project_snapshot, path)
-        if method == "project.subscribe":
-            path = project_path(str(params.get("project") or ""))
-            return await asyncio.to_thread(
-                sessions.project_subscription,
-                path,
-                project_cursor=int(params.get("project_cursor", 0)),
-                task_cursor=int(params.get("task_cursor", 0)),
-            )
-        if method == "desktop.project.call":
-            path = project_path(str(params.get("project") or ""))
-            raw_actor = params.get("actor")
-            actor_value: dict[str, Any] = raw_actor if isinstance(raw_actor, dict) else {}
-            return await asyncio.to_thread(
-                sessions.execute_desktop_command,
-                path=path,
-                target=str(params.get("target") or ""),
-                sequence_id=str(params.get("sequence_id") or ""),
-                command=str(params.get("command") or ""),
-                args_value=params.get("args", []),
-                kwargs_value=params.get("kwargs", {}),
-                base_revision=(
-                    int(params["base_revision"])
-                    if params.get("base_revision") is not None
-                    else None
-                ),
-                request_id=str(params.get("request_id") or ""),
-                actor_value=actor_value,
-            )
-        if method == "desktop.application.settings":
-            return await asyncio.to_thread(sessions.application_settings)
-        if method == "desktop.application.settings.replace":
-            return await asyncio.to_thread(
-                sessions.replace_application_settings,
-                params.get("settings"),
-            )
-        if method == "desktop.application.cookies":
-            return await asyncio.to_thread(
-                sessions.cookie_command,
-                str(params.get("command") or ""),
-                params.get("args", []),
-            )
-        if method == "desktop.application.call":
-            return await asyncio.to_thread(
-                sessions.execute_application_command,
-                str(params.get("command") or ""),
-                params.get("args", []),
-                params.get("kwargs", {}),
-            )
-        if method == "history.list":
-            path = project_path(str(params.get("project") or ""))
-            return await asyncio.to_thread(sessions.history_list, path)
-        if method in {"history.undo", "history.redo"}:
-            path = project_path(str(params.get("project") or ""))
-            if params.get("base_revision") is None:
-                raise ValueError("base_revision is required")
-            raw_actor = params.get("actor")
-            if not isinstance(raw_actor, dict):
-                raise ValueError("actor must be an object")
-            return await asyncio.to_thread(
-                sessions.execute_history_command,
-                path,
-                direction="undo" if method == "history.undo" else "redo",
-                request_id=str(params.get("request_id") or ""),
-                base_revision=int(params["base_revision"]),
-                actor_value=raw_actor,
-                undo_group_id=(
-                    str(params["undo_group_id"])
-                    if params.get("undo_group_id") is not None
-                    else None
-                ),
-            )
-        if method == "project.events":
-            path = project_path(str(params.get("project") or ""))
-            after_cursor = int(params.get("after_cursor", 0))
-            if after_cursor < 0:
-                raise ValueError("after_cursor must be non-negative")
-            return await asyncio.to_thread(
-                sessions.project_events,
-                path,
-                after_cursor=after_cursor,
-            )
-        if method == "task.events":
-            path = project_path(str(params.get("project") or ""))
-            after_cursor = int(params.get("after_cursor", 0))
-            if after_cursor < 0:
-                raise ValueError("after_cursor must be non-negative")
-            return await asyncio.to_thread(
-                sessions.task_events,
-                path,
-                after_cursor=after_cursor,
-            )
-        if method in {"task.get", "task.list", "task.cancel", "task.wait"}:
-            operation = method
-            path = project_path(str(params.get("project") or ""))
-            request = {
-                "protocol": SERVICE_PROTOCOL,
-                "version": SERVICE_PROTOCOL_VERSION,
-                "operation": operation,
-                "project": str(path),
-                "arguments": (
-                    {
-                        "task_id": str(params.get("task_id") or ""),
-                        **(
-                            {"timeout": float(params.get("timeout", 3600))}
-                            if method == "task.wait"
-                            else {}
-                        ),
-                    }
-                    if method != "task.list"
-                    else {}
-                ),
-                "request_id": params.get("request_id"),
-                "base_revision": params.get("base_revision"),
-                "actor": params.get("actor")
-                or {"kind": "system", "id": "editor-service", "name": "Editor Service"},
-                "client_id": str(params.get("client_id") or "editor-service"),
-            }
-            return await asyncio.to_thread(sessions.execute, request)
+        operations = self._operations
         workspaces = self._workspaces
-        if method.startswith("workspace.") and workspaces is None:
-            raise RuntimeError("Workspace registry is not ready")
-        if method == "workspace.attach":
-            assert workspaces is not None
-            return workspaces.attach(
-                client_id=str(params.get("client_id") or ""),
-                project=(str(params["project"]) if params.get("project") else None),
-                workspace_session_id=(
-                    str(params["workspace_session_id"])
-                    if params.get("workspace_session_id")
-                    else None
-                ),
-            )
-        if method == "workspace.command":
-            assert workspaces is not None
-            arguments = params.get("arguments", {})
-            if not isinstance(arguments, dict):
-                raise ValueError("workspace command arguments must be an object")
-            event = workspaces.command(
-                str(params.get("workspace_session_id") or ""),
-                str(params.get("command") or ""),
-                arguments,
-            )
-            events = self._event_hub
-            if events is None:
-                raise RuntimeError("Editor Service events are not ready")
-            events.publish(ServiceEvent("workspace.changed", event))
-            return event
-        if method == "workspace.detach":
-            assert workspaces is not None
-            workspaces.detach(
-                str(params.get("workspace_session_id") or ""),
-                str(params.get("client_id") or ""),
-            )
-            return {"detached": True}
-        if method == "service.shutdown":
-            force = params.get("force", False)
-            if not isinstance(force, bool):
-                raise ValueError("force must be a boolean")
-            result = await asyncio.to_thread(sessions.prepare_shutdown, force=force)
-            asyncio.get_running_loop().call_soon(self.request_stop)
-            return result
-        raise ValueError(f"Unknown JSON-RPC method: {method}")
+        events = self._event_hub
+        if operations is None:
+            raise RuntimeError("Editor Service is not ready")
+        return await ServiceRequestDispatcher(
+            operations,
+            workspaces,
+            events,
+            self.request_stop,
+        ).dispatch(method, params)
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         events = self._event_hub
-        sessions = self._sessions
-        if events is None or sessions is None:
+        operations = self._operations
+        if events is None or operations is None:
             raise web.HTTPServiceUnavailable()
         websocket = web.WebSocketResponse(
             heartbeat=20,
@@ -583,41 +343,32 @@ class EditorServiceServer:
         )
         await websocket.prepare(request)
         self._websockets.add(websocket)
-        subscription, queue = events.subscribe()
+        scoped_event_types = frozenset(
+            {"project.changed", "project.conflict", "task.changed", "workspace.changed"}
+        )
+        subscription, queue = events.subscribe(
+            selector=lambda event: event.type not in scoped_event_types,
+        )
         workspace_subscription: tuple[str, str] | None = None
-        subscribed_project_id = ""
-        subscribed_project_path: Path | None = None
-        subscribed_workspace_id = ""
         subscription_ready = asyncio.Event()
 
         async def send_events() -> None:
             while True:
                 await subscription_ready.wait()
                 event = await queue.get()
-                payload = event.payload
-                if event.type in {"project.changed", "project.conflict"}:
-                    if str(payload.get("project_id") or "") != subscribed_project_id:
-                        continue
-                elif event.type == "task.changed":
-                    event_project = str(payload.get("project_path") or "")
-                    if (
-                        subscribed_project_path is None
-                        or not event_project
-                        or Path(event_project).resolve() != subscribed_project_path
-                    ):
-                        continue
-                elif event.type == "workspace.changed":
-                    if (
-                        not subscribed_workspace_id
-                        or str(payload.get("workspace_session_id") or "")
-                        != subscribed_workspace_id
-                    ):
-                        continue
                 await websocket.send_json(event.as_dict())
-                if event.type == "service.stopping":
+                if event.type in {"service.stopping", EVENT_STREAM_OVERFLOW}:
                     await websocket.close(
-                        code=WSCloseCode.GOING_AWAY,
-                        message=b"service stopping",
+                        code=(
+                            WSCloseCode.GOING_AWAY
+                            if event.type == "service.stopping"
+                            else WSCloseCode.TRY_AGAIN_LATER
+                        ),
+                        message=(
+                            b"service stopping"
+                            if event.type == "service.stopping"
+                            else b"event replay required"
+                        ),
                     )
                     return
 
@@ -639,6 +390,10 @@ class EditorServiceServer:
                         raise ValueError("WebSocket messages must be objects")
                     if value.get("type") == "service.subscribe":
                         subscription_ready.clear()
+                        events.replace_selector(
+                            subscription,
+                            lambda event: event.type not in scoped_event_types,
+                        )
                         await websocket.send_json(
                             ServiceEvent(
                                 "service.subscribed",
@@ -652,32 +407,53 @@ class EditorServiceServer:
                         continue
                     if value.get("type") != "project.subscribe":
                         raise ValueError(
-                            "WebSocket messages must be service.subscribe or "
-                            "project.subscribe objects"
+                            "WebSocket messages must be service.subscribe or project.subscribe objects"
                         )
                     path = project_path(str(value.get("project") or ""))
                     project_cursor = int(value.get("project_cursor", 0))
                     task_cursor = int(value.get("task_cursor", 0))
                     subscription_ready.clear()
+                    workspace_session_id = str(value.get("workspace_session_id") or "")
+                    identity = await asyncio.to_thread(
+                        operations.desktop.project_identity,
+                        path,
+                    )
+                    selected_project_id = str(identity["project_id"])
+                    selected_project_path = path.resolve()
+
+                    def selects_current_scope(
+                        event: ServiceEvent,
+                        *,
+                        project_id: str = selected_project_id,
+                        project_path_value: Path = selected_project_path,
+                        workspace_id: str = workspace_session_id,
+                    ) -> bool:
+                        if event.type in {"project.changed", "project.conflict"}:
+                            return str(event.payload.get("project_id") or "") == project_id
+                        if event.type == "task.changed":
+                            event_project = str(event.payload.get("project_path") or "")
+                            return (
+                                bool(event_project)
+                                and Path(event_project).resolve() == project_path_value
+                            )
+                        if event.type == "workspace.changed":
+                            return bool(workspace_id) and (
+                                str(event.payload.get("workspace_session_id") or "")
+                                == workspace_id
+                            )
+                        return True
+
+                    events.replace_selector(subscription, selects_current_scope)
                     snapshot = await asyncio.to_thread(
-                        sessions.project_subscription,
+                        operations.desktop.project_subscription,
                         path,
                         project_cursor=project_cursor,
                         task_cursor=task_cursor,
                     )
-                    subscribed_project_path = path.resolve()
-                    subscribed_project_id = str(snapshot["project_id"])
                     for event in snapshot["project_events"]:
-                        await websocket.send_json(
-                            ServiceEvent("project.changed", event).as_dict()
-                        )
+                        await websocket.send_json(ServiceEvent("project.changed", event).as_dict())
                     for event in snapshot["task_events"]:
-                        await websocket.send_json(
-                            ServiceEvent("task.changed", event).as_dict()
-                        )
-                    workspace_session_id = str(
-                        value.get("workspace_session_id") or ""
-                    )
+                        await websocket.send_json(ServiceEvent("task.changed", event).as_dict())
                     workspace_client_id = str(value.get("client_id") or "")
                     if workspace_session_id:
                         workspaces = self._workspaces
@@ -693,13 +469,12 @@ class EditorServiceServer:
                             workspace_session_id,
                             workspace_client_id,
                         )
-                    subscribed_workspace_id = workspace_session_id
                     await websocket.send_json(
                         ServiceEvent(
                             "project.subscribed",
                             {
                                 "project": str(path),
-                                "project_id": subscribed_project_id,
+                                "project_id": str(snapshot["project_id"]),
                                 "project_cursor": snapshot["project_event_cursor"],
                                 "task_cursor": snapshot["task_cursor"],
                                 "workspace_session_id": workspace_session_id or None,

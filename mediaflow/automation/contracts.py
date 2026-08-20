@@ -71,6 +71,15 @@ class AutomationOperationContract(DomainModel):
     result_schema: dict[str, Any]
 
 
+class AutomationOperationSummary(DomainModel):
+    name: str
+    project_access: Literal["none", "create", "read", "write"]
+    execution_mode: Literal["atomic", "task"]
+    history_mode: Literal["reversible", "non_undoable"]
+    idempotency: Literal["none", "optional"]
+    required_capabilities: list[str]
+
+
 class AutomationContract(DomainModel):
     product: str = PRODUCT_NAME
     protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
@@ -83,6 +92,43 @@ class AutomationContract(DomainModel):
     capabilities: list[CapabilityDefinition]
     editor_field_catalogs: dict[str, dict[str, Any]]
     operations: list[AutomationOperationContract]
+
+
+class AutomationContractSummary(DomainModel):
+    view: Literal["summary"] = "summary"
+    product: str = PRODUCT_NAME
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[4] = AUTOMATION_VERSION
+    default_project_root: str
+    transport: AutomationTransport = Field(default_factory=AutomationTransport)
+    request_schema: dict[str, Any]
+    success_response_schema: dict[str, Any]
+    error_response_schema: dict[str, Any]
+    capabilities: list[CapabilityDefinition]
+    editor_field_catalogs: list[str]
+    operations: list[AutomationOperationSummary]
+
+
+class AutomationOperationDescription(DomainModel):
+    view: Literal["operation"] = "operation"
+    product: str = PRODUCT_NAME
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[4] = AUTOMATION_VERSION
+    operation: AutomationOperationContract
+
+
+class AutomationFieldCatalogDescription(DomainModel):
+    view: Literal["catalog"] = "catalog"
+    product: str = PRODUCT_NAME
+    protocol: Literal["mediaflow-editor"] = AUTOMATION_PROTOCOL
+    version: Literal[4] = AUTOMATION_VERSION
+    name: str
+    catalog: dict[str, Any]
+
+
+class AutomationDescriptionQuery(DomainModel):
+    view: Literal["full", "summary", "operation", "catalog"] = "full"
+    name: str | None = None
 
 
 def inline_model_schema(model: type[DomainModel]) -> dict[str, Any]:
@@ -119,9 +165,91 @@ def inline_model_schema(model: type[DomainModel]) -> dict[str, Any]:
     return resolve(schema)
 
 
-def describe_contract() -> dict[str, Any]:
+def _description_query(
+    value: dict[str, Any] | AutomationDescriptionQuery | None,
+) -> AutomationDescriptionQuery:
+    query = (
+        value
+        if isinstance(value, AutomationDescriptionQuery)
+        else AutomationDescriptionQuery.model_validate(value or {})
+    )
+    name = query.name.strip() if isinstance(query.name, str) else None
+    if query.view in {"operation", "catalog"} and not name:
+        raise ValueError(f"describe {query.view} requires name")
+    if query.view in {"full", "summary"} and name is not None:
+        raise ValueError(f"describe {query.view} does not accept name")
+    return query.model_copy(update={"name": name})
+
+
+def _operation_summary(name: str, definition: Any) -> AutomationOperationSummary:
+    return AutomationOperationSummary(
+        name=name,
+        project_access=definition.project_access,
+        execution_mode=definition.execution_mode,
+        history_mode=definition.history_mode,
+        idempotency=definition.idempotency,
+        required_capabilities=list(definition.required_capabilities),
+    )
+
+
+def _operation_contract(name: str, definition: Any) -> AutomationOperationContract:
+    return AutomationOperationContract(
+        **_operation_summary(name, definition).model_dump(mode="python"),
+        arguments_schema=inline_model_schema(definition.arguments_model),
+        result_schema=inline_model_schema(definition.result_model),
+    )
+
+
+def _editor_field_catalog(name: str) -> dict[str, Any]:
+    if name == "visual_effects":
+        return {
+            kind.value: definition.model_dump(mode="json")
+            for kind, definition in VISUAL_EFFECT_DEFINITIONS.items()
+        }
+    if name == "audio_effects":
+        return {
+            kind.value: definition.model_dump(mode="json")
+            for kind, definition in AUDIO_EFFECT_DEFINITIONS.items()
+        }
+    raise ValueError(
+        f"Unknown editor field catalog: {name}. "
+        "Available catalogs: audio_effects, visual_effects"
+    )
+
+
+def describe_contract(
+    query: dict[str, Any] | AutomationDescriptionQuery | None = None,
+) -> dict[str, Any]:
     from mediaflow.automation.operation_registry import OPERATIONS
     from mediaflow.infrastructure.storage_paths import default_project_root
+
+    selected = _description_query(query)
+    if selected.view == "summary":
+        return AutomationContractSummary(
+            default_project_root=default_project_root(),
+            request_schema=inline_model_schema(AutomationRequest),
+            success_response_schema=inline_model_schema(AutomationSuccessResponse),
+            error_response_schema=inline_model_schema(AutomationFailureResponse),
+            capabilities=list(CAPABILITY_CATALOG),
+            editor_field_catalogs=["visual_effects", "audio_effects"],
+            operations=[
+                _operation_summary(name, definition)
+                for name, definition in OPERATIONS.items()
+            ],
+        ).model_dump(mode="json")
+    if selected.view == "operation":
+        definition = OPERATIONS.get(selected.name or "")
+        if definition is None:
+            raise ValueError(f"Unknown automation operation: {selected.name}")
+        return AutomationOperationDescription(
+            operation=_operation_contract(selected.name or "", definition),
+        ).model_dump(mode="json")
+    if selected.view == "catalog":
+        name = selected.name or ""
+        return AutomationFieldCatalogDescription(
+            name=name,
+            catalog=_editor_field_catalog(name),
+        ).model_dump(mode="json")
 
     contract = AutomationContract(
         default_project_root=default_project_root(),
@@ -130,28 +258,11 @@ def describe_contract() -> dict[str, Any]:
         error_response_schema=inline_model_schema(AutomationFailureResponse),
         capabilities=list(CAPABILITY_CATALOG),
         editor_field_catalogs={
-            "visual_effects": {
-                kind.value: definition.model_dump(mode="json")
-                for kind, definition in VISUAL_EFFECT_DEFINITIONS.items()
-            },
-            "audio_effects": {
-                kind.value: definition.model_dump(mode="json")
-                for kind, definition in AUDIO_EFFECT_DEFINITIONS.items()
-            },
+            "visual_effects": _editor_field_catalog("visual_effects"),
+            "audio_effects": _editor_field_catalog("audio_effects"),
         },
         operations=[
-            AutomationOperationContract(
-                name=name,
-                project_access=definition.project_access,
-                execution_mode=definition.execution_mode,
-                history_mode=definition.history_mode,
-                idempotency=definition.idempotency,
-                required_capabilities=list(definition.required_capabilities),
-                arguments_schema=inline_model_schema(
-                    definition.arguments_model
-                ),
-                result_schema=inline_model_schema(definition.result_model),
-            )
+            _operation_contract(name, definition)
             for name, definition in OPERATIONS.items()
         ],
     )

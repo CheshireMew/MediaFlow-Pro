@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.srt_time import format_srt_timestamp
 from mediaflow.domain.timebase import frames_to_seconds, seconds_to_frames
 
@@ -23,29 +22,7 @@ class SubtitleCue:
 
 
 class SubtitleFile:
-    """The single boundary for subtitle import and SRT publication."""
-
-    @classmethod
-    def read(
-        cls,
-        path: str | Path,
-        *,
-        fps_numerator: int,
-        fps_denominator: int,
-    ) -> list[SubtitleCue]:
-        source = Path(path).resolve(strict=True)
-        content = cls._decode(source.read_bytes())
-        if source.suffix.lower() in {".ass", ".ssa"}:
-            return cls.parse_ass(
-                content,
-                fps_numerator=fps_numerator,
-                fps_denominator=fps_denominator,
-            )
-        return cls.parse_srt(
-            content,
-            fps_numerator=fps_numerator,
-            fps_denominator=fps_denominator,
-        )
+    """Pure subtitle parsing, formatting, and language inference rules."""
 
     @classmethod
     def parse_srt(
@@ -164,25 +141,6 @@ class SubtitleFile:
         return cues
 
     @classmethod
-    def write_srt(
-        cls,
-        path: str | Path,
-        cues: list[SubtitleCue],
-        *,
-        fps_numerator: int,
-        fps_denominator: int,
-    ) -> Path:
-        output = Path(path).resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        content = cls.dumps_srt(
-            cues,
-            fps_numerator=fps_numerator,
-            fps_denominator=fps_denominator,
-        )
-        atomic_write_text(output, content, encoding="utf-8-sig")
-        return output
-
-    @classmethod
     def dumps_srt(
         cls,
         cues: list[SubtitleCue],
@@ -235,7 +193,7 @@ class SubtitleFile:
         return value if value and value != "auto" else "und"
 
     @staticmethod
-    def _decode(data: bytes) -> str:
+    def decode(data: bytes) -> str:
         for encoding in ("utf-8-sig", "utf-8", "gb18030", "utf-16"):
             try:
                 return data.decode(encoding)

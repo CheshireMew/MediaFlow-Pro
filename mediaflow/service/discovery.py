@@ -15,7 +15,7 @@ from mediaflow.domain.model_base import DomainModel
 from mediaflow.environment import SERVICE_STATE_DIRECTORY_VARIABLE, configured_path
 
 SERVICE_PROTOCOL = "mediaflow-editor"
-SERVICE_PROTOCOL_VERSION = 3
+SERVICE_PROTOCOL_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)

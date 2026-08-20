@@ -190,6 +190,13 @@ class DiagnosticsBundleTaskOutcome(DomainModel):
     skipped_item_count: int = Field(ge=0)
 
 
+class DubbingTaskOutcome(DomainModel):
+    outcome_type: Literal["dubbing"] = "dubbing"
+    session_id: str
+    phase: Literal["prepared", "synthesized", "committed"]
+    master: ArtifactReference | None = None
+
+
 TaskOutcome = Annotated[
     ImportedAssetTaskOutcome
     | DownloadAnalysisTaskOutcome
@@ -197,7 +204,8 @@ TaskOutcome = Annotated[
     | LoudnessTaskOutcome
     | ExportTaskOutcome
     | SequenceBuildTaskOutcome
-    | DiagnosticsBundleTaskOutcome,
+    | DiagnosticsBundleTaskOutcome
+    | DubbingTaskOutcome,
     Field(discriminator="outcome_type"),
 ]
 

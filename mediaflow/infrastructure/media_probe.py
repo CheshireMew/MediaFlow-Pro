@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -11,6 +10,7 @@ from mediaflow.domain.project import MediaMetadata, ProjectProfile
 from mediaflow.domain.storage_names import require_windows_interop_path
 from mediaflow.domain.timebase import seconds_to_frames
 
+from .ffprobe_runner import FfprobeRunner
 from .runtime_paths import RuntimePaths
 
 
@@ -24,14 +24,14 @@ class ProbeResult:
 class MediaProbe:
     def __init__(self, paths: RuntimePaths):
         self.paths = paths
+        self.ffprobe = FfprobeRunner(self.paths.ffprobe)
 
     def probe(self, path: str | Path, *, timeline_profile: ProjectProfile | None = None) -> ProbeResult:
         source = require_windows_interop_path(
             Path(path).resolve(strict=True)
         )
-        result = subprocess.run(
+        result = self.ffprobe.run(
             [
-                str(self.paths.ffprobe),
                 "-v",
                 "error",
                 "-show_streams",
@@ -40,12 +40,7 @@ class MediaProbe:
                 "json",
                 str(source),
             ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=30,
-            check=False,
         )
         if result.returncode != 0:
             raise RuntimeError(f"ffprobe failed for {source}: {result.stderr.strip()}")

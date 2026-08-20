@@ -8,7 +8,7 @@ Item {
     id: root
     objectName: "taskCenterPanel"
     readonly property bool canManageTasks:
-        workspaceController.actionCapabilities.canManageTasks
+        mediaflow.workspaceViewController.actionCapabilities.canManageTasks
     readonly property bool modalOpen: cancelAllDialog.opened
 
     AppDialog {
@@ -19,7 +19,7 @@ Item {
         modal: true
         title: qsTr("取消全部任务？")
         standardButtons: Dialog.Yes | Dialog.No
-        onAccepted: if (root.canManageTasks) taskController.cancelAllTasks()
+        onAccepted: if (root.canManageTasks) mediaflow.taskController.cancelAllTasks()
         contentItem: Text {
             width: cancelAllDialog.availableWidth
             text: qsTr("正在运行和等待中的任务都会取消；已经生成的结果不会删除。")
@@ -35,11 +35,11 @@ Item {
         Text {
             objectName: "taskActivitySummary"
             Layout.fillWidth: true
-            text: taskController.pausedTaskCount > 0
+            text: mediaflow.taskController.pausedTaskCount > 0
                 ? qsTr("进行中 %1 · 已暂停 %2")
-                    .arg(taskController.inFlightTaskCount)
-                    .arg(taskController.pausedTaskCount)
-                : qsTr("进行中 %1").arg(taskController.inFlightTaskCount)
+                    .arg(mediaflow.taskController.inFlightTaskCount)
+                    .arg(mediaflow.taskController.pausedTaskCount)
+                : qsTr("进行中 %1").arg(mediaflow.taskController.inFlightTaskCount)
             color: Theme.textMuted
             font.pixelSize: Theme.fontSizeCaption
         }
@@ -51,14 +51,14 @@ Item {
                 objectName: "pauseActiveTasksButton"
                 Layout.fillWidth: true
                 enabled: root.canManageTasks
-                    && taskController.inFlightTaskCount > 0
+                    && mediaflow.taskController.inFlightTaskCount > 0
                 text: qsTr("暂停进行中")
-                onClicked: taskController.pauseAllTasks()
+                onClicked: mediaflow.taskController.pauseAllTasks()
             }
             AppButton {
                 Layout.fillWidth: true
                 enabled: root.canManageTasks
-                    && taskController.activeTaskCount > 0
+                    && mediaflow.taskController.activeTaskCount > 0
                 danger: true
                 text: qsTr("全部取消")
                 onClicked: cancelAllDialog.open()
@@ -66,9 +66,9 @@ Item {
             AppButton {
                 Layout.fillWidth: true
                 enabled: root.canManageTasks
-                    && taskController.terminalTaskCount > 0
+                    && mediaflow.taskController.terminalTaskCount > 0
                 text: qsTr("清理已结束")
-                onClicked: taskController.clearTaskHistory()
+                onClicked: mediaflow.taskController.clearTaskHistory()
             }
         }
 
@@ -79,7 +79,7 @@ Item {
             Layout.fillHeight: true
             spacing: 8
             clip: true
-            model: taskController.tasksModel
+            model: mediaflow.taskController.tasksModel
             delegate: Panel {
                 required property string displayName
                 required property string configurationLabel
@@ -186,19 +186,19 @@ Item {
                             visible: status === "running"
                             enabled: root.canManageTasks
                             text: qsTr("暂停")
-                            onClicked: taskController.pauseTask(taskId)
+                            onClicked: mediaflow.taskController.pauseTask(taskId)
                         }
                         AppButton {
                             visible: status === "paused"
                             enabled: root.canManageTasks
                             text: qsTr("继续")
-                            onClicked: taskController.resumeTask(taskId)
+                            onClicked: mediaflow.taskController.resumeTask(taskId)
                         }
                         AppButton {
                             visible: status === "pending" || status === "running" || status === "paused"
                             enabled: root.canManageTasks
                             text: qsTr("取消")
-                            onClicked: taskController.cancelTask(taskId)
+                            onClicked: mediaflow.taskController.cancelTask(taskId)
                         }
                         AppButton {
                             objectName: "taskOpenResultButton"
@@ -206,19 +206,19 @@ Item {
                             visible: userOpenableArtifact && status === "completed"
                                 && artifacts && artifacts.length > 0
                             text: qsTr("打开结果")
-                            onClicked: taskController.openArtifact(String(artifacts[0]))
+                            onClicked: mediaflow.taskController.openArtifact(String(artifacts[0]))
                         }
                         AppButton {
                             visible: status === "failed" || status === "cancelled"
                             enabled: root.canManageTasks
                             text: qsTr("重试")
-                            onClicked: taskController.retryTask(taskId)
+                            onClicked: mediaflow.taskController.retryTask(taskId)
                         }
                         AppButton {
                             visible: status === "completed" || status === "failed" || status === "cancelled"
                             enabled: root.canManageTasks
                             text: qsTr("从列表移除")
-                            onClicked: taskController.removeTask(taskId)
+                            onClicked: mediaflow.taskController.removeTask(taskId)
                         }
                         AppButton {
                             visible: executionTrace && executionTrace.length > 0
@@ -233,7 +233,7 @@ Item {
                         AppButton {
                             visible: error.length > 0
                             text: qsTr("复制错误")
-                            onClicked: taskController.copyErrorDetails(error)
+                            onClicked: mediaflow.taskController.copyErrorDetails(error)
                         }
                         Item { Layout.fillWidth: true }
                     }

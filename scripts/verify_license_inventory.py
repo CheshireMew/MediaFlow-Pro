@@ -25,6 +25,9 @@ from scripts.run_artifacts import verification_run
 
 LOCK_FILE = ROOT / "requirements.lock"
 RUNTIME_LOCK_FILE = ROOT / "runtime.lock.json"
+RUNTIME_COMPONENT_LOCK_FILE = ROOT / "mediaflow/resources/runtime-components.lock.json"
+THIRD_PARTY_NOTICES_FILE = ROOT / "THIRD_PARTY_NOTICES.md"
+SPEAKER_DIARIZATION_SETUP_FILE = ROOT / "scripts/setup_speaker_diarization.ps1"
 PYTHON_COMPONENTS = {
     "aqtinstall": {"MIT", "MIT License"},
     "PySide6": {"LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only"},
@@ -46,6 +49,16 @@ PYTHON_COMPONENTS = {
 if platform.system() == "Windows":
     PYTHON_COMPONENTS["pywin32"] = {"PSF"}
 LOCKED_REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([^\\\s]+)")
+
+DIARIZATION_NOTICE_REQUIREMENTS = {
+    "PyTorch": ("torch==2.11.0", "BSD-3-Clause"),
+    "TorchAudio": ("torchaudio==2.11.0", "BSD-2-Clause"),
+    "pyannote.audio": ("pyannote.audio==4.0.7", "MIT"),
+    "pyannote Community-1": (
+        "pyannote/speaker-diarization-community-1",
+        "CC-BY-4.0",
+    ),
+}
 
 
 def canonical_package_name(name: str) -> str:
@@ -78,6 +91,79 @@ def package_row(name: str, lock: dict[str, str]) -> dict[str, object]:
     }
 
 
+def on_demand_runtime_rows(notices: str) -> list[dict[str, object]]:
+    document = json.loads(RUNTIME_COMPONENT_LOCK_FILE.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or document.get("schema_version") != 3:
+        raise RuntimeError("Unsupported runtime component license contract")
+    records = document.get("components")
+    if not isinstance(records, list) or not records:
+        raise RuntimeError("Runtime component license contract has no components")
+    rows: list[dict[str, object]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise RuntimeError("Runtime component license record must be an object")
+        license_value = str(record.get("license") or "")
+        distribution = str(record.get("distribution") or "")
+        bundle_allowed = record.get("bundle_allowed") is True
+        values = (
+            str(record.get("display_name") or ""),
+            str(record.get("version") or ""),
+            str(record.get("homepage") or ""),
+        )
+        documented = all(value and value in notices for value in values)
+        policy_passed = distribution in {"upstream-download-only", "redistributable"}
+        if license_value == "NOASSERTION":
+            policy_passed = (
+                policy_passed
+                and distribution == "upstream-download-only"
+                and not bundle_allowed
+                and "Do not redistribute" in str(record.get("license_notes") or "")
+            )
+        rows.append(
+            {
+                "id": str(record.get("id") or ""),
+                "version": str(record.get("version") or ""),
+                "license": license_value,
+                "distribution": distribution,
+                "bundle_allowed": bundle_allowed,
+                "documented": documented,
+                "passed": documented and policy_passed,
+            }
+        )
+    return rows
+
+
+def diarization_runtime_rows(notices: str) -> list[dict[str, object]]:
+    setup = SPEAKER_DIARIZATION_SETUP_FILE.read_text(encoding="utf-8")
+    runtime_contract = setup + (ROOT / "mediaflow/domain/settings.py").read_text(encoding="utf-8")
+    rows: list[dict[str, object]] = []
+    for name, (setup_token, license_value) in DIARIZATION_NOTICE_REQUIREMENTS.items():
+        rows.append(
+            {
+                "name": name,
+                "setup_token": setup_token,
+                "license": license_value,
+                "passed": (
+                    setup_token in runtime_contract
+                    and name in notices
+                    and license_value in notices
+                ),
+            }
+        )
+    gated_terms_documented = (
+        "accept its Hugging Face conditions" in notices
+        and "their own access token" in notices
+        and "CC-BY-4.0 attribution requirements" in notices
+    )
+    rows.append(
+        {
+            "name": "Community-1 access terms",
+            "passed": gated_terms_documented,
+        }
+    )
+    return rows
+
+
 def command_first_line(executable: Path, *arguments: str) -> str:
     result = run_cancellable(
         [str(executable), *arguments],
@@ -104,6 +190,9 @@ def main(argv: list[str] | None = None) -> int:
 def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     lock = locked_versions()
     packages = [package_row(name, lock) for name in PYTHON_COMPONENTS]
+    notices = THIRD_PARTY_NOTICES_FILE.read_text(encoding="utf-8")
+    on_demand_runtimes = on_demand_runtime_rows(notices)
+    diarization_runtimes = diarization_runtime_rows(notices)
     gpl_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     ofl_text = (ROOT / "mediaflow/resources/fonts/OFL.txt").read_text(encoding="utf-8")
     external: dict[str, object]
@@ -168,12 +257,16 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
         "gpl_text_present": "GNU GENERAL PUBLIC LICENSE" in gpl_text and "Version 3" in gpl_text,
         "font_ofl_text_present": "SIL OPEN FONT LICENSE" in ofl_text and "Version 1.1" in ofl_text,
         "python_components": packages,
+        "on_demand_runtime_components": on_demand_runtimes,
+        "on_demand_diarization_runtime": diarization_runtimes,
         "external_runtime": external,
     }
     base_passed = (
         report["gpl_text_present"]
         and report["font_ofl_text_present"]
         and all(row["passed"] for row in packages)
+        and all(row["passed"] for row in on_demand_runtimes)
+        and all(row["passed"] for row in diarization_runtimes)
     )
     runtime_passed = arguments.python_only or (
         bool(external["mlt_version_matches"])

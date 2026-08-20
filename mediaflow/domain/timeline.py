@@ -10,7 +10,7 @@ from .exports import SubtitleStyle
 from .model_base import DomainModel, new_id
 from .project import Sequence
 from .visual_effects import ClipVisualEffect
-from .web_media import WebClipState
+from .web_state import WebClipState
 
 
 def default_clip_media_kind(asset_kind: AssetKind, *, has_audio: bool) -> ClipMediaKind:

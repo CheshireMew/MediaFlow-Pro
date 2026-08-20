@@ -8,7 +8,7 @@ AppScrollView {
     objectName: "multiClipInspector"
     clip: true
     contentWidth: availableWidth
-    readonly property var summary: timelineController.selectedClipsSummary
+    readonly property var summary: mediaflow.timelineViewController.selectedClipsSummary
 
     function shown(value, fallback) {
         return value === null || value === undefined ? fallback : String(value);
@@ -85,11 +85,11 @@ AppScrollView {
             Layout.rightMargin: 18
             primary: true
             text: qsTr("应用到全部所选片段")
-            enabled: workspaceController.actionCapabilities.canEdit
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
                 && gain.acceptableInput && pan.acceptableInput
                 && fadeIn.acceptableInput && fadeOut.acceptableInput
                 && opacity.acceptableInput
-            onClicked: timelineController.setSelectedClipsProperties(
+            onClicked: mediaflow.timelineClipController.setSelectedClipsProperties(
                 Number(gain.text), Number(pan.text), Number(fadeIn.text),
                 Number(fadeOut.text), Number(opacity.text))
         }
@@ -100,15 +100,15 @@ AppScrollView {
             AppButton {
                 Layout.fillWidth: true
                 text: qsTr("创建复合片段")
-                enabled: timelineController.canCreateCompoundClip
-                onClicked: timelineController.createCompoundClip()
+                enabled: mediaflow.timelineViewController.canCreateCompoundClip
+                onClicked: mediaflow.timelineStructureController.createCompoundClip()
             }
             AppButton {
                 Layout.fillWidth: true
                 danger: true
                 text: qsTr("删除所选")
-                enabled: workspaceController.actionCapabilities.canEdit
-                onClicked: timelineController.deleteSelectedClips(false)
+                enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                onClicked: mediaflow.timelineClipController.deleteSelectedClips(false)
             }
         }
         Item { Layout.fillHeight: true; Layout.minimumHeight: 12 }

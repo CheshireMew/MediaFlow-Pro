@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +22,14 @@ from mediaflow.domain.storage_names import (
 
 from .ffmpeg_runner import FfmpegRunner
 from .output_reservation import output_set_transaction
+from .proxy_encoding import build_proxy_command
 from .runtime_paths import RuntimePaths
+from .storage_budget import (
+    estimate_proxy_peak_bytes,
+    finalize_storage_receipt,
+    require_project_artifact_budget,
+    start_storage_receipt,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +45,7 @@ class PreparedProxyGeneration:
     proxy_path: Path
     sdr_preview_proxy_path: Path | None
     replaced_outputs: tuple[tuple[Path, Path], ...]
+    storage_receipt_path: Path
 
 
 class ProxyService:
@@ -79,7 +87,56 @@ class ProxyService:
         progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> PreparedProxyGeneration:
-        source = self.repository.catalog.resolve_asset_path(asset)
+        source = require_windows_interop_path(
+            self.repository.assets.resolve_asset_path(asset)
+        )
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        output_dir = self.repository.project_dir / "proxies"
+        duration_seconds = asset.metadata.duration_frames / profile.fps
+        expected_peak = estimate_proxy_peak_bytes(
+            duration_seconds,
+            output_count=(2 if profile.color_mode == ColorMode.HDR10_BT2020_PQ else 1),
+        )
+        preflight = require_project_artifact_budget(
+            self.repository.project_dir,
+            output_dir,
+            expected_new_bytes=expected_peak,
+            label=f"MediaFlow proxy for {asset.name}",
+        )
+        receipt = start_storage_receipt(
+            self.paths.runtime_dir,
+            producer="project-proxy",
+            operation_id=f"{uuid.uuid4().hex}:{asset.id}",
+            owned_root=output_dir,
+            preflight=preflight,
+        )
+        try:
+            return self._prepare_outputs(
+                asset,
+                profile,
+                storage_receipt_path=receipt,
+                progress=progress,
+                check_cancelled=check_cancelled,
+            )
+        except BaseException as error:
+            finalize_storage_receipt(
+                receipt,
+                status=("interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed"),
+                error=str(error),
+            )
+            raise
+
+    def _prepare_outputs(
+        self,
+        asset: Asset,
+        profile: ProjectProfile,
+        *,
+        storage_receipt_path: Path,
+        progress: Callable[[OperationProgress], None] | None = None,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> PreparedProxyGeneration:
+        source = self.repository.assets.resolve_asset_path(asset)
         if not source.is_file():
             raise FileNotFoundError(source)
         source = require_windows_interop_path(source)
@@ -122,148 +179,37 @@ class ProxyService:
                 if sdr_preview_output is not None
                 else None
             )
-            fps = f"{profile.fps_numerator}/{profile.fps_denominator}"
-            gop = max(1, math.ceil(profile.fps))
-            scale = "scale='if(gt(iw,ih),-2,540)':'if(gt(iw,ih),540,-2)'"
-            source_hdr = asset.metadata.color_primaries == "bt2020" and asset.metadata.color_transfer in {
-                "smpte2084",
-                "arib-std-b67",
-            }
-            if profile.color_mode == ColorMode.HDR10_BT2020_PQ and not source_hdr:
-                color = (
-                    "zscale=pin=bt709:tin=bt709:min=bt709:p=bt2020:"
-                    "t=smpte2084:m=bt2020nc:r=tv:npl=203:"
-                    "d=error_diffusion"
-                )
-            elif profile.color_mode == ColorMode.SDR_BT709 and source_hdr:
-                color = (
-                    "zscale=t=linear:npl=100,format=gbrpf32le,"
-                    "tonemap=tonemap=mobius:param=0.3:desat=2:peak=10,"
-                    "zscale=p=bt709:t=bt709:m=bt709:r=tv:"
-                    "d=error_diffusion"
-                )
-            else:
-                color = ""
-            filters = ",".join(item for item in (color, scale, f"fps={fps}") if item)
-            command = [
-                "-n",
-                "-v",
-                "error",
-                "-i",
-                str(source),
-                "-vf",
-                filters,
-            ]
-            if profile.color_mode == ColorMode.HDR10_BT2020_PQ:
-                command.extend(
-                    [
-                        "-c:v",
-                        "libx265",
-                        "-profile:v",
-                        "main10",
-                        "-pix_fmt",
-                        "yuv420p10le",
-                        "-color_primaries",
-                        "bt2020",
-                        "-color_trc",
-                        "smpte2084",
-                        "-colorspace",
-                        "bt2020nc",
-                        "-crf",
-                        "25",
-                    ]
-                )
-            else:
-                command.extend(
-                    [
-                        "-c:v",
-                        "libx264",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-crf",
-                        "24",
-                    ]
-                )
-            command.extend(
-                [
-                    "-preset",
-                    "veryfast",
-                    "-g",
-                    str(gop),
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "128k",
-                    str(temporary_output),
-                ]
-            )
             duration_seconds = asset.metadata.duration_frames / profile.fps
-            result = self._encode(
-                command,
+            self._encode_proxy_output(
+                build_proxy_command(
+                    source,
+                    temporary_output,
+                    asset,
+                    profile,
+                ),
+                temporary_output,
                 message_code="proxy_encoding",
+                failure_label="Proxy",
                 duration_seconds=duration_seconds,
                 progress=progress,
                 check_cancelled=check_cancelled,
             )
-            if (
-                result.returncode != 0
-                or not temporary_output.is_file()
-                or temporary_output.stat().st_size == 0
-            ):
-                raise RuntimeError(f"Proxy generation failed: {result.stderr.strip()}")
             if temporary_sdr_output is not None:
-                sdr_color = (
-                    "zscale=t=linear:npl=100,format=gbrpf32le,"
-                    "tonemap=tonemap=mobius:param=0.3:desat=2:peak=10,"
-                    "zscale=p=bt709:t=bt709:m=bt709:r=tv:d=error_diffusion"
-                    if source_hdr
-                    else ""
-                )
-                sdr_filters = ",".join(item for item in (sdr_color, scale, f"fps={fps}") if item)
-                sdr_result = self._encode(
-                    [
-                        "-n",
-                        "-v",
-                        "error",
-                        "-i",
-                        str(source),
-                        "-vf",
-                        sdr_filters,
-                        "-c:v",
-                        "libx264",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-color_primaries",
-                        "bt709",
-                        "-color_trc",
-                        "bt709",
-                        "-colorspace",
-                        "bt709",
-                        "-x264-params",
-                        "colorprim=bt709:transfer=bt709:colormatrix=bt709",
-                        "-crf",
-                        "24",
-                        "-preset",
-                        "veryfast",
-                        "-g",
-                        str(gop),
-                        "-c:a",
-                        "aac",
-                        "-b:a",
-                        "128k",
-                        str(temporary_sdr_output),
-                    ],
+                self._encode_proxy_output(
+                    build_proxy_command(
+                        source,
+                        temporary_sdr_output,
+                        asset,
+                        profile,
+                        force_sdr=True,
+                    ),
+                    temporary_sdr_output,
                     message_code="proxy_sdr_encoding",
+                    failure_label="SDR preview proxy",
                     duration_seconds=duration_seconds,
                     progress=progress,
                     check_cancelled=check_cancelled,
                 )
-                if (
-                    sdr_result.returncode != 0
-                    or not temporary_sdr_output.is_file()
-                    or temporary_sdr_output.stat().st_size == 0
-                ):
-                    raise RuntimeError(f"SDR preview proxy generation failed: {sdr_result.stderr.strip()}")
             if progress:
                 progress(OperationProgress.indeterminate("proxy_registering"))
             if check_cancelled:
@@ -280,11 +226,12 @@ class ProxyService:
                 replaced_outputs=tuple(
                     publication.replaced_output_archives.items()
                 ),
+                storage_receipt_path=storage_receipt_path,
             )
 
     def commit_prepared(self, prepared: PreparedProxyGeneration) -> Asset:
         try:
-            return self.repository.catalog.set_asset_proxy_paths(
+            result = self.repository.assets.set_asset_proxy_paths(
                 prepared.asset_id,
                 expected_fingerprint=prepared.expected_fingerprint,
                 proxy_path=prepared.proxy_path,
@@ -293,6 +240,17 @@ class ProxyService:
         except BaseException as error:
             self._rollback_prepared(prepared, error)
             raise
+        outputs = (prepared.proxy_path,) + (
+            (prepared.sdr_preview_proxy_path,)
+            if prepared.sdr_preview_proxy_path is not None
+            else ()
+        )
+        finalize_storage_receipt(
+            prepared.storage_receipt_path,
+            status="passed",
+            outputs=outputs,
+        )
+        return result
 
     def generate(
         self,
@@ -316,6 +274,7 @@ class ProxyService:
         prepared: PreparedProxyGeneration,
         error: BaseException,
     ) -> None:
+        retained: list[Path] = []
         destinations = (
             prepared.proxy_path,
             *(
@@ -336,6 +295,7 @@ class ProxyService:
             try:
                 failed.parent.mkdir(parents=True, exist_ok=True)
                 destination.replace(failed)
+                retained.append(failed)
             except OSError as archive_error:
                 error.add_note(
                     f"未登记代理文件无法移入失败归档：{archive_error}"
@@ -350,6 +310,12 @@ class ProxyService:
                 error.add_note(
                     f"代理登记失败后无法恢复原文件 {destination}：{restore_error}"
                 )
+        finalize_storage_receipt(
+            prepared.storage_receipt_path,
+            status="failed",
+            outputs=tuple(retained),
+            error=str(error),
+        )
 
     @staticmethod
     def _cache_key(asset: Asset, source: Path, profile: ProjectProfile) -> str:
@@ -366,6 +332,29 @@ class ProxyService:
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _encode_proxy_output(
+        self,
+        command: list[str],
+        output: Path,
+        *,
+        message_code: str,
+        failure_label: str,
+        duration_seconds: float,
+        progress: Callable[[OperationProgress], None] | None,
+        check_cancelled: Callable[[], None] | None,
+    ) -> None:
+        result = self._encode(
+            command,
+            message_code=message_code,
+            duration_seconds=duration_seconds,
+            progress=progress,
+            check_cancelled=check_cancelled,
+        )
+        if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
+            raise RuntimeError(
+                f"{failure_label} generation failed: {result.stderr.strip()}"
+            )
 
     def _encode(
         self,

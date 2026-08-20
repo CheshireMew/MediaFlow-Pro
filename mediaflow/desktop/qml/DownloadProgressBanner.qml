@@ -7,7 +7,7 @@ import "components"
 Rectangle {
     id: root
     objectName: "downloadProgressBanner"
-    visible: taskController.downloadProgressVisible
+    visible: mediaflow.taskController.downloadProgressVisible
     color: Theme.surfaceFloating
     radius: Theme.radius
     border.width: 1
@@ -41,17 +41,17 @@ Rectangle {
                 Layout.fillWidth: true
                 Text {
                     Layout.fillWidth: true
-                    text: taskController.activeDownloadCount > 1
-                          ? qsTr("正在下载 %1 个视频").arg(taskController.activeDownloadCount)
-                          : qsTr("正在下载：%1").arg(taskController.activeDownloadTitle)
+                    text: mediaflow.taskController.activeDownloadCount > 1
+                          ? qsTr("正在下载 %1 个视频").arg(mediaflow.taskController.activeDownloadCount)
+                          : qsTr("正在下载：%1").arg(mediaflow.taskController.activeDownloadTitle)
                     color: Theme.text
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                 }
                 Text {
-                    visible: taskController.downloadProgressDeterminate
-                    text: Math.round(taskController.downloadProgress) + "%"
+                    visible: mediaflow.taskController.downloadProgressDeterminate
+                    text: Math.round(mediaflow.taskController.downloadProgress) + "%"
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                 }
@@ -62,21 +62,21 @@ Rectangle {
                 Layout.fillWidth: true
                 from: 0
                 to: 100
-                indeterminate: !taskController.downloadProgressDeterminate
-                value: taskController.downloadProgress
+                indeterminate: !mediaflow.taskController.downloadProgressDeterminate
+                value: mediaflow.taskController.downloadProgress
             }
         }
         AppButton {
             text: qsTr("任务详情")
             compact: true
-            onClicked: taskController.openTaskCenter()
+            onClicked: mediaflow.taskController.openTaskCenter()
         }
         AppButton {
             text: qsTr("取消下载")
             compact: true
             danger: true
-            enabled: workspaceController.actionCapabilities.canManageWorkflow
-            onClicked: workspaceController.cancelWorkflow(workspaceController.workflowRunId)
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canManageWorkflow
+            onClicked: mediaflow.workspaceWorkflowController.cancelWorkflow(mediaflow.workspaceViewController.workflowRunId)
         }
     }
 }

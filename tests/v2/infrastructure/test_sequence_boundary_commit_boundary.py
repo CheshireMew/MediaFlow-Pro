@@ -52,8 +52,8 @@ def _runtime_paths(tmp_path: Path) -> RuntimePaths:
 
 def _create_timeline(repository: ProjectRepository, source: Path) -> TimelineState:
     source.write_bytes(b"deterministic boundary commit fixture")
-    asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-    repository.catalog.update_asset(
+    asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+    repository.assets.update_asset(
         asset.model_copy(
             update={
                 "metadata": MediaMetadata(
@@ -67,7 +67,7 @@ def _create_timeline(repository: ProjectRepository, source: Path) -> TimelineSta
             }
         )
     )
-    sequence_id = repository.catalog.get_project().main_sequence_id
+    sequence_id = repository.projects.get_project().main_sequence_id
     editor = TimelineEditor(repository, sequence_id)
     video_track = editor.add_track(TrackKind.VIDEO)
     editor.add_clip(

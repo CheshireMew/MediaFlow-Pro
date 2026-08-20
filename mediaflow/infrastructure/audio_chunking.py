@@ -10,8 +10,8 @@ from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.storage_names import require_windows_interop_path
 from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
+from mediaflow.infrastructure.ffprobe_runner import FfprobeRunner
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable
 
 
 class AudioPreparationService:
@@ -21,6 +21,7 @@ class AudioPreparationService:
     def __init__(self, paths: RuntimePaths):
         self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
+        self.ffprobe = FfprobeRunner(self.paths.ffprobe)
 
     def prepare_for_asr(
         self,
@@ -109,9 +110,8 @@ class AudioPreparationService:
             raise
 
     def _probe_audio(self, source: Path) -> tuple[int, float]:
-        result = run_cancellable(
+        result = self.ffprobe.run(
             [
-                str(self.paths.ffprobe),
                 "-v",
                 "error",
                 "-select_streams",
@@ -122,9 +122,6 @@ class AudioPreparationService:
                 "json",
                 str(source),
             ],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
         )
         if result.returncode != 0:
             raise RuntimeError(str(result.stderr or "无法读取音频流").strip())
@@ -238,14 +235,14 @@ class AudioChunkingService:
     def __init__(self, paths: RuntimePaths):
         self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
+        self.ffprobe = FfprobeRunner(self.paths.ffprobe)
 
     def duration_seconds(self, media_path: str | Path) -> float:
         source = require_windows_interop_path(
             Path(media_path).resolve(strict=True)
         )
-        result = run_cancellable(
+        result = self.ffprobe.run(
             [
-                str(self.paths.ffprobe),
                 "-v",
                 "error",
                 "-show_entries",
@@ -254,9 +251,6 @@ class AudioChunkingService:
                 "json",
                 str(source),
             ],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
         )
         if result.returncode != 0:
             raise RuntimeError(str(result.stderr or "无法读取媒体时长").strip())

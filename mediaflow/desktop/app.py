@@ -32,7 +32,7 @@ from mediaflow.infrastructure.settings_repository import (
     DesktopSettingsRepository,
     SettingsLoadResult,
 )
-from mediaflow.service.desktop_proxy import (
+from mediaflow.service.desktop_application_proxy import (
     DesktopEditorApplication,
     create_desktop_editor_application,
 )
@@ -90,17 +90,14 @@ def create_engine(
     engine.warnings.connect(lambda warnings: qml_errors.extend(item.toString() for item in warnings))
     api = application or create_desktop_editor_application()
     if api.native_qml_root is None:
-        raise RuntimeError(
-            f"{PRODUCT_NAME} native preview is not built. "
-            "Run scripts/build_native.ps1 first."
-        )
+        raise RuntimeError(f"{PRODUCT_NAME} native preview is not built. Run scripts/build_native.ps1 first.")
     engine.addImportPath(str(api.native_qml_root))
     controllers = EditorControllers(engine, application=api)
     engine.rootContext().setContextProperty(
         "applicationMonospaceFontFamily",
         _monospace_font_family(),
     )
-    language = controllers.session.desktop_settings.ui.language
+    language = controllers.session.state.desktop_settings.ui.language
     if language != "zh_CN":
         translation = QTranslator(app)
         translation_path = (
@@ -110,8 +107,7 @@ def create_engine(
             raise RuntimeError(f"Failed to load interface translation: {translation_path}")
         app.installTranslator(translation)
         app.setProperty("mediaflowTranslator", translation)
-    for name, controller in controllers.context_properties().items():
-        engine.rootContext().setContextProperty(name, controller)
+    engine.rootContext().setContextProperty("mediaflow", controllers)
     qml_path = Path(__file__).resolve().parent / "qml" / "Main.qml"
     with _qml_dll_search_path():
         engine.load(QUrl.fromLocalFile(str(qml_path)))
@@ -211,11 +207,7 @@ def startup_settings_path() -> Path | None:
     if configured_settings:
         return Path(configured_settings).expanduser().resolve()
     selected_runtime = configured_runtime_directory() or _saved_runtime_directory()
-    return (
-        (selected_runtime / "desktop-settings.json").resolve()
-        if selected_runtime is not None
-        else None
-    )
+    return (selected_runtime / "desktop-settings.json").resolve() if selected_runtime is not None else None
 
 
 def load_startup_settings(settings_path: Path | None) -> SettingsLoadResult:
@@ -230,7 +222,7 @@ def configure_startup_surface(
     if not isinstance(settings, SettingsLoadResult):
         load_startup_settings(settings)
     surface_format = QSurfaceFormat.defaultFormat()
-    surface_format.setColorSpace(QColorSpace(QColorSpace.SRgbLinear))
+    surface_format.setColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgbLinear))
     QSurfaceFormat.setDefaultFormat(surface_format)
     return True
 
@@ -309,7 +301,7 @@ def main() -> int:
         publish_startup_ready(engine)
         app.aboutToQuit.connect(controllers.shutdown)
         if len(sys.argv) > 1:
-            controllers.workspace.openProject(QUrl.fromLocalFile(sys.argv[1]).toString())
+            controllers.workspace_project.openProject(QUrl.fromLocalFile(sys.argv[1]).toString())
         return app.exec()
     finally:
         shutdown_application_logging()

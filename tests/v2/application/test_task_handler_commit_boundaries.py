@@ -40,9 +40,17 @@ from mediaflow.domain.tasks import (
     Task,
 )
 from mediaflow.domain.timeline import ClipTransform, ClipTransformKeyframe
+from mediaflow.infrastructure.analysis_artifacts import (
+    archive_failed_visual_analysis,
+    write_download_analysis,
+)
 from mediaflow.infrastructure.media_probe import ProbeResult
 from mediaflow.infrastructure.output_reservation import output_set_transaction
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.subtitle_file_store import LocalSubtitleFileStore
+from mediaflow.infrastructure.subtitle_publication_storage import (
+    LocalSubtitlePublicationStorage,
+)
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.visual_analysis import write_visual_analysis
 
@@ -180,6 +188,18 @@ class _AnalysisRuntime:
         self.write_calls += 1
         return write_visual_analysis(path, payload)
 
+    @staticmethod
+    def write_download_analysis(path: Path, plan: DownloadPlan) -> Path:
+        return write_download_analysis(path, plan)
+
+    @staticmethod
+    def archive_failed_visual_analysis(
+        sources: tuple[Path, ...],
+        archive_root: Path,
+        task_id: str,
+    ) -> list[str]:
+        return archive_failed_visual_analysis(sources, archive_root, task_id)
+
     def analyze_download(
         self,
         _url: str,
@@ -223,7 +243,8 @@ def _subtitle_acquisition(
 ) -> SubtitleAcquisitionService:
     return SubtitleAcquisitionService(
         repository,
-        SubtitlePublicationService(repository),
+        SubtitlePublicationService(repository, LocalSubtitlePublicationStorage()),
+        LocalSubtitleFileStore(),
     )
 
 
@@ -243,9 +264,7 @@ def _fail_outermost_transaction_commit(
             with original_transaction() as connection:
                 yield connection
                 if outermost:
-                    raise RuntimeError(
-                        "injected download database commit failure"
-                    )
+                    raise RuntimeError("injected download database commit failure")
         finally:
             depth -= 1
 
@@ -279,8 +298,8 @@ def _visual_timeline(
 ):
     source = root / "visual-source.mp4"
     source.write_bytes(b"observable visual source")
-    asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-    asset = repository.catalog.update_asset(
+    asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+    asset = repository.assets.update_asset(
         asset.model_copy(
             update={
                 "metadata": MediaMetadata(
@@ -292,7 +311,7 @@ def _visual_timeline(
             }
         )
     )
-    sequence_id = repository.catalog.get_project().main_sequence_id
+    sequence_id = repository.projects.get_project().main_sequence_id
     editor = TimelineEditor(repository, sequence_id)
     track = editor.add_track(TrackKind.VIDEO)
     clip = editor.add_clip(
@@ -333,7 +352,7 @@ def test_import_cancelled_during_probe_never_registers_asset(
     service = _task_service(repository, TaskKind.IMPORT, handlers.import_asset)
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             command=ImportAssetCommand(source_path=str(source.resolve())),
         )
         assert probe_entered.wait(timeout=5)
@@ -343,7 +362,7 @@ def test_import_cancelled_during_probe_never_registers_asset(
 
         assert completed.status == TaskStatus.CANCELLED
         assert completed.artifacts == []
-        assert repository.catalog.list_assets() == []
+        assert repository.assets.list_assets() == []
         assert repository.subtitles.list_subtitle_documents() == []
     finally:
         allow_probe_return.set()
@@ -379,7 +398,7 @@ def test_import_cancelled_after_publication_completes_with_readable_asset(
     service = _task_service(repository, TaskKind.IMPORT, delayed_return)
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             command=ImportAssetCommand(source_path=str(source.resolve())),
         )
         assert published.wait(timeout=5)
@@ -389,8 +408,8 @@ def test_import_cancelled_after_publication_completes_with_readable_asset(
 
         assert completed.status == TaskStatus.COMPLETED
         assert isinstance(completed.outcome, ImportedAssetTaskOutcome)
-        asset = repository.catalog.get_asset(completed.outcome.asset_id)
-        assert repository.catalog.resolve_asset_path(asset).read_bytes() == (b"published source")
+        asset = repository.assets.get_asset(completed.outcome.asset_id)
+        assert repository.assets.resolve_asset_path(asset).read_bytes() == (b"published source")
         assert completed.artifacts[0].resolve(repository.project_dir) == (source.resolve())
     finally:
         allow_return.set()
@@ -423,7 +442,7 @@ def test_download_asset_and_subtitle_registration_rolls_back_as_one_unit(
     plan = _download_plan()
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             command=DownloadMediaCommand(
                 request=DownloadRequest(
                     entry=plan.entries[0],
@@ -435,15 +454,9 @@ def test_download_asset_and_subtitle_registration_rolls_back_as_one_unit(
 
         assert completed.status == TaskStatus.FAILED
         assert completed.artifacts == []
-        assert repository.catalog.list_assets() == []
+        assert repository.assets.list_assets() == []
         assert repository.subtitles.list_subtitle_documents() == []
-        assert not list(
-            (
-                repository.project_dir
-                / "generated"
-                / "subtitles"
-            ).rglob("*.srt")
-        )
+        assert not list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
         assert first.is_file()
         assert second.is_file()
     finally:
@@ -478,7 +491,7 @@ def test_download_database_commit_failure_withdraws_every_generated_subtitle(
     )
     plan = _download_plan()
     task = Task(
-        project_id=repository.catalog.get_project().id,
+        project_id=repository.projects.get_project().id,
         command=DownloadMediaCommand(
             request=DownloadRequest(
                 entry=plan.entries[0],
@@ -506,27 +519,15 @@ def test_download_database_commit_failure_withdraws_every_generated_subtitle(
                 for change in context.project_changes():
                     change()
 
-        assert repository.catalog.list_assets() == []
+        assert repository.assets.list_assets() == []
         assert repository.subtitles.list_subtitle_documents() == []
-        assert not list(
-            (
-                repository.project_dir
-                / "generated"
-                / "subtitles"
-            ).rglob("*.srt")
-        )
-        archived = list(
-            (
-                repository.project_dir
-                / "archive"
-                / "subtitle-publications"
-            ).rglob("*.srt")
-        )
+        assert not list((repository.project_dir / "generated" / "subtitles").rglob("*.srt"))
+        archived = list((repository.project_dir / "archive" / "subtitle-publications").rglob("*.srt"))
         assert len(archived) == 2
-        assert {
-            path.read_text(encoding="utf-8-sig").strip().splitlines()[-1]
-            for path in archived
-        } == {"First", "Second"}
+        assert {path.read_text(encoding="utf-8-sig").strip().splitlines()[-1] for path in archived} == {
+            "First",
+            "Second",
+        }
     finally:
         repository.close()
 
@@ -553,6 +554,7 @@ def test_visual_analysis_cancelled_at_saving_publishes_no_file_or_timeline_edit(
         repository,
         runtime,
         lambda: ServiceSettings(),
+        lambda value: TimelineEditor(repository, value),
     )
     service = _task_service(repository, TaskKind.ANALYZE, handler.handle)
     cancellation_requested = threading.Event()
@@ -579,7 +581,7 @@ def test_visual_analysis_cancelled_at_saving_publishes_no_file_or_timeline_edit(
     )
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             sequence_id=sequence_id,
             command=command,
             input_asset_ids=[asset.id],
@@ -618,6 +620,7 @@ def test_visual_analysis_timeline_failure_rolls_back_db_and_archives_json(
         repository,
         runtime,
         lambda: ServiceSettings(),
+        lambda value: TimelineEditor(repository, value),
     )
     original = TimelineEditor.replace_scene_markers
 
@@ -633,7 +636,7 @@ def test_visual_analysis_timeline_failure_rolls_back_db_and_archives_json(
     service = _task_service(repository, TaskKind.ANALYZE, handler.handle)
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             sequence_id=sequence_id,
             command=AnalyzeScenesCommand(
                 sequence_id=sequence_id,
@@ -672,6 +675,7 @@ def test_visual_analysis_cancelled_after_publication_completes_and_is_consumable
         repository,
         runtime,
         lambda: ServiceSettings(),
+        lambda value: TimelineEditor(repository, value),
     )
     published = threading.Event()
     allow_return = threading.Event()
@@ -685,7 +689,7 @@ def test_visual_analysis_cancelled_after_publication_completes_and_is_consumable
     service = _task_service(repository, TaskKind.ANALYZE, delayed_return)
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             sequence_id=sequence_id,
             command=AnalyzeScenesCommand(
                 sequence_id=sequence_id,
@@ -728,11 +732,12 @@ def test_download_analysis_cancellation_reaches_runtime_before_artifact_write(
         repository,
         runtime,
         lambda: ServiceSettings(),
+        lambda value: TimelineEditor(repository, value),
     )
     service = _task_service(repository, TaskKind.ANALYZE, handler.handle)
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             command=AnalyzeDownloadCommand(
                 url="https://example.invalid/video",
             ),
@@ -765,6 +770,7 @@ def test_download_analysis_cancelled_after_write_completes_with_persisted_outcom
         repository,
         _AnalysisRuntime(download_plan=plan),
         lambda: ServiceSettings(),
+        lambda value: TimelineEditor(repository, value),
     )
     published = threading.Event()
     allow_return = threading.Event()
@@ -778,7 +784,7 @@ def test_download_analysis_cancelled_after_write_completes_with_persisted_outcom
     service = _task_service(repository, TaskKind.ANALYZE, delayed_return)
     try:
         started = service.start(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             command=AnalyzeDownloadCommand(url=plan.source_url),
         )
         assert published.wait(timeout=5)

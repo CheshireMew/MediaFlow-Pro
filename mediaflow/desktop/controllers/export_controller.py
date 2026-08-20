@@ -4,38 +4,32 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, Signal, Slot
 
-from mediaflow.application.export_catalog import default_export_preset
-from mediaflow.desktop.presentation_catalogs import (
+from mediaflow.desktop.editor_planning import (
+    export_preset_for_options,
+    next_default_export_output,
+)
+from mediaflow.desktop.presentation_export import (
     encoder_label,
     export_format_options,
     no_subtitle_burn_label,
-    system_name,
 )
+from mediaflow.desktop.presentation_messages import system_name
 from mediaflow.domain.enums import (
     ColorMode,
-    ExportFormat,
     TrackKind,
     WorkflowStage,
 )
-from mediaflow.domain.exports import (
-    SubtitleStyle,
-    VideoEncoderPolicy,
-    WatermarkOverlay,
-)
-from mediaflow.domain.storage_names import (
-    OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
-    export_quality_directory,
-    safe_child_path,
-)
+from mediaflow.domain.storage_names import export_quality_directory
 from mediaflow.domain.task_commands import (
     ExportSequenceCommand,
     WorkflowTaskLink,
 )
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import ExportControllerScope
 
 
-class ExportController(ControllerFacet):
+class ExportController(ControllerFacet[ExportControllerScope]):
     projectStateChanged = Signal()
     tasksChanged = Signal()
     settingsChanged = Signal()
@@ -43,11 +37,11 @@ class ExportController(ControllerFacet):
     exportCapabilityChanged = Signal()
     errorOccurred = Signal(str)
 
-    @Property("QVariantList", constant=True)
+    @Property(list, constant=True)
     def subtitleFontOptions(self) -> list[dict]:
         return self._session._api.subtitle_font_options()
 
-    @Property("QVariantList", notify=settingsChanged)
+    @Property(list, notify=settingsChanged)
     def encoderPolicyOptions(self) -> list[dict]:
         return [
             {
@@ -55,44 +49,46 @@ class ExportController(ControllerFacet):
                 "label": encoder_label(item["labelKey"]),
                 "available": True,
             }
-            for item in self._session.presentation.encoder_policy_options
+            for item in self._session.state.presentation.encoder_policy_options
         ]
 
-    @Property("QVariantList", notify=projectStateChanged)
+    @Property(list, notify=projectStateChanged)
     def exportFormatOptions(self) -> list[dict]:
         color_mode = (
-            self._session.binding.timeline.state.sequence.profile.color_mode
-            if self._session.binding.timeline
+            self._session.state.binding.require_timeline().state.sequence.profile.color_mode
+            if self._session.state.binding.timeline
             else ColorMode.SDR_BT709
         )
         return export_format_options(color_mode)
 
-    @Property("QVariantList", notify=projectStateChanged)
+    @Property(list, notify=projectStateChanged)
     def subtitleTrackOptions(self) -> list[dict]:
         values = [{"label": no_subtitle_burn_label(), "value": ""}]
-        if not self._session.binding.timeline:
+        if not self._session.state.binding.timeline:
             return values
         values.extend(
             {"label": system_name(track.name), "value": track.id}
-            for track in self._session.binding.timeline.state.tracks
+            for track in self._session.state.binding.require_timeline().state.tracks
             if track.kind == TrackKind.SUBTITLE and track.enabled
         )
         return values
 
-    @Property("QVariantMap", notify=projectStateChanged)
+    @Property(dict, notify=projectStateChanged)
     def exportPresetData(self) -> dict:
-        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+        if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
             return {}
-        preset = self._session.binding.current.get_sequence(
-            self._session.binding.active_sequence_id
-        ).export_preset
+        preset = (
+            self._session.state.binding.require_current()
+            .get_sequence(self._session.state.binding.active_sequence_id)
+            .export_preset
+        )
         return preset.model_dump(mode="json") if preset else {}
 
     @Property(str, notify=projectStateChanged)
     def defaultExportDirectory(self) -> str:
         return (
-            str(self._session.binding.current.project_dir / "exports")
-            if self._session.binding.current
+            str(self._session.state.binding.require_current().project_dir / "exports")
+            if self._session.state.binding.current
             else ""
         )
 
@@ -100,13 +96,13 @@ class ExportController(ControllerFacet):
     def canExportSequence(self) -> bool:
         return self._session._active_sequence_has_renderable_content()
 
-    @Property("QVariantList", notify=tasksChanged)
+    @Property(list, notify=tasksChanged)
     def exportHistory(self) -> list[dict]:
-        if not self._session.binding.current or not self._session.binding.active_sequence_id:
+        if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
             return []
         values: list[dict] = []
-        for record in self._session.binding.current.list_export_history(
-            self._session.binding.active_sequence_id
+        for record in self._session.state.binding.require_current().list_export_history(
+            self._session.state.binding.active_sequence_id
         ):
             warnings = sum(check.status == "warning" for check in record.quality.checks)
             failures = sum(check.status == "failed" for check in record.quality.checks)
@@ -131,7 +127,7 @@ class ExportController(ControllerFacet):
                     "proofFrames": list(record.quality.proof_frames),
                     "reportPath": str(
                         export_quality_directory(
-                            self._session.binding.current.project_dir,
+                            self._session.state.binding.require_current().project_dir,
                             record.id,
                         )
                         / "report.json"
@@ -147,8 +143,8 @@ class ExportController(ControllerFacet):
     @report_ui_errors
     def exportFcpxml(self, path_url: str) -> None:
         self._session._require_exportable_sequence()
-        output = self._session.binding.current.export_fcpxml(
-            self._session.binding.active_sequence_id,
+        output = self._session.state.binding.require_current().export_fcpxml(
+            self._session.state.binding.active_sequence_id,
             self._session._local_path(path_url),
             overwrite=True,
         )
@@ -163,40 +159,13 @@ class ExportController(ControllerFacet):
         options: dict,
     ) -> None:
         self._session._require_exportable_sequence()
-        output = self._next_default_output(suffix)
+        output = next_default_export_output(self._session, suffix)
         self._export_sequence_with_options(
             format_name,
             str(output),
             options,
             overwrite=False,
         )
-
-    def _next_default_output(self, suffix: str) -> Path:
-        sequence = self._session.binding.current.get_sequence(
-            self._session.binding.active_sequence_id
-        )
-        extension = "".join(character for character in suffix if character.isalnum()).lower()
-        if not extension:
-            raise ValueError("导出格式缺少有效的文件扩展名")
-        directory = Path(self.defaultExportDirectory)
-        reserved_outputs = {
-            Path(task.command.output_path).resolve()
-            for task in self._session.task_state.items.values()
-            if isinstance(task.command, ExportSequenceCommand) and not task.status.is_terminal
-        }
-        sequence_number = 1
-        while True:
-            numbered_suffix = "" if sequence_number == 1 else f" ({sequence_number})"
-            output = safe_child_path(
-                directory,
-                sequence.name,
-                suffix=f"{numbered_suffix}.{extension}",
-                required_sibling_component_utf16_units=(OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS),
-            )
-            if not output.exists() and output.resolve() not in reserved_outputs:
-                break
-            sequence_number += 1
-        return output
 
     @Slot(str, str, "QVariantMap")
     @report_ui_errors
@@ -223,16 +192,16 @@ class ExportController(ControllerFacet):
         overwrite: bool,
     ) -> None:
         output = self._session._local_path(path_url)
-        preset = self._preset_for_options(format_name, options)
+        preset = export_preset_for_options(self._session, format_name, options)
         if preset.burn_subtitle_track_id and preset.subtitle_style is not None:
-            self._session.binding.timeline.set_subtitle_track_style(
+            self._session.state.binding.require_timeline().set_subtitle_track_style(
                 preset.burn_subtitle_track_id,
                 preset.subtitle_style,
             )
-        self._session.binding.current.save_sequence_export_preset(
-            self._session.binding.active_sequence_id, preset
+        self._session.state.binding.require_current().save_sequence_export_preset(
+            self._session.state.binding.active_sequence_id, preset
         )
-        self._session.events.projectStateChanged.emit()
+        self._session.updates.commit(project=True)
         workflow = self._session.tasks.active_workflow()
         workflow_link = (
             WorkflowTaskLink(run_id=workflow.id, stage=workflow.stage)
@@ -242,54 +211,14 @@ class ExportController(ControllerFacet):
         task = self._session.tasks.start(
             ExportSequenceCommand(
                 output_path=str(output),
-                sequence_id=self._session.binding.active_sequence_id,
+                sequence_id=self._session.state.binding.active_sequence_id,
                 format=preset.format,
                 preset=preset,
                 overwrite=overwrite,
                 workflow=workflow_link,
             ),
-            sequence_id=self._session.binding.active_sequence_id,
+            sequence_id=self._session.state.binding.active_sequence_id,
         )
         if task and workflow_link:
-            self._session.binding.current.attach_export_task(workflow.id, task.id)
-            self._session.events.workflowChanged.emit()
-
-    def _preset_for_options(self, format_name: str, options: dict):
-        export_format = ExportFormat(format_name)
-        state = self._session.binding.timeline.state
-        preset = default_export_preset(
-            export_format,
-            state.sequence.profile.color_mode,
-            state.sequence.profile.fps,
-        )
-        updates: dict = {}
-        field_map = {
-            "container": "container",
-            "audioCodec": "audio_codec",
-            "pixelFormat": "pixel_format",
-            "qualityValue": "quality_value",
-            "preset": "preset",
-            "gopFrames": "gop_frames",
-            "audioBitrate": "audio_bitrate",
-            "burnSubtitleTrackId": "burn_subtitle_track_id",
-        }
-        for source_name, target_name in field_map.items():
-            value = options.get(source_name)
-            if value in {"", None}:
-                continue
-            updates[target_name] = value
-        if export_format != ExportFormat.AUDIO and isinstance(
-            options.get("encoderPolicy"),
-            dict,
-        ):
-            policy = VideoEncoderPolicy.model_validate(options["encoderPolicy"])
-            updates["encoder_policy"] = policy
-        if isinstance(options.get("advanced"), dict):
-            updates["advanced"] = options["advanced"]
-        if isinstance(options.get("subtitleStyle"), dict):
-            updates["subtitle_style"] = SubtitleStyle.model_validate(options["subtitleStyle"])
-        if isinstance(options.get("watermark"), dict):
-            updates["watermark"] = WatermarkOverlay.model_validate(options["watermark"])
-        return type(preset).model_validate(
-            {**preset.model_dump(mode="python"), **updates}
-        )
+            self._session.state.binding.require_current().attach_export_task(workflow.id, task.id)
+            self._session.updates.commit(workflow=True)

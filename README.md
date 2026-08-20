@@ -46,7 +46,7 @@ MediaFlow Pro 是一套以项目为中心的本地视频创作工作站。把视
 | 把结构化网页动画和普通素材放进同一条时间线 | `editable-media` v6 导入、统一字段编辑、关键帧、换版、真实时间胶片条与可恢复的浏览器逐帧渲染 |
 | 根据转录文字做剪辑、翻译或高光处理 | 转录工作区，以及可预检、可撤销的 CLI 自动化操作 |
 | 检查成片是否符合交付要求 | 黑帧、冻结、静音、响度、时长、安全区和参考视频对照报告 |
-| 下载网络媒体后继续编辑 | yt-dlp 下载、站点信息读取、项目创建与真实进度展示 |
+| 下载网络媒体后继续编辑 | yt-dlp 视频与播放列表下载、小宇宙单集音频下载、项目创建与真实进度展示 |
 
 如果你只需要把完整 HTML 动画确定性渲染成视频，而不需要非线性编辑工程，[HyperFrames](https://github.com/heygen-com/hyperframes) 会更直接。MediaFlow Pro 面向需要原片、多轨、字幕、声音和后续修改的制作链。
 
@@ -138,12 +138,26 @@ Ubuntu / macOS：
 | 项目与素材 | 可移动项目目录、素材文件夹、代理、波形、指纹、离线检测、重新定位和版本快照 |
 | 时间线 | 多序列、多轨视频/音频/字幕、裁剪、分割、复制、波纹删除、转场、换源、变速、反向、复合片段、效果链和统一撤销/重做 |
 | 预览与画面 | 源监视器、节目监视器、画布变换、原生音频时钟、HDR/SDR 工程和 MLT 同源预览 |
-| 文字与字幕 | faster-whisper / Faster-Whisper XXL 转录、字幕编辑、翻译、术语表和基于真实词级时间的文字剪辑 |
-| 音频 | 多总线、效果链、ducking、LUFS 与 True Peak 测量 |
+| 文字与字幕 | faster-whisper / Faster-Whisper XXL 转录、字幕编辑、翻译、术语表、多人说话人识别和基于真实词级时间的文字剪辑 |
+| 音频 | 多总线、效果链、ducking、LUFS、True Peak 测量，以及按说话人克隆音色的跨语言配音 |
 | 分析与交付 | 场景切点、主体跟踪、黑帧/冻结/静音检查、参考视频逐帧对照、H.264/HEVC/AV1/ProRes、独立字幕和 FCPXML |
 | 界面与工作区 | 中文、英文、日文界面，高 DPI、键盘操作，以及标准、媒体、竖屏三套可持久化布局 |
 
 下载与按需运行组件的实际可用性取决于当前站点和本机环境。远程登录态网页不属于 `editable-media` 导入边界；网页包必须是本地、可验证、可确定性定位的目录。
+
+## 多人跨语言配音
+
+“文本与字幕 → 多人配音”可以把没有重叠讲话的英文对白转换为中文配音。把音频放入主要对白轨后，如果还没有英文字幕，可以直接在配音面板启动正式转录任务，无需切换工作区。默认流程把英文转写片段作为已经确定的语音区间，用本地 3D-Speaker CAM++ 中英双语模型提取音色并聚类，不需要 Hugging Face 账号、模型授权或访问令牌；只有多人同时说话等重叠语音场景才需要在设置中切换到 Community-1。随后按真实词级时间抽取每人 3.0–9.8 秒、音频与原文严格对应的多个参考片段；导入字幕没有词时间且必须截取长句时，会明确要求人工核对参考原文。系统保留字幕的一对一翻译关系，再用同一个 GPT-SoVITS v2Pro 服务逐句合成。界面允许修改说话人、主参考音频、参考原文、译文和人工确认状态；超长译文会先借用后续静音、再在设定上限内加速，仍然过长时保留完整语音并明确标为待复核，不会截断句尾。最终母版作为一条可更新的音频轨提交到时间线。
+
+本地音色聚类使用独立 Python 环境，避免语音模型依赖影响 MediaFlow 主环境。Windows 示例：
+
+设置页点击“安装本地模型”即可准备 3D-Speaker；开发环境也可以运行：
+
+```powershell
+.\scripts\setup_speaker_diarization.ps1
+```
+
+安装器会在 `MEDIAFLOW_RUNTIME_DIR\tools` 下创建隔离环境，固定安装 `sherpa-onnx` 和 NumPy，下载约 28 MB 的 CAM++ 模型并核对 SHA-256，不使用 C 盘。若确实需要处理多人同时讲话，可运行 `.\scripts\setup_speaker_diarization.ps1 -Backend community_1 -Device auto` 安装 Community-1 的独立 PyTorch 环境，再在设置中填写 Hugging Face 令牌。公开自动化入口为 `dubbing.prepare`、`dubbing.speaker.update`、`dubbing.reference.update`、`dubbing.utterance.update`、`dubbing.synthesize` 和 `dubbing.commit`，精确参数仍以 `mediaflow-cli describe --operation <名称>` 为准。
 
 ## `editable-media` 网页包
 
@@ -161,11 +175,15 @@ MediaFlow Pro 正式消费通用的 `editable-media` v6 本地网页包，不依
 
 `mediaflow-cli` 是常驻 Editor Service 的结构化客户端。第一次调用会按需启动服务，后续命令只发送请求；CLI 不直接打开 `project.mfp`，也不绕过项目写锁。
 
-先读取当前机器实际公开的操作、参数和能力要求：
+先读取当前机器实际公开的能力和操作摘要，再只读取本轮选中操作的精确参数与结果合同；大型字段目录也按名称读取：
 
 ```powershell
-mediaflow-cli describe
+mediaflow-cli describe --summary
+mediaflow-cli describe --operation timeline.get
+mediaflow-cli describe --catalog visual_effects
 ```
+
+无参数 `mediaflow-cli describe` 仍返回完整合同，用于诊断、归档和合同一致性检查，不作为 Agent 每轮发现能力的默认入口。摘要、单操作、字段目录和完整合同都由 Editor Service 的同一操作注册表实时生成。
 
 再通过文件或标准输入发送 `mediaflow-editor` v4 JSON 请求：
 
@@ -178,7 +196,7 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 
 导出、转录、网页字段与关键帧、网页换版、项目交接和诊断界面可以直接预览并复制同一份可执行请求，不会因为复制而启动任务或增加项目修订。`diagnostics.bundle.create` 会作为持久任务生成有大小上限且排除原始媒体与凭据的诊断 ZIP。
 
-支持 MCP 的宿主可以把 `mediaflow-mcp` 配置为 stdio server。它与桌面端和 CLI 共用同一个 Editor Service，不包含第二套编辑实现。具体工具和参数仍以 `mediaflow-cli describe` 的实时输出为准。
+支持 MCP 的宿主可以把 `mediaflow-mcp` 配置为 stdio server。它与桌面端和 CLI 共用同一个 Editor Service，不包含第二套编辑实现。具体工具和参数仍以 `mediaflow-cli describe --summary` 及选中操作的 `--operation` 实时输出为准。
 
 ## 项目与架构边界
 
@@ -197,6 +215,7 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 - QML 不直接访问数据库或启动外部程序；桌面端、CLI 和 MCP 都调用同一个 `EditorApplication` / `EditorProject` 边界。
 - 每个登录用户只有一个按需启动的本机 Editor Service，只有服务进程可以取得项目写锁。
 - `.env.example` 是机器路径变量的公开合同，源码不会根据盘符或系统安装目录猜测运行时。
+- 大型缓存和本地验证会在第一次写入前检查项目上限与磁盘安全线；运行 `python scripts/report_storage.py` 可查看真实根目录、项目归属和清理候选，报告不会删除文件。
 
 领域分层、线程模型、持久化边界和服务协议见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
@@ -211,6 +230,8 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 ```
 
 不要直接运行没有资源边界的整库 `pytest tests/v2`。本地入口和 CI 都由 [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) 统一决定范围，并把跨平台源码构建与项目交接分开；文档修改不会触发无关的桌面端或端到端验收。使用 `.\scripts\run_quality.ps1 --dry-run` 可以预览实际命令。
+
+公开界面图由 `& $env:MEDIAFLOW_PYTHON scripts\update_documentation_screenshots.py` 在隔离项目中生成。生成器会同时更新图片哈希、尺寸和 UI 源码摘要；文档校验会拒绝手工替换、暴露本机路径或已经落后于当前 QML 的截图。
 
 桌面日志保存在运行目录的 `logs/mediaflow.log`，达到 5 MiB 后轮转并保留 5 个备份。操作失败弹窗末尾的短编号会原样写入日志，反馈问题时请一并提供该编号。问题反馈使用 [GitHub Issues](https://github.com/CheshireMew/MediaFlow-Pro/issues)。
 

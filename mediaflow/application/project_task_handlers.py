@@ -10,6 +10,7 @@ from mediaflow.application.asset_task_handlers import (
     WebRenderTaskHandler,
 )
 from mediaflow.application.diagnostics_task_handler import DiagnosticsBundleTaskHandler
+from mediaflow.application.dubbing_task_handler import DubbingTaskHandler
 from mediaflow.application.export_task_handlers import ExportTaskHandlers
 from mediaflow.application.highlight_service import HighlightService
 from mediaflow.application.language_task_handlers import LanguageTaskHandlers
@@ -21,6 +22,7 @@ from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionServic
 from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
+from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcription_task_handler import (
     TranscriptionTaskHandler,
 )
@@ -44,6 +46,7 @@ class ProjectTaskHandlers:
         translations: TranslationService,
         settings: Callable[[], ServiceSettings],
         active_llm_provider: Callable[[], LlmProviderSettings],
+        timeline_provider: Callable[[str], TimelineEditor],
     ):
         self._web = WebRenderTaskHandler(documents, runtimes.web)
         self._assets = AssetTaskHandlers(
@@ -84,10 +87,20 @@ class ProjectTaskHandlers:
             documents,
             runtimes.analysis,
             settings,
+            timeline_provider,
         )
         self._diagnostics = DiagnosticsBundleTaskHandler(
             documents.project_dir,
             runtimes.diagnostics,
+        )
+        self._dubbing = DubbingTaskHandler(
+            documents,
+            assets,
+            runtimes.dubbing,
+            translations,
+            settings,
+            active_llm_provider,
+            timeline_provider,
         )
 
     def register_with(self, tasks: TaskService) -> None:
@@ -102,4 +115,5 @@ class ProjectTaskHandlers:
         tasks.register(TaskKind.HIGHLIGHT, self._language.highlight)
         tasks.register(TaskKind.WEB_RENDER, self._web.handle)
         tasks.register(TaskKind.DIAGNOSTICS, self._diagnostics.handle)
+        tasks.register(TaskKind.DUBBING, self._dubbing.handle)
         tasks.recover_claimable()

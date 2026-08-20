@@ -25,7 +25,7 @@ class MltGraph:
         if use_proxies and asset.proxy_path:
             proxy = Path(asset.proxy_path)
             return (repository.project_dir / proxy).resolve() if not proxy.is_absolute() else proxy.resolve()
-        return repository.catalog.resolve_asset_path(asset)
+        return repository.assets.resolve_asset_path(asset)
 
     @classmethod
     def append_filter(

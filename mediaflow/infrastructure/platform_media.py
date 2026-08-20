@@ -12,6 +12,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from mediaflow.domain.downloads import DownloadEntry, DownloadPlan
 
+from .xiaoyuzhou_media import XiaoyuzhouEpisodeResolver
+
 
 @dataclass(frozen=True)
 class ResolvedPlatformMedia:
@@ -29,6 +31,7 @@ class PlatformMediaResolver:
 
     def __init__(self, chromium: Path | None):
         self.chromium = chromium
+        self.xiaoyuzhou = XiaoyuzhouEpisodeResolver()
 
     def analyze(
         self,
@@ -38,6 +41,12 @@ class PlatformMediaResolver:
         check_cancelled: Callable[[], None] | None = None,
     ) -> DownloadPlan | None:
         self._checkpoint(check_cancelled)
+        if self.xiaoyuzhou.supports(url):
+            return self.xiaoyuzhou.analyze(
+                url,
+                proxy=proxy,
+                check_cancelled=check_cancelled,
+            )
         if "bilibili.com/video/" in url:
             result = self._analyze_bilibili(
                 url,

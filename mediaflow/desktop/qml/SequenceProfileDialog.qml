@@ -14,23 +14,23 @@ AppDialog {
     standardButtons: Dialog.Save | Dialog.Cancel
 
     onOpened: {
-        profileWidth.text = String(workspaceController.profileWidth);
-        profileHeight.text = String(workspaceController.profileHeight);
+        profileWidth.text = String(mediaflow.workspaceViewController.profileWidth);
+        profileHeight.text = String(mediaflow.workspaceViewController.profileHeight);
         for (var index = 0; index < frameRate.model.length; ++index) {
             var item = frameRate.model[index];
-            if (item.n === workspaceController.profileFpsNumerator
-                    && item.d === workspaceController.profileFpsDenominator) {
+            if (item.n === mediaflow.workspaceViewController.profileFpsNumerator
+                    && item.d === mediaflow.workspaceViewController.profileFpsDenominator) {
                 frameRate.currentIndex = index;
                 break;
             }
         }
         colorProfile.currentIndex =
-            workspaceController.colorMode === "hdr10_bt2020_pq" ? 1 : 0;
+            mediaflow.workspaceViewController.colorMode === "hdr10_bt2020_pq" ? 1 : 0;
         for (var channelIndex = 0;
                 channelIndex < audioChannels.model.length;
                 ++channelIndex) {
             if (audioChannels.model[channelIndex].value
-                    === workspaceController.profileAudioChannels) {
+                    === mediaflow.workspaceViewController.profileAudioChannels) {
                 audioChannels.currentIndex = channelIndex;
                 break;
             }
@@ -41,7 +41,7 @@ AppDialog {
         var fps = frameRate.model[frameRate.currentIndex];
         var color = colorProfile.model[colorProfile.currentIndex];
         var channels = audioChannels.model[audioChannels.currentIndex];
-        workspaceController.updateSequenceProfile(
+        mediaflow.workspaceSequenceController.updateSequenceProfile(
             Number(profileWidth.text),
             Number(profileHeight.text),
             fps.n,

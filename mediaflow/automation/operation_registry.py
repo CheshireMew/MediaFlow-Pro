@@ -3,12 +3,23 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from mediaflow.automation import operation_models as models
+import mediaflow.automation.operation_models as models
+from mediaflow.application.project_mutation_planning import plan_automation_project_mutation
 from mediaflow.automation.operation_context import OperationContext
+from mediaflow.domain.collaboration import ProjectMutationPlan
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.runtime_capabilities import CAPABILITY_IDS
+from mediaflow.domain.speech import (
+    SpeechSynthesisResult,
+    SpeechSynthesizeArguments,
+    SpeechTranscribeArguments,
+    SpeechTranscriptionResult,
+)
+
+if TYPE_CHECKING:
+    from mediaflow.composition import EditorProject
 
 ProjectAccess = Literal["none", "create", "read", "write"]
 ExecutionMode = Literal["atomic", "task"]
@@ -39,6 +50,7 @@ class _LazyOperationModule:
 
 
 diagnostics = _LazyOperationModule("mediaflow.automation.diagnostics_operations")
+dubbing = _LazyOperationModule("mediaflow.automation.dubbing_operations")
 language_audio = _LazyOperationModule("mediaflow.automation.language_audio_operations")
 media_quality = _LazyOperationModule("mediaflow.automation.media_quality_operations")
 project = _LazyOperationModule("mediaflow.automation.project_operations")
@@ -76,10 +88,20 @@ class OperationDefinition:
             exclude_computed_fields=True,
         )
 
-    def write_set(self, operation: str, arguments: dict[str, Any]) -> list[str]:
+    def mutation_plan(
+        self,
+        operation: str,
+        arguments: dict[str, Any],
+        project: EditorProject,
+    ) -> ProjectMutationPlan:
         if self.project_access not in {"create", "write"}:
-            return []
-        return _operation_write_set(operation, arguments)
+            return ProjectMutationPlan.scoped([])
+        return plan_automation_project_mutation(
+            operation,
+            arguments,
+            default_sequence_id=project.get_project().main_sequence_id,
+            project=project,
+        )
 
     def __post_init__(self) -> None:
         unknown = set(self.required_capabilities) - CAPABILITY_IDS
@@ -147,128 +169,6 @@ def _write(
 WEB = ("project-editing", "editable-web-media")
 
 
-def _path_value(value: Any, fallback: str = "main") -> str:
-    text = str(value or fallback)
-    return text.replace("~", "~0").replace("/", "~1")
-
-
-def _field_paths(root: str, values: Any) -> list[str]:
-    if isinstance(values, DomainModel):
-        values = values.model_dump(mode="python", exclude_unset=True)
-    if not isinstance(values, dict) or not values:
-        return [root]
-    return [f"{root}/{_path_value(name)}" for name in sorted(values)]
-
-
-def _operation_write_set(operation: str, arguments: dict[str, Any]) -> list[str]:
-    sequence = _path_value(arguments.get("sequence_id"))
-    if operation == "project.create":
-        return ["/project"]
-    if operation in {"project.upgrade", "project.version.restore"}:
-        return ["/project"]
-    if operation == "project.version.create":
-        return ["/project/versions"]
-    if operation.startswith("timeline.transition."):
-        transition_id = arguments.get("transition_id") or "new"
-        return [f"/sequences/{sequence}/transitions/{_path_value(transition_id)}"]
-    if operation.startswith("timeline.marker."):
-        marker_id = arguments.get("marker_id") or "new"
-        return [f"/sequences/{sequence}/markers/{_path_value(marker_id)}"]
-    if operation == "asset.import":
-        return ["/assets"]
-    if operation == "sequence.short.create":
-        return ["/sequences"]
-    if operation == "timeline.portable.import":
-        return [
-            "/assets",
-            f"/sequences/{sequence}",
-            f"/sequences/{sequence}/subtitles",
-        ]
-    if operation == "timeline.track.add":
-        return [f"/sequences/{sequence}/tracks"]
-    if operation == "subtitle.track.style.update":
-        return [f"/sequences/{sequence}/tracks/{_path_value(arguments.get('track_id'))}/subtitle-style"]
-    if operation in {"timeline.clip.add", "timeline.clip.batch.add", "timeline.clip.copy"}:
-        return [f"/sequences/{sequence}/clips"]
-    if operation == "timeline.clip.freeze.add":
-        return [f"/sequences/{sequence}/clips"]
-    if operation.startswith("timeline.clip."):
-        clip_ids = arguments.get("clip_ids") or [arguments.get("clip_id")]
-        roots = [f"/sequences/{sequence}/clips/{_path_value(clip_id)}" for clip_id in clip_ids if clip_id]
-        if operation in {"timeline.clip.delete", "timeline.clip.split"}:
-            return roots
-        field = {
-            "timeline.clip.move": "placement",
-            "timeline.clip.transform": "transform",
-            "timeline.clip.audio": "audio",
-            "timeline.clip.source.replace": "asset_id",
-        }.get(operation)
-        if field:
-            return [f"{root}/{field}" for root in roots]
-        if ".effect." in operation:
-            effect_id = arguments.get("effect_id")
-            suffix = f"/{_path_value(effect_id)}" if effect_id else ""
-            return [f"{root}/effects{suffix}" for root in roots]
-        return roots or [f"/sequences/{sequence}/clips"]
-    if operation == "subtitle.segment.update":
-        root = (
-            f"/subtitles/documents/{_path_value(arguments.get('document_id'))}"
-            f"/segments/{_path_value(arguments.get('segment_id'))}"
-        )
-        fields = {
-            name: value for name, value in arguments.items() if name not in {"document_id", "segment_id"}
-        }
-        return _field_paths(root, fields)
-    if operation == "transcript.edit.apply":
-        return [f"/sequences/{sequence}/transcript"]
-    if operation == "transcript.sequence.transcribe":
-        return [f"/tasks/transcript-sequence:{sequence}"]
-    if operation == "diagnostics.bundle.create":
-        return ["/tasks/diagnostics-bundle"]
-    if operation == "audio.bus.update":
-        root = f"/audio/buses/{_path_value(arguments.get('bus_id'))}"
-        return _field_paths(root, arguments.get("changes"))
-    if operation == "audio.effect.save":
-        effect = arguments.get("effect")
-        if isinstance(effect, DomainModel):
-            effect_id = effect.model_dump().get("id")
-        elif isinstance(effect, dict):
-            effect_id = effect.get("id")
-        else:
-            effect_id = None
-        return [f"/audio/effects/{_path_value(effect_id, 'new')}"]
-    if operation == "audio.effect.remove":
-        return [f"/audio/effects/{_path_value(arguments.get('effect_id'))}"]
-    if operation.startswith("task."):
-        return [f"/tasks/{_path_value(arguments.get('task_id'), 'new')}"]
-    if operation.startswith(("preview.", "export.")):
-        return [f"/tasks/{operation.replace('.', '-')}:{sequence}"]
-    if operation == "web.import":
-        return ["/assets/web"]
-    if operation.startswith("web.clip."):
-        root = f"/web/clips/{_path_value(arguments.get('clip_id'))}"
-        web_suffix = {
-            "web.clip.variant.select": "variant",
-            "web.clip.theme.update": "theme",
-            "web.clip.data.update": "data",
-            "web.clip.data.snapshot": "data",
-            "web.clip.lock.update": "locks",
-            "web.clip.parameter.lock.update": "parameter-locks",
-        }.get(operation)
-        if web_suffix:
-            return [f"{root}/{web_suffix}"]
-        if "keyframe" in operation:
-            return [f"{root}/keyframes/{_path_value(arguments.get('path'))}"]
-        if "parameter" in operation:
-            return [f"{root}/parameters/{_path_value(arguments.get('path'))}"]
-        return [root]
-    if operation.startswith("web.batch."):
-        return ["/web/batches"]
-    if operation == "web.asset.rebind.commit":
-        return [f"/assets/{_path_value(arguments.get('asset_id'))}/web-package"]
-    return [f"/operations/{operation.replace('.', '/')}"]
-
-
 OPERATIONS: dict[str, OperationDefinition] = {
     "runtime.inspect": _operation(
         models.EmptyArguments,
@@ -278,15 +178,15 @@ OPERATIONS: dict[str, OperationDefinition] = {
         capabilities=(),
     ),
     "speech.transcribe": _operation(
-        models.SpeechTranscribeArguments,
-        models.SpeechTranscriptionResult,
+        SpeechTranscribeArguments,
+        SpeechTranscriptionResult,
         "none",
         speech.transcribe,
         capabilities=("faster-whisper-xxl",),
     ),
     "speech.synthesize": _operation(
-        models.SpeechSynthesizeArguments,
-        models.SpeechSynthesisResult,
+        SpeechSynthesizeArguments,
+        SpeechSynthesisResult,
         "none",
         speech.synthesize,
         capabilities=("gpt-sovits-v2pro",),
@@ -532,6 +432,58 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.SubtitleSegmentResult,
         language_audio.update_subtitle_segment,
         reversible=True,
+    ),
+    "dubbing.session.list": _read(
+        models.DubbingListArguments,
+        models.DubbingSessionListResult,
+        dubbing.list_sessions,
+    ),
+    "dubbing.session.get": _read(
+        models.DubbingSessionArguments,
+        models.DubbingSessionResult,
+        dubbing.get_session,
+    ),
+    "dubbing.prepare": _write(
+        models.DubbingPrepareArguments,
+        models.TaskReceiptResult,
+        dubbing.prepare,
+        task_backed=True,
+        capabilities=(
+            "project-editing",
+            "speaker-diarization",
+            "mlt",
+            "ffmpeg",
+            "ffprobe",
+        ),
+    ),
+    "dubbing.synthesize": _write(
+        models.DubbingSynthesizeArguments,
+        models.TaskReceiptResult,
+        dubbing.synthesize,
+        task_backed=True,
+        capabilities=("project-editing", "gpt-sovits-v2pro", "ffmpeg"),
+    ),
+    "dubbing.commit": _write(
+        models.DubbingCommitArguments,
+        models.TaskReceiptResult,
+        dubbing.commit,
+        task_backed=True,
+        capabilities=("project-editing", "ffprobe"),
+    ),
+    "dubbing.speaker.update": _write(
+        models.DubbingSpeakerUpdateArguments,
+        models.DubbingSessionResult,
+        dubbing.update_speaker,
+    ),
+    "dubbing.reference.update": _write(
+        models.DubbingReferenceUpdateArguments,
+        models.DubbingSessionResult,
+        dubbing.update_reference,
+    ),
+    "dubbing.utterance.update": _write(
+        models.DubbingUtteranceUpdateArguments,
+        models.DubbingSessionResult,
+        dubbing.update_utterance,
     ),
     "transcript.get": _read(
         models.TranscriptGetArguments,

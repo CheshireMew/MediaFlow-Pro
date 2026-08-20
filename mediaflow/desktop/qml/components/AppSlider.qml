@@ -4,10 +4,11 @@ import ".."
 
 Slider {
     id: control
+    property bool compact: false
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
-    implicitWidth: orientation === Qt.Horizontal ? 160 : 20
-    implicitHeight: orientation === Qt.Horizontal ? 20 : 160
+    implicitWidth: orientation === Qt.Horizontal ? 160 : compact ? 16 : 20
+    implicitHeight: orientation === Qt.Horizontal ? compact ? 16 : 20 : 160
 
     background: Rectangle {
         x: control.orientation === Qt.Horizontal
@@ -16,8 +17,10 @@ Slider {
         y: control.orientation === Qt.Horizontal
             ? control.topPadding + Math.round((control.availableHeight - height) / 2)
             : control.topPadding
-        width: control.orientation === Qt.Horizontal ? control.availableWidth : 4
-        height: control.orientation === Qt.Horizontal ? 4 : control.availableHeight
+        width: control.orientation === Qt.Horizontal
+            ? control.availableWidth : control.compact ? 3 : 4
+        height: control.orientation === Qt.Horizontal
+            ? control.compact ? 3 : 4 : control.availableHeight
         radius: 2
         color: control.enabled ? Theme.progressTrack : Theme.controlDisabled
 
@@ -44,8 +47,8 @@ Slider {
             ? control.topPadding + Math.round((control.availableHeight - height) / 2)
             : control.topPadding
                 + control.visualPosition * (control.availableHeight - height)
-        implicitWidth: 16
-        implicitHeight: 16
+        implicitWidth: control.compact ? 12 : 16
+        implicitHeight: control.compact ? 12 : 16
         radius: width / 2
         color: !control.enabled
             ? Theme.textDisabled

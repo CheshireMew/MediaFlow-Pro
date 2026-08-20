@@ -16,12 +16,12 @@ AppScrollView {
         id: root
         width: editScroll.availableWidth
         spacing: 10
-        property var transitionOptions: timelineController.transitionOptions
+        property var transitionOptions: mediaflow.timelineViewController.transitionOptions
         property string loadedTransitionId: ""
-        readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+        readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
 
         function loadSelectedTransition() {
-            const transitionId = String(timelineController.selectedTransitionId || "");
+            const transitionId = String(mediaflow.timelineViewController.selectedTransitionId || "");
             if (transitionId.length === 0) {
                 loadedTransitionId = "";
                 return;
@@ -29,7 +29,7 @@ AppScrollView {
             if (transitionId === loadedTransitionId
                     && (transitionKind.activeFocus || transitionDuration.activeFocus))
                 return;
-            const data = timelineController.selectedTransitionData;
+            const data = mediaflow.timelineViewController.selectedTransitionData;
             transitionKind.currentIndex = Math.max(
                 0, transitionKind.indexOfValue(String(data.kind || "dissolve")));
             transitionDuration.value = Number(data.durationFrames || 15);
@@ -39,7 +39,7 @@ AppScrollView {
         Component.onCompleted: Qt.callLater(loadSelectedTransition)
 
         Connections {
-            target: timelineController
+            target: mediaflow.timelineViewController
             function onSelectionChanged() { root.loadSelectedTransition(); }
             function onHistoryChanged() { root.loadSelectedTransition(); }
         }
@@ -55,7 +55,7 @@ AppScrollView {
             objectName: "editCompoundClipPanel"
             Layout.fillWidth: true
             implicitHeight: compoundContent.implicitHeight + 22
-            visible: timelineController.selectedCompoundId.length > 0
+            visible: mediaflow.timelineViewController.selectedCompoundId.length > 0
             enabled: root.canEdit
             ColumnLayout {
                 id: compoundContent
@@ -66,7 +66,7 @@ AppScrollView {
                 spacing: 8
                 Text {
                     Layout.fillWidth: true
-                    text: timelineController.selectedCompoundData.name || qsTr("复合片段")
+                    text: mediaflow.timelineViewController.selectedCompoundData.name || qsTr("复合片段")
                     color: Theme.text
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.DemiBold
@@ -74,8 +74,8 @@ AppScrollView {
                 Text {
                     Layout.fillWidth: true
                     text: qsTr("包含 %1 个片段，共 %2 帧。它会作为一个整体移动和删除，预览与导出仍使用原始素材。")
-                        .arg(timelineController.selectedCompoundData.memberCount || 0)
-                        .arg(timelineController.selectedCompoundData.durationFrames || 0)
+                        .arg(mediaflow.timelineViewController.selectedCompoundData.memberCount || 0)
+                        .arg(mediaflow.timelineViewController.selectedCompoundData.durationFrames || 0)
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap
@@ -85,13 +85,13 @@ AppScrollView {
                     AppButton {
                         Layout.fillWidth: true
                         text: qsTr("解除复合")
-                        onClicked: timelineController.dissolveSelectedCompoundClip()
+                        onClicked: mediaflow.timelineStructureController.dissolveSelectedCompoundClip()
                     }
                     AppButton {
                         Layout.fillWidth: true
                         danger: true
                         text: qsTr("删除复合片段")
-                        onClicked: timelineController.deleteSelectedClips(false)
+                        onClicked: mediaflow.timelineClipController.deleteSelectedClips(false)
                     }
                 }
             }
@@ -101,7 +101,7 @@ AppScrollView {
             objectName: "editClipTimingPanel"
             Layout.fillWidth: true
             implicitHeight: timingContent.implicitHeight + 22
-            visible: timelineController.selectedClipId.length > 0 && !webController.isWebClip
+            visible: mediaflow.timelineViewController.selectedClipId.length > 0 && !mediaflow.webController.isWebClip
             enabled: root.canEdit
             ColumnLayout {
                 id: timingContent
@@ -112,7 +112,7 @@ AppScrollView {
                 spacing: 7
                 Text {
                     Layout.fillWidth: true
-                    text: timelineController.selectedClipData.assetName || qsTr("时间线片段")
+                    text: mediaflow.timelineViewController.selectedClipData.assetName || qsTr("时间线片段")
                     color: Theme.text
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.DemiBold
@@ -131,17 +131,17 @@ AppScrollView {
                         Layout.fillWidth: true
                         textRole: "label"
                         valueRole: "value"
-                        model: timelineController.selectedClipReplacementOptions
+                        model: mediaflow.timelineViewController.selectedClipReplacementOptions
                         currentIndex: Math.max(0, indexOfValue(
-                            String(timelineController.selectedClipData.assetId || "")))
+                            String(mediaflow.timelineViewController.selectedClipData.assetId || "")))
                     }
                     AppButton {
                         objectName: "replaceClipSourceButton"
                         text: qsTr("换源")
                         enabled: Boolean(replacementAsset.currentValue)
                             && String(replacementAsset.currentValue)
-                                !== String(timelineController.selectedClipData.assetId || "")
-                        onClicked: timelineController.replaceSelectedClipSource(
+                                !== String(mediaflow.timelineViewController.selectedClipData.assetId || "")
+                        onClicked: mediaflow.timelineClipController.replaceSelectedClipSource(
                             String(replacementAsset.currentValue))
                     }
                 }
@@ -149,13 +149,13 @@ AppScrollView {
                     id: sourceIn
                     Layout.fillWidth: true
                     label: qsTr("源入点")
-                    text: String(timelineController.selectedClipData.sourceIn ?? 0)
+                    text: String(mediaflow.timelineViewController.selectedClipData.sourceIn ?? 0)
                 }
                 PropertyField {
                     id: clipDuration
                     Layout.fillWidth: true
                     label: qsTr("持续帧")
-                    text: String(timelineController.selectedClipData.durationFrames ?? 1)
+                    text: String(mediaflow.timelineViewController.selectedClipData.durationFrames ?? 1)
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -163,12 +163,12 @@ AppScrollView {
                         id: speed
                         Layout.fillWidth: true
                         model: [-4, -2, -1, -0.5, -0.25, 0.25, 0.5, 1, 1.5, 2, 4]
-                        currentIndex: Math.max(0, model.indexOf(timelineController.selectedClipData.speed ?? 1))
+                        currentIndex: Math.max(0, model.indexOf(mediaflow.timelineViewController.selectedClipData.speed ?? 1))
                     }
                     AppSwitch {
                         id: pitch
                         text: qsTr("保音高")
-                        checked: timelineController.selectedClipData.pitchCompensation ?? true
+                        checked: mediaflow.timelineViewController.selectedClipData.pitchCompensation ?? true
                     }
                 }
                 RowLayout {
@@ -176,20 +176,20 @@ AppScrollView {
                     AppButton {
                         Layout.fillWidth: true
                         text: qsTr("应用裁剪")
-                        onClicked: timelineController.trimClip(timelineController.selectedClipId, Number(sourceIn.text), Number(clipDuration.text))
+                        onClicked: mediaflow.timelineClipController.trimClip(mediaflow.timelineViewController.selectedClipId, Number(sourceIn.text), Number(clipDuration.text))
                     }
                     AppButton {
                         Layout.fillWidth: true
                         text: qsTr("应用速度")
-                        onClicked: timelineController.setClipSpeed(timelineController.selectedClipId, Number(speed.currentValue), pitch.checked)
+                        onClicked: mediaflow.timelineClipController.setClipSpeed(mediaflow.timelineViewController.selectedClipId, Number(speed.currentValue), pitch.checked)
                     }
                 }
                 AppButton {
                     objectName: "detachClipAudioButton"
                     Layout.fillWidth: true
-                    visible: timelineController.selectedClipData.canDetachAudio === true
+                    visible: mediaflow.timelineViewController.selectedClipData.canDetachAudio === true
                     text: qsTr("解除视音频绑定")
-                    onClicked: timelineController.detachClipAudio(timelineController.selectedClipId)
+                    onClicked: mediaflow.timelineClipController.detachClipAudio(mediaflow.timelineViewController.selectedClipId)
                 }
             }
         }
@@ -198,7 +198,7 @@ AppScrollView {
             objectName: "editClipTransformPanel"
             Layout.fillWidth: true
             implicitHeight: transformContent.implicitHeight + 22
-            visible: timelineController.selectedClipId.length > 0 && !webController.isWebClip
+            visible: mediaflow.timelineViewController.selectedClipId.length > 0 && !mediaflow.webController.isWebClip
             enabled: root.canEdit
             ColumnLayout {
                 id: transformContent
@@ -223,38 +223,38 @@ AppScrollView {
                         objectName: "editClipPosX"
                         Layout.fillWidth: true
                         label: "X %"
-                        text: String(timelineController.selectedClipData.x ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.x ?? 0)
                     }
                     PropertyField {
                         id: posY
                         objectName: "editClipPosY"
                         Layout.fillWidth: true
                         label: "Y %"
-                        text: String(timelineController.selectedClipData.y ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.y ?? 0)
                     }
                     PropertyField {
                         id: scaleX
                         Layout.fillWidth: true
                         label: qsTr("横向缩放")
-                        text: String(timelineController.selectedClipData.scaleX ?? 1)
+                        text: String(mediaflow.timelineViewController.selectedClipData.scaleX ?? 1)
                     }
                     PropertyField {
                         id: scaleY
                         Layout.fillWidth: true
                         label: qsTr("纵向缩放")
-                        text: String(timelineController.selectedClipData.scaleY ?? 1)
+                        text: String(mediaflow.timelineViewController.selectedClipData.scaleY ?? 1)
                     }
                     PropertyField {
                         id: rotation
                         Layout.fillWidth: true
                         label: qsTr("旋转 °")
-                        text: String(timelineController.selectedClipData.rotation ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.rotation ?? 0)
                     }
                     PropertyField {
                         id: opacity
                         Layout.fillWidth: true
                         label: qsTr("透明度")
-                        text: String(timelineController.selectedClipData.opacity ?? 1)
+                        text: String(mediaflow.timelineViewController.selectedClipData.opacity ?? 1)
                     }
                 }
                 Text {
@@ -271,25 +271,25 @@ AppScrollView {
                         id: cropLeft
                         Layout.fillWidth: true
                         label: qsTr("左")
-                        text: String(timelineController.selectedClipData.cropLeft ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.cropLeft ?? 0)
                     }
                     PropertyField {
                         id: cropTop
                         Layout.fillWidth: true
                         label: qsTr("上")
-                        text: String(timelineController.selectedClipData.cropTop ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.cropTop ?? 0)
                     }
                     PropertyField {
                         id: cropRight
                         Layout.fillWidth: true
                         label: qsTr("右")
-                        text: String(timelineController.selectedClipData.cropRight ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.cropRight ?? 0)
                     }
                     PropertyField {
                         id: cropBottom
                         Layout.fillWidth: true
                         label: qsTr("下")
-                        text: String(timelineController.selectedClipData.cropBottom ?? 0)
+                        text: String(mediaflow.timelineViewController.selectedClipData.cropBottom ?? 0)
                     }
                 }
                 AppButton {
@@ -297,12 +297,12 @@ AppScrollView {
                     Layout.fillWidth: true
                     primary: true
                     text: qsTr("应用画面参数")
-                    onClicked: timelineController.setClipTransform(timelineController.selectedClipId, Number(posX.text), Number(posY.text), Number(scaleX.text), Number(scaleY.text), Number(rotation.text), Number(cropLeft.text), Number(cropTop.text), Number(cropRight.text), Number(cropBottom.text), Number(opacity.text))
+                    onClicked: mediaflow.timelineClipController.setClipTransform(mediaflow.timelineViewController.selectedClipId, Number(posX.text), Number(posY.text), Number(scaleX.text), Number(scaleY.text), Number(rotation.text), Number(cropLeft.text), Number(cropTop.text), Number(cropRight.text), Number(cropBottom.text), Number(opacity.text))
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: Number(timelineController.selectedClipData.transformKeyframeCount || 0) > 0
-                          ? qsTr("已有 %1 个画面关键帧").arg(timelineController.selectedClipData.transformKeyframeCount)
+                    text: Number(mediaflow.timelineViewController.selectedClipData.transformKeyframeCount || 0) > 0
+                          ? qsTr("已有 %1 个画面关键帧").arg(mediaflow.timelineViewController.selectedClipData.transformKeyframeCount)
                           : qsTr("可对视频分析场景、自动构图或跟踪主体")
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
@@ -314,19 +314,19 @@ AppScrollView {
                         objectName: "detectScenesButton"
                         Layout.fillWidth: true
                         text: qsTr("检测场景")
-                        onClicked: timelineController.detectScenesSelected(0.35)
+                        onClicked: mediaflow.timelineAnalysisController.detectScenesSelected(0.35)
                     }
                     AppButton {
                         objectName: "autoReframeButton"
                         Layout.fillWidth: true
                         text: qsTr("自动构图")
-                        onClicked: timelineController.autoReframeSelected()
+                        onClicked: mediaflow.timelineAnalysisController.autoReframeSelected()
                     }
                     AppButton {
                         objectName: "trackSubjectButton"
                         Layout.fillWidth: true
                         text: qsTr("主体跟踪")
-                        onClicked: timelineController.trackSubjectSelected()
+                        onClicked: mediaflow.timelineAnalysisController.trackSubjectSelected()
                     }
                 }
                 RowLayout {
@@ -335,12 +335,12 @@ AppScrollView {
                         Layout.fillWidth: true
                         danger: true
                         text: qsTr("删除所选")
-                        onClicked: timelineController.deleteSelectedClips(false)
+                        onClicked: mediaflow.timelineClipController.deleteSelectedClips(false)
                     }
                     AppButton {
                         Layout.fillWidth: true
                         text: qsTr("波纹删除")
-                        onClicked: timelineController.deleteSelectedClips(true)
+                        onClicked: mediaflow.timelineClipController.deleteSelectedClips(true)
                     }
                 }
             }
@@ -348,12 +348,12 @@ AppScrollView {
 
         VisualEffectStackPanel {
             Layout.fillWidth: true
-            visible: timelineController.selectedClipId.length > 0
-                && !webController.isWebClip
-                && timelineController.selectedClipData.trackKind === "video"
+            visible: mediaflow.timelineViewController.selectedClipId.length > 0
+                && !mediaflow.webController.isWebClip
+                && mediaflow.timelineViewController.selectedClipData.trackKind === "video"
             canEdit: root.canEdit
-            effects: timelineController.selectedClipVisualEffects
-            effectOptions: timelineController.visualEffectOptions
+            effects: mediaflow.timelineEffectsController.selectedClipVisualEffects
+            effectOptions: mediaflow.timelineEffectsController.visualEffectOptions
         }
 
         Text {
@@ -386,13 +386,13 @@ AppScrollView {
                     border.color: activeFocus || resourceMouse.containsMouse ? Theme.accent : Theme.border
                     border.width: activeFocus ? 2 : 1
                     enabled: root.canEdit
-                        && timelineController.selectedClipId.length > 0
+                        && mediaflow.timelineViewController.selectedClipId.length > 0
                     opacity: enabled ? 1 : 0.55
                     activeFocusOnTab: true
                     function activateResource() {
-                        if (root.canEdit && timelineController.selectedClipId.length > 0)
-                            timelineController.addTransitionAfter(
-                                timelineController.selectedClipId,
+                        if (root.canEdit && mediaflow.timelineViewController.selectedClipId.length > 0)
+                            mediaflow.timelineStructureController.addTransitionAfter(
+                                mediaflow.timelineViewController.selectedClipId,
                                 modelData.value,
                                 Number(modelData.defaultDurationFrames));
                     }
@@ -466,13 +466,13 @@ AppScrollView {
                         anchors.fill: parent
                         hoverEnabled: true
                         enabled: resourceCard.enabled
-                        onEntered: timelineController.previewTransitionAfter(
-                            timelineController.selectedClipId,
+                        onEntered: mediaflow.timelineViewController.previewTransitionAfter(
+                            mediaflow.timelineViewController.selectedClipId,
                             modelData.value,
                             Number(modelData.defaultDurationFrames))
-                        onExited: timelineController.clearTransitionPreview()
-                        onClicked: timelineController.addTransitionAfter(
-                            timelineController.selectedClipId,
+                        onExited: mediaflow.timelineViewController.clearTransitionPreview()
+                        onClicked: mediaflow.timelineStructureController.addTransitionAfter(
+                            mediaflow.timelineViewController.selectedClipId,
                             modelData.value,
                             Number(modelData.defaultDurationFrames))
                     }
@@ -482,7 +482,7 @@ AppScrollView {
         Panel {
             Layout.fillWidth: true
             implicitHeight: 176
-            visible: timelineController.selectedTransitionId.length > 0
+            visible: mediaflow.timelineViewController.selectedTransitionId.length > 0
             enabled: root.canEdit
             ColumnLayout {
                 anchors.fill: parent
@@ -516,13 +516,13 @@ AppScrollView {
                         Layout.fillWidth: true
                         primary: true
                         text: qsTr("应用")
-                        onClicked: timelineController.updateTransition(timelineController.selectedTransitionId, transitionKind.currentValue, transitionDuration.value)
+                        onClicked: mediaflow.timelineStructureController.updateTransition(mediaflow.timelineViewController.selectedTransitionId, transitionKind.currentValue, transitionDuration.value)
                     }
                     AppButton {
                         Layout.fillWidth: true
                         danger: true
                         text: qsTr("移除转场")
-                        onClicked: timelineController.removeTransition(timelineController.selectedTransitionId)
+                        onClicked: mediaflow.timelineStructureController.removeTransition(mediaflow.timelineViewController.selectedTransitionId)
                     }
                 }
             }
@@ -530,9 +530,9 @@ AppScrollView {
         EmptyState {
             Layout.fillWidth: true
             Layout.preferredHeight: 260
-            visible: timelineController.selectedClipId.length === 0
-                && timelineController.selectedCompoundId.length === 0
-                && timelineController.selectedTransitionId.length === 0
+            visible: mediaflow.timelineViewController.selectedClipId.length === 0
+                && mediaflow.timelineViewController.selectedCompoundId.length === 0
+                && mediaflow.timelineViewController.selectedTransitionId.length === 0
             iconName: "cut"
             title: qsTr("选择时间线片段")
             description: qsTr("选择后可以编辑画面、裁剪速度并添加转场。")

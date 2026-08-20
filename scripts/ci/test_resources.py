@@ -5,6 +5,7 @@ from collections.abc import Sequence
 RUNTIME_TEST_SOURCES = frozenset(
     {
         "tests/v2/infrastructure/test_asr_cli.py",
+        "tests/v2/infrastructure/test_dubbing_runtime.py",
         "tests/v2/infrastructure/test_editable_media_v6_runtime.py",
         "tests/v2/infrastructure/test_editable_media_project_migration.py",
         "tests/v2/infrastructure/test_encoder_discovery.py",

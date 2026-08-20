@@ -36,6 +36,13 @@ class SettingsForm(BaseModel):
     asr_parallel_chunks: int = Field(alias="asrParallelChunks", ge=0, le=4)
     gpt_sovits_root: str = Field(alias="gptSoVitsRoot")
     gpt_sovits_device: Literal["auto", "cuda", "cpu"] = Field(alias="gptSoVitsDevice")
+    diarization_backend: Literal["transcript_clustering", "community_1"] = Field(
+        alias="diarizationBackend"
+    )
+    diarization_python: str = Field(alias="diarizationPython")
+    diarization_model: str = Field(alias="diarizationModel")
+    diarization_hf_token: str = Field(alias="diarizationHfToken")
+    diarization_device: Literal["auto", "cuda", "cpu"] = Field(alias="diarizationDevice")
     translation_target_language: str = Field(alias="translationTargetLanguage")
     translation_mode: TranslationMode = Field(alias="translationMode")
     automatic_proxy: bool = Field(alias="automaticProxy")
@@ -77,6 +84,11 @@ class SettingsForm(BaseModel):
                 "asr_parallel_chunks": service.asr.parallel_chunks,
                 "gpt_sovits_root": service.speech_synthesis.gpt_sovits_root or "",
                 "gpt_sovits_device": service.speech_synthesis.device,
+                "diarization_backend": service.speaker_diarization.backend,
+                "diarization_python": service.speaker_diarization.python_executable or "",
+                "diarization_model": service.speaker_diarization.model,
+                "diarization_hf_token": service.speaker_diarization.hugging_face_token,
+                "diarization_device": service.speaker_diarization.device,
                 "translation_target_language": service.translation.target_language,
                 "translation_mode": service.translation.mode,
                 "automatic_proxy": service.preview.automatic_proxy,
@@ -133,6 +145,15 @@ class SettingsForm(BaseModel):
             self.gpt_sovits_root.strip() or None
         )
         service_candidate.speech_synthesis.device = self.gpt_sovits_device
+        service_candidate.speaker_diarization.backend = self.diarization_backend
+        service_candidate.speaker_diarization.python_executable = (
+            self.diarization_python.strip() or None
+        )
+        service_candidate.speaker_diarization.model = self.diarization_model.strip()
+        service_candidate.speaker_diarization.hugging_face_token = (
+            self.diarization_hf_token.strip()
+        )
+        service_candidate.speaker_diarization.device = self.diarization_device
         service_candidate.translation.target_language = self.translation_target_language
         service_candidate.translation.mode = self.translation_mode
         service_candidate.preview.automatic_proxy = self.automatic_proxy

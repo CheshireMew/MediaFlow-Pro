@@ -7,7 +7,6 @@ import platform
 import re
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import zipfile
 from collections.abc import Callable, Iterable
@@ -22,6 +21,7 @@ from mediaflow.automation.contracts import describe_contract
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import DiagnosticsBundleCommand
+from mediaflow.infrastructure.ffprobe_runner import FfprobeRunner
 from mediaflow.infrastructure.project_schema_definition import PROJECT_FILE_NAME
 from mediaflow.infrastructure.runtime_capabilities import RuntimeCapabilityInspector
 from mediaflow.infrastructure.runtime_context import RuntimeContext
@@ -86,6 +86,7 @@ class DiagnosticsBundleService:
         self.paths = paths
         self.settings = settings
         self.database_path = self.project_dir / PROJECT_FILE_NAME
+        self.ffprobe = FfprobeRunner(self.paths.ffprobe)
 
     def create(
         self,
@@ -420,9 +421,8 @@ class DiagnosticsBundleService:
             probe: Any = None
             if path.is_file() and str(asset.get("kind")) != "web":
                 try:
-                    completed = subprocess.run(
+                    completed = self.ffprobe.run(
                         [
-                            str(self.paths.ffprobe),
                             "-v",
                             "error",
                             "-show_format",
@@ -431,13 +431,8 @@ class DiagnosticsBundleService:
                             "json",
                             str(path),
                         ],
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
                         timeout=60,
-                        check=False,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        check_cancelled=check_cancelled,
                     )
                     if completed.returncode == 0:
                         probe = json.loads(completed.stdout)

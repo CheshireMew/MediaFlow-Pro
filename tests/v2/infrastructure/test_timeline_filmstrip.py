@@ -16,7 +16,7 @@ from mediaflow.infrastructure.timeline_filmstrip import (
     _FilmstripMemoryLru,
     _FilmstripRequestCoordinator,
 )
-from mediaflow.infrastructure.web_render_service import (
+from mediaflow.infrastructure.web_native_media import (
     WebNativeMediaPlan,
     WebNativeVideoSegment,
     slice_web_native_media_plan_for_frame,
@@ -32,9 +32,9 @@ def test_filmstrip_samples_real_forward_reverse_and_freeze_source_frames(
     tile = tmp_path / "tile.jpg"
     tile.write_bytes(b"tile")
     with ProjectRepository.create(tmp_path / "project", "Filmstrip") as repository:
-        project = repository.catalog.get_project()
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": MediaMetadata(
@@ -97,8 +97,7 @@ def test_filmstrip_samples_real_forward_reverse_and_freeze_source_frames(
         )
 
     grouped = {
-        clip.id: [row for row in rows if row["clipId"] == clip.id]
-        for clip in (forward, reverse, freeze)
+        clip.id: [row for row in rows if row["clipId"] == clip.id] for clip in (forward, reverse, freeze)
     }
     assert len({row["sourceFrame"] for row in grouped[forward.id]}) > 1
     assert grouped[forward.id][0]["sourceFrame"] == 100
@@ -112,12 +111,12 @@ def test_filmstrip_prefers_sdr_then_regular_proxy_then_original(tmp_path: Path) 
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
     with ProjectRepository.create(tmp_path / "project", "Proxy order") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
         proxy = repository.project_dir / "proxies" / "proxy.mp4"
         sdr = repository.project_dir / "proxies" / "sdr.mp4"
         proxy.write_bytes(b"proxy")
         sdr.write_bytes(b"sdr")
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "proxy_path": str(proxy),

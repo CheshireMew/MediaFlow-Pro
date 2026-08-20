@@ -14,13 +14,13 @@ Item {
     property bool snapVertical: false
     property bool snapHorizontal: false
     property bool interactionVisible: true
-    readonly property var clipData: timelineController.selectedClipData
-    readonly property bool clipIsVisible: timelineController.selectedClipId.length > 0
+    readonly property var clipData: mediaflow.timelineViewController.selectedClipData
+    readonly property bool clipIsVisible: mediaflow.timelineViewController.selectedClipId.length > 0
         && previewPosition >= Number(clipData.startFrame ?? 0)
         && previewPosition < Number(clipData.endFrame ?? 0)
 
     visible: interactionVisible && clipIsVisible
-    enabled: visible && Boolean(workspaceController.actionCapabilities.canEdit)
+    enabled: visible && Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
 
     function reload() {
         draftX = Number(clipData.x ?? 0)
@@ -33,10 +33,10 @@ Item {
     }
 
     function commit() {
-        if (!timelineController.selectedClipId)
+        if (!mediaflow.timelineViewController.selectedClipId)
             return
-        timelineController.setClipTransform(
-            timelineController.selectedClipId,
+        mediaflow.timelineClipController.setClipTransform(
+            mediaflow.timelineViewController.selectedClipId,
             draftX, draftY, draftScaleX, draftScaleY, draftRotation,
             Number(clipData.cropLeft ?? 0), Number(clipData.cropTop ?? 0),
             Number(clipData.cropRight ?? 0), Number(clipData.cropBottom ?? 0),
@@ -44,7 +44,7 @@ Item {
     }
 
     Connections {
-        target: timelineController
+        target: mediaflow.timelineViewController
         function onSelectionChanged() { root.reload() }
     }
     Component.onCompleted: reload()

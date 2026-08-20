@@ -7,6 +7,7 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from mediaflow.domain.enums import AssetKind
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import WebControllerScope
 from .web_editor_context import (
     WebEditorContext,
     coerce_web_descriptor_value,
@@ -15,7 +16,7 @@ from .web_editor_context import (
 )
 
 
-class WebController(ControllerFacet):
+class WebController(ControllerFacet[WebControllerScope]):
     projectStateChanged = Signal()
     historyChanged = Signal()
     errorOccurred = Signal(str)
@@ -24,7 +25,7 @@ class WebController(ControllerFacet):
     browserSelectionRequested = Signal(str)
     entryUrlChanged = Signal()
 
-    def __init__(self, session):
+    def __init__(self, session: WebControllerScope):
         super().__init__(session)
         self.setObjectName("webController")
         self._web_edit_mode = False
@@ -92,7 +93,7 @@ class WebController(ControllerFacet):
     def browserReady(self) -> bool:
         return self._browser_ready
 
-    @Property("QVariantMap", notify=webSelectionChanged)
+    @Property(dict, notify=webSelectionChanged)
     def browserLayerSnapshot(self) -> dict:
         return dict(self._browser_values.get(self._selected_web_layer_id) or {})
 
@@ -108,19 +109,22 @@ class WebController(ControllerFacet):
     def browserSelectedLayerId(self) -> str:
         return self._browser_selected_layer_id
 
-    @Property("QVariantMap", notify=webStateChanged)
+    @Property(dict, notify=webStateChanged)
     def manifestData(self) -> dict:
         return dict(self._web_manifest)
 
     @Property(str, notify=webStateChanged)
     def stateJson(self) -> str:
+        return self.runtime_state_json()
+
+    def runtime_state_json(self) -> str:
         return json.dumps(self._runtime_web_state, ensure_ascii=False, separators=(",", ":"))
 
     @Property(str, notify=webStateChanged)
     def persistentStateJson(self) -> str:
         return json.dumps(self._web_state, ensure_ascii=False, separators=(",", ":"))
 
-    @Property("QVariantMap", notify=webStateChanged)
+    @Property(dict, notify=webStateChanged)
     def activeCanvasData(self) -> dict:
         variant = next(
             (
@@ -136,7 +140,7 @@ class WebController(ControllerFacet):
     def activeVariantId(self) -> str:
         return self._active_variant_id
 
-    @Property("QVariantList", notify=webStateChanged)
+    @Property(list, notify=webStateChanged)
     def variantOptions(self) -> list[dict]:
         selected = (self._web_state.get("variant") or {}).get("id") or self._web_manifest.get(
             "default_variant_id"
@@ -154,11 +158,11 @@ class WebController(ControllerFacet):
     def activeSceneId(self) -> str:
         return self._active_scene_id
 
-    @Property("QVariantList", notify=webStateChanged)
+    @Property(list, notify=webStateChanged)
     def editDescriptors(self) -> list[dict]:
         return [dict(item) for item in self._edit_document.get("fields", [])]
 
-    @Property("QVariantList", notify=webSelectionChanged)
+    @Property(list, notify=webSelectionChanged)
     def selectedLayerDescriptors(self) -> list[dict]:
         return self._selected_layer_descriptor_rows()
 
@@ -170,35 +174,27 @@ class WebController(ControllerFacet):
             if item.get("target") == "layer" and str(item.get("source_id", "")).startswith(prefix)
         ]
 
-    @Property("QVariantList", notify=webStateChanged)
+    @Property(list, notify=webStateChanged)
     def parameterDescriptors(self) -> list[dict]:
         return [
-            dict(item)
-            for item in self._edit_document.get("fields", [])
-            if item.get("target") == "parameter"
+            dict(item) for item in self._edit_document.get("fields", []) if item.get("target") == "parameter"
         ]
 
-    @Property("QVariantList", notify=webStateChanged)
+    @Property(list, notify=webStateChanged)
     def themeDescriptors(self) -> list[dict]:
-        return [
-            dict(item) for item in self._edit_document.get("fields", []) if item.get("target") == "theme"
-        ]
+        return [dict(item) for item in self._edit_document.get("fields", []) if item.get("target") == "theme"]
 
-    @Property("QVariantList", notify=webStateChanged)
+    @Property(list, notify=webStateChanged)
     def dataDescriptors(self) -> list[dict]:
-        return [
-            dict(item)
-            for item in self._edit_document.get("fields", [])
-            if item.get("target") == "data"
-        ]
+        return [dict(item) for item in self._edit_document.get("fields", []) if item.get("target") == "data"]
 
-    @Property("QVariantMap", notify=webStateChanged)
+    @Property(dict, notify=webStateChanged)
     def componentData(self) -> dict:
         return dict(self._web_manifest.get("component") or {})
 
     @Property(str, notify=webStateChanged)
     def capabilitiesJson(self) -> str:
-        if not self._session.binding.current or self._session.binding.current.read_only:
+        if not self._session.state.binding.current or self._session.state.binding.require_current().read_only:
             return "{}"
         values = {
             layer["id"]: list(layer.get("editable") or []) for layer in self._web_manifest.get("layers", [])
@@ -307,7 +303,7 @@ class WebController(ControllerFacet):
             self.webSelectionChanged.emit()
             self.webStateChanged.emit()
         except (TypeError, ValueError) as error:
-            self._session.events.errorOccurred.emit(str(error))
+            self._session.updates.report_error(str(error))
 
     @Slot(str, "QVariantMap")
     @report_ui_errors
@@ -315,7 +311,7 @@ class WebController(ControllerFacet):
         current = require_mutable_web_clip(self._session, self._web_clip_id)
         current_revision = int(self._web_state.get("revision", 0))
         updated = current.update_web_clip(
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
             clip_id=self._web_clip_id,
             updates={layer_id: dict(changes)},
             scene_id=self._active_scene_id,
@@ -332,7 +328,7 @@ class WebController(ControllerFacet):
         if browser_state == self._runtime_web_state:
             return
         updated = current.commit_web_runtime_state(
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
             self._web_clip_id,
             browser_state,
             expected_revision=int(self._web_state.get("revision", 0)),
@@ -358,7 +354,7 @@ class WebController(ControllerFacet):
         if target == "layer":
             layer_id, field = source_id.rsplit(".", 1)
             updated = current.update_web_clip(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
                 {layer_id: {field: typed_value}},
                 scene_id=self._active_scene_id,
@@ -367,7 +363,7 @@ class WebController(ControllerFacet):
             )
         elif target == "parameter":
             updated = current.update_web_parameter(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
                 source_id,
                 typed_value,
@@ -377,14 +373,14 @@ class WebController(ControllerFacet):
             )
         elif target == "theme":
             updated = current.update_web_theme(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
                 {source_id: typed_value},
                 expected_revision=revision,
             )
         elif target == "data":
             updated = current.update_web_data(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
                 {source_id: typed_value},
                 scene_id=self._active_scene_id,
@@ -406,7 +402,7 @@ class WebController(ControllerFacet):
         if target == "layer":
             layer_id, field = source_id.rsplit(".", 1)
             updated = current.set_web_field_locks(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
                 layer_id,
                 [field],
@@ -416,7 +412,7 @@ class WebController(ControllerFacet):
             )
         elif target == "parameter":
             updated = current.set_web_parameter_lock(
-                self._session.binding.active_sequence_id,
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
                 source_id,
                 locked,
@@ -432,7 +428,7 @@ class WebController(ControllerFacet):
     def selectVariant(self, variant_id: str) -> None:
         current = require_mutable_web_clip(self._session, self._web_clip_id)
         updated = current.select_web_variant(
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
             self._web_clip_id,
             variant_id,
             expected_revision=int(self._web_state.get("revision", 0)),
@@ -444,7 +440,7 @@ class WebController(ControllerFacet):
     def importDataSnapshot(self, source_url: QUrl, field_id: str) -> None:
         current = require_mutable_web_clip(self._session, self._web_clip_id)
         updated = current.update_web_data_from_file(
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
             self._web_clip_id,
             source_url.toLocalFile(),
             scene_id=self._active_scene_id,
@@ -466,7 +462,7 @@ class WebController(ControllerFacet):
     def _set_locks(self, layer_id: str, fields: list[str], locked: bool) -> None:
         current = require_mutable_web_clip(self._session, self._web_clip_id)
         updated = current.set_web_field_locks(
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
             self._web_clip_id,
             layer_id,
             fields,
@@ -483,13 +479,13 @@ class WebController(ControllerFacet):
         self._refresh_layers()
         self.webSelectionChanged.emit()
         self.webStateChanged.emit()
-        self._session.events.historyChanged.emit()
+        self._session.updates.commit(history=True)
         self._session.projectors.timeline.schedule_preview_graph()
 
     def _refresh_runtime_state(self) -> None:
-        if self._session.binding.current and self._web_clip_id:
-            self._runtime_web_state = self._session.binding.current.web_runtime_state(
-                self._session.binding.active_sequence_id,
+        if self._session.state.binding.current and self._web_clip_id:
+            self._runtime_web_state = self._session.state.binding.require_current().web_runtime_state(
+                self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
             )
             self._active_variant_id = str((self._runtime_web_state.get("variant") or {}).get("id") or "")
@@ -502,11 +498,11 @@ class WebController(ControllerFacet):
             self._active_scene_id = ""
 
     def _refresh_edit_document(self) -> None:
-        if not self._session.binding.current or not self._web_clip_id:
+        if not self._session.state.binding.current or not self._web_clip_id:
             self._edit_document = {}
             return
-        document = self._session.binding.current.describe_web_clip_editing(
-            self._session.binding.active_sequence_id,
+        document = self._session.state.binding.require_current().describe_web_clip_editing(
+            self._session.state.binding.active_sequence_id,
             self._web_clip_id,
             scene_id=self._active_scene_id or None,
         )
@@ -536,22 +532,29 @@ class WebController(ControllerFacet):
         self._active_variant_id = ""
         self._active_scene_id = ""
         if (
-            self._session.binding.current
-            and self._session.binding.timeline
-            and self._session.selection.clip_ids
+            self._session.state.binding.current
+            and self._session.state.binding.timeline
+            and self._session.state.selection.clip_ids
         ):
-            clip_id = self._session.selection.clip_ids[-1]
+            clip_id = self._session.state.selection.clip_ids[-1]
             clip = next(
-                (item for item in self._session.binding.timeline.state.clips if item.id == clip_id), None
+                (
+                    item
+                    for item in self._session.state.binding.require_timeline().state.clips
+                    if item.id == clip_id
+                ),
+                None,
             )
             if clip is not None:
-                asset = self._session.binding.current.get_asset(clip.asset_id)
+                asset = self._session.state.binding.require_current().get_asset(clip.asset_id)
                 if asset.kind == AssetKind.WEB:
-                    spec = self._session.binding.current.get_web_asset_spec(asset.id)
-                    state = self._session.binding.timeline.state.web_states[clip.id]
+                    spec = self._session.state.binding.require_current().get_web_asset_spec(asset.id)
+                    state = self._session.state.binding.require_timeline().state.web_states[clip.id]
                     self._web_clip_id = clip.id
                     self._web_asset_id = asset.id
-                    self._web_entry_url = self._session.binding.current.web_editor_entry_url(asset.id)
+                    self._web_entry_url = self._session.state.binding.require_current().web_editor_entry_url(
+                        asset.id
+                    )
                     self._web_manifest = spec.manifest.model_dump(mode="json")
                     self._web_state = state.model_dump(mode="json")
                     self._refresh_runtime_state()
@@ -566,15 +569,18 @@ class WebController(ControllerFacet):
         if self._selected_web_layer_id not in known:
             self._selected_web_layer_id = known[0] if known else ""
         if not self._web_clip_id:
-            if had_web_preview and self._session.binding.current:
-                self._session.binding.current.close_web_preview()
+            if had_web_preview and self._session.state.binding.current:
+                self._session.state.binding.require_current().close_web_preview()
             self._web_edit_mode = False
             self._browser_revision = 0
             self._browser_edit_mode = False
             self._browser_selected_layer_id = ""
             self._browser_ready = False
             self._selected_web_layer_id = ""
-        elif self._session.binding.current is not None and self._session.binding.current.read_only:
+        elif (
+            self._session.state.binding.current is not None
+            and self._session.state.binding.require_current().read_only
+        ):
             self._web_edit_mode = False
         self._refresh_layers()
         self.webSelectionChanged.emit()

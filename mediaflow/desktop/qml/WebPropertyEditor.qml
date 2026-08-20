@@ -13,7 +13,7 @@ ColumnLayout {
     readonly property var definition: descriptor.descriptor || ({})
 
     function commit(value) {
-        webController.updateDescriptorValue(
+        mediaflow.webController.updateDescriptorValue(
             String(descriptor.target),
             String(descriptor.source_id),
             value)
@@ -27,7 +27,7 @@ ColumnLayout {
             source = source.replace(/\./g, "/");
         const section = target === "parameter" ? "parameters" :
             target === "layer" ? "layers" : target;
-        return "/web/clips/" + webController.webClipId
+        return "/web/clips/" + mediaflow.webController.webClipId
             + "/" + section + "/" + source;
     }
 
@@ -56,7 +56,7 @@ ColumnLayout {
             flat: false
             toolTipText: root.descriptor.locked
                 ? qsTr("允许自动化修改") : qsTr("保留人工调整")
-            onClicked: webController.setDescriptorLocked(
+            onClicked: mediaflow.webController.setDescriptorLocked(
                 String(root.descriptor.target),
                 String(root.descriptor.source_id),
                 !Boolean(root.descriptor.locked))
@@ -64,7 +64,7 @@ ColumnLayout {
         AppButton {
             implicitHeight: 26
             text: qsTr("复制 CLI")
-            onClicked: automationController.copyWebFieldUpdateRequest(
+            onClicked: mediaflow.automationController.copyWebFieldUpdateRequest(
                 String(root.descriptor.target),
                 String(root.descriptor.source_id),
                 root.descriptor.value)
@@ -83,7 +83,7 @@ ColumnLayout {
         AppButton {
             Layout.fillWidth: true
             text: qsTr("在播放头添加关键帧")
-            onClicked: webTimelineController.setDescriptorKeyframeAtFrame(
+            onClicked: mediaflow.webTimelineController.setDescriptorKeyframeAtFrame(
                 String(root.descriptor.target),
                 String(root.descriptor.source_id),
                 root.descriptor.value,
@@ -96,14 +96,14 @@ ColumnLayout {
             iconName: "delete"
             flat: false
             toolTipText: qsTr("移除播放头处关键帧")
-            onClicked: webTimelineController.removeDescriptorKeyframeAtFrame(
+            onClicked: mediaflow.webTimelineController.removeDescriptorKeyframeAtFrame(
                 String(root.descriptor.target),
                 String(root.descriptor.source_id),
                 root.playheadFrame)
         }
         AppButton {
             text: qsTr("复制设置请求")
-            onClicked: automationController.copyWebKeyframeSetRequest(
+            onClicked: mediaflow.automationController.copyWebKeyframeSetRequest(
                 String(root.descriptor.target),
                 String(root.descriptor.source_id),
                 root.descriptor.value,
@@ -112,7 +112,7 @@ ColumnLayout {
         }
         AppButton {
             text: qsTr("复制移除请求")
-            onClicked: automationController.copyWebKeyframeRemoveRequest(
+            onClicked: mediaflow.automationController.copyWebKeyframeRemoveRequest(
                 String(root.descriptor.target),
                 String(root.descriptor.source_id),
                 root.playheadFrame)

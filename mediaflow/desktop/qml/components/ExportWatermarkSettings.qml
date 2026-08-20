@@ -35,7 +35,7 @@ ColumnLayout {
         const watermark = value.watermark || {}
         watermarkEnabled.checked = Boolean(watermark.enabled ?? false)
         const assetIndex = watermarkAsset.indexOfValue(
-            watermark.asset_id || mediaController.selectedWatermarkAssetId || "")
+            watermark.asset_id || mediaflow.mediaController.selectedWatermarkAssetId || "")
         if (assetIndex >= 0)
             watermarkAsset.currentIndex = assetIndex
         const positionIndex = watermarkPosition.indexOfValue(watermark.position || "TR")
@@ -56,7 +56,7 @@ ColumnLayout {
         title: qsTr("选择水印图片")
         fileMode: FileDialog.OpenFile
         nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)")]
-        onAccepted: mediaController.importWatermark(selectedFile.toString())
+        onAccepted: mediaflow.mediaController.importWatermark(selectedFile.toString())
     }
 
     Text {
@@ -71,10 +71,10 @@ ColumnLayout {
         AppComboBox {
             id: watermarkAsset
             Layout.fillWidth: true
-            model: mediaController.watermarkAssetOptions
+            model: mediaflow.mediaController.watermarkAssetOptions
             textRole: "label"
             valueRole: "value"
-            onActivated: mediaController.selectWatermarkAsset(String(currentValue))
+            onActivated: mediaflow.mediaController.selectWatermarkAsset(String(currentValue))
         }
         AppButton { text: qsTr("导入图片"); onClicked: watermarkDialog.open() }
     }

@@ -7,21 +7,21 @@ Rectangle {
     id: root
     objectName: "workspaceNavigation"
 
-    readonly property var modes: workspaceController.workspaceModes.filter(
+    readonly property var modes: mediaflow.workspaceViewController.workspaceModes.filter(
         function (mode) { return Boolean(mode.navigationVisible); })
     property string activeMode: modes.length > 0 ? String(modes[0].key) : ""
     signal modeRequested(string mode)
     signal settingsRequested
 
-    implicitHeight: 68
+    implicitHeight: Theme.workspaceNavigationHeight
     color: Theme.surface
 
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: 8
         anchors.rightMargin: 8
-        anchors.topMargin: 5
-        anchors.bottomMargin: 4
+        anchors.topMargin: 4
+        anchors.bottomMargin: 3
         spacing: 1
 
         Repeater {
@@ -37,8 +37,8 @@ Rectangle {
                     root.modeRequested(modelData.key);
                 }
 
-                Layout.minimumWidth: 58
-                Layout.preferredWidth: Math.max(58, navigationContent.implicitWidth + 14)
+                Layout.minimumWidth: 52
+                Layout.preferredWidth: Math.max(52, navigationContent.implicitWidth + 12)
                 Layout.fillHeight: true
                 radius: Theme.radiusSmall
                 color: navMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
@@ -50,12 +50,12 @@ Rectangle {
                 ColumnLayout {
                     id: navigationContent
                     anchors.centerIn: parent
-                    spacing: 3
+                    spacing: 2
 
                     AppIcon {
                         Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 22
-                        Layout.preferredHeight: 22
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
                         iconName: String(modelData.icon)
                         iconColor: navigationItem.selected ? Theme.accent : Theme.textSubtle
                     }
@@ -73,8 +73,8 @@ Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
-                    anchors.leftMargin: 12
-                    anchors.rightMargin: 12
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
                     height: 2
                     radius: 1
                     visible: navigationItem.selected
@@ -109,8 +109,8 @@ Rectangle {
                 root.settingsRequested();
             }
 
-            Layout.minimumWidth: 58
-            Layout.preferredWidth: Math.max(58, settingsContent.implicitWidth + 14)
+            Layout.minimumWidth: 52
+            Layout.preferredWidth: Math.max(52, settingsContent.implicitWidth + 12)
             Layout.fillHeight: true
             radius: Theme.radiusSmall
             color: settingsMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
@@ -120,12 +120,12 @@ Rectangle {
             ColumnLayout {
                 id: settingsContent
                 anchors.centerIn: parent
-                spacing: 3
+                spacing: 2
 
                 AppIcon {
                     Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: 22
-                    Layout.preferredHeight: 22
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
                     iconName: "settings"
                     iconColor: Theme.textSubtle
                 }

@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import csv
-import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Literal
 
-from mediaflow.application.ports import WebApplicationDocuments
+from mediaflow.application.ports import StructuredFileReader, WebApplicationDocuments
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.web_clip_editing_service import WebClipEditingService
 from mediaflow.domain.enums import AssetKind
-from mediaflow.domain.web_media import (
-    WebVariantResult,
-)
+from mediaflow.domain.web_state import WebVariantResult
 
 
 class WebBatchService:
@@ -24,10 +20,12 @@ class WebBatchService:
         repository: WebApplicationDocuments,
         timeline: Callable[[str], TimelineEditor],
         clips: WebClipEditingService,
+        structured_files: StructuredFileReader,
     ) -> None:
         self.repository = repository
         self._timeline = timeline
         self._clips = clips
+        self._structured_files = structured_files
 
     def create_variants(
         self,
@@ -46,7 +44,7 @@ class WebBatchService:
             source_clip = next(item for item in source.clips if item.id == clip_id)
         except StopIteration as error:
             raise KeyError(clip_id) from error
-        source_asset = self.repository.catalog.get_asset(source_clip.asset_id)
+        source_asset = self.repository.assets.get_asset(source_clip.asset_id)
         if source_asset.kind != AssetKind.WEB:
             raise ValueError("Batch variants require an editable web clip")
         results: list[WebVariantResult] = []
@@ -142,17 +140,15 @@ class WebBatchService:
             )
         return results
 
-    @staticmethod
-    def read_variant_records(source: str | Path) -> list[Mapping[str, object]]:
-        path = Path(source).expanduser().resolve(strict=True)
+    def read_variant_records(self, source: str | Path) -> list[Mapping[str, object]]:
+        path = self._structured_files.resolve_file(source)
         if path.suffix.lower() == ".json":
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            payload = self._structured_files.read_json(path)
             if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
                 raise ValueError("Batch variant JSON must be an array of objects")
             return [
                 {str(key): value for key, value in item.items()} for item in payload if isinstance(item, dict)
             ]
         if path.suffix.lower() == ".csv":
-            with path.open("r", encoding="utf-8-sig", newline="") as stream:
-                return list(csv.DictReader(stream))
+            return self._structured_files.read_csv(path)
         raise ValueError("Batch variant sources accept .json or .csv files")

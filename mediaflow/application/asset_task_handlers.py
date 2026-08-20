@@ -101,6 +101,7 @@ class AssetTaskHandlers(ProjectTaskHandler):
             document = prepared_subtitle.document
             asset = prepared_subtitle.subtitle.asset
             document_id = document.id
+
             def commit_subtitle() -> None:
                 self.subtitle_acquisition.commit_subtitle_import(
                     prepared_subtitle,
@@ -115,6 +116,7 @@ class AssetTaskHandlers(ProjectTaskHandler):
             )
             context.cancellation.raise_if_requested()
             asset = prepared_asset.asset
+
             def commit_asset() -> None:
                 self.assets.commit_prepared(prepared_asset)
 
@@ -130,10 +132,10 @@ class AssetTaskHandlers(ProjectTaskHandler):
 
     def proxy(self, context: TaskContext) -> TaskCompletion:
         command = self.command(context, GenerateProxyCommand)
-        asset = self.documents.catalog.get_asset(command.asset_id)
-        sequence_id = context.task.sequence_id or self.documents.catalog.get_project().main_sequence_id
-        sequence = self.documents.catalog.get_sequence(sequence_id)
-        asset = asset_in_timeline_clock(self.documents.catalog, asset, sequence)
+        asset = self.documents.assets.get_asset(command.asset_id)
+        sequence_id = context.task.sequence_id or self.documents.projects.get_project().main_sequence_id
+        sequence = self.documents.sequences.get_sequence(sequence_id)
+        asset = asset_in_timeline_clock(self.documents.projects, self.documents.sequences, asset, sequence)
         prepared = self.runtime.prepare_proxy(
             asset,
             sequence.profile,
@@ -152,10 +154,10 @@ class AssetTaskHandlers(ProjectTaskHandler):
 
     def waveform(self, context: TaskContext) -> TaskCompletion:
         command = self.command(context, GenerateWaveformCommand)
-        asset = self.documents.catalog.get_asset(command.asset_id)
-        sequence_id = context.task.sequence_id or self.documents.catalog.get_project().main_sequence_id
-        sequence = self.documents.catalog.get_sequence(sequence_id)
-        asset = asset_in_timeline_clock(self.documents.catalog, asset, sequence)
+        asset = self.documents.assets.get_asset(command.asset_id)
+        sequence_id = context.task.sequence_id or self.documents.projects.get_project().main_sequence_id
+        sequence = self.documents.sequences.get_sequence(sequence_id)
+        asset = asset_in_timeline_clock(self.documents.projects, self.documents.sequences, asset, sequence)
         waveform_path = self.runtime.generate_waveform(
             asset,
             duration_seconds=asset.metadata.duration_frames / sequence.profile.fps,
@@ -164,7 +166,7 @@ class AssetTaskHandlers(ProjectTaskHandler):
         )
 
         def commit_waveform() -> None:
-            self.documents.catalog.set_asset_waveform_path(
+            self.documents.assets.set_asset_waveform_path(
                 asset.id,
                 expected_fingerprint=asset.fingerprint,
                 waveform_path=waveform_path,
@@ -205,23 +207,13 @@ class DownloadTaskHandler(ProjectTaskHandler):
             )
         except BaseException as error:
             try:
-                archived = (
-                    self.runtime.archive_unrecorded_downloads(
-                        [Path(path).resolve() for path in paths]
-                    )
-                )
+                archived = self.runtime.archive_unrecorded_downloads([Path(path).resolve() for path in paths])
             except BaseException as archive_error:
-                error.add_note(
-                    "下载文件登记失败后无法完整撤回已发布文件："
-                    f"{archive_error}"
-                )
+                error.add_note(f"下载文件登记失败后无法完整撤回已发布文件：{archive_error}")
             else:
                 if archived:
                     error.add_note(
-                        "未登记的下载文件已移至失败归档："
-                        + ", ".join(
-                            str(path) for path in archived
-                        )
+                        "未登记的下载文件已移至失败归档：" + ", ".join(str(path) for path in archived)
                     )
             raise
 
@@ -232,8 +224,8 @@ class DownloadTaskHandler(ProjectTaskHandler):
     ) -> TaskCompletion:
         resolved_paths = [Path(path).resolve(strict=True) for path in paths]
         existing = {
-            self.documents.catalog.resolve_asset_path(asset).resolve(): asset
-            for asset in self.documents.catalog.list_assets()
+            self.documents.assets.resolve_asset_path(asset).resolve(): asset
+            for asset in self.documents.assets.list_assets()
         }
         prepared: dict[Path, PreparedAssetRegistration] = {}
         candidate_assets = []
@@ -256,16 +248,13 @@ class DownloadTaskHandler(ProjectTaskHandler):
             if (
                 asset.id in prepared_document_assets
                 or asset.kind != AssetKind.SUBTITLE
-                or Path(asset.path).suffix.lower()
-                not in {".srt", ".vtt", ".ass", ".ssa"}
+                or Path(asset.path).suffix.lower() not in {".srt", ".vtt", ".ass", ".ssa"}
             ):
                 continue
             prepared_document_assets.add(asset.id)
-            _document, publication = (
-                self.subtitle_acquisition.prepare_document_publication(
-                    asset,
-                    available_assets=candidate_assets,
-                )
+            _document, publication = self.subtitle_acquisition.prepare_document_publication(
+                asset,
+                available_assets=candidate_assets,
             )
             if publication is not None:
                 publications.append(publication)
@@ -285,23 +274,15 @@ class DownloadTaskHandler(ProjectTaskHandler):
                 )
             except BaseException as error:
                 try:
-                    archived = self.runtime.archive_unrecorded_downloads(
-                        resolved_paths
-                    )
+                    archived = self.runtime.archive_unrecorded_downloads(resolved_paths)
                 except BaseException as archive_error:
-                    error.add_note(
-                        "下载文件登记失败后无法完整撤回已发布文件："
-                        f"{archive_error}"
-                    )
+                    error.add_note(f"下载文件登记失败后无法完整撤回已发布文件：{archive_error}")
                 else:
                     if archived:
                         error.add_note(
-                            "未登记的下载文件已移至失败归档："
-                            + ", ".join(str(path) for path in archived)
+                            "未登记的下载文件已移至失败归档：" + ", ".join(str(path) for path in archived)
                         )
                 raise
 
         context.defer_project_change(commit_downloads)
-        return self.completion(
-            *(asset.path for asset in candidate_assets)
-        )
+        return self.completion(*(asset.path for asset in candidate_assets))

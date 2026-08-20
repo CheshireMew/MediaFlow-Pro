@@ -140,3 +140,37 @@ def test_cli_describe_uses_the_resident_service_contract() -> None:
     assert output["version"] == 4
     assert output["result"]["transport"]["lifecycle"] == "resident-editor-service"
     assert stopped.returncode == 0
+
+
+def test_cli_progressively_describes_summary_operation_and_catalog() -> None:
+    try:
+        summary_result = _run_cli("describe", "--summary")
+        operation_result = _run_cli("describe", "--operation", "task.wait")
+        catalog_result = _run_cli("describe", "--catalog", "audio_effects")
+    finally:
+        stopped = _run_cli("service", "shutdown")
+
+    assert summary_result.returncode == 0
+    assert summary_result.stderr == ""
+    assert len(summary_result.stdout.encode("utf-8")) < 100_000
+    summary = json.loads(summary_result.stdout)["result"]
+    assert summary["view"] == "summary"
+    task_wait_summary = next(item for item in summary["operations"] if item["name"] == "task.wait")
+    assert "arguments_schema" not in task_wait_summary
+    assert "result_schema" not in task_wait_summary
+
+    assert operation_result.returncode == 0
+    assert operation_result.stderr == ""
+    operation = json.loads(operation_result.stdout)["result"]
+    assert operation["view"] == "operation"
+    assert operation["operation"]["name"] == "task.wait"
+    assert operation["operation"]["arguments_schema"]
+    assert operation["operation"]["result_schema"]
+
+    assert catalog_result.returncode == 0
+    assert catalog_result.stderr == ""
+    catalog = json.loads(catalog_result.stdout)["result"]
+    assert catalog["view"] == "catalog"
+    assert catalog["name"] == "audio_effects"
+    assert catalog["catalog"]
+    assert stopped.returncode == 0

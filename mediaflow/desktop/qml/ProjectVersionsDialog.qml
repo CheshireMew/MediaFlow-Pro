@@ -32,7 +32,7 @@ AppDialog {
                 id: versionName
                 objectName: "projectVersionNameInput"
                 Layout.fillWidth: true
-                enabled: Boolean(workspaceController.actionCapabilities.canEdit)
+                enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
                 placeholderText: qsTr("例如：客户审阅版")
             }
             AppButton {
@@ -40,9 +40,9 @@ AppDialog {
                 primary: true
                 text: qsTr("保存当前版本")
                 enabled: versionName.text.trim().length > 0
-                    && Boolean(workspaceController.actionCapabilities.canEdit)
+                    && Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
                 onClicked: {
-                    workspaceController.createNamedVersion(versionName.text);
+                    mediaflow.workspaceProjectController.createNamedVersion(versionName.text);
                     versionName.clear();
                 }
             }
@@ -58,22 +58,22 @@ AppDialog {
                 AppButton {
                     Layout.fillWidth: true
                     text: qsTr("复制项目交接 CLI")
-                    onClicked: automationController.copyProjectHandoffRequest()
+                    onClicked: mediaflow.automationController.copyProjectHandoffRequest()
                 }
                 AppButton {
                     Layout.fillWidth: true
                     text: qsTr("复制诊断包 CLI")
-                    enabled: automationController.diagnosticsDefaultPath.length > 0
-                    onClicked: automationController.copyDiagnosticsBundleRequest(
-                        automationController.diagnosticsDefaultPath, [], false)
+                    enabled: mediaflow.automationController.diagnosticsDefaultPath.length > 0
+                    onClicked: mediaflow.automationController.copyDiagnosticsBundleRequest(
+                        mediaflow.automationController.diagnosticsDefaultPath, [], false)
                 }
                 AppButton {
                     Layout.fillWidth: true
                     primary: true
                     text: qsTr("生成诊断包")
-                    enabled: Boolean(workspaceController.actionCapabilities.canStartTasks)
-                    onClicked: automationController.createDiagnosticsBundle(
-                        automationController.diagnosticsDefaultPath, false)
+                    enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
+                    onClicked: mediaflow.automationController.createDiagnosticsBundle(
+                        mediaflow.automationController.diagnosticsDefaultPath, false)
                 }
             }
         }
@@ -84,7 +84,7 @@ AppDialog {
             Layout.fillHeight: true
             clip: true
             spacing: 6
-            model: workspaceController.projectVersions
+            model: mediaflow.workspaceViewController.projectVersions
             ScrollBar.vertical: AppScrollBar {}
             delegate: Rectangle {
                 required property string versionId
@@ -121,7 +121,7 @@ AppDialog {
                     AppButton {
                         objectName: "restoreProjectVersionButton"
                         text: qsTr("恢复")
-                        enabled: Boolean(workspaceController.actionCapabilities.canEdit)
+                        enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
                         onClicked: {
                             root.pendingRestoreId = versionId;
                             root.pendingRestoreName = name;
@@ -149,8 +149,8 @@ AppDialog {
         title: qsTr("恢复“%1”？").arg(root.pendingRestoreName)
         standardButtons: Dialog.Yes | Dialog.Cancel
         onAccepted: {
-            if (workspaceController.actionCapabilities.canEdit)
-                workspaceController.restoreNamedVersion(root.pendingRestoreId);
+            if (mediaflow.workspaceViewController.actionCapabilities.canEdit)
+                mediaflow.workspaceProjectController.restoreNamedVersion(root.pendingRestoreId);
             root.pendingRestoreId = "";
             root.pendingRestoreName = "";
         }

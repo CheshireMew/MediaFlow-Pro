@@ -7,7 +7,7 @@ Panel {
     objectName: "exportHistoryPanel"
     Layout.fillWidth: true
     implicitHeight: content.implicitHeight + 22
-    visible: exportController.exportHistory.length > 0
+    visible: mediaflow.exportController.exportHistory.length > 0
     ColumnLayout {
         id: content
         anchors.left: parent.left
@@ -25,13 +25,13 @@ Panel {
                 font.weight: Font.DemiBold
             }
             Text {
-                text: qsTr("%1 次").arg(exportController.exportHistory.length)
+                text: qsTr("%1 次").arg(mediaflow.exportController.exportHistory.length)
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
             }
         }
         Repeater {
-            model: exportController.exportHistory.slice(0, 5)
+            model: mediaflow.exportController.exportHistory.slice(0, 5)
             Rectangle {
                 required property var modelData
                 objectName: "exportHistoryItem_" + modelData.recordId
@@ -81,12 +81,12 @@ Panel {
                     }
                     AppButton {
                         text: qsTr("成片")
-                        onClicked: taskController.openArtifact(modelData.outputPath)
+                        onClicked: mediaflow.taskController.openArtifact(modelData.outputPath)
                     }
                     AppButton {
                         objectName: "openExportQualityReportButton"
                         text: qsTr("报告")
-                        onClicked: taskController.openArtifact(modelData.reportPath)
+                        onClicked: mediaflow.taskController.openArtifact(modelData.reportPath)
                     }
                 }
             }

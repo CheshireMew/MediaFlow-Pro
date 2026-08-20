@@ -31,19 +31,19 @@ logger = logging.getLogger(__name__)
 class TimelineAssetOperations(SessionCoordinator):
     def continue_batch(self) -> None:
         while (
-            self._session.asset_state.pending_batch_ids
-            and not self._session.asset_state.pending_profile_asset_id
+            self._session.state.assets.pending_batch_ids
+            and not self._session.state.assets.pending_profile_asset_id
         ):
-            asset_id = self._session.asset_state.pending_batch_ids.pop(0)
+            asset_id = self._session.state.assets.pending_batch_ids.pop(0)
             placed = self.add_to_timeline(
                 asset_id,
-                self._session.asset_state.pending_batch_placement,
+                self._session.state.assets.pending_batch_placement,
             )
             if placed is None:
                 return
-            if self._session.asset_state.pending_batch_placement.start_frame is not None:
-                self._session.asset_state.pending_batch_placement = replace(
-                    self._session.asset_state.pending_batch_placement,
+            if self._session.state.assets.pending_batch_placement.start_frame is not None:
+                self._session.state.assets.pending_batch_placement = replace(
+                    self._session.state.assets.pending_batch_placement,
                     track_id=placed.track_id,
                     start_frame=placed.end_frame,
                     force_new_track=False,
@@ -54,8 +54,8 @@ class TimelineAssetOperations(SessionCoordinator):
         asset_ids: Iterable[str],
         placement: TimelinePlacement | None = None,
     ) -> None:
-        self._session.asset_state.pending_batch_ids = list(dict.fromkeys(asset_ids))
-        self._session.asset_state.pending_batch_placement = placement or TimelinePlacement()
+        self._session.state.assets.pending_batch_ids = list(dict.fromkeys(asset_ids))
+        self._session.state.assets.pending_batch_placement = placement or TimelinePlacement()
         self.continue_batch()
 
     def add_to_timeline(
@@ -63,37 +63,37 @@ class TimelineAssetOperations(SessionCoordinator):
         asset_id: str,
         placement: TimelinePlacement,
     ) -> PlacedTimelineAsset | None:
-        asset = self._session.binding.current.get_asset(asset_id)
-        project = self._session.binding.current.get_project()
+        asset = self._session.state.binding.require_current().get_asset(asset_id)
+        project = self._session.state.binding.require_current().get_project()
         if (
             asset.kind == AssetKind.VIDEO
-            and self._session.binding.active_sequence_id == project.main_sequence_id
+            and self._session.state.binding.active_sequence_id == project.main_sequence_id
         ):
-            state = self._session.binding.timeline.state
-            assets = {item.id: item for item in self._session.binding.current.list_assets()}
+            state = self._session.state.binding.require_timeline().state
+            assets = {item.id: item for item in self._session.state.binding.require_current().list_assets()}
             has_timeline_video = any(assets[item.asset_id].kind == AssetKind.VIDEO for item in state.clips)
             if not has_timeline_video:
-                suggested = self._session.binding.current.suggested_profile(asset.id)
+                suggested = self._session.state.binding.require_current().suggested_profile(asset.id)
                 if suggested and suggested != state.sequence.profile:
                     if state.clips and state.sequence.profile_confirmed:
                         fps = suggested.fps_numerator / suggested.fps_denominator
                         mode = "HDR10" if suggested.color_mode == ColorMode.HDR10_BT2020_PQ else "SDR"
-                        self._session.asset_state.pending_profile_asset_id = asset.id
-                        self._session.asset_state.pending_profile_placement = placement
-                        self._session.asset_state.pending_profile_label = (
+                        self._session.state.assets.pending_profile_asset_id = asset.id
+                        self._session.state.assets.pending_profile_placement = placement
+                        self._session.state.assets.pending_profile_label = (
                             f"{suggested.width}×{suggested.height}  {fps:.3f} fps  {mode}"
                         ).replace(".000", "")
-                        self._session.events.profileConfirmationChanged.emit()
+                        self._session.updates.commit(profile_confirmation=True)
                         return None
-                    self._session.binding.current.adopt_main_profile_from_video(asset.id)
-                    self._session.binding.timeline.reload()
-                    asset = self._session.binding.current.get_asset(asset.id)
-                    self._session.events.projectStateChanged.emit()
+                    self._session.state.binding.require_current().adopt_main_profile_from_video(asset.id)
+                    self._session.state.binding.require_timeline().reload()
+                    asset = self._session.state.binding.require_current().get_asset(asset.id)
+                    self._session.updates.commit(project=True)
                 elif not state.sequence.profile_confirmed:
-                    self._session.binding.current.adopt_main_profile_from_video(asset.id)
-                    self._session.binding.timeline.reload()
-                    asset = self._session.binding.current.get_asset(asset.id)
-                    self._session.events.projectStateChanged.emit()
+                    self._session.state.binding.require_current().adopt_main_profile_from_video(asset.id)
+                    self._session.state.binding.require_timeline().reload()
+                    asset = self._session.state.binding.require_current().get_asset(asset.id)
+                    self._session.updates.commit(project=True)
         return self.place_on_timeline(asset, placement)
 
     def place_on_timeline(
@@ -102,19 +102,21 @@ class TimelineAssetOperations(SessionCoordinator):
         placement: TimelinePlacement,
     ) -> PlacedTimelineAsset:
         if asset.kind == AssetKind.SUBTITLE:
-            documents = self._session.binding.current.list_subtitle_documents(asset.id)
+            documents = self._session.state.binding.require_current().list_subtitle_documents(asset.id)
             if not documents:
                 raise RuntimeError("字幕素材还没有对应的字幕文档，请重新导入 SRT")
             document = next(
-                (item for item in documents if item.id == self._session.selection.document_id),
+                (item for item in documents if item.id == self._session.state.selection.document_id),
                 documents[0],
             )
-            segments = self._session.binding.current.list_subtitle_segments(document.id)
+            segments = self._session.state.binding.require_current().list_subtitle_segments(document.id)
             if not segments:
                 raise RuntimeError("字幕文档中没有可放置的字幕")
-            project = self._session.binding.current.get_project()
-            main_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
-            active_profile = self._session.binding.timeline.state.sequence.profile
+            project = self._session.state.binding.require_current().get_project()
+            main_profile = (
+                self._session.state.binding.require_current().get_sequence(project.main_sequence_id).profile
+            )
+            active_profile = self._session.state.binding.require_timeline().state.sequence.profile
             source_start, source_end = reframe_interval(
                 min(item.start_frame for item in segments),
                 max(item.end_frame for item in segments),
@@ -129,21 +131,21 @@ class TimelineAssetOperations(SessionCoordinator):
                 start,
                 duration,
             )
-            placements = self._session.binding.current.place_subtitle_document(
+            placements = self._session.state.binding.require_current().place_subtitle_document(
                 document.id,
                 subtitle_track.id,
                 offset_frames=start - source_start,
                 follow_clips=False,
             )
-            self._session.selection.document_id = document.id
-            self._session.selection.clip_ids = []
-            self._session.selection.compound_id = ""
+            self._session.state.selection.document_id = document.id
+            self._session.state.selection.clip_ids = []
+            self._session.state.selection.compound_id = ""
             self._session.projectors.timeline.refresh_timeline()
             self._session.projectors.subtitles.refresh_documents()
             self._session.projectors.timeline.refresh_preview_subtitles()
-            self._session.events.projectStateChanged.emit()
-            self._session.events.historyChanged.emit()
-            self._session.events.selectionChanged.emit()
+            self._session.updates.commit(project=True)
+            self._session.updates.commit(history=True)
+            self._session.updates.commit(selection=True)
             self._session._set_status("已放入 %1 条字幕", len(placements))
             return PlacedTimelineAsset(
                 track_id=subtitle_track.id,
@@ -155,9 +157,11 @@ class TimelineAssetOperations(SessionCoordinator):
             AssetKind.WEB: TrackKind.VIDEO,
             AssetKind.AUDIO: TrackKind.AUDIO,
         }[asset.kind]
-        project = self._session.binding.current.get_project()
-        main_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
-        active_profile = self._session.binding.timeline.state.sequence.profile
+        project = self._session.state.binding.require_current().get_project()
+        main_profile = (
+            self._session.state.binding.require_current().get_sequence(project.main_sequence_id).profile
+        )
+        active_profile = self._session.state.binding.require_timeline().state.sequence.profile
         asset = asset.in_frame_clock(main_profile, active_profile)
         source_in = max(0, placement.source_in_frame)
         source_out = placement.source_out_frame
@@ -173,22 +177,22 @@ class TimelineAssetOperations(SessionCoordinator):
         start = self._placement_start(placement, 0)
         track = self._resolve_drop_track(target_kind, placement, start, duration)
         if placement.start_frame is None:
-            clips = self._session.binding.timeline.state.clips_for_track(track.id)
+            clips = self._session.state.binding.require_timeline().state.clips_for_track(track.id)
             start = max((clip.timeline_end for clip in clips), default=0)
-        clip = self._session.binding.timeline.add_clip(
+        clip = self._session.state.binding.require_timeline().add_clip(
             track_id=track.id,
             asset_id=asset.id,
             timeline_start=start,
             source_in=source_in,
             duration=duration,
         )
-        self._session.selection.clip_ids = [clip.id]
-        self._session.selection.compound_id = ""
+        self._session.state.selection.clip_ids = [clip.id]
+        self._session.state.selection.compound_id = ""
         self._session.projectors.timeline.refresh_timeline()
-        self._session.events.projectStateChanged.emit()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(project=True)
+        self._session.updates.commit(selection=True)
         self.schedule_background(asset, dropped_frames=0)
-        self._session.events.historyChanged.emit()
+        self._session.updates.commit(history=True)
         self._session._set_status("已将 %1 放入时间轴", asset.name)
         return PlacedTimelineAsset(track_id=track.id, end_frame=clip.timeline_end)
 
@@ -200,18 +204,18 @@ class TimelineAssetOperations(SessionCoordinator):
         requested = max(0, placement.start_frame)
         if not placement.snap_enabled:
             return requested
-        return self._session.binding.timeline.snap_frame(
+        return self._session.state.binding.require_timeline().snap_frame(
             requested,
             self._session._timeline_snap_targets([], placement.playhead_frame),
             self._session._snap_tolerance_frames(placement.pixels_per_frame),
         )
 
     def _timeline_is_empty(self) -> bool:
-        state = self._session.binding.timeline.state
+        state = self._session.state.binding.require_timeline().state
         if state.clips:
             return False
         return not any(
-            self._session.binding.current.list_subtitle_placements(track.id)
+            self._session.state.binding.require_current().list_subtitle_placements(track.id)
             for track in state.tracks
             if track.kind == TrackKind.SUBTITLE
         )
@@ -223,7 +227,7 @@ class TimelineAssetOperations(SessionCoordinator):
         start: int,
         duration: int,
     ):
-        state = self._session.binding.timeline.state
+        state = self._session.state.binding.require_timeline().state
         requested = next(
             (track for track in state.tracks if track.id == placement.track_id),
             None,
@@ -268,46 +272,50 @@ class TimelineAssetOperations(SessionCoordinator):
     ) -> bool:
         end = start + duration
         if kind == TrackKind.SUBTITLE:
-            occupied = self._session.binding.current.list_subtitle_placements(track_id)
+            occupied = self._session.state.binding.require_current().list_subtitle_placements(track_id)
             return all(end <= item.start_frame or start >= item.end_frame for item in occupied)
         clips = (
-            audio_clips_for_track(self._session.binding.timeline.state, track_id)
+            audio_clips_for_track(self._session.state.binding.require_timeline().state, track_id)
             if kind == TrackKind.AUDIO
-            else self._session.binding.timeline.state.clips_for_track(track_id)
+            else self._session.state.binding.require_timeline().state.clips_for_track(track_id)
         )
         return all(end <= clip.timeline_start or start >= clip.timeline_end for clip in clips)
 
     def add_timeline_track(self, kind: TrackKind, *, position: int | None = None):
         audio_bus_id = None
         if kind in {TrackKind.VIDEO, TrackKind.AUDIO}:
-            buses = self._session.binding.current.list_audio_buses(self._session.binding.active_sequence_id)
+            buses = self._session.state.binding.require_current().list_audio_buses(
+                self._session.state.binding.active_sequence_id
+            )
             preferred_name = "音乐" if kind == TrackKind.AUDIO else "对白"
             audio_bus_id = next(
                 (bus.id for bus in buses if bus.name == preferred_name),
                 next((bus.id for bus in buses if bus.parent_bus_id is None), None),
             )
-        return self._session.binding.timeline.add_track(kind, audio_bus_id=audio_bus_id, position=position)
+        return self._session.state.binding.require_timeline().add_track(
+            kind, audio_bus_id=audio_bus_id, position=position
+        )
 
     def start_media_import(self, source: Path) -> Task:
         if source.suffix.lower() in {".srt", ".vtt", ".ass", ".ssa"}:
             selected_media_id = next(
                 (
                     asset_id
-                    for asset_id in self._session.selection.asset_ids
-                    if self._session.binding.current.get_asset(asset_id).kind
+                    for asset_id in self._session.state.selection.asset_ids
+                    if self._session.state.binding.require_current().get_asset(asset_id).kind
                     in {AssetKind.VIDEO, AssetKind.AUDIO}
                 ),
                 None,
             )
-            return self._session.binding.current.import_asset(
+            return self._session.state.binding.require_current().import_asset(
                 source,
-                sequence_id=self._session.binding.active_sequence_id,
+                sequence_id=self._session.state.binding.active_sequence_id,
                 purpose="subtitle",
-                language=self._session.service_settings.asr.language,
+                language=self._session.state.service_settings.asr.language,
                 media_asset_id=selected_media_id,
             )
-        return self._session.binding.current.import_asset(
-            source, sequence_id=self._session.binding.active_sequence_id
+        return self._session.state.binding.require_current().import_asset(
+            source, sequence_id=self._session.state.binding.active_sequence_id
         )
 
     def import_media_paths(
@@ -325,7 +333,9 @@ class TimelineAssetOperations(SessionCoordinator):
         for index, source in enumerate(sources):
             manifest_path = source / MANIFEST_FILE_NAME if source.is_dir() else source
             if manifest_path.is_file() and manifest_path.name == MANIFEST_FILE_NAME:
-                imported_asset_ids[index] = self._session.binding.current.import_web_package(manifest_path).id
+                imported_asset_ids[index] = (
+                    self._session.state.binding.require_current().import_web_package(manifest_path).id
+                )
             elif source.is_file():
                 tasks.append((index, self.start_media_import(source)))
             elif source.is_dir():
@@ -340,9 +350,9 @@ class TimelineAssetOperations(SessionCoordinator):
                 pending_task_ids={task.id for _, task in tasks},
             )
             for index, task in tasks:
-                self._session.asset_state.pending_import_tasks[task.id] = (batch_id, index)
+                self._session.state.assets.pending_import_tasks[task.id] = (batch_id, index)
             if batch.pending_task_ids:
-                self._session.asset_state.pending_import_batches[batch_id] = batch
+                self._session.state.assets.pending_import_batches[batch_id] = batch
             else:
                 self.queue_for_timeline(
                     [asset_id for asset_id in imported_asset_ids if asset_id],
@@ -350,10 +360,10 @@ class TimelineAssetOperations(SessionCoordinator):
                 )
         imported_web_ids = [asset_id for asset_id in imported_asset_ids if asset_id]
         if imported_web_ids:
-            self._session.selection.asset_ids = [imported_web_ids[-1]]
+            self._session.state.selection.asset_ids = [imported_web_ids[-1]]
             self._session.projectors.assets.refresh_assets()
-            self._session.events.projectStateChanged.emit()
-            self._session.events.selectionChanged.emit()
+            self._session.updates.commit(project=True)
+            self._session.updates.commit(selection=True)
         else:
             self._session.projectors.tasks.refresh_tasks()
         if len(sources) == 1:
@@ -368,18 +378,18 @@ class TimelineAssetOperations(SessionCoordinator):
                 self._session._set_status("已导入 %1 个素材", len(sources))
 
     def finish_import_drop(self, task_id: str, asset_id: str) -> None:
-        task_entry = self._session.asset_state.pending_import_tasks.pop(task_id, None)
+        task_entry = self._session.state.assets.pending_import_tasks.pop(task_id, None)
         if task_entry is None:
             return
         batch_id, index = task_entry
-        batch = self._session.asset_state.pending_import_batches.get(batch_id)
+        batch = self._session.state.assets.pending_import_batches.get(batch_id)
         if batch is None:
             return
         batch.pending_task_ids.discard(task_id)
         batch.asset_ids[index] = asset_id or None
         if batch.pending_task_ids:
             return
-        self._session.asset_state.pending_import_batches.pop(batch_id, None)
+        self._session.state.assets.pending_import_batches.pop(batch_id, None)
         imported_ids = [item for item in batch.asset_ids if item]
         if imported_ids:
             self.queue_for_timeline(imported_ids, batch.placement)
@@ -395,25 +405,27 @@ class TimelineAssetOperations(SessionCoordinator):
         return Path(path).expanduser().resolve()
 
     def schedule_background(self, asset, *, dropped_frames: int) -> None:
-        if not self._session.binding.current or self._session.binding.current.read_only:
+        if not self._session.state.binding.current or self._session.state.binding.require_current().read_only:
             return
         prepare_media_managed = (
             dropped_frames <= 0
-            and self._session.binding.current
+            and self._session.state.binding.current
             and any(
                 run.stage == WorkflowStage.PREPARE_MEDIA and asset.id in run.asset_ids
-                for run in self._session.binding.current.list_workflow_runs(active_only=True)
+                for run in self._session.state.binding.require_current().list_workflow_runs(active_only=True)
             )
         )
         active = {
             (task.kind, tuple(task.input_asset_ids))
-            for task in self._session.binding.current.list_tasks()
+            for task in self._session.state.binding.require_current().list_tasks()
             if task.status.value in {"pending", "running", "paused"}
         }
         proxy_key = (TaskKind.PROXY, (asset.id,))
-        decision = self._session.binding.current.proxy_decision(asset, dropped_frames=dropped_frames)
+        decision = self._session.state.binding.require_current().proxy_decision(
+            asset, dropped_frames=dropped_frames
+        )
         if (
-            self._session.service_settings.preview.automatic_proxy
+            self._session.state.service_settings.preview.automatic_proxy
             and not prepare_media_managed
             and not asset.proxy_path
             and decision.required

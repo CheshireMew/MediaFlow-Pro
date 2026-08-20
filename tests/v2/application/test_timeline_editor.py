@@ -31,8 +31,8 @@ def editor_fixture(tmp_path: Path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"real-producer-output")
     repository = ProjectRepository.create(tmp_path / "Project", "Project")
-    asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-    project = repository.catalog.get_project()
+    asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+    project = repository.projects.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
     video_track = editor.add_track(TrackKind.VIDEO)
     editor.add_track(TrackKind.AUDIO)
@@ -52,8 +52,12 @@ def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
         source_in=10,
         duration=100,
     )
+    checkpoint = editor.history.checkpoint()
     left, right = editor.split_clip(clip.id, 40)
+    changes = editor.history.change_set_since(checkpoint)
     assert (left.duration, right.timeline_start, right.source_in) == (40, 40, 50)
+    assert f"/sequences/{editor.sequence_id}/clips/{clip.id}/duration" in changes.write_set
+    assert f"/sequences/{editor.sequence_id}/clips/{right.id}" in changes.write_set
     assert len(repository.timeline.load_timeline(editor.sequence_id).clips) == 2
 
     editor.undo()
@@ -152,7 +156,7 @@ def test_known_media_source_bounds_are_enforced_at_edit_and_storage_boundaries(
     editor_fixture,
 ) -> None:
     repository, editor, asset, video_track = editor_fixture
-    asset = repository.catalog.update_asset(
+    asset = repository.assets.update_asset(
         asset.model_copy(
             update={
                 "metadata": asset.metadata.model_copy(
@@ -195,9 +199,7 @@ def test_known_media_source_bounds_are_enforced_at_edit_and_storage_boundaries(
             duration=10,
         )
     invalid = editor.state
-    invalid.clips[0] = invalid.clips[0].model_copy(
-        update={"source_in": 100, "duration": 2}
-    )
+    invalid.clips[0] = invalid.clips[0].model_copy(update={"source_in": 100, "duration": 2})
     with pytest.raises(ValueError, match="source range"):
         repository.timeline.save_timeline(invalid)
 
@@ -215,7 +217,7 @@ def test_replace_source_is_one_undoable_edit_and_revalidates_source_bounds(
     )
     replacement_path = repository.project_dir.parent / "replacement.png"
     replacement_path.write_bytes(b"real-replacement-output")
-    replacement = repository.catalog.import_external_asset(
+    replacement = repository.assets.import_external_asset(
         replacement_path,
         AssetKind.IMAGE,
     )
@@ -320,8 +322,7 @@ def test_split_preserves_valid_incoming_and_outgoing_transitions(editor_fixture)
 
     left, right = editor.split_clip(source.id, 40)
     transitions = {
-        item.id: item
-        for item in repository.timeline.load_timeline(editor.sequence_id).transitions
+        item.id: item for item in repository.timeline.load_timeline(editor.sequence_id).transitions
     }
 
     assert transitions[incoming_transition.id].right_clip_id == left.id
@@ -440,7 +441,7 @@ def test_primary_dialogue_track_is_unique_persisted_and_undoable(editor_fixture)
     assert not any(track.primary_dialogue for track in editor.state.tracks)
     voice_source = repository.project_dir.parent / "voice.wav"
     voice_source.write_bytes(b"real-audio-producer-output")
-    voice_asset = repository.catalog.import_external_asset(voice_source, AssetKind.AUDIO)
+    voice_asset = repository.assets.import_external_asset(voice_source, AssetKind.AUDIO)
     editor.add_clip(
         track_id=second_audio.id,
         asset_id=voice_asset.id,
@@ -471,7 +472,7 @@ def test_empty_audio_track_does_not_claim_dialogue_before_linked_audio_appears(
     editor_fixture,
 ) -> None:
     repository, editor, asset, video_track = editor_fixture
-    asset = repository.catalog.update_asset(
+    asset = repository.assets.update_asset(
         asset.model_copy(
             update={"metadata": asset.metadata.model_copy(update={"has_video": True, "has_audio": True})}
         )
@@ -504,7 +505,7 @@ def test_linked_subtitles_follow_move_trim_speed_split_and_undo(editor_fixture) 
     )
     subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
     document = SubtitleDocument(
-        project_id=repository.catalog.get_project().id,
+        project_id=repository.projects.get_project().id,
         asset_id=asset.id,
         language="zh-CN",
     )
@@ -794,7 +795,7 @@ def test_timeline_range_creates_complete_editable_short_sequence(editor_fixture)
     selected = editor.add_range(10, 70, "短视频选区")
     subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
     document = SubtitleDocument(
-        project_id=repository.catalog.get_project().id,
+        project_id=repository.projects.get_project().id,
         asset_id=asset.id,
         language="zh-CN",
     )
@@ -839,7 +840,7 @@ def test_short_creation_rolls_back_the_whole_use_case_on_late_failure(
         duration=40,
     )
     selection = editor.add_range(5, 30, "Atomic short")
-    before_ids = [item.id for item in repository.catalog.list_sequences()]
+    before_ids = [item.id for item in repository.sequences.list_sequences()]
 
     def fail_after_sequence_was_staged(_state) -> None:
         raise RuntimeError("late timeline failure")
@@ -855,7 +856,7 @@ def test_short_creation_rolls_back_the_whole_use_case_on_late_failure(
             selection.id,
         )
 
-    assert [item.id for item in repository.catalog.list_sequences()] == before_ids
+    assert [item.id for item in repository.sequences.list_sequences()] == before_ids
 
 
 def test_ripple_delete_moves_all_unlocked_tracks(editor_fixture) -> None:
@@ -900,12 +901,18 @@ def test_ripple_delete_moves_all_unlocked_tracks(editor_fixture) -> None:
         after,
         source_track_ids={video_track.id},
     ) == [RippleAdjustment(interval=FrameInterval(0, 30), delta_frames=-30)]
+    checkpoint = editor.history.checkpoint()
     editor.delete_clip(first.id, ripple=True)
+    changes = editor.history.change_set_since(checkpoint)
     assert next(clip for clip in editor.state.clips if clip.id == later.id).timeline_start == 10
     assert next(clip for clip in editor.state.clips if clip.id == locked.id).timeline_start == 40
     assert next(item for item in editor.state.markers if item.id == marker.id).frame == 15
     shifted = next(item for item in editor.state.ranges if item.id == selection.id)
     assert (shifted.start_frame, shifted.end_frame) == (5, 25)
+    assert f"/sequences/{editor.sequence_id}/clips/{first.id}" in changes.write_set
+    assert f"/sequences/{editor.sequence_id}/clips/{later.id}/timeline_start" in changes.write_set
+    assert f"/sequences/{editor.sequence_id}/markers/{marker.id}/frame" in changes.write_set
+    assert f"/sequences/{editor.sequence_id}/ranges/{selection.id}/start_frame" in changes.write_set
 
 
 def test_snapping_uses_nearest_frame_with_stable_tie_break() -> None:
@@ -1078,7 +1085,7 @@ def test_profile_frame_clock_change_retimes_timeline_subtitles_and_undo(editor_f
     )
     subtitle_track = next(track for track in editor.state.tracks if track.kind == TrackKind.SUBTITLE)
     document = SubtitleDocument(
-        project_id=repository.catalog.get_project().id,
+        project_id=repository.projects.get_project().id,
         asset_id=asset.id,
         language="zh-CN",
     )
@@ -1116,19 +1123,17 @@ def test_profile_frame_clock_change_reframes_known_asset_bounds_atomically(
         "Clock Project",
         profile_25,
     ) as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
-                    "metadata": asset.metadata.model_copy(
-                        update={"duration_frames": 25, "has_video": True}
-                    )
+                    "metadata": asset.metadata.model_copy(update={"duration_frames": 25, "has_video": True})
                 }
             )
         )
         editor = TimelineEditor(
             repository,
-            repository.catalog.get_project().main_sequence_id,
+            repository.projects.get_project().main_sequence_id,
         )
         video_track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
@@ -1139,15 +1144,13 @@ def test_profile_frame_clock_change_reframes_known_asset_bounds_atomically(
             duration=25,
         )
 
-        editor.set_sequence_profile(
-            profile_25.model_copy(update={"fps_numerator": 30})
-        )
+        editor.set_sequence_profile(profile_25.model_copy(update={"fps_numerator": 30}))
         assert editor.state.clips[0].duration == 30
-        assert repository.catalog.get_asset(asset.id).metadata.duration_frames == 30
+        assert repository.assets.get_asset(asset.id).metadata.duration_frames == 30
 
         editor.undo()
         assert editor.state.clips[0].duration == 25
-        assert repository.catalog.get_asset(asset.id).metadata.duration_frames == 25
+        assert repository.assets.get_asset(asset.id).metadata.duration_frames == 25
 
 
 def test_main_profile_cannot_bypass_the_frame_clock_transaction(
@@ -1157,15 +1160,11 @@ def test_main_profile_cannot_bypass_the_frame_clock_transaction(
         tmp_path / "Main Clock Boundary",
         "Main Clock Boundary",
     ) as repository:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         before = repository.timeline.load_timeline(sequence_id)
         invalid = before.model_copy(deep=True)
         invalid.sequence = invalid.sequence.model_copy(
-            update={
-                "profile": invalid.sequence.profile.model_copy(
-                    update={"fps_numerator": 24}
-                )
-            }
+            update={"profile": invalid.sequence.profile.model_copy(update={"fps_numerator": 24})}
         )
 
         with pytest.raises(
@@ -1195,12 +1194,12 @@ def test_main_clock_change_resyncs_short_subtitles_without_moving_overrides(
         "Shared Subtitle Clock",
         main_profile,
     ) as repository:
-        project = repository.catalog.get_project()
-        short = repository.catalog.create_short_sequence(
+        project = repository.projects.get_project()
+        short = repository.sequences.create_short_sequence(
             "Short",
             short_profile,
         )
-        asset = repository.catalog.import_external_asset(
+        asset = repository.assets.import_external_asset(
             subtitle_source,
             AssetKind.SUBTITLE,
         )
@@ -1247,14 +1246,9 @@ def test_main_clock_change_resyncs_short_subtitles_without_moving_overrides(
             repository,
             project.main_sequence_id,
         )
-        main_editor.set_sequence_profile(
-            main_profile.model_copy(update={"fps_numerator": 24})
-        )
+        main_editor.set_sequence_profile(main_profile.model_copy(update={"fps_numerator": 24}))
         changed = {
-            item.segment_id: item
-            for item in repository.subtitles.list_subtitle_placements(
-                subtitle_track.id
-            )
+            item.segment_id: item for item in repository.subtitles.list_subtitle_placements(subtitle_track.id)
         }
         assert (
             changed[first.id].start_frame,
@@ -1268,10 +1262,7 @@ def test_main_clock_change_resyncs_short_subtitles_without_moving_overrides(
 
         main_editor.undo()
         restored = {
-            item.segment_id: item
-            for item in repository.subtitles.list_subtitle_placements(
-                subtitle_track.id
-            )
+            item.segment_id: item for item in repository.subtitles.list_subtitle_placements(subtitle_track.id)
         }
         assert (
             restored[first.id].start_frame,
@@ -1285,10 +1276,7 @@ def test_main_clock_change_resyncs_short_subtitles_without_moving_overrides(
 
         main_editor.redo()
         redone = {
-            item.segment_id: item
-            for item in repository.subtitles.list_subtitle_placements(
-                subtitle_track.id
-            )
+            item.segment_id: item for item in repository.subtitles.list_subtitle_placements(subtitle_track.id)
         }
         assert (
             redone[first.id].start_frame,
@@ -1307,17 +1295,15 @@ def test_short_sequence_source_bounds_use_the_short_sequence_frame_clock(
         "Short Clock Project",
         main_profile,
     ) as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
-                    "metadata": asset.metadata.model_copy(
-                        update={"duration_frames": 25, "has_video": True}
-                    )
+                    "metadata": asset.metadata.model_copy(update={"duration_frames": 25, "has_video": True})
                 }
             )
         )
-        short = repository.catalog.create_short_sequence(
+        short = repository.sequences.create_short_sequence(
             "30 fps short",
             main_profile.model_copy(update={"fps_numerator": 30}),
         )
@@ -1346,8 +1332,8 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
     source = tmp_path / "linked.mp4"
     source.write_bytes(b"av-source")
     with ProjectRepository.create(tmp_path / "Linked Project", "Linked Project") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": MediaMetadata(
@@ -1358,7 +1344,7 @@ def test_linked_video_moves_between_video_tracks_and_detaches_to_independent_aud
                 }
             )
         )
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         first_video = editor.add_track(TrackKind.VIDEO)
         first = editor.add_clip(
             track_id=first_video.id,
@@ -1453,8 +1439,8 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
         "Exact Frame Clock",
         profile_120,
     ) as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "proxy_path": str(proxy),
@@ -1470,7 +1456,7 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
                 }
             )
         )
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         subtitle_track = editor.add_track(TrackKind.SUBTITLE)
@@ -1516,7 +1502,7 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
         editor.set_sequence_in_out(3, 119)
 
         document = SubtitleDocument(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             asset_id=asset.id,
             language="zh-CN",
         )
@@ -1563,7 +1549,7 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
         repository.highlights.save_highlights(
             [
                 HighlightCandidate(
-                    project_id=repository.catalog.get_project().id,
+                    project_id=repository.projects.get_project().id,
                     asset_id=asset.id,
                     document_id=document.id,
                     sequence_id=sequence_id,
@@ -1575,9 +1561,7 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
         )
         before = repository.timeline.capture_main_frame_clock(sequence_id)
 
-        editor.set_sequence_profile(
-            profile_120.model_copy(update={"fps_numerator": 24})
-        )
+        editor.set_sequence_profile(profile_120.model_copy(update={"fps_numerator": 24}))
         after = repository.timeline.capture_main_frame_clock(sequence_id)
         assert after != before
         assert after.assets[0].proxy_path is None
@@ -1608,8 +1592,8 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
         with ProjectRepository.open(project_dir, writable=False) as observer:
             assert observer.timeline.capture_main_frame_clock(sequence_id) == after
 
-        current_asset = repository.catalog.get_asset(asset.id)
-        repository.catalog.update_asset(
+        current_asset = repository.assets.get_asset(asset.id)
+        repository.assets.update_asset(
             current_asset.model_copy(
                 update={
                     "proxy_path": str(proxy),

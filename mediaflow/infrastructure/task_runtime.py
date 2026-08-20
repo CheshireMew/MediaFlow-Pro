@@ -10,6 +10,7 @@ from mediaflow.application.ports import (
     AssetTaskRuntime,
     DiagnosticsTaskRuntime,
     DownloadTaskRuntime,
+    DubbingTaskRuntime,
     ExportExecutionResult,
     ExportSequenceRequest,
     ExportTaskRuntime,
@@ -35,14 +36,19 @@ from mediaflow.domain.storage_names import (
 from mediaflow.domain.task_commands import DiagnosticsBundleCommand, SequenceBuildUnit
 from mediaflow.domain.tasks import LoudnessTaskOutcome
 from mediaflow.domain.timeline import Clip, ClipTransformKeyframe, TimelineState
-from mediaflow.domain.web_media import (
+from mediaflow.domain.web_exports import (
     WebClipExportResult,
     WebExportFormat,
 )
 
+from .analysis_artifacts import (
+    archive_failed_visual_analysis,
+    write_download_analysis,
+)
 from .asr_engine import create_asr_pipeline
 from .cookie_store import CookieStore
 from .diagnostics_bundle import DiagnosticsBundleService
+from .dubbing_runtime import InfrastructureDubbingRuntime
 from .export_quality import ExportQualityService
 from .file_fingerprint import fingerprint_file, fingerprint_matches
 from .mlt import (
@@ -51,7 +57,7 @@ from .mlt import (
     SequenceBoundaryAnalysisService,
     TimelineCompiler,
 )
-from .mlt.export_service import (
+from .mlt.export_types import (
     ExportResult,
     MltExportRequest,
 )
@@ -157,9 +163,7 @@ class InfrastructureAssetTaskRuntime:
     ) -> Asset:
         if not isinstance(prepared, PreparedProxyGeneration):
             raise TypeError("Proxy preparation does not belong to this runtime")
-        return ProxyService(self._documents, self._paths).commit_prepared(
-            prepared
-        )
+        return ProxyService(self._documents, self._paths).commit_prepared(prepared)
 
     def generate_waveform(
         self,
@@ -207,9 +211,7 @@ class InfrastructureDownloadTaskRuntime:
     ) -> tuple[Path, ...]:
         return archive_published_outputs(
             paths,
-            archive_directory_name=(
-                FAILED_DOWNLOAD_DIRECTORY_NAME
-            ),
+            archive_directory_name=(FAILED_DOWNLOAD_DIRECTORY_NAME),
         )
 
 
@@ -346,12 +348,8 @@ class InfrastructureExportTaskRuntime:
             )
             if report_dir.exists():
                 if not report_dir.is_dir():
-                    raise RuntimeError(
-                        f"Export quality evidence is not a directory: {report_dir}"
-                    )
-                archive_root = (
-                    report_dir.parent / f"{PRODUCT_NAME} Failed Export QA"
-                )
+                    raise RuntimeError(f"Export quality evidence is not a directory: {report_dir}")
+                archive_root = report_dir.parent / f"{PRODUCT_NAME} Failed Export QA"
                 attempt = 1
                 while True:
                     target = safe_child_path(
@@ -542,6 +540,18 @@ class InfrastructureAnalysisTaskRuntime:
     ) -> Path:
         return write_visual_analysis(path, payload)
 
+    @staticmethod
+    def write_download_analysis(path: Path, plan: DownloadPlan) -> Path:
+        return write_download_analysis(path, plan)
+
+    @staticmethod
+    def archive_failed_visual_analysis(
+        sources: tuple[Path, ...],
+        archive_root: Path,
+        task_id: str,
+    ) -> list[str]:
+        return archive_failed_visual_analysis(sources, archive_root, task_id)
+
     def analyze_download(
         self,
         url: str,
@@ -594,6 +604,7 @@ class InfrastructureTaskRuntimes:
     transcription: TranscriptionTaskRuntime
     analysis: AnalysisTaskRuntime
     diagnostics: DiagnosticsTaskRuntime
+    dubbing: DubbingTaskRuntime
 
     @classmethod
     def create(
@@ -619,4 +630,5 @@ class InfrastructureTaskRuntimes:
                 paths,
                 settings,
             ),
+            dubbing=InfrastructureDubbingRuntime(documents, paths),
         )

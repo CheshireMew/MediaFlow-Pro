@@ -134,7 +134,7 @@ def migrate_v2_to_v3(workspace) -> None:
         )
         sequence_ids = [item["id"] for item in connection.execute("SELECT id FROM sequence").fetchall()]
         for sequence_id in sequence_ids:
-            workspace.subtitles._sync_subtitle_placements(
+            workspace.subtitles.sync_subtitle_placements(
                 connection,
                 sequence_id,
             )
@@ -262,7 +262,7 @@ def migrate_v6_to_v7(workspace) -> None:
         )
         sequence_ids = [item["id"] for item in connection.execute("SELECT id FROM sequence").fetchall()]
         for sequence_id in sequence_ids:
-            workspace.subtitles._sync_subtitle_placements(
+            workspace.subtitles.sync_subtitle_placements(
                 connection,
                 sequence_id,
             )

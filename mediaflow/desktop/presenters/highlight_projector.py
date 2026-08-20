@@ -5,15 +5,16 @@ from .base import Projector
 
 class HighlightProjector(Projector):
     def refresh_highlights(self) -> None:
-        if not self._session.binding.current:
+        if not self._session.state.binding.current:
             self._session.models.highlights.set_items([])
             return
         selected_asset_id = (
-            self._session.selection.asset_ids[0] if self._session.selection.asset_ids else None
+            self._session.state.selection.asset_ids[0] if self._session.state.selection.asset_ids else None
         )
-        candidates = self._session.binding.current.list_highlights(selected_asset_id)
+        candidates = self._session.state.binding.require_current().list_highlights(selected_asset_id)
         documents = {
-            document.id: document for document in self._session.binding.current.list_subtitle_documents()
+            document.id: document
+            for document in self._session.state.binding.require_current().list_subtitle_documents()
         }
         self._session.models.highlights.set_items(
             [

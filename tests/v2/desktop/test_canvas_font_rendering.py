@@ -38,11 +38,11 @@ def test_timeline_canvases_render_with_the_application_monospace_font(
     controllers = None
     try:
         engine, controllers = create_engine(app)
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Canvas Font Rendering",
         )
-        controllers.timeline.addTrack("audio")
+        controllers.timeline_structure.addTrack("audio")
 
         window = engine.rootObjects()[0]
         timeline_ruler = window.findChild(QQuickItem, "timelineRuler")

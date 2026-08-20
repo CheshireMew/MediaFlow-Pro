@@ -16,19 +16,15 @@ from xml.etree import ElementTree as ET
 import pytest
 from pydantic import ValidationError
 
-import mediaflow.infrastructure.web_render_service as web_render_module
-from mediaflow.application import web_package_files as web_package_module
+import mediaflow.infrastructure.web_browser_cache_renderer as web_browser_cache_module
+import mediaflow.infrastructure.web_package_storage as web_package_module
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.task_service import TaskStopped
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.web_media_service import (
     WebMediaServices,
 )
-from mediaflow.application.web_package_files import (
-    MANIFEST_FILE_NAME,
-    editable_media_source_hash,
-    web_package_root,
-)
+from mediaflow.application.web_package_files import MANIFEST_FILE_NAME, web_package_root
 from mediaflow.composition import EditorProject
 from mediaflow.domain.enums import (
     AssetKind,
@@ -46,17 +42,24 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.domain.task_commands import ExportSequenceCommand
 from mediaflow.domain.tasks import ArtifactReference
-from mediaflow.domain.web_media import media_mime_type, parse_editable_media_manifest
+from mediaflow.domain.web_manifest import parse_editable_media_manifest
+from mediaflow.domain.web_package_paths import media_mime_type
+from mediaflow.infrastructure.editable_media_contract import editable_media_contract
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.mlt import MltExportService, TimelineCompiler
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.structured_file_reader import LocalStructuredFileReader
 from mediaflow.infrastructure.web_browser import BrowserWebPackageValidator
 from mediaflow.infrastructure.web_capture_engine import (
     FastCaptureFallbackRequired,
     get_web_capture_engine,
     web_capture_diagnostics,
+)
+from mediaflow.infrastructure.web_package_storage import (
+    LocalWebPackageStorage,
+    editable_media_source_hash,
 )
 from mediaflow.infrastructure.web_render_service import WebRenderService
 from tests.v2.editor_service_api import EditorServiceApi
@@ -76,11 +79,11 @@ def _browser_validator() -> BrowserWebPackageValidator:
     chromium = RuntimeContext.discover().paths.chromium
     if chromium is None:
         raise RuntimeError("Pinned Chromium is unavailable")
-    return BrowserWebPackageValidator(chromium)
+    return BrowserWebPackageValidator(chromium, editable_media_contract())
 
 
 def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaServices]:
-    project = repository.catalog.get_project()
+    project = repository.projects.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
     return editor, WebMediaServices(
         repository,
@@ -88,6 +91,9 @@ def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaSer
             editor if sequence_id == project.main_sequence_id else TimelineEditor(repository, sequence_id)
         ),
         _browser_validator(),
+        LocalStructuredFileReader(),
+        LocalWebPackageStorage(),
+        editable_media_contract(),
     )
 
 
@@ -98,7 +104,7 @@ def _add_web_clip(
     *,
     duration: int = 3,
 ):
-    project = repository.catalog.get_project()
+    project = repository.projects.get_project()
     asset = service.packages.import_package(STARTER)
     track = editor.add_track(TrackKind.VIDEO)
     clip = editor.add_clip(
@@ -123,7 +129,7 @@ def test_editorial_technology_cover_real_consumer_chain(
     sequence_id = ""
     try:
         editor, service = _service(repository)
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         sequence_id = project.main_sequence_id
         asset = service.packages.import_package(EDITORIAL_TECHNOLOGY_COVER)
         assert asset.kind == AssetKind.WEB
@@ -206,9 +212,7 @@ def test_editorial_technology_cover_real_consumer_chain(
     with ProjectRepository.open(project_dir, writable=False) as reopened:
         state = reopened.timeline.load_timeline(sequence_id)
         assert state.web_states[clip_id].revision == 1
-        assert state.web_states[clip_id].scenes["cover"].layers["title"].content == (
-            "真实消费：科技图解封面"
-        )
+        assert state.web_states[clip_id].scenes["cover"].layers["title"].content == ("真实消费：科技图解封面")
 
 
 def test_react_filmstrip_captures_only_requested_frames_without_full_cache(
@@ -219,7 +223,7 @@ def test_react_filmstrip_captures_only_requested_frames_without_full_cache(
         "React filmstrip",
     ) as repository:
         editor, service = _service(repository)
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         asset = service.packages.import_package(REACT_REFERENCE)
         track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
@@ -241,9 +245,7 @@ def test_react_filmstrip_captures_only_requested_frames_without_full_cache(
         assert not full_target.path.exists()
         for source in (first, later):
             manifest = json.loads(
-                source.with_name(f"{source.name}.manifest.json").read_text(
-                    encoding="utf-8"
-                )
+                source.with_name(f"{source.name}.manifest.json").read_text(encoding="utf-8")
             )
             assert manifest["frame_count"] == 1
             assert manifest["has_audio"] is False
@@ -264,9 +266,10 @@ def test_react_filmstrip_captures_only_requested_frames_without_full_cache(
                 ],
                 check=True,
             )
-        assert hashlib.sha256(first_png.read_bytes()).digest() != hashlib.sha256(
-            later_png.read_bytes()
-        ).digest()
+        assert (
+            hashlib.sha256(first_png.read_bytes()).digest() != hashlib.sha256(later_png.read_bytes()).digest()
+        )
+
 
 def _native_source_record(
     *,
@@ -473,7 +476,7 @@ def test_editable_media_v6_full_chain(
     try:
         project, asset, clip = _add_web_clip(repository, editor, service)
         copied_root = web_package_root(
-            repository.catalog.resolve_asset_path(asset),
+            repository.assets.resolve_asset_path(asset),
             repository.web.get_web_asset_spec(asset.id).manifest,
         )
         receipt = next((repository.project_dir / "sources" / "web" / "receipts").glob("r-*.json"))
@@ -482,14 +485,8 @@ def test_editable_media_v6_full_chain(
         assert json.loads(receipt.read_text(encoding="utf-8"))["status"] == "committed"
         assert asset.metadata.width == asset.metadata.height == 1080
         copied_files = {path.name for path in copied_root.iterdir() if path.is_file()}
-        expected_files = {
-            "editable-media.json",
-            "editable-media-runtime.js",
-            "index.html",
-            "media-sources.json",
-        }
-        assert expected_files <= copied_files
-        assert copied_files <= expected_files | {"fixture-origin.json"}
+        producer_files = {path.name for path in STARTER.iterdir() if path.is_file()}
+        assert copied_files == producer_files
 
         initial_runtime = service.clips.runtime_state(project.main_sequence_id, clip.id)
         assert set(initial_runtime) == {
@@ -643,11 +640,7 @@ def test_editable_media_v6_full_chain(
             )
         assert protected_video.read_bytes() == protected_video_bytes
         assert not list(tmp_path.glob(".mf-web-video-*.tmp.mp4"))
-        failed_exports = list(
-            (tmp_path / "MediaFlow Pro Failed Exports").glob(
-                "mf-web-video-*.tmp.mp4"
-            )
-        )
+        failed_exports = list((tmp_path / "MediaFlow Pro Failed Exports").glob("mf-web-video-*.tmp.mp4"))
         assert len(failed_exports) == 1
         assert failed_exports[0].stat().st_size > 0
 
@@ -656,7 +649,7 @@ def test_editable_media_v6_full_chain(
         assert len(set(rendered)) == 2
         document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(timeline)
         assert str(cache) in document.xml
-        assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
+        assert str(repository.assets.resolve_asset_path(asset)) not in document.xml
 
         output = tmp_path / "v6-web-final.mp4"
         result = MltExportService(
@@ -758,7 +751,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
     )
     editor, service = _service(repository)
     try:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         asset = service.packages.import_package(package)
         video_track = editor.add_track(TrackKind.VIDEO)
         clip = editor.add_clip(
@@ -807,9 +800,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
             text=True,
             check=True,
         )
-        assert json.loads(filmstrip_probe.stdout)["streams"] == [
-            {"codec_type": "video"}
-        ]
+        assert json.loads(filmstrip_probe.stdout)["streams"] == [{"codec_type": "video"}]
         filmstrip_pixels = subprocess.run(
             [
                 str(RuntimeContext.discover().paths.ffmpeg),
@@ -911,7 +902,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
 
         document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(timeline)
         assert document.xml.count(str(cache)) == 2
-        assert str(repository.catalog.resolve_asset_path(asset)) not in document.xml
+        assert str(repository.assets.resolve_asset_path(asset)) not in document.xml
         handoff = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
             timeline,
             tmp_path / "native-web.fcpxml",
@@ -997,7 +988,7 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         assert any(decoded_audio)
         with pytest.raises(ValueError, match="native audio"):
             service.rebind.plan_rebind_asset(asset.id, STARTER)
-        assert repository.catalog.get_asset(asset.id).metadata.has_audio is True
+        assert repository.assets.get_asset(asset.id).metadata.has_audio is True
 
         detached_video, detached_audio = editor.detach_clip_audio(clip.id)
         detached_timeline = repository.timeline.load_timeline(project.main_sequence_id)
@@ -1053,7 +1044,7 @@ def test_native_media_cannot_be_misbound_to_a_browser_asset_slot(
     try:
         with pytest.raises(ValueError, match="browser-rendered image source"):
             service.packages.import_package(package)
-        assert repository.catalog.list_assets() == []
+        assert repository.assets.list_assets() == []
     finally:
         repository.close()
 
@@ -1088,7 +1079,7 @@ def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
 
         retry_engine = FailsFirstFastAttempt()
         monkeypatch.setattr(
-            web_render_module,
+            web_browser_cache_module,
             "get_web_capture_engine",
             lambda _executable: retry_engine,
         )
@@ -1178,11 +1169,7 @@ def test_web_render_cancellation_aborts_ffmpeg_and_never_publishes_cache(
         assert completed_frames >= 1
         assert not target.path.exists()
         assert not target.path.with_name(f"{target.path.name}.manifest.json").exists()
-        assert not list(
-            target.path.parent.glob(
-                f"{target.path.stem}.*.partial{target.path.suffix}"
-            )
-        )
+        assert not list(target.path.parent.glob(f"{target.path.stem}.*.partial{target.path.suffix}"))
     finally:
         repository.close()
 
@@ -1341,12 +1328,12 @@ def test_editable_media_v6_contract_rejections(
     manifest = json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8"))
     manifest["version"] = 1
     with pytest.raises((ValueError, ValidationError), match="version"):
-        parse_editable_media_manifest(manifest)
+        parse_editable_media_manifest(manifest, editable_media_contract())
 
     manifest = json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8"))
     manifest["scenes"].append(dict(manifest["scenes"][0]))
     with pytest.raises((ValueError, ValidationError), match="scene identifiers"):
-        parse_editable_media_manifest(manifest)
+        parse_editable_media_manifest(manifest, editable_media_contract())
 
     missing_sources = tmp_path / "missing-media-sources"
     shutil.copytree(STARTER, missing_sources)
@@ -1460,7 +1447,7 @@ def test_web_package_accepts_the_deepest_complete_tree_that_fits_all_roots(
         asset = service.packages.import_package(source)
         spec = repository.web.get_web_asset_spec(asset.id)
         package_root = web_package_root(
-            repository.catalog.resolve_asset_path(asset),
+            repository.assets.resolve_asset_path(asset),
             spec.manifest,
         )
         copied_boundary = package_root / boundary_name
@@ -1532,7 +1519,7 @@ def test_web_package_database_failure_rolls_back_records_and_archives_publicatio
         with pytest.raises(OSError, match="injected web spec failure"):
             service.packages.import_package(STARTER)
 
-        assert not [asset for asset in repository.catalog.list_assets() if asset.kind == AssetKind.WEB]
+        assert not [asset for asset in repository.assets.list_assets() if asset.kind == AssetKind.WEB]
         assert not list((repository.project_dir / "sources" / "web").glob("p-*"))
         assert not list((repository.project_dir / "staging" / "web").glob("s-*"))
         failed = list((repository.project_dir / "archive" / "web").glob("f-*"))
@@ -1554,13 +1541,18 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
     entry = source / "index.html"
     nested_entry = pages / "index.html"
     entry.replace(nested_entry)
-    nested_entry.write_text(
-        nested_entry.read_text(encoding="utf-8").replace(
+    nested_content = nested_entry.read_text(encoding="utf-8")
+    nested_content = nested_content.replace(
+        'href="editable-media-editor.css"',
+        'href="../editable-media-editor.css"',
+    ).replace(
+        'src="editable-media-editor.js"',
+        'src="../editable-media-editor.js"',
+    ).replace(
             '<script src="editable-media-runtime.js"></script>',
             ('<script src="../editable-media-runtime.js" data-manifest="../editable-media.json"></script>'),
-        ),
-        encoding="utf-8",
     )
+    nested_entry.write_text(nested_content, encoding="utf-8")
     manifest_path = source / MANIFEST_FILE_NAME
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["entry"] = "pages/index.html"
@@ -1573,7 +1565,7 @@ def test_nested_web_entry_resolves_back_to_the_single_package_root(
     try:
         asset = service.packages.import_package(source)
         spec = repository.web.get_web_asset_spec(asset.id)
-        imported_entry = repository.catalog.resolve_asset_path(asset)
+        imported_entry = repository.assets.resolve_asset_path(asset)
         imported_root = web_package_root(imported_entry, spec.manifest)
 
         assert imported_entry.parent.name == "pages"
@@ -1828,7 +1820,7 @@ def test_rebind_database_failure_keeps_the_old_package_readable(
     asset = service.packages.import_package(STARTER)
     old_spec = repository.web.get_web_asset_spec(asset.id)
     old_root = web_package_root(
-        repository.catalog.resolve_asset_path(asset),
+        repository.assets.resolve_asset_path(asset),
         old_spec.manifest,
     )
     replacement = tmp_path / "replacement"
@@ -1858,12 +1850,12 @@ def test_rebind_database_failure_keeps_the_old_package_readable(
                 {},
             )
 
-        current_asset = repository.catalog.get_asset(asset.id)
+        current_asset = repository.assets.get_asset(asset.id)
         current_spec = repository.web.get_web_asset_spec(asset.id)
         assert current_spec == old_spec
         assert (
             web_package_root(
-                repository.catalog.resolve_asset_path(current_asset),
+                repository.assets.resolve_asset_path(current_asset),
                 current_spec.manifest,
             )
             == old_root
@@ -1916,9 +1908,7 @@ def test_rebind_requires_exact_conflict_decisions_and_an_unchanged_plan(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["component"]["name"] = "Replacement without spring"
         manifest["parameters"] = [
-            item
-            for item in manifest["parameters"]
-            if item["descriptor"]["id"] != "spring_strength"
+            item for item in manifest["parameters"] if item["descriptor"]["id"] != "spring_strength"
         ]
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -1975,7 +1965,7 @@ def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
         asset = service.packages.import_package(STARTER)
         old_spec = repository.web.get_web_asset_spec(asset.id)
         old_root = web_package_root(
-            repository.catalog.resolve_asset_path(asset),
+            repository.assets.resolve_asset_path(asset),
             old_spec.manifest,
         )
         version = repository.records.create_project_version("Before web rebind")
@@ -1996,10 +1986,10 @@ def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
             plan.plan_digest,
             {},
         )
-        rebound_asset = repository.catalog.get_asset(asset.id)
+        rebound_asset = repository.assets.get_asset(asset.id)
         rebound_spec = repository.web.get_web_asset_spec(asset.id)
         rebound_root = web_package_root(
-            repository.catalog.resolve_asset_path(rebound_asset),
+            repository.assets.resolve_asset_path(rebound_asset),
             rebound_spec.manifest,
         )
         assert report.archive_path == str(old_root)
@@ -2008,10 +1998,10 @@ def test_named_version_restore_keeps_the_immutable_pre_rebind_web_package(
         _browser_validator().validate(rebound_root, rebound_spec.manifest)
 
         repository.records.restore_project_version(version.id)
-        restored_asset = repository.catalog.get_asset(asset.id)
+        restored_asset = repository.assets.get_asset(asset.id)
         restored_spec = repository.web.get_web_asset_spec(asset.id)
         restored_root = web_package_root(
-            repository.catalog.resolve_asset_path(restored_asset),
+            repository.assets.resolve_asset_path(restored_asset),
             restored_spec.manifest,
         )
         assert restored_root == old_root
@@ -2031,7 +2021,7 @@ def test_publication_reconciliation_is_write_only_and_preserves_referenced_packa
     asset = service.packages.import_package(STARTER)
     spec = repository.web.get_web_asset_spec(asset.id)
     referenced_root = web_package_root(
-        repository.catalog.resolve_asset_path(asset),
+        repository.assets.resolve_asset_path(asset),
         spec.manifest,
     )
     receipt_root = project_dir / "sources" / "web" / "receipts"
@@ -2080,11 +2070,11 @@ def test_publication_reconciliation_is_write_only_and_preserves_referenced_packa
         assert json.loads(referenced_receipt.read_text(encoding="utf-8"))["status"] == "committed"
         failures = list((project_dir / "archive" / "web").glob("f-*"))
         assert len(failures) == 2
-        current_asset = writable.catalog.get_asset(asset.id)
+        current_asset = writable.assets.get_asset(asset.id)
         current_spec = writable.web.get_web_asset_spec(asset.id)
         assert (
             web_package_root(
-                writable.catalog.resolve_asset_path(current_asset),
+                writable.assets.resolve_asset_path(current_asset),
                 current_spec.manifest,
             )
             == referenced_root
@@ -2116,7 +2106,7 @@ def test_reopening_rejects_an_empty_directory_added_to_a_published_web_package(
     asset = service.packages.import_package(STARTER)
     spec = repository.web.get_web_asset_spec(asset.id)
     package_root = web_package_root(
-        repository.catalog.resolve_asset_path(asset),
+        repository.assets.resolve_asset_path(asset),
         spec.manifest,
     )
     receipt = next((project_dir / "sources" / "web" / "receipts").glob("r-*.json"))
@@ -2148,9 +2138,7 @@ def test_v6_cli_chain(
         arguments={
             "name": "CLI V6 Web Project",
             "directory_name": "cli-v6-web-project",
-            "profile": ProjectProfile().model_dump(
-                mode="json", exclude_computed_fields=True
-            ),
+            "profile": ProjectProfile().model_dump(mode="json", exclude_computed_fields=True),
         },
     )
     project_path = Path(created["path"])
@@ -2163,9 +2151,7 @@ def test_v6_cli_chain(
         )
 
     def request(operation: str, arguments: dict | None = None) -> dict:
-        return editor_service_api.execute_request(
-            request_payload(operation, arguments)
-        )["result"]
+        return editor_service_api.execute_request(request_payload(operation, arguments))["result"]
 
     sequence_id = created["project"]["main_sequence_id"]
     imported = request("web.import", {"source": str(STARTER)})
@@ -2231,16 +2217,14 @@ def test_v6_cli_chain(
     fields = {item["path"]: item for item in described["fields"]}
     assert fields["parameters.spring_strength"]["descriptor"]["control"] == "slider"
     assert fields["parameters.spring_strength"]["descriptor"]["unit"] == "ratio"
-    assert (
-        fields["scenes.opening.parameters.stagger_interval_ms"]["descriptor"]["kind"]
-        == "integer"
-    )
+    assert fields["scenes.opening.parameters.stagger_interval_ms"]["descriptor"]["kind"] == "integer"
 
     parameter_updated = request(
         "web.clip.parameter.update",
         {
             "sequence_id": sequence_id,
             "clip_id": clip_id,
+            "scene_id": "opening",
             "parameter_id": "spring_strength",
             "value": 0.88,
             "expected_revision": revision,
@@ -2268,6 +2252,7 @@ def test_v6_cli_chain(
         {
             "sequence_id": sequence_id,
             "clip_id": clip_id,
+            "scene_id": "opening",
             "parameter_id": "spring_strength",
             "locked": True,
             "expected_revision": revision,
@@ -2323,9 +2308,7 @@ def test_v6_cli_chain(
         arguments={"task_id": task_receipt["id"], "timeout": 60},
     )["task"]
     assert completed_render["status"] == "completed"
-    artifact = ArtifactReference.model_validate(
-        completed_render["artifacts"][0]
-    )
+    artifact = ArtifactReference.model_validate(completed_render["artifacts"][0])
     assert artifact.resolve(project_path).is_file()
 
     variants = request(

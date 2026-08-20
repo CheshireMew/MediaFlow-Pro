@@ -41,6 +41,14 @@ def project_write_paths_overlap(left: str, right: str) -> bool:
     return ProjectWritePath.parse(left).overlaps(ProjectWritePath.parse(right))
 
 
+def project_write_path_covers(scope: str, path: str) -> bool:
+    """Return whether a declared write scope contains one concrete change path."""
+
+    planned = ProjectWritePath.parse(scope)
+    changed = ProjectWritePath.parse(path)
+    return changed.segments[: len(planned.segments)] == planned.segments
+
+
 class ActorIdentity(DomainModel):
     kind: Literal["human", "agent", "automation", "system"]
     id: str = Field(min_length=1)
@@ -49,8 +57,45 @@ class ActorIdentity(DomainModel):
 
 class ProjectChange(DomainModel):
     path: str = Field(min_length=1)
-    action: Literal["create", "update", "delete", "invoke"]
+    action: Literal["create", "update", "delete"]
     value: Any = None
+
+
+class ProjectChangeSet(DomainModel):
+    """Canonical, observable project changes produced by one committed command."""
+
+    changes: list[ProjectChange] = Field(default_factory=list)
+
+    @property
+    def write_set(self) -> list[str]:
+        return sorted({change.path for change in self.changes})
+
+    @classmethod
+    def combine(cls, values: list[ProjectChangeSet]) -> ProjectChangeSet:
+        combined: dict[str, ProjectChange] = {}
+        for value in values:
+            for change in value.changes:
+                combined[change.path] = change
+        return cls(changes=[combined[path] for path in sorted(combined)])
+
+
+class ProjectMutationPlan(DomainModel):
+    """Conflict footprint plus the complete scope an operation may mutate."""
+
+    conflict_set: list[str]
+    change_scopes: list[str]
+
+    @classmethod
+    def scoped(
+        cls,
+        scopes: list[str],
+        *,
+        conflict_set: list[str] | None = None,
+    ) -> ProjectMutationPlan:
+        return cls(
+            conflict_set=sorted(set(conflict_set if conflict_set is not None else scopes)),
+            change_scopes=sorted(set(scopes)),
+        )
 
 
 class ProjectEditAction(DomainModel):
@@ -111,8 +156,7 @@ class ProjectRevisionConflict(RuntimeError):
         self.conflicting_events = conflicting_events
         self.reason = reason
         super().__init__(
-            "Project revision conflict: "
-            f"expected {expected_revision}, current {current_revision}; {reason}"
+            f"Project revision conflict: expected {expected_revision}, current {current_revision}; {reason}"
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -122,7 +166,5 @@ class ProjectRevisionConflict(RuntimeError):
             "current_revision": self.current_revision,
             "write_set": self.write_set,
             "reason": self.reason,
-            "conflicting_events": [
-                event.model_dump(mode="json") for event in self.conflicting_events
-            ],
+            "conflicting_events": [event.model_dump(mode="json") for event in self.conflicting_events],
         }

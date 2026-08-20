@@ -7,10 +7,10 @@ ColumnLayout {
     id: root
 
     property bool videoEnabled: true
-    property var builtInPresets: settingsController.builtInSubtitleStylePresets
+    property var builtInPresets: mediaflow.settingsController.builtInSubtitleStylePresets
     property var presetOptions: {
         const values = root.builtInPresets.slice()
-        const custom = settingsController.settingsData.subtitleStylePresets || []
+        const custom = mediaflow.settingsController.settingsData.subtitleStylePresets || []
         for (var index = 0; index < custom.length; ++index) {
             values.push({
                 id: String(custom[index].id),
@@ -55,8 +55,8 @@ ColumnLayout {
     }
 
     function fontAvailable(fontFamily) {
-        for (let index = 0; index < exportController.subtitleFontOptions.length; ++index) {
-            const option = exportController.subtitleFontOptions[index]
+        for (let index = 0; index < mediaflow.exportController.subtitleFontOptions.length; ++index) {
+            const option = mediaflow.exportController.subtitleFontOptions[index]
             if (option.value === fontFamily)
                 return option.available
         }
@@ -106,7 +106,7 @@ ColumnLayout {
         id: burnSubtitle
         objectName: "exportBurnSubtitleTrack"
         Layout.fillWidth: true
-        model: exportController.subtitleTrackOptions
+        model: mediaflow.exportController.subtitleTrackOptions
         textRole: "label"
         valueRole: "value"
     }
@@ -135,7 +135,7 @@ ColumnLayout {
             text: qsTr("保存样式")
             enabled: subtitleStylePresetName.text.trim().length > 0
             onClicked: {
-                settingsController.saveSubtitleStylePreset(
+                mediaflow.settingsController.saveSubtitleStylePreset(
                     subtitleStylePresetName.text,
                     JSON.stringify(root.currentStyle()))
                 subtitleStylePresetName.clear()
@@ -146,7 +146,7 @@ ColumnLayout {
             danger: true
             visible: subtitleStylePreset.currentIndex >= 0
                 && root.presetOptions[subtitleStylePreset.currentIndex].custom
-            onClicked: settingsController.removeSubtitleStylePreset(
+            onClicked: mediaflow.settingsController.removeSubtitleStylePreset(
                 String(subtitleStylePreset.currentValue))
         }
     }
@@ -163,7 +163,7 @@ ColumnLayout {
             Layout.preferredWidth: 150
             textRole: "label"
             valueRole: "value"
-            model: exportController.subtitleFontOptions
+            model: mediaflow.exportController.subtitleFontOptions
             onActivated: subtitleFont.text = String(currentValue)
         }
     }

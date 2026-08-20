@@ -52,7 +52,7 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
     )
     project = EditorProject(repository, settings=settings, paths=paths)
     try:
-        sequence_id = repository.catalog.get_project().main_sequence_id
+        sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
         audio_track = editor.add_track(TrackKind.AUDIO)
         editor.add_clip(
@@ -68,11 +68,11 @@ def test_real_faster_whisper_output_is_persisted_and_written_to_srt(tmp_path: Pa
                     repository.timeline.load_timeline(sequence_id),
                     {
                         item.id: item
-                        for item in repository.catalog.list_assets()
+                        for item in repository.assets.list_assets()
                     },
                     settings.asr,
-                    project_profile=repository.catalog.get_sequence(
-                        repository.catalog.get_project().main_sequence_id
+                    project_profile=repository.sequences.get_sequence(
+                        repository.projects.get_project().main_sequence_id
                     ).profile,
                 )
             ),

@@ -156,7 +156,7 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
             assets.import_external(source) for source in avatar_sources
         ]
         imported[0] = assets.adopt_main_profile_from_video(imported[0].id)
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         editor = TimelineEditor(repository, project.main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         clips = [

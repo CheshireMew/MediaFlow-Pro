@@ -39,7 +39,23 @@ def _parser() -> argparse.ArgumentParser:
         description=f"{PRODUCT_NAME} headless editor interface. All output is JSON.",
     )
     commands = parser.add_subparsers(dest="subcommand", required=True)
-    commands.add_parser("describe", help="Print the versioned capability contract")
+    describe = commands.add_parser("describe", help="Discover the versioned capability contract")
+    describe_view = describe.add_mutually_exclusive_group()
+    describe_view.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print compact capabilities and operation metadata without operation schemas.",
+    )
+    describe_view.add_argument(
+        "--operation",
+        metavar="NAME",
+        help="Print the exact argument and result schema for one operation.",
+    )
+    describe_view.add_argument(
+        "--catalog",
+        metavar="NAME",
+        help="Print one editor field catalog named by the summary.",
+    )
     execute = commands.add_parser("execute", help="Execute one versioned JSON request")
     execute.add_argument(
         "--request",
@@ -67,10 +83,18 @@ def _parser() -> argparse.ArgumentParser:
 
 def _request_from_args(args: argparse.Namespace) -> dict:
     if args.subcommand == "describe":
+        arguments: dict[str, str] = {}
+        if args.summary:
+            arguments = {"view": "summary"}
+        elif args.operation:
+            arguments = {"view": "operation", "name": args.operation}
+        elif args.catalog:
+            arguments = {"view": "catalog", "name": args.catalog}
         return {
             "protocol": AUTOMATION_PROTOCOL,
             "version": AUTOMATION_VERSION,
             "operation": "describe",
+            "arguments": arguments,
             "actor": {"kind": "agent", "id": "mediaflow-cli"},
             "client_id": "mediaflow-cli",
         }
@@ -115,7 +139,7 @@ def _execute_from_args(args: argparse.Namespace) -> tuple[str | None, dict]:
     request = _request_from_args(args)
     envelope = AutomationRequest.model_validate(request)
     result = (
-        call_sync("system.describe")
+        call_sync("system.describe", envelope.arguments)
         if envelope.operation == "describe"
         else execute_sync(envelope.model_dump(mode="json"))
     )

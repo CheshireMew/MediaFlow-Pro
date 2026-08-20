@@ -7,6 +7,8 @@ from pydantic import Field, field_validator, model_validator
 
 from mediaflow.domain.model_base import DomainModel
 
+DownloadCodec = Literal["best", "avc"]
+
 
 class DownloadEntry(DomainModel):
     """One selectable media item and the exact yt-dlp selection needed for it."""
@@ -20,6 +22,7 @@ class DownloadEntry(DomainModel):
     duration: float = Field(default=0.0, ge=0.0)
     uploader: str = ""
     thumbnail: str = ""
+    suggested_filename: str = ""
     available: bool = True
     unavailable_reason: str = ""
 
@@ -37,6 +40,7 @@ class DownloadPlan(DomainModel):
 
     source_url: str
     kind: Literal["single", "collection"]
+    media_kind: Literal["video", "audio"] = "video"
     media_id: str = ""
     title: str
     extractor: str
@@ -81,7 +85,7 @@ class DownloadRequest(DomainModel):
     entry: DownloadEntry
     collection_title: str = ""
     resolution: str = "best"
-    codec: Literal["best", "avc"] = "avc"
+    codec: DownloadCodec = "avc"
     download_subtitles: bool = False
     subtitle_languages: list[str] = Field(default_factory=lambda: ["en", "zh"])
     filename_prefix: str = ""

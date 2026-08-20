@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 46
+PROJECT_SCHEMA_VERSION = 47
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -216,6 +216,108 @@ CREATE TABLE IF NOT EXISTS subtitle_placement (
     text_override TEXT,
     timing_overridden INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS dubbing_session (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    source_document_id TEXT NOT NULL REFERENCES subtitle_document(id) ON DELETE CASCADE,
+    target_document_id TEXT REFERENCES subtitle_document(id) ON DELETE SET NULL,
+    source_language TEXT NOT NULL,
+    target_language TEXT NOT NULL,
+    dialogue_track_id TEXT NOT NULL REFERENCES track(id) ON DELETE RESTRICT,
+    source_timeline_revision INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN (
+        'preparing', 'review', 'synthesizing', 'synthesized', 'committed'
+    )),
+    settings_json TEXT NOT NULL,
+    diarization_engine TEXT NOT NULL,
+    diarization_version TEXT NOT NULL,
+    diarization_model TEXT NOT NULL,
+    synthesis_engine TEXT NOT NULL,
+    synthesis_version TEXT NOT NULL,
+    master_path TEXT,
+    master_sha256 TEXT,
+    master_duration_seconds REAL,
+    master_asset_id TEXT REFERENCES asset(id) ON DELETE SET NULL,
+    committed_track_id TEXT REFERENCES track(id) ON DELETE SET NULL,
+    committed_clip_id TEXT REFERENCES clip(id) ON DELETE SET NULL,
+    revision INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dubbing_speaker (
+    session_id TEXT NOT NULL REFERENCES dubbing_session(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    review_status TEXT NOT NULL CHECK(review_status IN (
+        'automatic', 'accepted', 'needs_review'
+    )),
+    PRIMARY KEY(session_id, id),
+    UNIQUE(session_id, position)
+);
+CREATE TABLE IF NOT EXISTS dubbing_reference (
+    session_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    start_frame INTEGER NOT NULL,
+    end_frame INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    language TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    primary_reference INTEGER NOT NULL,
+    PRIMARY KEY(session_id, id),
+    UNIQUE(session_id, speaker_id, position),
+    FOREIGN KEY(session_id, speaker_id)
+        REFERENCES dubbing_speaker(session_id, id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS dubbing_speaker_turn (
+    session_id TEXT NOT NULL REFERENCES dubbing_session(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    speaker_id TEXT NOT NULL,
+    start_frame INTEGER NOT NULL,
+    end_frame INTEGER NOT NULL,
+    confidence REAL,
+    PRIMARY KEY(session_id, id),
+    UNIQUE(session_id, position),
+    FOREIGN KEY(session_id, speaker_id)
+        REFERENCES dubbing_speaker(session_id, id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS dubbing_utterance (
+    session_id TEXT NOT NULL REFERENCES dubbing_session(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    speaker_id TEXT NOT NULL,
+    source_segment_ids_json TEXT NOT NULL,
+    target_segment_ids_json TEXT NOT NULL,
+    start_frame INTEGER NOT NULL,
+    end_frame INTEGER NOT NULL,
+    source_text TEXT NOT NULL,
+    target_text TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN (
+        'pending', 'generated', 'needs_review', 'failed'
+    )),
+    review_status TEXT NOT NULL CHECK(review_status IN (
+        'automatic', 'accepted', 'needs_review'
+    )),
+    output_path TEXT,
+    output_sha256 TEXT,
+    natural_duration_seconds REAL,
+    fitted_duration_seconds REAL,
+    speed_factor REAL NOT NULL,
+    seed INTEGER NOT NULL,
+    reference_sha256 TEXT,
+    issues_json TEXT NOT NULL,
+    PRIMARY KEY(session_id, id),
+    UNIQUE(session_id, position),
+    FOREIGN KEY(session_id, speaker_id)
+        REFERENCES dubbing_speaker(session_id, id) ON DELETE RESTRICT
+);
 CREATE TABLE IF NOT EXISTS subtitle_track_document (
     track_id TEXT NOT NULL REFERENCES track(id) ON DELETE CASCADE,
     document_id TEXT NOT NULL REFERENCES subtitle_document(id) ON DELETE CASCADE,
@@ -387,6 +489,10 @@ CREATE INDEX IF NOT EXISTS idx_export_history_sequence_time
 ON export_history(sequence_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_project_version_project_time
 ON project_version(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dubbing_session_project_time
+ON dubbing_session(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_dubbing_session_sequence
+ON dubbing_session(sequence_id, updated_at);
 """
 
 WORKFLOW_RUN_TABLE_SQL = """

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -18,9 +19,14 @@ from typing import Literal
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.environment import test_run_root
 from mediaflow.infrastructure.project_lock import ProcessFileLock
+from mediaflow.infrastructure.storage_budget import (
+    directory_inventory,
+    require_test_artifact_budget,
+)
 
 MANIFEST_FILENAME = "run-result.json"
 MANIFEST_SCHEMA = "mediaflow-script-run/v1"
+VERIFICATION_WORK_ROOT_VARIABLE = "MEDIAFLOW_VERIFICATION_WORK_ROOT"
 
 _CATEGORY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _MANAGED_RUN_PATTERN = re.compile(
@@ -37,6 +43,18 @@ def _timestamp() -> str:
 
 def _finished_at() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def verification_workspace_root(evidence_root: Path) -> Path:
+    configured = os.environ.get(VERIFICATION_WORK_ROOT_VARIABLE, "").strip()
+    if not configured:
+        return evidence_root.expanduser().resolve()
+    identity = hashlib.sha256(
+        str(evidence_root.expanduser().resolve()).encode("utf-8")
+    ).hexdigest()[:12]
+    workspace = Path(configured).expanduser().resolve() / identity
+    workspace.mkdir(parents=True, exist_ok=True)
+    return workspace
 
 
 def _validate_category(category: str) -> str:
@@ -164,6 +182,7 @@ class VerificationRun:
     managed: bool
     started_at: str
     category_root: Path | None = None
+    storage_preflight: dict[str, object] = field(default_factory=dict)
     _finished: bool = field(default=False, init=False)
     _entered: bool = field(default=False, init=False)
     _previous_environment: dict[str, str | None] = field(
@@ -176,15 +195,17 @@ class VerificationRun:
             raise RuntimeError(f"Verification run is already finished: {self.path}")
         if self._entered:
             raise RuntimeError(f"Verification run is already active: {self.path}")
+        workspace = verification_workspace_root(self.path)
         isolated = {
             "MEDIAFLOW_SERVICE_SETTINGS_PATH": (
-                self.path / "settings" / "service-settings.json"
+                workspace / "settings" / "service-settings.json"
             ),
             "MEDIAFLOW_DESKTOP_SETTINGS_PATH": (
-                self.path / "settings" / "desktop-settings.json"
+                workspace / "settings" / "desktop-settings.json"
             ),
-            "MEDIAFLOW_MEDIA_ROOT": self.path / "media",
-            "MEDIAFLOW_PROJECT_ROOT": self.path / "projects",
+            "MEDIAFLOW_MEDIA_ROOT": workspace / "media",
+            "MEDIAFLOW_PROJECT_ROOT": workspace / "projects",
+            "MEDIAFLOW_SERVICE_STATE_DIR": workspace / "editor-service",
         }
         self._previous_environment = {
             name: os.environ.get(name) for name in isolated
@@ -274,6 +295,11 @@ class VerificationRun:
         }
         if status != "running":
             payload["finished_at"] = _finished_at()
+            payload["storage"] = {
+                "preflight": self.storage_preflight,
+                "final_inventory": directory_inventory(self.path),
+                "cleanup": "report-only-until-authorized",
+            }
         return payload
 
 
@@ -299,6 +325,11 @@ def verification_run(
                 f"Managed script run root cannot be linked: {requested_base}"
             )
         base = requested_base.resolve()
+        storage_preflight = require_test_artifact_budget(
+            base,
+            expected_new_bytes=1024**3,
+            label=f"MediaFlow {category} verification evidence",
+        )
         base.mkdir(parents=True, exist_ok=True)
         category_root = base / category
         category_root.mkdir(exist_ok=True)
@@ -313,6 +344,7 @@ def verification_run(
     elif explicit_root is not None:
         path = explicit_root.expanduser().resolve()
         path.mkdir(parents=True, exist_ok=False)
+        storage_preflight = {}
     else:
         if explicit_parent is None:
             raise AssertionError("Explicit parent resolution is inconsistent")
@@ -322,6 +354,7 @@ def verification_run(
             f"{category}-{started_at}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         )
         path.mkdir(exist_ok=False)
+        storage_preflight = {}
 
     run = VerificationRun(
         category=category,
@@ -329,6 +362,7 @@ def verification_run(
         managed=managed,
         started_at=started_at,
         category_root=category_root,
+        storage_preflight=storage_preflight,
     )
     try:
         _write_manifest(

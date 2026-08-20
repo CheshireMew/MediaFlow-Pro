@@ -28,6 +28,7 @@ class EditorServiceRpcError(RuntimeError):
 
 _started_processes: dict[int, subprocess.Popen[bytes]] = {}
 _started_processes_lock = threading.Lock()
+SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS = 15.0
 
 
 def _started_process_exit(pid: int) -> int | None:
@@ -88,9 +89,7 @@ class EditorServiceClient:
                 cls._start_service_process(selected)
                 started = True
             elif not start_if_needed:
-                raise last_error or EditorServiceUnavailable(
-                    "MediaFlow Editor Service is not running"
-                )
+                raise last_error or EditorServiceUnavailable("MediaFlow Editor Service is not running")
             if time.monotonic() >= deadline:
                 raise last_error or EditorServiceUnavailable(
                     "MediaFlow Editor Service did not become ready before the startup deadline"
@@ -121,10 +120,7 @@ class EditorServiceClient:
             exit_code = _started_process_exit(self.discovery.pid)
             detail = str(connection_error)
             if exit_code is not None:
-                detail = (
-                    f"{detail}; Editor Service process {self.discovery.pid} "
-                    f"exited with code {exit_code}"
-                )
+                detail = f"{detail}; Editor Service process {self.discovery.pid} exited with code {exit_code}"
             raise EditorServiceUnavailable(detail) from connection_error
         if not isinstance(payload, dict):
             raise EditorServiceUnavailable("Editor Service returned a non-object response")
@@ -343,6 +339,8 @@ def close_sync_transport() -> None:
 
 
 def shutdown_sync_service() -> None:
+    paths = ServicePaths.discover()
+    discovery = EditorServiceClient._live_discovery(paths)
     try:
         call_sync(
             "service.shutdown",
@@ -353,3 +351,13 @@ def shutdown_sync_service() -> None:
         pass
     finally:
         close_sync_transport()
+    if discovery is None:
+        return
+    deadline = time.monotonic() + SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS
+    while discovery.belongs_to_live_process():
+        if time.monotonic() >= deadline:
+            raise EditorServiceUnavailable(
+                f"Editor Service process {discovery.pid} did not stop within "
+                f"{SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS:g} seconds"
+            )
+        time.sleep(0.05)

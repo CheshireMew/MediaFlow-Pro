@@ -24,7 +24,7 @@ Item {
         nameFilters: root.format.filter ? [root.format.filter] : []
         onAccepted: {
             if (root.actionsEnabled) {
-                exportController.exportSequenceWithOptions(
+                mediaflow.exportController.exportSequenceWithOptions(
                     String(root.format.value || ""),
                     selectedFile.toString(),
                     root.options);
@@ -40,7 +40,7 @@ Item {
         nameFilters: [qsTr("Final Cut Pro XML (*.fcpxml)")]
         onAccepted: {
             if (root.actionsEnabled)
-                exportController.exportFcpxml(selectedFile.toString());
+                mediaflow.exportController.exportFcpxml(selectedFile.toString());
         }
     }
 }

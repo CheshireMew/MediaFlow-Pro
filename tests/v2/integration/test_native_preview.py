@@ -76,7 +76,7 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
 
     with ProjectRepository.create(tmp_path / "Native Project", "Native Project") as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,
@@ -459,7 +459,7 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(
         assert audio_asset.kind == AssetKind.AUDIO and audio_asset.metadata.has_audio
         assert image_asset.kind == AssetKind.IMAGE
 
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO)
         audio_track = editor.add_track(TrackKind.AUDIO)
         specifications = [
@@ -561,7 +561,7 @@ def test_native_preview_tone_maps_hdr_graph_on_sdr_output(
 
     with ProjectRepository.create(tmp_path / "HDR Preview", "HDR Preview", profile) as repository:
         asset = AssetService(repository, MediaProbe(paths)).import_external(source)
-        editor = TimelineEditor(repository, repository.catalog.get_project().main_sequence_id)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
         track = editor.add_track(TrackKind.VIDEO)
         editor.add_clip(
             track_id=track.id,

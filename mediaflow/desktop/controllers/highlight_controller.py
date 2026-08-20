@@ -16,9 +16,10 @@ from mediaflow.domain.task_commands import (
 )
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import CreativeControllerScope
 
 
-class HighlightController(ControllerFacet):
+class HighlightController(ControllerFacet[CreativeControllerScope]):
     projectStateChanged = Signal()
     selectionChanged = Signal()
     historyChanged = Signal()
@@ -31,17 +32,19 @@ class HighlightController(ControllerFacet):
 
     @Property(str, notify=selectionChanged)
     def selectedHighlightId(self) -> str:
-        return self._session.selection.highlight_id
+        return self._session.state.selection.highlight_id
 
-    @Property("QVariantMap", notify=selectionChanged)
+    @Property(dict, notify=selectionChanged)
     def selectedHighlightData(self) -> dict:
-        row = self._session.models.highlights.findRow("highlightId", self._session.selection.highlight_id)
+        row = self._session.models.highlights.findRow(
+            "highlightId", self._session.state.selection.highlight_id
+        )
         return self._session.models.highlights.get(row)
 
     @Slot(str)
     def selectHighlight(self, highlight_id: str) -> None:
-        self._session.selection.highlight_id = highlight_id
-        self._session.events.selectionChanged.emit()
+        self._session.state.selection.highlight_id = highlight_id
+        self._session.updates.commit(selection=True)
 
     @Slot(str)
     @report_ui_errors
@@ -57,9 +60,11 @@ class HighlightController(ControllerFacet):
     @report_ui_errors
     def createShortFromHighlight(self, highlight_id: str) -> None:
         self._session._require_writable()
-        sequence = self._session.binding.current.create_highlight_short(highlight_id)
-        self._session.binding.active_sequence_id = sequence.id
-        self._session.binding.timeline = self._session.binding.current.timeline(sequence.id)
+        sequence = self._session.state.binding.require_current().create_highlight_short(highlight_id)
+        self._session.state.binding.active_sequence_id = sequence.id
+        self._session.state.binding.timeline = self._session.state.binding.require_current().timeline(
+            sequence.id
+        )
         self._session.projectors.refresh_active_sequence(refresh_sequences=True)
         self._session._set_status("已从高光创建短视频序列")
 
@@ -67,19 +72,21 @@ class HighlightController(ControllerFacet):
     @report_ui_errors
     def addManualHighlight(self, start_frame: int, end_frame: int, title: str) -> None:
         self._session._require_writable()
-        selected_asset_id = self._session.selection.asset_ids[0] if self._session.selection.asset_ids else ""
+        selected_asset_id = (
+            self._session.state.selection.asset_ids[0] if self._session.state.selection.asset_ids else ""
+        )
         if not selected_asset_id:
             raise ValueError("请先选择视频或音频素材")
-        candidate = self._session.binding.current.add_manual_highlight(
+        candidate = self._session.state.binding.require_current().add_manual_highlight(
             selected_asset_id,
             start_frame=start_frame,
             end_frame=end_frame,
             title=title or None,
-            document_id=self._session.selection.document_id or None,
+            document_id=self._session.state.selection.document_id or None,
         )
-        self._session.selection.highlight_id = candidate.id
+        self._session.state.selection.highlight_id = candidate.id
         self._session.projectors.highlights.refresh_highlights()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(selection=True)
         self._session._set_status("已添加手动高光候选")
 
     @Slot(str, int, int, str)
@@ -92,50 +99,52 @@ class HighlightController(ControllerFacet):
         title: str,
     ) -> None:
         self._session._require_writable()
-        self._session.binding.current.update_highlight(
+        self._session.state.binding.require_current().update_highlight(
             highlight_id,
             start_frame=start_frame,
             end_frame=end_frame,
             title=title,
         )
         self._session.projectors.highlights.refresh_highlights()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(selection=True)
         self._session._set_status("高光候选已保存")
 
     @Slot(str, bool)
     @report_ui_errors
     def setHighlightSelected(self, highlight_id: str, selected: bool) -> None:
         self._session._require_writable()
-        self._session.binding.current.set_highlight_selected(highlight_id, selected)
+        self._session.state.binding.require_current().set_highlight_selected(highlight_id, selected)
         self._session.projectors.highlights.refresh_highlights()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(selection=True)
 
     @Slot(str)
     @report_ui_errors
     def deleteHighlight(self, highlight_id: str) -> None:
         self._session._require_writable()
-        self._session.binding.current.delete_highlight(highlight_id)
-        if self._session.selection.highlight_id == highlight_id:
-            self._session.selection.highlight_id = ""
+        self._session.state.binding.require_current().delete_highlight(highlight_id)
+        if self._session.state.selection.highlight_id == highlight_id:
+            self._session.state.selection.highlight_id = ""
         self._session.projectors.highlights.refresh_highlights()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(selection=True)
         self._session._set_status("高光候选已删除")
 
     @Slot(str)
     @report_ui_errors
     def previewHighlight(self, highlight_id: str) -> None:
         candidate = next(
-            item for item in self._session.binding.current.list_highlights() if item.id == highlight_id
+            item
+            for item in self._session.state.binding.require_current().list_highlights()
+            if item.id == highlight_id
         )
-        project = self._session.binding.current.get_project()
+        project = self._session.state.binding.require_current().get_project()
         source_sequence_id = self._highlight_source_sequence_id(candidate) or project.main_sequence_id
-        sequence_changed = self._session.binding.active_sequence_id != source_sequence_id
+        sequence_changed = self._session.state.binding.active_sequence_id != source_sequence_id
         if sequence_changed:
-            self._session.binding.active_sequence_id = source_sequence_id
-            self._session.binding.timeline = self._session.binding.current.timeline(
-                self._session.binding.active_sequence_id
+            self._session.state.binding.active_sequence_id = source_sequence_id
+            self._session.state.binding.timeline = self._session.state.binding.require_current().timeline(
+                self._session.state.binding.active_sequence_id
             )
-        self._session.presentation.pending_preview_range = (candidate.start_frame, candidate.end_frame)
+        self._session.state.presentation.pending_preview_range = (candidate.start_frame, candidate.end_frame)
         if sequence_changed:
             self._session.projectors.refresh_active_sequence()
         else:
@@ -146,17 +155,21 @@ class HighlightController(ControllerFacet):
     def addHighlightToMainSequence(self, highlight_id: str) -> None:
         self._session._require_writable()
         candidate = next(
-            item for item in self._session.binding.current.list_highlights() if item.id == highlight_id
+            item
+            for item in self._session.state.binding.require_current().list_highlights()
+            if item.id == highlight_id
         )
-        main_sequence_id = self._session.binding.current.get_project().main_sequence_id
+        main_sequence_id = self._session.state.binding.require_current().get_project().main_sequence_id
         source_sequence_id = self._highlight_source_sequence_id(candidate)
         if source_sequence_id:
             if source_sequence_id != main_sequence_id:
                 raise ValueError("时间轴高光请创建短视频序列后再加入主序列")
-            sequence_changed = self._session.binding.active_sequence_id != main_sequence_id
-            self._session.binding.active_sequence_id = main_sequence_id
-            self._session.binding.timeline = self._session.binding.current.timeline(main_sequence_id)
-            self._session.presentation.pending_preview_range = (
+            sequence_changed = self._session.state.binding.active_sequence_id != main_sequence_id
+            self._session.state.binding.active_sequence_id = main_sequence_id
+            self._session.state.binding.timeline = self._session.state.binding.require_current().timeline(
+                main_sequence_id
+            )
+            self._session.state.presentation.pending_preview_range = (
                 candidate.start_frame,
                 candidate.end_frame,
             )
@@ -166,7 +179,7 @@ class HighlightController(ControllerFacet):
                 self._session.projectors.timeline.schedule_preview_graph()
             self._session._set_status("该高光区间已经位于主序列中")
             return
-        editor = self._session.binding.current.timeline(main_sequence_id)
+        editor = self._session.state.binding.require_current().timeline(main_sequence_id)
         video_track = next(track for track in editor.state.tracks if track.kind == TrackKind.VIDEO)
         timeline_start = editor.state.duration_frames
         clip = editor.add_clip(
@@ -176,19 +189,19 @@ class HighlightController(ControllerFacet):
             source_in=candidate.start_frame,
             duration=candidate.end_frame - candidate.start_frame,
         )
-        if self._session.binding.active_sequence_id == main_sequence_id:
-            self._session.binding.timeline = editor
-            self._session.selection.clip_ids = [clip.id]
-            self._session.selection.compound_id = ""
+        if self._session.state.binding.active_sequence_id == main_sequence_id:
+            self._session.state.binding.timeline = editor
+            self._session.state.selection.clip_ids = [clip.id]
+            self._session.state.selection.compound_id = ""
             self._session.projectors.timeline.refresh_timeline()
-            self._session.events.selectionChanged.emit()
-            self._session.events.historyChanged.emit()
+            self._session.updates.commit(selection=True)
+            self._session.updates.commit(history=True)
         self._session._set_status("高光区间已添加到主序列")
 
     def _highlight_source_sequence_id(self, candidate) -> str:
         if not candidate.document_id:
             return ""
-        document = self._session.binding.current.get_subtitle_document(candidate.document_id)
+        document = self._session.state.binding.require_current().get_subtitle_document(candidate.document_id)
         return document.sequence_id or ""
 
     @Slot()
@@ -196,16 +209,16 @@ class HighlightController(ControllerFacet):
     def createAllHighlightShorts(self) -> None:
         self._session._require_writable()
         selected_asset_id = (
-            self._session.selection.asset_ids[0] if self._session.selection.asset_ids else None
+            self._session.state.selection.asset_ids[0] if self._session.state.selection.asset_ids else None
         )
-        candidates = self._session.binding.current.selected_highlights(selected_asset_id)
+        candidates = self._session.state.binding.require_current().selected_highlights(selected_asset_id)
         if not candidates:
             raise ValueError("没有选中的高光候选")
         for candidate in candidates:
-            self._session.binding.current.create_highlight_short(candidate.id)
+            self._session.state.binding.require_current().create_highlight_short(candidate.id)
         self._session.projectors.timeline.refresh_sequences()
         self._session.projectors.highlights.refresh_highlights()
-        self._session.events.projectStateChanged.emit()
+        self._session.updates.commit(project=True)
         self._session._set_status("已创建 %1 个短视频草稿", len(candidates))
 
     @Slot(str)
@@ -213,13 +226,15 @@ class HighlightController(ControllerFacet):
     def exportSelectedHighlights(self, directory_url: str) -> None:
         self._session._require_writable()
         selected_asset_id = (
-            self._session.selection.asset_ids[0] if self._session.selection.asset_ids else None
+            self._session.state.selection.asset_ids[0] if self._session.state.selection.asset_ids else None
         )
-        candidates = self._session.binding.current.selected_highlights(selected_asset_id)
+        candidates = self._session.state.binding.require_current().selected_highlights(selected_asset_id)
         if not candidates:
             raise ValueError("没有选中的高光候选")
         output_dir = self._session._local_path(directory_url)
-        source_sequence = self._session.binding.current.get_sequence(self._session.binding.active_sequence_id)
+        source_sequence = self._session.state.binding.require_current().get_sequence(
+            self._session.state.binding.active_sequence_id
+        )
         saved_preset = source_sequence.export_preset
         saved_video_preset = (
             saved_preset if (saved_preset is not None and saved_preset.format != ExportFormat.AUDIO) else None
@@ -231,7 +246,7 @@ class HighlightController(ControllerFacet):
         )
         self._session.tasks.start(
             ExportHighlightsCommand(
-                sequence_id=self._session.binding.active_sequence_id,
+                sequence_id=self._session.state.binding.active_sequence_id,
                 candidate_ids=[candidate.id for candidate in candidates],
                 output_dir=str(output_dir),
                 preset=preset,
@@ -240,7 +255,7 @@ class HighlightController(ControllerFacet):
                 ),
             ),
             [candidate.asset_id for candidate in candidates],
-            sequence_id=self._session.binding.active_sequence_id,
+            sequence_id=self._session.state.binding.active_sequence_id,
         )
 
     @Slot()
@@ -248,5 +263,8 @@ class HighlightController(ControllerFacet):
     def exportSelectedHighlightsToDefaultLocation(self) -> None:
         self._session._require_writable()
         self.exportSelectedHighlights(
-            str(self._session.binding.current.project_dir / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY)
+            str(
+                self._session.state.binding.require_current().project_dir
+                / DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY
+            )
         )

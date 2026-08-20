@@ -32,14 +32,14 @@ Rectangle {
     property bool shortcutsEnabled: true
     property int trackHeight: 72
     property int trackPitch: trackHeight + 1
-    readonly property real fpsExact: Math.max(1, workspaceController.profileFpsNumerator) / Math.max(1, workspaceController.profileFpsDenominator)
-    readonly property int fpsRounded: Math.max(1, Math.round(workspaceController.profileFpsNumerator / Math.max(1, workspaceController.profileFpsDenominator)))
-    readonly property int contentFrameCount: Math.max(Math.ceil(fpsExact * 10), workspaceController.timelineDurationFrames + Math.ceil(fpsExact * 2))
+    readonly property real fpsExact: Math.max(1, mediaflow.workspaceViewController.profileFpsNumerator) / Math.max(1, mediaflow.workspaceViewController.profileFpsDenominator)
+    readonly property int fpsRounded: Math.max(1, Math.round(mediaflow.workspaceViewController.profileFpsNumerator / Math.max(1, mediaflow.workspaceViewController.profileFpsDenominator)))
+    readonly property int contentFrameCount: Math.max(Math.ceil(fpsExact * 10), mediaflow.workspaceViewController.timelineDurationFrames + Math.ceil(fpsExact * 2))
     readonly property real minimumPixelsPerFrame: Math.max(0.000001, Math.min(0.5, timelineFlick.width / Math.max(1, contentFrameCount)))
-    readonly property int maxPlayheadFrame: Math.max(0, workspaceController.timelineDurationFrames - 1)
+    readonly property int maxPlayheadFrame: Math.max(0, mediaflow.workspaceViewController.timelineDurationFrames - 1)
     readonly property Item focusedItem: root.Window.window ? root.Window.window.activeFocusItem : null
     readonly property bool textInputActive: focusedItem instanceof TextInput || focusedItem instanceof TextEdit
-    readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+    readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
     readonly property int visiblePlayheadFrame: playheadScrubbing || playheadSeekPending ? interactivePlayheadFrame : Math.min(playheadFrame, maxPlayheadFrame)
     signal seekRequested(int frame)
     signal editProfileRequested
@@ -113,12 +113,12 @@ Rectangle {
     }
 
     function synchronizeInitialZoom() {
-        const sequenceId = workspaceController.activeSequenceId;
+        const sequenceId = mediaflow.workspaceViewController.activeSequenceId;
         if (sequenceId !== zoomSequenceId) {
             zoomSequenceId = sequenceId;
-            zoomAwaitingFirstContent = workspaceController.timelineDurationFrames <= 0;
+            zoomAwaitingFirstContent = mediaflow.workspaceViewController.timelineDurationFrames <= 0;
             Qt.callLater(fitTimeline);
-        } else if (zoomAwaitingFirstContent && workspaceController.timelineDurationFrames > 0) {
+        } else if (zoomAwaitingFirstContent && mediaflow.workspaceViewController.timelineDurationFrames > 0) {
             zoomAwaitingFirstContent = false;
             Qt.callLater(fitTimeline);
         }
@@ -148,7 +148,7 @@ Rectangle {
     }
 
     function requestedDragTrackPosition(originalTrackPosition, deltaY) {
-        return Math.max(0, Math.min(timelineController.tracksModel.rowCount() - 1, Math.floor((originalTrackPosition * trackPitch + 12 + deltaY + 23) / trackPitch)));
+        return Math.max(0, Math.min(mediaflow.timelineViewController.tracksModel.rowCount() - 1, Math.floor((originalTrackPosition * trackPitch + 12 + deltaY + 23) / trackPitch)));
     }
 
     function beginClipDrag(clipId, trackPosition, trackKind, audioTrackPosition) {
@@ -158,13 +158,13 @@ Rectangle {
         draggingClipTrackPosition = trackPosition;
         draggingClipAudioTrackPosition = audioTrackPosition === undefined ? -1 : Number(audioTrackPosition);
         draggingClipTrackKind = trackKind;
-        draggingClipTrackId = String(timelineController.tracksModel.get(trackPosition).trackId);
+        draggingClipTrackId = String(mediaflow.timelineViewController.tracksModel.get(trackPosition).trackId);
         draggingClipId = clipId;
     }
 
     function clearTimelineSelection() {
         multiSelectMode = false;
-        timelineController.clearSelection();
+        mediaflow.timelineViewController.clearSelection();
     }
 
     function updateClipDrag(clipId, startFrame, originalTrackPosition, deltaX, deltaY) {
@@ -173,7 +173,7 @@ Rectangle {
         draggingClipOffsetX = Math.max(-startFrame * pixelsPerFrame, deltaX);
         const requestedPosition = requestedDragTrackPosition(originalTrackPosition, deltaY);
         const nextFrame = Math.max(0, startFrame + Math.round(draggingClipOffsetX / pixelsPerFrame));
-        const preview = timelineController.previewClipMove(clipId, nextFrame, requestedPosition, false);
+        const preview = mediaflow.timelineClipController.previewClipMove(clipId, nextFrame, requestedPosition, false);
         if (!preview.accepted)
             return;
         draggingClipTrackId = String(preview.trackId);
@@ -188,7 +188,7 @@ Rectangle {
         draggingClipOffsetX = Math.max(-startFrame * pixelsPerFrame, deltaX);
         const requestedAudioPosition = requestedDragTrackPosition(originalAudioTrackPosition, deltaY);
         const nextFrame = Math.max(0, startFrame + Math.round(draggingClipOffsetX / pixelsPerFrame));
-        const preview = timelineController.previewClipMove(clipId, nextFrame, requestedAudioPosition, true);
+        const preview = mediaflow.timelineClipController.previewClipMove(clipId, nextFrame, requestedAudioPosition, true);
         if (!preview.accepted)
             return;
         draggingClipTrackId = String(preview.trackId);
@@ -215,13 +215,13 @@ Rectangle {
         const nextTrackId = draggingClipTrackId;
         cancelClipDrag();
         if (moved)
-            timelineController.moveClip(clipId, nextFrame, nextTrackId, pixelsPerFrame, playheadFrame, snapEnabled);
+            mediaflow.timelineClipController.moveClip(clipId, nextFrame, nextTrackId, pixelsPerFrame, playheadFrame, snapEnabled);
     }
 
     function openClipContextMenu(clipId) {
         contextClipId = clipId;
-        if (!timelineController.isClipSelected(clipId))
-            timelineController.selectClip(clipId, false);
+        if (!mediaflow.timelineViewController.isClipSelected(clipId))
+            mediaflow.timelineViewController.selectClip(clipId, false);
         clipContextMenu.popup();
     }
 
@@ -232,29 +232,29 @@ Rectangle {
             objectName: "timelineSplitClipMenuItem"
             text: qsTr("在播放头处分割") + "\tCtrl+K"
             enabled: root.canEdit && root.contextClipId.length > 0
-            onTriggered: timelineController.splitClip(root.contextClipId, root.playheadFrame)
+            onTriggered: mediaflow.timelineClipController.splitClip(root.contextClipId, root.playheadFrame)
         }
         AppMenuItem {
             text: qsTr("创建片段副本") + "\tCtrl+D"
             enabled: root.canEdit && root.contextClipId.length > 0
-            onTriggered: timelineController.duplicateClip(root.contextClipId, root.pixelsPerFrame, root.playheadFrame)
+            onTriggered: mediaflow.timelineClipController.duplicateClip(root.contextClipId, root.pixelsPerFrame, root.playheadFrame)
         }
         AppMenuItem {
             objectName: "timelineDetachAudioMenuItem"
             text: qsTr("解除视音频绑定")
-            enabled: root.canEdit && root.contextClipId.length > 0 && timelineController.selectedClipData.canDetachAudio === true
-            onTriggered: timelineController.detachClipAudio(root.contextClipId)
+            enabled: root.canEdit && root.contextClipId.length > 0 && mediaflow.timelineViewController.selectedClipData.canDetachAudio === true
+            onTriggered: mediaflow.timelineClipController.detachClipAudio(root.contextClipId)
         }
         AppMenuSeparator {}
         AppMenuItem {
             text: qsTr("删除所选片段") + "\tDelete"
-            enabled: root.canEdit && timelineController.selectedClipIds.length > 0
-            onTriggered: timelineController.deleteSelectedClips(false)
+            enabled: root.canEdit && mediaflow.timelineViewController.selectedClipIds.length > 0
+            onTriggered: mediaflow.timelineClipController.deleteSelectedClips(false)
         }
         AppMenuItem {
             text: qsTr("波纹删除所选片段") + "\tShift+Delete"
-            enabled: root.canEdit && timelineController.selectedClipIds.length > 0
-            onTriggered: timelineController.deleteSelectedClips(true)
+            enabled: root.canEdit && mediaflow.timelineViewController.selectedClipIds.length > 0
+            onTriggered: mediaflow.timelineClipController.deleteSelectedClips(true)
         }
     }
 
@@ -266,7 +266,7 @@ Rectangle {
     Component.onCompleted: Qt.callLater(synchronizeInitialZoom)
 
     Connections {
-        target: workspaceController
+        target: mediaflow.workspaceViewController
         function onProjectStateChanged() {
             root.synchronizeInitialZoom();
         }
@@ -275,7 +275,7 @@ Rectangle {
         }
     }
     Connections {
-        target: timelineController
+        target: mediaflow.timelineClipController
         function onExclusiveSelectionRequested() {
             root.multiSelectMode = false;
         }

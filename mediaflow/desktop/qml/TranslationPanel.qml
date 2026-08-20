@@ -18,7 +18,7 @@ ColumnLayout {
     readonly property bool hasDocuments: sourceDocument.count > 0
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
-    readonly property bool canEdit: Boolean(workspaceController.actionCapabilities.canEdit)
+    readonly property bool canEdit: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
     signal modeRequested(string mode)
     signal importRequested
 
@@ -33,15 +33,15 @@ ColumnLayout {
     }
 
     function syncDefaults() {
-        root.selectValue(targetLanguage, settingsController.defaultTranslationLanguage);
-        root.selectValue(translationMode, settingsController.settingsData.translationMode || "standard");
+        root.selectValue(targetLanguage, mediaflow.settingsController.defaultTranslationLanguage);
+        root.selectValue(translationMode, mediaflow.settingsController.settingsData.translationMode || "standard");
         root.syncDocumentSelector();
         root.refreshComparison();
     }
 
     function syncDocumentSelector() {
-        const row = subtitleController.subtitleDocumentsModel.findRow(
-            "documentId", subtitleController.selectedDocumentId);
+        const row = mediaflow.subtitleViewController.subtitleDocumentsModel.findRow(
+            "documentId", mediaflow.subtitleViewController.selectedDocumentId);
         if (row >= 0)
             sourceDocument.currentIndex = row;
     }
@@ -92,13 +92,13 @@ ColumnLayout {
     }
 
     function refreshComparison() {
-        const documentId = String(subtitleController.selectedDocumentId || "");
-        const refreshed = subtitleController.translationComparison(
+        const documentId = String(mediaflow.subtitleViewController.selectedDocumentId || "");
+        const refreshed = mediaflow.subtitleTranslationController.translationComparison(
             documentId, String(targetLanguage.currentValue || ""));
         reconcileTranslationDrafts(refreshed);
         comparisonData = refreshed;
         const contextId = String(comparisonData.sourceDocumentId || documentId);
-        taskData = taskController.latestTask("translate", contextId);
+        taskData = mediaflow.taskController.latestTask("translate", contextId);
     }
 
     function rowSelected(rowId) {
@@ -135,7 +135,7 @@ ColumnLayout {
     }
 
     function loadGlossaryTerm() {
-        const data = settingsController.selectedGlossaryTermData;
+        const data = mediaflow.settingsController.selectedGlossaryTermData;
         termSource.text = data.source || "";
         termTarget.text = data.target || "";
         termNote.text = data.note || "";
@@ -143,11 +143,11 @@ ColumnLayout {
     }
 
     Component.onCompleted: {
-        observedDocumentId = String(subtitleController.selectedDocumentId || "");
+        observedDocumentId = String(mediaflow.subtitleViewController.selectedDocumentId || "");
         syncDefaults();
     }
     Connections {
-        target: settingsController
+        target: mediaflow.settingsController
         function onSettingsChanged() {
             root.syncDefaults();
         }
@@ -156,9 +156,9 @@ ColumnLayout {
         }
     }
     Connections {
-        target: subtitleController
+        target: mediaflow.subtitleViewController
         function onSelectionChanged() {
-            const documentId = String(subtitleController.selectedDocumentId || "");
+            const documentId = String(mediaflow.subtitleViewController.selectedDocumentId || "");
             if (documentId !== root.observedDocumentId) {
                 root.selectedRowIds = [];
                 root.observedDocumentId = documentId;
@@ -169,7 +169,7 @@ ColumnLayout {
         function onProjectStateChanged() { root.refreshComparison(); }
     }
     Connections {
-        target: taskController
+        target: mediaflow.taskController
         function onTasksChanged() { root.refreshComparison(); }
     }
 
@@ -216,14 +216,14 @@ ColumnLayout {
                     Layout.fillWidth: true
                 primary: true
                 text: qsTr("识别时间轴声音")
-                enabled: Boolean(workspaceController.actionCapabilities.canStartTasks)
+                enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
                     onClicked: root.modeRequested("transcript")
                 }
                 AppButton {
                     objectName: "translationImportFileButton"
                 Layout.fillWidth: true
                 text: qsTr("导入字幕文件")
-                enabled: Boolean(workspaceController.actionCapabilities.canImport)
+                enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canImport)
                     onClicked: root.importRequested()
                 }
                 Item { Layout.fillHeight: true }
@@ -234,10 +234,10 @@ ColumnLayout {
                 objectName: "translationDocumentSelector"
                 Layout.fillWidth: true
                 visible: root.hasDocuments
-                model: subtitleController.subtitleDocumentsModel
+                model: mediaflow.subtitleViewController.subtitleDocumentsModel
                 textRole: "language"
                 valueRole: "documentId"
-                onActivated: subtitleController.selectSubtitleDocument(String(currentValue))
+                onActivated: mediaflow.subtitleViewController.selectSubtitleDocument(String(currentValue))
             }
 
             RowLayout {
@@ -246,7 +246,7 @@ ColumnLayout {
                 AppComboBox {
                     id: translationMode
                     Layout.fillWidth: true
-                    model: subtitleController.translationModeOptions
+                    model: mediaflow.subtitleViewController.translationModeOptions
                     textRole: "label"
                     valueRole: "value"
                 }
@@ -255,7 +255,7 @@ ColumnLayout {
                     objectName: "translationTargetLanguage"
                     Layout.fillWidth: true
                     enabled: translationMode.currentValue !== "proofread"
-                    model: subtitleController.translationLanguageOptions
+                    model: mediaflow.subtitleViewController.translationLanguageOptions
                     textRole: "label"
                     valueRole: "value"
                     onCurrentValueChanged: root.refreshComparison()
@@ -275,7 +275,7 @@ ColumnLayout {
                         && !root.taskActive
                         && (translationMode.currentValue === "proofread"
                             || targetLanguage.currentValue.length > 0)
-                    onClicked: subtitleController.translateDocument(
+                    onClicked: mediaflow.subtitleTranslationController.translateDocument(
                         root.comparisonData.sourceDocumentId,
                         targetLanguage.currentValue,
                         translationMode.currentValue)
@@ -286,7 +286,7 @@ ColumnLayout {
                     enabled: root.canEdit && root.selectedRowIds.length > 0
                         && Boolean(root.comparisonData.targetDocumentId)
                         && !root.taskActive
-                    onClicked: subtitleController.translateComparisonSegments(
+                    onClicked: mediaflow.subtitleTranslationController.translateComparisonSegments(
                         root.comparisonData.sourceDocumentId,
                         root.comparisonData.targetDocumentId,
                         root.selectedSourceSegmentIds(),
@@ -336,7 +336,7 @@ ColumnLayout {
                         visible: Boolean(root.comparisonData.targetDocumentId)
                         text: qsTr("放入序列")
                         enabled: root.canEdit
-                        onClicked: subtitleController.placeSubtitleDocument(
+                        onClicked: mediaflow.subtitlePlacementController.placeSubtitleDocument(
                             root.comparisonData.targetDocumentId)
                     }
                 }
@@ -436,7 +436,7 @@ ColumnLayout {
                                         comparisonList.panel.comparisonData.targetDocumentId || "");
                                     const targetSegmentId = String(
                                         comparisonRow.modelData.targetSegmentId || "");
-                                    if (subtitleController.updateTranslationSegment(
+                                    if (mediaflow.subtitleTranslationController.updateTranslationSegment(
                                             targetDocumentId, targetSegmentId,
                                             targetEditor.text)) {
                                         comparisonList.panel.clearTranslationDraft(
@@ -452,7 +452,7 @@ ColumnLayout {
                     anchors.fill: parent
                     visible: comparisonList.count === 0
                     iconName: "translate"
-                    title: subtitleController.selectedDocumentId.length > 0
+                    title: mediaflow.subtitleViewController.selectedDocumentId.length > 0
                         ? qsTr("没有可对照的字幕段") : qsTr("还没有字幕文档")
                     description: qsTr("先转录媒体或导入 SRT，再从这里生成译文。")
                 }
@@ -474,7 +474,7 @@ ColumnLayout {
                 }
                 AppButton {
                     text: qsTr("新建术语")
-                    onClicked: settingsController.selectGlossaryTerm("")
+                    onClicked: mediaflow.settingsController.selectGlossaryTerm("")
                 }
             }
             Text {
@@ -492,7 +492,7 @@ ColumnLayout {
                 Layout.minimumHeight: 72
                 clip: true
                 spacing: 5
-                model: settingsController.glossaryTermsModel
+                model: mediaflow.settingsController.glossaryTermsModel
                 delegate: Rectangle {
                     required property string termId
                     required property string source
@@ -501,8 +501,8 @@ ColumnLayout {
                     width: glossaryList.width
                     height: 52
                     radius: Theme.radiusSmall
-                    color: settingsController.selectedGlossaryTermId === termId ? Theme.accentSoft : termMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-                    border.color: settingsController.selectedGlossaryTermId === termId ? Theme.accent : Theme.border
+                    color: mediaflow.settingsController.selectedGlossaryTermId === termId ? Theme.accentSoft : termMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+                    border.color: mediaflow.settingsController.selectedGlossaryTermId === termId ? Theme.accent : Theme.border
                     RowLayout {
                         anchors.fill: parent
                         anchors.margins: 8
@@ -523,7 +523,7 @@ ColumnLayout {
                         id: termMouse
                         anchors.fill: parent
                         hoverEnabled: true
-                        onClicked: settingsController.selectGlossaryTerm(termId)
+                        onClicked: mediaflow.settingsController.selectGlossaryTerm(termId)
                     }
                 }
                 EmptyState {
@@ -569,8 +569,8 @@ ColumnLayout {
                         Layout.fillWidth: true
                         AppButton {
                             text: qsTr("移除")
-                            enabled: settingsController.selectedGlossaryTermId.length > 0
-                            onClicked: settingsController.removeGlossaryTerm(settingsController.selectedGlossaryTermId)
+                            enabled: mediaflow.settingsController.selectedGlossaryTermId.length > 0
+                            onClicked: mediaflow.settingsController.removeGlossaryTerm(mediaflow.settingsController.selectedGlossaryTermId)
                         }
                         Item {
                             Layout.fillWidth: true
@@ -579,7 +579,7 @@ ColumnLayout {
                             primary: true
                             text: qsTr("保存术语")
                             enabled: termSource.text.trim().length > 0 && termTarget.text.trim().length > 0
-                            onClicked: settingsController.saveGlossaryTerm(settingsController.selectedGlossaryTermId, termSource.text, termTarget.text, termNote.text, termCategory.text)
+                            onClicked: mediaflow.settingsController.saveGlossaryTerm(mediaflow.settingsController.selectedGlossaryTermId, termSource.text, termTarget.text, termNote.text, termCategory.text)
                         }
                     }
                 }

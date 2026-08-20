@@ -11,14 +11,14 @@ Rectangle {
     signal openExportRequested()
 
     objectName: "workflowBanner"
-    visible: workspaceController.workflowPending
-        && !(workspaceController.workflowStage === "download"
-            && taskController.downloadProgressVisible)
-    color: workspaceController.workflowStatus === "blocked"
+    visible: mediaflow.workspaceViewController.workflowPending
+        && !(mediaflow.workspaceViewController.workflowStage === "download"
+            && mediaflow.taskController.downloadProgressVisible)
+    color: mediaflow.workspaceViewController.workflowStatus === "blocked"
         ? Theme.warningSoft : Theme.surfaceFloating
     radius: Theme.radius
     border.width: 1
-    border.color: workspaceController.workflowStatus === "blocked"
+    border.color: mediaflow.workspaceViewController.workflowStatus === "blocked"
         ? Theme.warning : Theme.borderStrong
     clip: true
 
@@ -31,10 +31,10 @@ Rectangle {
     }
 
     readonly property bool canAct:
-        workspaceController.actionCapabilities.canManageWorkflow
+        mediaflow.workspaceViewController.actionCapabilities.canManageWorkflow
     readonly property bool canSkip:
         ["prepare_media", "transcribe", "translate", "highlight",
-         "create_shorts"].indexOf(workspaceController.workflowStage) >= 0
+         "create_shorts"].indexOf(mediaflow.workspaceViewController.workflowStage) >= 0
 
     function stageLabel(stage) {
         if (stage === "download") return qsTr("下载")
@@ -92,15 +92,15 @@ Rectangle {
             Layout.preferredWidth: 3
             Layout.preferredHeight: 32
             radius: 2
-            color: workspaceController.workflowStatus === "blocked"
+            color: mediaflow.workspaceViewController.workflowStatus === "blocked"
                 ? Theme.warning : Theme.accent
         }
 
         AppIcon {
             Layout.preferredWidth: 22
             Layout.preferredHeight: 22
-            iconName: root.stageIcon(workspaceController.workflowStage)
-            iconColor: workspaceController.workflowStatus === "blocked"
+            iconName: root.stageIcon(mediaflow.workspaceViewController.workflowStage)
+            iconColor: mediaflow.workspaceViewController.workflowStatus === "blocked"
                 ? Theme.warning : Theme.accentHover
         }
 
@@ -108,14 +108,14 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 2
             Text {
-                text: root.stageLabel(workspaceController.workflowStage)
+                text: root.stageLabel(mediaflow.workspaceViewController.workflowStage)
                 color: Theme.text
                 font.pixelSize: Theme.fontSizeBody
                 font.weight: Font.DemiBold
             }
             Text {
                 Layout.fillWidth: true
-                text: root.message(workspaceController.workflowMessageCode)
+                text: root.message(mediaflow.workspaceViewController.workflowMessageCode)
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
                 elide: Text.ElideRight
@@ -129,7 +129,7 @@ Rectangle {
         AppComboBox {
             id: workflowLanguage
             objectName: "workflowLanguage"
-            visible: workspaceController.workflowStage === "translate"
+            visible: mediaflow.workspaceViewController.workflowStage === "translate"
             enabled: root.canAct
             Layout.preferredWidth: 150
             textRole: "label"
@@ -141,7 +141,7 @@ Rectangle {
                 { label: qsTr("日本语"), value: "ja" }
             ]
             Component.onCompleted: {
-                const wanted = settingsController.defaultTranslationLanguage
+                const wanted = mediaflow.settingsController.defaultTranslationLanguage
                 for (let index = 0; index < model.length; ++index) {
                     if (model[index].value === wanted) {
                         currentIndex = index
@@ -155,29 +155,29 @@ Rectangle {
             objectName: "workflowContinue"
             primary: true
             compact: true
-            visible: workspaceController.workflowStatus !== "running"
+            visible: mediaflow.workspaceViewController.workflowStatus !== "running"
             enabled: root.canAct
-                && (workspaceController.workflowStage !== "translate"
+                && (mediaflow.workspaceViewController.workflowStage !== "translate"
                     || workflowLanguage.currentValue.length > 0
-                    || workspaceController.workflowMessageCode
+                    || mediaflow.workspaceViewController.workflowMessageCode
                         === "workflow_llm_provider_required")
-            text: workspaceController.workflowMessageCode
+            text: mediaflow.workspaceViewController.workflowMessageCode
                     === "workflow_llm_provider_required"
                 ? qsTr("打开设置")
-                : workspaceController.workflowStage === "export"
+                : mediaflow.workspaceViewController.workflowStage === "export"
                 ? qsTr("前往导出")
-                : workspaceController.workflowStatus === "blocked"
+                : mediaflow.workspaceViewController.workflowStatus === "blocked"
                 ? qsTr("恢复")
                 : qsTr("确认继续")
             onClicked: {
-                if (workspaceController.workflowMessageCode
+                if (mediaflow.workspaceViewController.workflowMessageCode
                         === "workflow_llm_provider_required")
                     root.openSettingsRequested()
-                else if (workspaceController.workflowStage === "export")
+                else if (mediaflow.workspaceViewController.workflowStage === "export")
                     root.openExportRequested()
                 else
-                    workspaceController.continueWorkflow(
-                        workspaceController.workflowRunId,
+                    mediaflow.workspaceWorkflowController.continueWorkflow(
+                        mediaflow.workspaceViewController.workflowRunId,
                         workflowLanguage.currentValue || "")
             }
         }
@@ -188,8 +188,8 @@ Rectangle {
             visible: root.canSkip
             enabled: root.canAct
             text: qsTr("跳过")
-            onClicked: workspaceController.skipWorkflow(
-                workspaceController.workflowRunId)
+            onClicked: mediaflow.workspaceWorkflowController.skipWorkflow(
+                mediaflow.workspaceViewController.workflowRunId)
         }
 
         AppButton {
@@ -198,8 +198,8 @@ Rectangle {
             enabled: root.canAct
             danger: true
             text: qsTr("取消")
-            onClicked: workspaceController.cancelWorkflow(
-                workspaceController.workflowRunId)
+            onClicked: mediaflow.workspaceWorkflowController.cancelWorkflow(
+                mediaflow.workspaceViewController.workflowRunId)
         }
     }
 }

@@ -46,7 +46,7 @@ MediaFlow Pro is a project-based local video creation workstation. Give it video
 | Put structured web animation and regular media on the same timeline | `editable-media` v6 import, unified field editing, keyframes, package replacement, true-time filmstrips, and recoverable deterministic browser rendering |
 | Edit, translate, or find highlights from a transcript | A transcription workspace and previewable, undoable CLI automation |
 | Verify that a final video meets delivery requirements | Reports for black frames, freezes, silence, loudness, duration, safe areas, and reference-video comparison |
-| Download online media and continue editing it locally | yt-dlp downloads, source inspection, project creation, and real progress reporting |
+| Download online media and continue editing it locally | yt-dlp video and playlist downloads, Xiaoyuzhou episode audio downloads, project creation, and real progress reporting |
 
 If you only need to deterministically render finished HTML animation to video and do not need a nonlinear editing project, [HyperFrames](https://github.com/heygen-com/hyperframes) is the more direct tool. MediaFlow Pro is for workflows that combine footage, multiple tracks, subtitles, sound, and repeated revisions.
 
@@ -138,12 +138,18 @@ On all three platforms, pass a project directory as the first argument to open i
 | Projects and assets | Portable project directories, asset folders, proxies, waveforms, fingerprints, offline detection, relinking, and version snapshots |
 | Timeline | Multiple sequences and video/audio/subtitle tracks; trim, split, copy, ripple delete, transitions, source replacement, speed, reverse, compound clips, effect chains, and unified undo/redo |
 | Preview and picture | Source and program monitors, canvas transforms, a native audio clock, HDR/SDR projects, and MLT-backed preview |
-| Text and subtitles | faster-whisper / Faster-Whisper XXL transcription, subtitle editing, translation, terminology, and text-based editing from real word timestamps |
-| Audio | Multiple buses, effect chains, ducking, LUFS, and True Peak measurement |
+| Text and subtitles | faster-whisper / Faster-Whisper XXL transcription, subtitle editing, translation, terminology, multi-speaker diarization, and text-based editing from real word timestamps |
+| Audio | Multiple buses, effect chains, ducking, LUFS, True Peak measurement, and per-speaker cross-language voice cloning |
 | Analysis and delivery | Scene cuts, subject tracking, black-frame/freeze/silence checks, frame-by-frame reference comparison, H.264/HEVC/AV1/ProRes, separate subtitles, and FCPXML |
 | Interface and workspaces | Chinese, English, and Japanese UI; high DPI and keyboard support; persistent standard, media, and vertical layouts |
 
 Download and optional runtime availability depends on the current source site and local environment. Remote authenticated pages are outside the `editable-media` import boundary: a web package must be local, verifiable, and deterministically seekable.
+
+## Multi-speaker cross-language dubbing
+
+The Text and Subtitles workspace can turn non-overlapping English dialogue into Chinese speech. After placing audio on the primary dialogue track, the dubbing panel can start the canonical transcription task itself when English subtitles do not yet exist, without switching workspaces. It diarizes the designated dialogue track with pyannote.audio Community-1 and uses real word timestamps to extract multiple 3.0–9.8 second references whose audio and transcript match exactly. A clipped long subtitle without word timing is explicitly marked for transcript review. The workflow preserves one-to-one subtitle translations, keeps one GPT-SoVITS v2Pro server alive for the batch, and provides speaker, reference, translation, and review controls before committing one replaceable master track. Timing first borrows following silence and then applies bounded speed-up; speech that still runs long is preserved in full and marked for review rather than truncated.
+
+Keep pyannote in a separate Python environment, accept the [Community-1 model terms](https://huggingface.co/pyannote/speaker-diarization-community-1), and select that Python, its Hugging Face token, and the GPT-SoVITS v2Pro installation in Settings. Hugging Face, model, and Torch caches stay under that environment's `cache` directory; after one successful authorized diarization, the token can be removed for offline runs. The public operations are `dubbing.prepare`, the three review update operations, `dubbing.synthesize`, and `dubbing.commit`; inspect their exact current contracts with `mediaflow-cli describe --operation <name>`.
 
 ## `editable-media` web packages
 
@@ -197,6 +203,7 @@ MCP-capable hosts can configure `mediaflow-mcp` as a stdio server. It shares the
 - QML does not access the database or launch external processes directly. Desktop, CLI, and MCP use the same `EditorApplication` / `EditorProject` boundary.
 - Each signed-in user has one on-demand local Editor Service, and only that service process may hold project write locks.
 - `.env.example` is the public machine-path contract; source code does not guess runtimes from drive letters or system installations.
+- Large caches and local verification runs check their project limit and disk safety line before the first write. Run `python scripts/report_storage.py` to inspect real roots, project ownership, and cleanup candidates without deleting files.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for layers, threading, persistence boundaries, and the service protocol.
 

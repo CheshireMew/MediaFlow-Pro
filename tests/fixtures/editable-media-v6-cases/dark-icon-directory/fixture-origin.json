@@ -1,0 +1,15 @@
+{
+  "protocol": "mediaflow-generated-test-fixture",
+  "version": 1,
+  "producer": "visual-multimedia/assets/web-card-cases/dark-icon-directory",
+  "editable_media_version": 6,
+  "files": {
+    "editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
+    "editable-media.json": "678f1d7e003b019623720a4b2868700339b40c3a9aa1a76df754509fd10327c6",
+    "index.html": "363223424767a5541986fd222a86179b8f22dc41784132a664aa910eae3f044c",
+    "media-sources.json": "43692b4f21f90b9de5a66b0c79abe7977a1d1a77f8cfa2cdaa1172a9567c54f1",
+    "preview.png": "62adb3ffb6a31894f74b2021be01ffb608f837a3de0b23f349825aff9c2cc2d7",
+    "qa-preview.mjs": "3387f2b13ff290c6599266fac2444dd32c64f3959b11503f0ba374fb507948aa",
+    "style-profile.json": "519a1208f3349aca3d9a5ba812483863ffcb587fd202b29ff181ac64d2e2ff4e"
+  }
+}

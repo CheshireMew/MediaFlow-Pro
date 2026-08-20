@@ -12,8 +12,10 @@ import pytest
 from scripts import run_artifacts
 from scripts.run_artifacts import (
     MANIFEST_FILENAME,
+    VERIFICATION_WORK_ROOT_VARIABLE,
     _remove_managed_run,
     verification_run,
+    verification_workspace_root,
 )
 from tests.v2 import conftest as pytest_retention
 
@@ -68,7 +70,9 @@ def _release_file_holder(process: subprocess.Popen[str]) -> None:
 
 def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv(VERIFICATION_WORK_ROOT_VARIABLE, raising=False)
     managed_root = tmp_path / "managed-scripts"
     previous_service_settings = os.environ.get("MEDIAFLOW_SERVICE_SETTINGS_PATH")
     previous_desktop_settings = os.environ.get("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
@@ -145,6 +149,26 @@ def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
         _remove_managed_run(category_root, category_root, "policy")
     with pytest.raises(RuntimeError, match="unmanaged verification path"):
         _remove_managed_run(category_root, historical, "policy")
+
+
+def test_verification_run_separates_long_evidence_from_short_native_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = tmp_path / "deep" / "evidence" / "run"
+    workspace_base = tmp_path / "short"
+    monkeypatch.setenv(VERIFICATION_WORK_ROOT_VARIABLE, str(workspace_base))
+    previous_service_state = os.environ.get("MEDIAFLOW_SERVICE_STATE_DIR")
+
+    with verification_run("policy", explicit_root=evidence) as run_dir:
+        workspace = verification_workspace_root(run_dir)
+        assert workspace.parent == workspace_base.resolve()
+        assert Path(os.environ["MEDIAFLOW_PROJECT_ROOT"]).is_relative_to(workspace)
+        assert Path(os.environ["MEDIAFLOW_MEDIA_ROOT"]).is_relative_to(workspace)
+        assert Path(os.environ["MEDIAFLOW_SERVICE_STATE_DIR"]).is_relative_to(workspace)
+        assert run_dir == evidence.resolve()
+
+    assert os.environ.get("MEDIAFLOW_SERVICE_STATE_DIR") == previous_service_state
 
 
 def test_managed_script_manifest_failure_archives_unpublished_run(

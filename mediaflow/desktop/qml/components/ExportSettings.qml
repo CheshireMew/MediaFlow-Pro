@@ -17,7 +17,7 @@ ColumnLayout {
         if (!root.format)
             return []
         const target = root.format.value
-        const options = exportController.encoderPolicyOptions.filter(function(item) {
+        const options = mediaflow.exportController.encoderPolicyOptions.filter(function(item) {
             return item.formats.indexOf(target) >= 0
         })
         if (target === "audio" || !root.restoredEncoderPolicy)

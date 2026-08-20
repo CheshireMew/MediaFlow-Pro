@@ -17,27 +17,22 @@ from mediaflow.desktop.coordinators import (
     TaskOperations,
     TimelineAssetOperations,
 )
-from mediaflow.desktop.presentation_catalogs import status_message
+from mediaflow.desktop.presentation_messages import status_message
 from mediaflow.desktop.presenters import PresentationProjectors
 from mediaflow.desktop.session_events import SESSION_EVENT_NAMES, SessionEvents
 from mediaflow.desktop.session_state import (
-    AssetInteractionState,
-    AsyncRequestState,
-    DownloadState,
-    PresentationState,
-    ProjectBinding,
+    DesktopSessionState,
     RuntimeToolState,
-    SelectionState,
     SessionModels,
-    TaskViewState,
 )
+from mediaflow.desktop.session_updates import SessionUpdates
 from mediaflow.domain.downloads import DownloadPlan, DownloadRequest
 from mediaflow.domain.enums import (
     TrackKind,
 )
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.service.client import EditorServiceRpcError
-from mediaflow.service.desktop_proxy import (
+from mediaflow.service.desktop_application_proxy import (
     DesktopEditorApplication,
     create_desktop_editor_application,
 )
@@ -60,27 +55,23 @@ class ProjectSession(QObject):
     ):
         super().__init__(parent)
         self._api = application or create_desktop_editor_application()
-        self.service_settings = self._api.service_settings
-        self.desktop_settings = self._api.desktop_settings
-        self.binding = ProjectBinding()
-        self.selection = SelectionState()
-        self.task_state = TaskViewState()
-        self.presentation = PresentationState()
-        self.asset_state = AssetInteractionState()
-        self.download_state = DownloadState()
-        self.runtime_state = RuntimeToolState(
-            status={
-                **self._api.runtime_tool_status(),
-                "busy": False,
-                "progressMode": "indeterminate",
-                "progressValue": 0.0,
-                "message": "",
-                "operation": "",
-            }
+        self.state = DesktopSessionState(
+            service_settings=self._api.service_settings,
+            desktop_settings=self._api.desktop_settings,
+            runtime_state=RuntimeToolState(
+                status={
+                    **self._api.runtime_tool_status(),
+                    "busy": False,
+                    "progressMode": "indeterminate",
+                    "progressValue": 0.0,
+                    "message": "",
+                    "operation": "",
+                }
+            ),
         )
-        self.requests = AsyncRequestState()
         self.models = SessionModels.create(self)
         self.events = SessionEvents(self)
+        self.updates = SessionUpdates(self.events, self)
         self.background = BackgroundRequests(self)
         self.runtime_tools = RuntimeToolOperations(self)
         self.settings_persistence = SettingsPersistence(self)
@@ -108,8 +99,8 @@ class ProjectSession(QObject):
     @Slot(str)
     def _log_ui_error(self, message: str) -> None:
         error_id = uuid.uuid4().hex[:10]
-        self.presentation.last_error_id = error_id
-        self.events.errorReferenceChanged.emit()
+        self.state.presentation.last_error_id = error_id
+        self.updates.commit(error_reference=True)
         logger.error(
             "UI operation failed [%s]: %s",
             error_id,
@@ -121,27 +112,27 @@ class ProjectSession(QObject):
         self,
         error: EditorServiceRpcError,
     ) -> None:
-        self.presentation.collaboration_conflict = collaboration_conflict_details(error)
-        self.events.collaborationConflictChanged.emit()
+        self.state.presentation.collaboration_conflict = collaboration_conflict_details(error)
+        self.updates.commit(collaboration_conflict=True)
 
     def _require_writable(self) -> None:
-        if not self.binding.current or not self.binding.timeline:
+        if not self.state.binding.current or not self.state.binding.timeline:
             raise RuntimeError("请先打开一个项目")
-        if self.binding.current.read_only:
+        if self.state.binding.require_current().read_only:
             raise PermissionError("项目以只读方式打开")
 
     def _active_sequence_has_renderable_content(self) -> bool:
-        if not self.binding.current or not self.binding.timeline:
+        if not self.state.binding.current or not self.state.binding.timeline:
             return False
-        state = self.binding.timeline.state
+        state = self.state.binding.require_timeline().state
         active_video_track_ids = {track.id for track in state.effective_tracks(TrackKind.VIDEO)}
         if any(clip.track_id in active_video_track_ids for clip in state.clips):
             return True
-        assets = {asset.id: asset for asset in self.binding.current.list_assets()}
+        assets = {asset.id: asset for asset in self.state.binding.require_current().list_assets()}
         audio = select_audible_sequence_audio(
             state,
             assets,
-            self.binding.current.list_audio_buses(state.sequence.id),
+            self.state.binding.require_current().list_audio_buses(state.sequence.id),
         )
         return bool(audio.asset_ids)
 
@@ -151,9 +142,9 @@ class ProjectSession(QObject):
             raise ValueError("当前序列没有可导出的媒体片段")
 
     def _require_subtitle_document(self) -> None:
-        if not self.binding.current or not self.selection.document_id:
+        if not self.state.binding.current or not self.state.selection.document_id:
             raise RuntimeError("请先选择字幕文档")
-        self.binding.current.get_subtitle_document(self.selection.document_id)
+        self.state.binding.require_current().get_subtitle_document(self.state.selection.document_id)
 
     def _finish_subtitle_edit(
         self,
@@ -161,12 +152,12 @@ class ProjectSession(QObject):
         status_source: str,
         *status_arguments: object,
     ) -> None:
-        self.selection.subtitle_segment_ids = list(selected_ids)
+        self.state.selection.subtitle_segment_ids = list(selected_ids)
         self.projectors.subtitles.refresh_documents()
         self.projectors.timeline.refresh_preview_subtitles()
-        self.events.selectionChanged.emit()
-        self.events.projectStateChanged.emit()
-        self.events.historyChanged.emit()
+        self.updates.commit(selection=True)
+        self.updates.commit(project=True)
+        self.updates.commit(history=True)
         self.projectors.timeline.schedule_preview_graph()
         self._set_status(status_source, *status_arguments)
 
@@ -177,19 +168,19 @@ class ProjectSession(QObject):
     ) -> None:
         self.projectors.timeline.refresh_sequences()
         self.projectors.timeline.refresh_timeline()
-        self.events.projectStateChanged.emit()
-        self.events.historyChanged.emit()
+        self.updates.commit(project=True)
+        self.updates.commit(history=True)
         self._set_status(status_source, *status_arguments)
 
     def _set_download_plan(self, plan: DownloadPlan) -> None:
-        self.download_state.plan = plan
-        self.download_state.selected_entries = {entry.index for entry in plan.entries if entry.available}
+        self.state.download.plan = plan
+        self.state.download.selected_entries = {entry.index for entry in plan.entries if entry.available}
         self.projectors.tasks.refresh_download_entries()
-        self.events.downloadPlanChanged.emit()
+        self.updates.commit(download_plan=True)
 
     def _set_status(self, source: str, *arguments: object) -> None:
-        self.presentation.status_message = status_message(source, *arguments)
-        self.events.statusChanged.emit()
+        self.state.presentation.status_message = status_message(source, *arguments)
+        self.updates.commit(status=True)
 
     def _timeline_snap_targets(
         self,
@@ -199,11 +190,11 @@ class ProjectSession(QObject):
         excluded_subtitle_placement_ids: Iterable[str] = (),
     ) -> list[int]:
         targets = [0, max(0, playhead_frame)]
-        if not self.binding.timeline:
+        if not self.state.binding.timeline:
             return targets
         excluded = set(excluded_clip_ids)
         excluded_placements = set(excluded_subtitle_placement_ids)
-        state = self.binding.timeline.state
+        state = self.state.binding.require_timeline().state
         for clip in state.clips:
             if clip.id not in excluded:
                 targets.extend([clip.timeline_start, clip.timeline_end])
@@ -223,18 +214,22 @@ class ProjectSession(QObject):
         self,
         requests: list[DownloadRequest],
     ) -> None:
+        if self.state.binding.current is None:
+            raise RuntimeError("请先打开一个项目")
         self._apply_workflow_update(
-            self.binding.current.begin_download_workflow(self.binding.active_sequence_id, requests)
+            self.state.binding.require_current().begin_download_workflow(
+                self.state.binding.active_sequence_id, requests
+            )
         )
 
     def _apply_workflow_update(self, update: WorkflowUpdate) -> None:
         if update.selected_asset_ids:
-            self.selection.asset_ids = list(update.selected_asset_ids)
-            self.events.selectionChanged.emit()
+            self.state.selection.asset_ids = list(update.selected_asset_ids)
+            self.updates.commit(selection=True)
         if update.status_source:
             self._set_status(update.status_source, *update.status_arguments)
         self.projectors.timeline.refresh_sequences()
-        self.events.workflowChanged.emit()
+        self.updates.commit(workflow=True)
 
     _snap_tolerance_frames = staticmethod(snap_tolerance_frames)
     _updated_selection = staticmethod(updated_selection)

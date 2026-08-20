@@ -22,12 +22,15 @@ ColumnLayout {
         AppTabButton { objectName: "transcriptSection_subtitle"; text: qsTr("字幕") }
         AppTabButton { objectName: "transcriptSection_translate"; text: qsTr("翻译") }
         AppTabButton { objectName: "transcriptSection_glossary"; text: qsTr("术语表") }
+        AppTabButton { objectName: "transcriptSection_dubbing"; text: qsTr("多人配音") }
     }
 
     StackLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        currentIndex: Math.min(transcriptTabs.currentIndex, 2)
+        currentIndex: transcriptTabs.currentIndex <= 1
+            ? transcriptTabs.currentIndex
+            : transcriptTabs.currentIndex <= 3 ? 2 : 3
 
         TranscriptPanel {
             onModeRequested: function (mode) {
@@ -59,5 +62,6 @@ ColumnLayout {
             }
             onImportRequested: root.importRequested()
         }
+        DubbingPanel {}
     }
 }

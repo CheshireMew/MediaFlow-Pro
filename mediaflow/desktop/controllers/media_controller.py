@@ -7,9 +7,10 @@ from mediaflow.desktop.session_state import TimelinePlacement
 from mediaflow.domain.enums import AssetKind
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import MediaControllerScope
 
 
-class MediaController(ControllerFacet):
+class MediaController(ControllerFacet[MediaControllerScope]):
     projectStateChanged = Signal()
     selectionChanged = Signal()
     relinkConfirmationChanged = Signal()
@@ -18,7 +19,7 @@ class MediaController(ControllerFacet):
     sourceMonitorChanged = Signal()
     searchChanged = Signal()
 
-    def __init__(self, session):
+    def __init__(self, session: MediaControllerScope):
         super().__init__(session)
         self._source_asset_id = ""
         self._source_graph_path = ""
@@ -79,57 +80,61 @@ class MediaController(ControllerFacet):
         normalized = name.strip()
         if not normalized:
             raise ValueError("素材文件夹名称不能为空")
-        self._session.binding.current.create_asset_bin(
+        self._session.state.binding.require_current().create_asset_bin(
             normalized,
             parent_id.strip() or None,
         )
         self._session.projectors.assets.refresh_assets()
-        self._session.events.projectStateChanged.emit()
+        self._session.updates.commit(project=True)
         self._session._set_status("已创建素材文件夹：%1", normalized)
 
     @Slot(str)
     @report_ui_errors
     def moveSelectedAssetsToBin(self, bin_id: str) -> None:
         self._session._require_writable()
-        if not self._session.selection.asset_ids:
+        if not self._session.state.selection.asset_ids:
             raise ValueError("请先选择要移动的素材")
-        self._session.binding.current.move_assets_to_bin(
-            self._session.selection.asset_ids,
+        self._session.state.binding.require_current().move_assets_to_bin(
+            self._session.state.selection.asset_ids,
             bin_id.strip() or None,
         )
         self._session.projectors.assets.refresh_assets()
-        self._session.events.projectStateChanged.emit()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(project=True)
+        self._session.updates.commit(selection=True)
         self._session._set_status("素材文件夹已更新")
 
-    @Property("QVariantList", notify=projectStateChanged)
+    @Property(list, notify=projectStateChanged)
     def watermarkAssetOptions(self) -> list[dict]:
-        if not self._session.binding.current:
+        if not self._session.state.binding.current:
             return []
         return [
             {"label": asset.name, "value": asset.id}
-            for asset in self._session.binding.current.list_assets()
+            for asset in self._session.state.binding.require_current().list_assets()
             if asset.kind == AssetKind.IMAGE and asset.status.value == "online"
         ]
 
     @Property(str, notify=selectionChanged)
     def selectedWatermarkAssetId(self) -> str:
-        return self._session.selection.watermark_asset_id
+        return self._session.state.selection.watermark_asset_id
 
     @Property(str, notify=selectionChanged)
     def selectedAssetId(self) -> str:
-        return self._session.selection.asset_ids[-1] if self._session.selection.asset_ids else ""
+        return self._session.state.selection.asset_ids[-1] if self._session.state.selection.asset_ids else ""
 
-    @Property("QVariantList", notify=selectionChanged)
+    @Property(list, notify=selectionChanged)
     def selectedAssetIds(self) -> list[str]:
-        return list(self._session.selection.asset_ids)
+        return list(self._session.state.selection.asset_ids)
 
-    @Property("QVariantMap", notify=selectionChanged)
+    @Property(dict, notify=selectionChanged)
     def selectedAssetData(self) -> dict:
-        row = self._session.models.assets.findRow("assetId", self.selectedAssetId)
+        row = self._session.models.assets.findRow(
+            "assetId", self._session.state.selection.asset_ids[-1]
+            if self._session.state.selection.asset_ids
+            else ""
+        )
         return self._session.models.assets.get(row)
 
-    @Property("QVariantMap", notify=sourceMonitorChanged)
+    @Property(dict, notify=sourceMonitorChanged)
     def sourceMonitorData(self) -> dict:
         return {
             "assetId": self._source_asset_id,
@@ -143,19 +148,21 @@ class MediaController(ControllerFacet):
     @Slot(str)
     @report_ui_errors
     def openSourceMonitor(self, asset_id: str) -> None:
-        if not self._session.binding.current:
+        if not self._session.state.binding.current:
             raise RuntimeError("当前没有打开的项目")
-        asset = self._session.binding.current.get_asset(asset_id)
+        asset = self._session.state.binding.require_current().get_asset(asset_id)
         if asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO, AssetKind.IMAGE}:
             raise ValueError("该素材类型不能在源监视器中播放")
-        project = self._session.binding.current.get_project()
-        main_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
-        active_profile = self._session.binding.timeline.state.sequence.profile
+        project = self._session.state.binding.require_current().get_project()
+        main_profile = (
+            self._session.state.binding.require_current().get_sequence(project.main_sequence_id).profile
+        )
+        active_profile = self._session.state.binding.require_timeline().state.sequence.profile
         timeline_asset = asset.in_frame_clock(main_profile, active_profile)
         duration = timeline_asset.metadata.duration_frames or 150
         graph = self._session._api.write_asset_preview_snapshot(
-            self._session.binding.current.project_dir,
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.require_current().project_dir,
+            self._session.state.binding.active_sequence_id,
             asset.id,
         )
         self._source_asset_id = asset.id
@@ -222,36 +229,38 @@ class MediaController(ControllerFacet):
     @report_ui_errors
     def captureSourceFrame(self, frame: int) -> None:
         self._session._require_writable()
-        if not self._source_asset_id or not self._session.binding.current:
+        if not self._source_asset_id or not self._session.state.binding.current:
             raise RuntimeError("源监视器中没有素材")
-        captured = self._session.binding.current.capture_asset_frame(
+        captured = self._session.state.binding.require_current().capture_asset_frame(
             self._source_asset_id,
             max(0, int(frame)),
-            self._session.binding.active_sequence_id,
+            self._session.state.binding.active_sequence_id,
         )
-        self._session.selection.asset_ids = [captured.id]
+        self._session.state.selection.asset_ids = [captured.id]
         self._session.projectors.assets.refresh_assets()
-        self._session.events.projectStateChanged.emit()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(project=True)
+        self._session.updates.commit(selection=True)
         self._session._set_status("已将当前画面保存为素材：%1", captured.name)
 
     @Slot(str, result=QUrl)
     def assetUrl(self, asset_id: str) -> QUrl:
-        if not asset_id or not self._session.binding.current:
+        if not asset_id or not self._session.state.binding.current:
             return QUrl()
         try:
-            asset = self._session.binding.current.get_asset(asset_id)
-            return QUrl.fromLocalFile(str(self._session.binding.current.resolve_asset_path(asset)))
+            asset = self._session.state.binding.require_current().get_asset(asset_id)
+            return QUrl.fromLocalFile(
+                str(self._session.state.binding.require_current().resolve_asset_path(asset))
+            )
         except (KeyError, OSError, ValueError):
             return QUrl()
 
     @Slot(str)
     @report_ui_errors
     def openAssetFolder(self, asset_id: str) -> None:
-        if not asset_id or not self._session.binding.current:
+        if not asset_id or not self._session.state.binding.current:
             raise RuntimeError("当前没有可定位的素材")
-        asset = self._session.binding.current.get_asset(asset_id)
-        directory = self._session.binding.current.resolve_asset_path(asset).parent
+        asset = self._session.state.binding.require_current().get_asset(asset_id)
+        directory = self._session.state.binding.require_current().resolve_asset_path(asset).parent
         if not directory.is_dir():
             raise FileNotFoundError(f"素材所在文件夹不存在：{directory}")
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
@@ -277,9 +286,9 @@ class MediaController(ControllerFacet):
             ".tiff",
         }:
             raise ValueError("水印必须是 PNG、JPEG、WebP 或其他受支持的图片")
-        self._session.binding.current.import_asset(
+        self._session.state.binding.require_current().import_asset(
             source,
-            sequence_id=self._session.binding.active_sequence_id,
+            sequence_id=self._session.state.binding.active_sequence_id,
             purpose="watermark",
         )
         self._session.projectors.tasks.refresh_tasks()
@@ -289,11 +298,11 @@ class MediaController(ControllerFacet):
     @report_ui_errors
     def selectWatermarkAsset(self, asset_id: str) -> None:
         if asset_id:
-            asset = self._session.binding.current.get_asset(asset_id)
+            asset = self._session.state.binding.require_current().get_asset(asset_id)
             if asset.kind != AssetKind.IMAGE:
                 raise ValueError("水印必须是图片素材")
-        self._session.selection.watermark_asset_id = asset_id
-        self._session.events.selectionChanged.emit()
+        self._session.state.selection.watermark_asset_id = asset_id
+        self._session.updates.commit(selection=True)
 
     @Slot(str, str)
     @report_ui_errors
@@ -301,54 +310,54 @@ class MediaController(ControllerFacet):
         self._session._require_writable()
         replacement = self._session._local_path(path_url)
         try:
-            asset = self._session.binding.current.relink_asset(asset_id, replacement)
+            asset = self._session.state.binding.require_current().relink_asset(asset_id, replacement)
         except ValueError as error:
             if "does not match" not in str(error):
                 raise
-            self._session.asset_state.pending_relink_asset_id = asset_id
-            self._session.asset_state.pending_relink_path = str(replacement)
-            self._session.events.relinkConfirmationChanged.emit()
+            self._session.state.assets.pending_relink_asset_id = asset_id
+            self._session.state.assets.pending_relink_path = str(replacement)
+            self._session.updates.commit(relink_confirmation=True)
             return
-        self._session.selection.asset_ids = [asset.id]
+        self._session.state.selection.asset_ids = [asset.id]
         self._session.projectors.assets.refresh_assets()
         self._session.projectors.timeline.schedule_preview_graph()
-        self._session.events.projectStateChanged.emit()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(project=True)
+        self._session.updates.commit(selection=True)
         self._session._set_status("离线素材已重新关联")
 
     @Slot(bool)
     @report_ui_errors
     def resolveRelinkReplacement(self, replace: bool) -> None:
-        asset_id = self._session.asset_state.pending_relink_asset_id
-        replacement = self._session.asset_state.pending_relink_path
-        self._session.asset_state.pending_relink_asset_id = ""
-        self._session.asset_state.pending_relink_path = ""
-        self._session.events.relinkConfirmationChanged.emit()
+        asset_id = self._session.state.assets.pending_relink_asset_id
+        replacement = self._session.state.assets.pending_relink_path
+        self._session.state.assets.pending_relink_asset_id = ""
+        self._session.state.assets.pending_relink_path = ""
+        self._session.updates.commit(relink_confirmation=True)
         if not replace or not asset_id:
             return
         self._session._require_writable()
-        self._session.binding.current.relink_asset(
+        self._session.state.binding.require_current().relink_asset(
             asset_id,
             replacement,
             allow_different_content=True,
         )
-        self._session.selection.asset_ids = [asset_id]
+        self._session.state.selection.asset_ids = [asset_id]
         self._session.projectors.assets.refresh_assets()
         self._session.projectors.timeline.schedule_preview_graph()
-        self._session.events.projectStateChanged.emit()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(project=True)
+        self._session.updates.commit(selection=True)
         self._session._set_status("已替换素材内容，预览缓存和音频波形将重新生成")
 
     @Slot(str)
     @report_ui_errors
     def relinkOfflineMedia(self, directory_url: str) -> None:
         self._session._require_writable()
-        relinked, unresolved = self._session.binding.current.relink_offline_assets(
+        relinked, unresolved = self._session.state.binding.require_current().relink_offline_assets(
             self._session._local_path(directory_url)
         )
         self._session.projectors.assets.refresh_assets()
-        self._session.events.projectStateChanged.emit()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(project=True)
+        self._session.updates.commit(selection=True)
         if unresolved:
             self._session._set_status(
                 "已重新关联 %1 个素材，仍有 %2 个未找到",
@@ -361,19 +370,19 @@ class MediaController(ControllerFacet):
     @Slot(str)
     @Slot(str, bool)
     def selectAsset(self, asset_id: str, toggle: bool = False) -> None:
-        self._session.selection.asset_ids = self._session._updated_selection(
-            self._session.selection.asset_ids,
+        self._session.state.selection.asset_ids = self._session._updated_selection(
+            self._session.state.selection.asset_ids,
             asset_id,
             toggle=toggle,
         )
-        self._session.selection.document_id = ""
-        self._session.selection.subtitle_segment_ids = []
+        self._session.state.selection.document_id = ""
+        self._session.state.selection.subtitle_segment_ids = []
         self._session.projectors.subtitles.refresh_documents()
-        self._session.events.selectionChanged.emit()
+        self._session.updates.commit(selection=True)
 
     @Slot(str, result=bool)
     def isAssetSelected(self, asset_id: str) -> bool:
-        return asset_id in self._session.selection.asset_ids
+        return asset_id in self._session.state.selection.asset_ids
 
     @Slot(str, int, int, float, int, int, int, result="QVariantList")
     def waveformPeaks(
@@ -387,18 +396,18 @@ class MediaController(ControllerFacet):
         pixel_width: int,
     ) -> list[float]:
         if (
-            not self._session.binding.current
-            or not self._session.binding.active_sequence_id
+            not self._session.state.binding.current
+            or not self._session.state.binding.active_sequence_id
             or pixel_width <= 0
             or visible_duration_frames <= 0
         ):
             return []
         try:
-            cached = self._session.asset_state.waveform_cache.get(asset_id)
+            cached = self._session.state.assets.waveform_cache.get(asset_id)
             if not cached:
                 return []
             payload = cached[2]
-            profile = self._session.binding.timeline.state.sequence.profile
+            profile = self._session.state.binding.require_timeline().state.sequence.profile
             sample_rate = int(payload["sample_rate"])
             visible_start_frame = max(0, min(duration_frames - 1, visible_start_frame))
             visible_duration_frames = max(

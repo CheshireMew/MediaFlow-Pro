@@ -6,7 +6,7 @@ import pytest
 
 import mediaflow.application.subtitle_publication as subtitle_publication_module
 from mediaflow.composition import EditorApplication
-from mediaflow.domain.collaboration import ActorIdentity
+from mediaflow.domain.collaboration import ActorIdentity, ProjectMutationPlan
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 
@@ -17,17 +17,12 @@ def _add_subtitle_document(
     text: str,
 ) -> tuple[SubtitleDocument, SubtitleSegment, Path]:
     source.write_text(
-        (
-            "1\n"
-            "00:00:00,000 --> 00:00:01,000\n"
-            f"{text}\n"
-        ),
+        (f"1\n00:00:00,000 --> 00:00:01,000\n{text}\n"),
         encoding="utf-8-sig",
     )
     repository = project._repository
-    catalog = repository.catalog
-    project_record = catalog.get_project()
-    asset = catalog.import_external_asset(
+    project_record = repository.projects.get_project()
+    asset = repository.assets.import_external_asset(
         source,
         AssetKind.SUBTITLE,
     )
@@ -73,8 +68,8 @@ def test_atomic_automation_receipt_failure_rolls_back_database_srt_and_history(
             raise OSError("injected automation receipt failure")
 
         monkeypatch.setattr(
-            project._repository,
-            "save_automation_result",
+            project._repository.operations,
+            "save_result",
             reject_receipt,
         )
 
@@ -102,11 +97,11 @@ def test_atomic_automation_receipt_failure_rolls_back_database_srt_and_history(
                     "end_frame": 25,
                     "text": "Must roll back",
                 },
-                    update,
-                    atomic=True,
-                    base_revision=original_revision,
-                    actor=ActorIdentity(kind="system", id="commit-boundary-test"),
-                    write_set=[f"/subtitles/segments/{segment.id}"],
+                update,
+                atomic=True,
+                base_revision=original_revision,
+                actor=ActorIdentity(kind="system", id="commit-boundary-test"),
+                mutation_plan=ProjectMutationPlan.scoped([f"/subtitles/segments/{segment.id}"]),
             )
 
         persisted = project.list_subtitle_segments(document.id)[0]
@@ -114,21 +109,16 @@ def test_atomic_automation_receipt_failure_rolls_back_database_srt_and_history(
         assert output.read_bytes() == original_bytes
         assert project.content_revision() == original_revision
         assert project._history.checkpoint() == history_checkpoint
-        assert project._repository._fetchone(
-            "SELECT request_id FROM automation_request WHERE request_id=?",
-            ("subtitle-update-rollback",),
-        ) is None
-        archived = list(
-            (
-                project.project_dir
-                / "archive"
-                / "subtitle-publications"
-            ).rglob("*.srt")
+        assert (
+            project._repository._fetchone(
+                "SELECT request_id FROM automation_request WHERE request_id=?",
+                ("subtitle-update-rollback",),
+            )
+            is None
         )
+        archived = list((project.project_dir / "archive" / "subtitle-publications").rglob("*.srt"))
         assert len(archived) == 1
-        assert "Must roll back" in archived[0].read_text(
-            encoding="utf-8-sig"
-        )
+        assert "Must roll back" in archived[0].read_text(encoding="utf-8-sig")
 
 
 def test_named_version_restore_joins_automation_and_all_srt_publications(
@@ -177,15 +167,14 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
         }
         current_revision = project.content_revision()
         history_checkpoint = project._history.checkpoint()
-        original_write = (
-            subtitle_publication_module._write_document_srt
-        )
+        original_write = subtitle_publication_module._write_document_srt
         writes = 0
 
         def fail_after_second_write(
             repository,
             document_id: str,
             output: Path,
+            storage,
         ) -> bool:
             nonlocal writes
             writes += 1
@@ -193,11 +182,10 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
                 repository,
                 document_id,
                 output,
+                storage,
             )
             if writes == 2:
-                raise OSError(
-                    "injected second restored SRT failure"
-                )
+                raise OSError("injected second restored SRT failure")
             return changed
 
         monkeypatch.setattr(
@@ -218,18 +206,19 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
                 "restore-version-with-srts",
                 "project.version.restore",
                 {"version_id": version.id},
-                    restore,
-                    atomic=True,
-                    base_revision=current_revision,
-                    actor=ActorIdentity(kind="system", id="commit-boundary-test"),
-                    write_set=[f"/project/versions/{version.id}/restore"],
+                restore,
+                atomic=True,
+                base_revision=current_revision,
+                actor=ActorIdentity(kind="system", id="commit-boundary-test"),
+                mutation_plan=ProjectMutationPlan.scoped(["/project"]),
             )
 
         assert project.content_revision() == current_revision
-        assert {
-            document.id
-            for document in project.list_subtitle_documents()
-        } == {first.id, second.id, third.id}
+        assert {document.id for document in project.list_subtitle_documents()} == {
+            first.id,
+            second.id,
+            third.id,
+        }
         assert [
             project.list_subtitle_segments(document_id)[0].text
             for document_id in (first.id, second.id, third.id)
@@ -238,15 +227,10 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
             "Current second",
             "Created after version",
         ]
-        assert {
-            path: path.read_bytes() for path in current_bytes
-        } == current_bytes
+        assert {path: path.read_bytes() for path in current_bytes} == current_bytes
         assert project._history.checkpoint() == history_checkpoint
         assert {
-            row["name"]
-            for row in project._repository._connection.execute(
-                "PRAGMA database_list"
-            ).fetchall()
+            row["name"] for row in project._repository._connection.execute("PRAGMA database_list").fetchall()
         } == {"main"}
 
         monkeypatch.setattr(
@@ -262,7 +246,7 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
             atomic=True,
             base_revision=current_revision,
             actor=ActorIdentity(kind="system", id="commit-boundary-test"),
-            write_set=[f"/project/versions/{version.id}/restore"],
+            mutation_plan=ProjectMutationPlan.scoped(["/project"]),
         )
         replayed = project.execute_automation_request(
             "restore-version-with-srts",
@@ -272,34 +256,16 @@ def test_named_version_restore_joins_automation_and_all_srt_publications(
             atomic=True,
             base_revision=current_revision,
             actor=ActorIdentity(kind="system", id="commit-boundary-test"),
-            write_set=[f"/project/versions/{version.id}/restore"],
+            mutation_plan=ProjectMutationPlan.scoped(["/project"]),
         )
 
         assert replayed == restored
-        assert {
-            document.id
-            for document in project.list_subtitle_documents()
-        } == {first.id, second.id}
+        assert {document.id for document in project.list_subtitle_documents()} == {first.id, second.id}
         assert [
-            project.list_subtitle_segments(document_id)[0].text
-            for document_id in (first.id, second.id)
+            project.list_subtitle_segments(document_id)[0].text for document_id in (first.id, second.id)
         ] == ["Version first", "Version second"]
-        assert "Version first" in first_output.read_text(
-            encoding="utf-8-sig"
-        )
-        assert "Version second" in second_output.read_text(
-            encoding="utf-8-sig"
-        )
+        assert "Version first" in first_output.read_text(encoding="utf-8-sig")
+        assert "Version second" in second_output.read_text(encoding="utf-8-sig")
         assert not third_output.exists()
-        archived = list(
-            (
-                project.project_dir
-                / "archive"
-                / "subtitle-publications"
-            ).rglob("*.srt")
-        )
-        assert any(
-            "Created after version"
-            in path.read_text(encoding="utf-8-sig")
-            for path in archived
-        )
+        archived = list((project.project_dir / "archive" / "subtitle-publications").rglob("*.srt"))
+        assert any("Created after version" in path.read_text(encoding="utf-8-sig") for path in archived)

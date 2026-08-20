@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,12 +14,13 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QColor, QImage
 
 from mediaflow.application.events import TaskEvent
-from mediaflow.application.settings_form import SettingsForm
 from mediaflow.application.task_service import TaskCompletion
 from mediaflow.application.workflow_coordinator import WorkflowCoordinator
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers import EditorControllers
+from mediaflow.desktop.controllers.project_controller import ProjectSession
 from mediaflow.desktop.coordinators.project_lifecycle import ProjectLifecycle
+from mediaflow.desktop.coordinators.task_events import TaskOperations
 from mediaflow.desktop.models import (
     AssetFilterModel,
     AssetListModel,
@@ -54,6 +56,7 @@ from mediaflow.domain.task_commands import (
     AnalyzeSequenceBoundsCommand,
     ExportSequenceCommand,
     ImportAssetCommand,
+    TrackSubjectCommand,
 )
 from mediaflow.domain.tasks import SequenceBoundaryTaskOutcome, Task
 from mediaflow.domain.workflows import WorkflowPayload
@@ -67,6 +70,19 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 from tests.v2.real_media import generate_real_media
+
+
+def test_subject_tracking_modes_do_not_reuse_each_others_active_task() -> None:
+    auto_reframe = TrackSubjectCommand(
+        sequence_id="sequence",
+        clip_id="clip",
+        mode="auto_reframe",
+    )
+    subject_tracking = auto_reframe.model_copy(update={"mode": "subject_tracking"})
+
+    assert TaskOperations._active_request_scope(auto_reframe) != (
+        TaskOperations._active_request_scope(subject_tracking)
+    )
 
 
 def test_deferred_model_update_is_readable_before_qml_notification() -> None:
@@ -382,6 +398,55 @@ def test_window_state_persists_normal_geometry_and_maximized_flag() -> None:
         controllers.shutdown()
 
 
+def test_dubbing_transcription_infers_the_only_audio_track(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = EditorApplication()
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(application)
+    )
+    selected_languages: list[str] = []
+    monkeypatch.setattr(
+        "mediaflow.desktop.controllers.dubbing_controller."
+        "start_current_transcription_task",
+        lambda _session, asr: selected_languages.append(asr.language),
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Dubbing Audio")
+        source = tmp_path / "dialogue.wav"
+        with wave.open(str(source), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(48_000)
+            audio.writeframes(b"\0\0" * 48_000)
+        current = controllers.session.state.binding.current
+        timeline = controllers.session.state.binding.timeline
+        asset = current.import_external_asset(source, expected_kind=AssetKind.AUDIO)
+        track = timeline.add_track(TrackKind.AUDIO)
+        timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=asset.metadata.duration_frames,
+        )
+
+        readiness = controllers.dubbing.sourceReadiness()
+        assert readiness["available"] is True
+        assert readiness["active"] is False
+
+        controllers.dubbing.transcribeSource("en")
+
+        selected_track = next(
+            item for item in timeline.state.tracks if item.id == track.id
+        )
+        assert selected_track.primary_dialogue is True
+        assert selected_languages == ["en"]
+    finally:
+        controllers.shutdown()
+
+
 def test_shutdown_drains_project_readers_before_releasing_project() -> None:
     controllers = EditorControllers()
     events: list[str] = []
@@ -435,8 +500,8 @@ def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(
 ) -> None:
     controllers = EditorControllers()
     session = controllers.session
-    session.binding.project_id = "project"
-    session.binding.generation = 7
+    session.state.binding.project_id = "project"
+    session.state.binding.generation = 7
     monkeypatch.setattr(session.projectors.tasks, "refresh_tasks", lambda: None)
     monkeypatch.setattr(session.projectors.assets, "refresh_assets", lambda: None)
     monkeypatch.setattr(
@@ -451,8 +516,8 @@ def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(
         status=TaskStatus.PAUSED,
         revision=1,
     )
-    session.asset_state.pending_import_tasks[paused.id] = ("batch", 0)
-    session.asset_state.pending_import_batches["batch"] = ImportDropBatch(
+    session.state.assets.pending_import_tasks[paused.id] = ("batch", 0)
+    session.state.assets.pending_import_batches["batch"] = ImportDropBatch(
         placement=TimelinePlacement(),
         asset_ids=[None],
         pending_task_ids={paused.id},
@@ -472,8 +537,8 @@ def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(
                 ),
             )
         )
-        assert paused.id in session.asset_state.pending_import_tasks
-        assert paused.id in session.asset_state.pending_import_batches["batch"].pending_task_ids
+        assert paused.id in session.state.assets.pending_import_tasks
+        assert paused.id in session.state.assets.pending_import_batches["batch"].pending_task_ids
 
         failed = paused.model_copy(
             update={
@@ -495,8 +560,8 @@ def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(
                 ),
             )
         )
-        assert failed.id not in session.asset_state.pending_import_tasks
-        assert "batch" not in session.asset_state.pending_import_batches
+        assert failed.id not in session.state.assets.pending_import_tasks
+        assert "batch" not in session.state.assets.pending_import_batches
     finally:
         controllers.shutdown()
 
@@ -505,7 +570,7 @@ def test_workspace_action_capabilities_share_one_read_only_and_closing_boundary(
     controllers = EditorControllers()
     session = controllers.session
     try:
-        session.binding.current = SimpleNamespace(read_only=True)
+        session.state.binding.current = SimpleNamespace(read_only=True)
         read_only = controllers.workspace.actionCapabilities
         assert read_only["canEdit"] is False
         assert read_only["canImport"] is False
@@ -514,8 +579,8 @@ def test_workspace_action_capabilities_share_one_read_only_and_closing_boundary(
         assert read_only["canManageWorkflow"] is False
         assert read_only["canCloseProject"] is True
 
-        session.binding.current = None
-        session.requests.closing_project = SimpleNamespace(project_dir=Path("D:/closing-project"))
+        session.state.binding.current = None
+        session.state.requests.closing_project = SimpleNamespace(project_dir=Path("D:/closing-project"))
         closing = controllers.workspace.actionCapabilities
         assert closing["canOpenProject"] is False
         assert closing["canCreateProject"] is False
@@ -523,8 +588,8 @@ def test_workspace_action_capabilities_share_one_read_only_and_closing_boundary(
         assert closing["projectReleasePending"] is True
         assert closing["projectClosing"] is False
     finally:
-        session.binding.current = None
-        session.requests.closing_project = None
+        session.state.binding.current = None
+        session.state.requests.closing_project = None
         controllers.shutdown()
 
 
@@ -535,26 +600,51 @@ def test_settings_form_save_merges_user_changes_with_async_runtime_updates(
     controllers = EditorControllers()
     try:
         session = controllers.session
-        baseline = SettingsForm.from_settings(
-            session.service_settings,
-            session.desktop_settings,
-        ).model_dump(mode="json", by_alias=True)
-        submitted = dict(baseline)
-        submitted["theme"] = "high_contrast"
+        draft = controllers.settings.settingsDraft
+        draft.begin()
+        draft.update("theme", "high_contrast")
 
         installed_path = tmp_path / "runtime" / "bin" / "xxl.exe"
-        runtime_update = session.service_settings.model_copy(deep=True)
+        runtime_update = session.state.service_settings.model_copy(deep=True)
         runtime_update.asr.cli_path = str(installed_path)
         session.settings_persistence.commit(runtime_update)
 
-        controllers.settings.saveSettings(
-            submitted,
-            baseline,
+        draft.flush()
+
+        assert session.state.desktop_settings.ui.theme == "high_contrast"
+        assert session.state.service_settings.asr.cli_path == str(installed_path)
+        assert ServiceSettingsRepository().load().asr.cli_path == str(installed_path)
+    finally:
+        controllers.shutdown()
+
+
+def test_speaker_clustering_install_result_becomes_the_default_runtime(
+    tmp_path: Path,
+) -> None:
+    controllers = EditorControllers()
+    try:
+        python = tmp_path / "speaker-clustering" / "venv" / "Scripts" / "python.exe"
+        model = tmp_path / "speaker-clustering" / "models" / "campplus.onnx"
+        python.parent.mkdir(parents=True)
+        model.parent.mkdir(parents=True)
+        python.touch()
+        model.touch()
+
+        controllers.session.runtime_tools._on_event(
+            {
+                "type": "completed",
+                "operation": "install_speaker_clustering",
+                "result": {"python": str(python), "model": str(model)},
+            }
         )
 
-        assert session.desktop_settings.ui.theme == "high_contrast"
-        assert session.service_settings.asr.cli_path == str(installed_path)
-        assert ServiceSettingsRepository().load().asr.cli_path == str(installed_path)
+        configured = controllers.session.state.service_settings.speaker_diarization
+        persisted = ServiceSettingsRepository().load().speaker_diarization
+        assert configured.backend == "transcript_clustering"
+        assert configured.clustering_python_executable == str(python)
+        assert configured.embedding_model_path == str(model)
+        assert persisted.clustering_python_executable == str(python)
+        assert persisted.embedding_model_path == str(model)
     finally:
         controllers.shutdown()
 
@@ -611,19 +701,19 @@ def test_subtitle_preview_fallback_reframes_main_clock_but_placement_stays_autho
     controllers = EditorControllers(application=desktop_application)
     try:
         controllers.session.lifecycle.replace(desktop_application.adapt_project(project))
-        controllers.workspace.selectSequence(short_sequence.id)
-        controllers.subtitles.selectSubtitleDocument(document.id)
-        assert controllers.subtitles.subtitlePlacementsModel.rowCount() == 0
+        controllers.workspace_sequence.selectSequence(short_sequence.id)
+        controllers.subtitle_view.selectSubtitleDocument(document.id)
+        assert controllers.subtitle_view.subtitlePlacementsModel.rowCount() == 0
 
         preview_ranges: list[tuple[int, int]] = []
-        controllers.subtitles.previewRangeRequested.connect(
+        controllers.subtitle_view.previewRangeRequested.connect(
             lambda start, end: preview_ranges.append((start, end))
         )
-        controllers.subtitles.previewSubtitleSegment(segment.id)
+        controllers.subtitle_view.previewSubtitleSegment(segment.id)
 
         assert preview_ranges == [(60, 120)]
         assert (
-            controllers.subtitles.subtitleSegmentTimelineFrame(
+            controllers.subtitle_view.subtitleSegmentTimelineFrame(
                 segment.id,
                 segment.start_frame,
             )
@@ -638,14 +728,14 @@ def test_subtitle_preview_fallback_reframes_main_clock_but_placement_stays_autho
         )
         project._repository.subtitles.add_subtitle_placements([placement])
         controllers.session.projectors.timeline.refresh_preview_subtitles()
-        assert controllers.subtitles.subtitlePlacementsModel.rowCount() == 1
+        assert controllers.subtitle_view.subtitlePlacementsModel.rowCount() == 1
 
         preview_ranges.clear()
-        controllers.subtitles.previewSubtitleSegment(segment.id)
+        controllers.subtitle_view.previewSubtitleSegment(segment.id)
 
         assert preview_ranges == [(73, 109)]
         assert (
-            controllers.subtitles.subtitleSegmentTimelineFrame(
+            controllers.subtitle_view.subtitleSegmentTimelineFrame(
                 segment.id,
                 segment.start_frame,
             )
@@ -790,7 +880,7 @@ def test_source_monitor_uses_real_graph_range_insertion_and_requested_frame(
     generate_real_media(source, application.runtime_paths, width=160, height=90)
     project = application.create_project(tmp_path / "Source Monitor", "Source Monitor")
     asset = project.import_external_asset(source, expected_kind=AssetKind.VIDEO)
-    asset = project._repository.catalog.update_asset(
+    asset = project._repository.assets.update_asset(
         asset.model_copy(
             update={
                 "metadata": MediaMetadata(
@@ -817,16 +907,16 @@ def test_source_monitor_uses_real_graph_range_insertion_and_requested_frame(
         controllers.media.setSourceInFrame(5)
         controllers.media.setSourceOutFrame(14)
         controllers.media.addSourceRangeToTimeline(40, 1.0, False)
-        [clip] = controllers.session.binding.timeline.state.clips
+        [clip] = controllers.session.state.binding.timeline.state.clips
         assert (clip.source_in, clip.duration) == (5, 10)
 
         controllers.media.captureSourceFrame(0)
-        first_capture = controllers.session.binding.current.resolve_asset_path(
-            controllers.session.binding.current.get_asset(controllers.media.selectedAssetId)
+        first_capture = controllers.session.state.binding.current.resolve_asset_path(
+            controllers.session.state.binding.current.get_asset(controllers.media.selectedAssetId)
         )
         controllers.media.captureSourceFrame(12)
-        second_capture = controllers.session.binding.current.resolve_asset_path(
-            controllers.session.binding.current.get_asset(controllers.media.selectedAssetId)
+        second_capture = controllers.session.state.binding.current.resolve_asset_path(
+            controllers.session.state.binding.current.get_asset(controllers.media.selectedAssetId)
         )
         assert first_capture.is_file() and second_capture.is_file()
         assert first_capture.read_bytes() != second_capture.read_bytes()
@@ -897,15 +987,15 @@ def test_download_plan_queues_selected_entries_as_typed_requests(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    captured: list[DownloadRequest] = []
+    monkeypatch.setattr(ProjectSession, "_require_writable", lambda _self: None)
+    monkeypatch.setattr(
+        ProjectSession,
+        "_start_download_workflow",
+        lambda _self, requests: captured.extend(requests),
+    )
     controllers = EditorControllers()
     session = controllers.session
-    captured: list[DownloadRequest] = []
-    monkeypatch.setattr(session, "_require_writable", lambda: None)
-    monkeypatch.setattr(
-        session,
-        "_start_download_workflow",
-        captured.extend,
-    )
     plan = PlatformMediaResolver._bilibili_plan(
         "https://www.bilibili.com/video/BV1234567890",
         {
@@ -1027,7 +1117,7 @@ def test_project_switch_rolls_back_to_live_previous_session_when_binding_fails(
     try:
         first = application.create_project(tmp_path / "First", "First")
         session.lifecycle.replace(desktop_application.adapt_project(first))
-        first_id = session.binding.current.get_project().id
+        first_id = session.state.binding.current.get_project().id
         second = application.create_project(tmp_path / "Second", "Second")
         original_refresh = session.projectors.refresh_project
         attempts = 0
@@ -1047,8 +1137,8 @@ def test_project_switch_rolls_back_to_live_previous_session_when_binding_fails(
         with pytest.raises(RuntimeError, match="binding failed"):
             session.lifecycle.replace(desktop_application.adapt_project(second))
 
-        assert session.binding.current.get_project().id == first_id
-        assert session.binding.current.project_dir == (tmp_path / "First").resolve()
+        assert session.state.binding.current.get_project().id == first_id
+        assert session.state.binding.current.project_dir == (tmp_path / "First").resolve()
         assert controllers.workspace.sequencesModel.rowCount() == 1
         with application.open_project(tmp_path / "Second", writable=True) as reopened:
             assert reopened.get_project().name == "Second"
@@ -1066,7 +1156,7 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
     desktop_application = DesktopPresentationApplication(application)
     controllers = EditorControllers(application=desktop_application)
     try:
-        project = holder.catalog.get_project()
+        project = holder.projects.get_project()
         paused_task = TaskRepository(holder).create(
             Task(
                 project_id=project.id,
@@ -1094,19 +1184,19 @@ def test_read_only_desktop_open_preserves_interrupted_workflows_and_writable_ope
             running=True,
         )
         workflow_ids = {empty.id, missing.id, paused.id}
-        before = {run.id: run.model_dump(mode="json") for run in holder.catalog.list_workflow_runs()}
+        before = {run.id: run.model_dump(mode="json") for run in holder.projects.list_workflow_runs()}
         revision_before = holder.content_revision()
 
         observer = application.open_project(root, writable=True)
         assert observer.read_only is True
         controllers.session.lifecycle.replace(desktop_application.adapt_project(observer))
 
-        bound = controllers.session.binding.current
+        bound = controllers.session.state.binding.current
         assert bound.project_dir == observer.project_dir
         assert bound.read_only is True
         with pytest.raises(PermissionError, match="只读"):
             bound.reconcile_workflow()
-        assert {run.id: run.model_dump(mode="json") for run in holder.catalog.list_workflow_runs()} == before
+        assert {run.id: run.model_dump(mode="json") for run in holder.projects.list_workflow_runs()} == before
         assert holder.content_revision() == revision_before
 
         controllers.session.lifecycle.close(close_in_background=False)
@@ -1139,7 +1229,7 @@ def test_default_export_uses_project_folder_and_avoids_existing_names(
         return None
 
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             str(tmp_path),
             "Export Defaults",
         )
@@ -1147,13 +1237,13 @@ def test_default_export_uses_project_folder_and_avoids_existing_names(
         image = QImage(16, 16, QImage.Format.Format_RGB32)
         image.fill(QColor("#56d6cb"))
         assert image.save(str(image_path))
-        current = controllers.session.binding.current
+        current = controllers.session.state.binding.current
         asset = current.import_external_asset(
             image_path,
             expected_kind=AssetKind.IMAGE,
         )
-        track = controllers.session.binding.timeline.add_track(TrackKind.VIDEO)
-        controllers.session.binding.timeline.add_clip(
+        track = controllers.session.state.binding.timeline.add_track(TrackKind.VIDEO)
+        controllers.session.state.binding.timeline.add_clip(
             track_id=track.id,
             asset_id=asset.id,
             timeline_start=0,
@@ -1202,9 +1292,9 @@ def test_double_loudness_trigger_reuses_the_same_active_request(
         return TaskCompletion()
 
     try:
-        controllers.workspace.createProject(str(tmp_path), "Double Trigger")
-        current = controllers.session.binding.current
-        current._tasks._handlers[TaskKind.ANALYZE] = block_loudness
+        controllers.workspace_project.createProject(str(tmp_path), "Double Trigger")
+        current = controllers.session.state.binding.current
+        current._tasks._execution.handlers[TaskKind.ANALYZE] = block_loudness
 
         controllers.audio.analyzeLoudness()
         assert handler_started.wait(5)
@@ -1223,15 +1313,17 @@ def test_open_desktop_consumes_persisted_task_events_from_project_service(
 ) -> None:
     controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
-        controllers.workspace.createProject(str(tmp_path), "External Task")
+        controllers.workspace_project.createProject(str(tmp_path), "External Task")
         session = controllers.session
         assert controllers.tasks.tasksModel.rowCount() == 0
-        project_revision = session.binding.current.content_revision()
+        project_revision = session.state.binding.current.content_revision()
 
-        task = session.binding.current.start_task(AnalyzeDownloadCommand(url="https://example.invalid/media"))
-        external = session.binding.current.wait_for_task(task.id, timeout=5)
+        task = session.state.binding.current.start_task(
+            AnalyzeDownloadCommand(url="https://example.invalid/media")
+        )
+        external = session.state.binding.current.wait_for_task(task.id, timeout=5)
         assert external.status == TaskStatus.FAILED
-        assert session.binding.current.content_revision() == project_revision
+        assert session.state.binding.current.content_revision() == project_revision
 
         session.lifecycle.reconcile_task_events()
 
@@ -1241,7 +1333,7 @@ def test_open_desktop_consumes_persisted_task_events_from_project_service(
         assert row["status"] == "failed"
         assert row["error"] == external.error
         assert row["error"]
-        assert session.binding.current.committed_task_result(external.id) is not None
+        assert session.state.binding.current.committed_task_result(external.id) is not None
     finally:
         controllers.shutdown()
 
@@ -1252,11 +1344,11 @@ def _create_completed_sequence_boundary_task(
 ) -> tuple[Task, str]:
     sequence_id = project.get_project().main_sequence_id
     source.write_bytes(b"desktop sequence boundary source")
-    asset = project._repository.catalog.import_external_asset(
+    asset = project._repository.assets.import_external_asset(
         source,
         AssetKind.VIDEO,
     )
-    asset = project._repository.catalog.update_asset(
+    asset = project._repository.assets.update_asset(
         asset.model_copy(
             update={
                 "metadata": asset.metadata.model_copy(
@@ -1292,7 +1384,7 @@ def _create_completed_sequence_boundary_task(
             speech_out_frame=90,
         )
     )
-    project._tasks._handlers[TaskKind.ANALYZE] = lambda _context: TaskCompletion(outcome=outcome)
+    project._tasks._execution.handlers[TaskKind.ANALYZE] = lambda _context: TaskCompletion(outcome=outcome)
     task = project.start_task(
         AnalyzeSequenceBoundsCommand(
             sequence_id=sequence_id,
@@ -1327,8 +1419,8 @@ def test_open_desktop_projects_service_committed_terminal_task_state(
 
     controllers = EditorControllers(application=DesktopPresentationApplication(application))
     try:
-        controllers.workspace.openProject(str(root))
-        current = controllers.session.binding.current
+        controllers.workspace_project.openProject(str(root))
+        current = controllers.session.state.binding.current
 
         assert current.load_timeline(sequence_id).sequence.in_out == (
             SequenceInOut(in_frame=10, out_frame=90)
@@ -1352,11 +1444,11 @@ def test_desktop_retries_terminal_task_projection_after_transient_failure(
     errors: list[str] = []
     controllers.session.events.errorOccurred.connect(errors.append)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             str(tmp_path),
             "Retry Task Consumption",
         )
-        current = controllers.session.binding.current
+        current = controllers.session.state.binding.current
         task, sequence_id = _create_completed_sequence_boundary_task(
             current,
             tmp_path / "retry-boundary.mp4",

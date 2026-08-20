@@ -6,7 +6,7 @@ from mediaflow.application.timeline_rules import TimelineRules
 from mediaflow.domain.project import SequenceInOut
 from mediaflow.domain.timebase import source_frame_at_timeline_offset
 from mediaflow.domain.timeline import Clip, CompoundClip, TimelineRange, TimelineState
-from mediaflow.domain.web_media import WebClipState
+from mediaflow.domain.web_state import WebClipState
 
 
 class RippleDeletePolicy:

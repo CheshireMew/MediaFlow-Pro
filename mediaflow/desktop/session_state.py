@@ -34,8 +34,10 @@ from mediaflow.desktop.models import (
     WebLayerListModel,
 )
 from mediaflow.domain.downloads import DownloadPlan
+from mediaflow.domain.settings import DesktopSettings, ServiceSettings
 from mediaflow.domain.tasks import Task
-from mediaflow.service.desktop_proxy import RemoteEditorProject, RemoteTimelineEditor
+from mediaflow.service.remote_project import RemoteEditorProject
+from mediaflow.service.remote_timeline import RemoteTimelineEditor
 
 DesktopProject = RemoteEditorProject
 DesktopTimeline = RemoteTimelineEditor
@@ -77,6 +79,16 @@ class ProjectBinding:
     task_subscription_token: int | None = None
     project_subscription_token: int | None = None
     workspace_subscription_token: int | None = None
+
+    def require_current(self) -> DesktopProject:
+        if self.current is None:
+            raise RuntimeError("请先打开一个项目")
+        return self.current
+
+    def require_timeline(self) -> DesktopTimeline:
+        if self.timeline is None:
+            raise RuntimeError("请先打开一个序列")
+        return self.timeline
 
 
 @dataclass(slots=True)
@@ -162,6 +174,14 @@ class DownloadState:
 
 
 @dataclass(slots=True)
+class WebDeliveryState:
+    rebind_plan: dict = field(default_factory=dict)
+    rebind_resolutions: dict[str, str] = field(default_factory=dict)
+    pending_rebind_source: str = ""
+    selected_clip_id: str = ""
+
+
+@dataclass(slots=True)
 class ProjectInteractionSnapshot:
     selection: SelectionState
     pending_profile_asset_id: str
@@ -199,6 +219,23 @@ class AsyncRequestState:
     closing_project: DesktopProject | None = None
     closing_project_error: str = ""
     shutting_down: bool = False
+
+
+@dataclass(slots=True)
+class DesktopSessionState:
+    """The single mutable state tree for one desktop editing session."""
+
+    service_settings: ServiceSettings
+    desktop_settings: DesktopSettings
+    runtime_state: RuntimeToolState
+    binding: ProjectBinding = field(default_factory=ProjectBinding)
+    selection: SelectionState = field(default_factory=SelectionState)
+    tasks: TaskViewState = field(default_factory=TaskViewState)
+    presentation: PresentationState = field(default_factory=PresentationState)
+    assets: AssetInteractionState = field(default_factory=AssetInteractionState)
+    download: DownloadState = field(default_factory=DownloadState)
+    web_delivery: WebDeliveryState = field(default_factory=WebDeliveryState)
+    requests: AsyncRequestState = field(default_factory=AsyncRequestState)
 
 
 @dataclass(slots=True)

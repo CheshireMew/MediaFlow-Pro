@@ -29,6 +29,12 @@ class RuntimeInspection(DomainModel):
     capabilities: list[RuntimeCapabilityStatus]
 
 
+class RuntimeComponentInstallResult(DomainModel):
+    component_id: str
+    root: str
+    entrypoint: str
+
+
 CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
     CapabilityDefinition(
         id="project-editing",
@@ -159,6 +165,14 @@ CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
         id="gpt-sovits-v2pro",
         availability="runtime-inspected",
         description="The optional GPT-SoVITS v2Pro runtime used for reference-voice synthesis.",
+    ),
+    CapabilityDefinition(
+        id="speaker-diarization",
+        availability="runtime-inspected",
+        description=(
+            "Local 3D-Speaker voice clustering for non-overlapping transcript "
+            "segments, with Community-1 available for overlapping speech."
+        ),
     ),
 )
 

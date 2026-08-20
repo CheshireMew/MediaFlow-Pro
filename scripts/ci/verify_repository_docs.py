@@ -1,11 +1,26 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
+import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from scripts.documentation_screenshot_contract import (
+    DOCUMENTATION_SCREENSHOTS,
+    MANIFEST_PATH,
+    documentation_ui_digest,
+    file_sha256,
+    png_dimensions,
+)
+
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
 HTML_MEDIA = re.compile(r"<(?:img|source)\b[^>]*\b(?:src|srcset)=[\"']([^\"']+)", re.IGNORECASE)
 FENCED_CODE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
@@ -83,8 +98,59 @@ def verify_repository_contract() -> list[str]:
     return failures
 
 
+def verify_documentation_screenshots() -> list[str]:
+    if not MANIFEST_PATH.is_file():
+        return ["documentation screenshot manifest is missing"]
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        return ["documentation screenshot manifest is invalid"]
+    failures: list[str] = []
+    if manifest.get("schema") != "mediaflow-documentation-screenshots/v1":
+        failures.append("documentation screenshot manifest schema is unsupported")
+    if manifest.get("generator") != "scripts/update_documentation_screenshots.py":
+        failures.append("documentation screenshots do not name their maintained generator")
+    if manifest.get("ui_source_digest") != documentation_ui_digest():
+        failures.append("documentation screenshots are stale; run the maintained generator")
+    records = manifest.get("images")
+    if not isinstance(records, list):
+        return [*failures, "documentation screenshot manifest has no image records"]
+    indexed = {
+        str(record.get("path") or ""): record
+        for record in records
+        if isinstance(record, dict)
+    }
+    if set(indexed) != set(DOCUMENTATION_SCREENSHOTS):
+        failures.append("documentation screenshot manifest does not own the expected images")
+    for relative_path, scenario in DOCUMENTATION_SCREENSHOTS.items():
+        image = REPOSITORY_ROOT / relative_path
+        record = indexed.get(relative_path)
+        if record is None or not image.is_file():
+            failures.append(f"missing maintained documentation screenshot: {relative_path}")
+            continue
+        try:
+            width, height = png_dimensions(image)
+        except ValueError as error:
+            failures.append(str(error))
+            continue
+        if width < 1280 or height < 720:
+            failures.append(f"documentation screenshot is too small: {relative_path}")
+        if record.get("scenario") != scenario:
+            failures.append(f"documentation screenshot scenario drifted: {relative_path}")
+        if record.get("sha256") != file_sha256(image):
+            failures.append(f"documentation screenshot hash drifted: {relative_path}")
+        if [record.get("width"), record.get("height")] != [width, height]:
+            failures.append(f"documentation screenshot dimensions drifted: {relative_path}")
+        if record.get("local_paths_exposed") is not False:
+            failures.append(f"documentation screenshot path-hygiene proof is missing: {relative_path}")
+    return failures
+
+
 def main() -> int:
-    failures = [*verify_repository_contract(), *verify_links()]
+    failures = [
+        *verify_repository_contract(),
+        *verify_documentation_screenshots(),
+        *verify_links(),
+    ]
     if failures:
         raise RuntimeError("Repository documentation verification failed:\n- " + "\n- ".join(failures))
     print(f"repository documentation verified ({len(tracked_markdown())} Markdown files)")

@@ -148,9 +148,9 @@ class DownloadStageHandler(AdvancingStageHandler):
         }
         assets = [
             asset
-            for asset in context.documents.catalog.list_assets()
+            for asset in context.documents.assets.list_assets()
             if asset.origin == AssetOrigin.DOWNLOAD
-            and str(context.documents.catalog.resolve_asset_path(asset).resolve()) in artifact_paths
+            and str(context.documents.assets.resolve_asset_path(asset).resolve()) in artifact_paths
         ]
         if not assets:
             return context.block(run, "workflow_download_artifacts_missing")
@@ -172,7 +172,7 @@ class PrepareMediaStageHandler(AdvancingStageHandler):
         del target_language
         specs: list[WorkflowTaskSpec] = []
         for asset_id in run.asset_ids:
-            asset = context.documents.catalog.get_asset(asset_id)
+            asset = context.documents.assets.get_asset(asset_id)
             decision = context.proxy_decision(asset, dropped_frames=0)
             if not asset.proxy_path and decision.required:
                 specs.append(
@@ -201,7 +201,7 @@ class TranscribeStageHandler(AdvancingStageHandler):
         transcribable = [
             asset_id
             for asset_id in run.asset_ids
-            if context.documents.catalog.get_asset(asset_id).kind
+            if context.documents.assets.get_asset(asset_id).kind
             in {
                 AssetKind.VIDEO,
                 AssetKind.AUDIO,
@@ -214,13 +214,16 @@ class TranscribeStageHandler(AdvancingStageHandler):
         bounds = state.sequence.in_out
         start_frame = min(duration, bounds.in_frame) if bounds else 0
         end_frame = min(duration, bounds.out_frame) if bounds else duration
-        assets = {asset.id: asset for asset in context.documents.catalog.list_assets()}
+        assets = {asset.id: asset for asset in context.documents.assets.list_assets()}
         try:
             plan = build_dialogue_transcription_plan(
                 state,
                 assets,
                 context.settings.asr,
-                project_profile=project_frame_profile(context.documents.catalog),
+                project_profile=project_frame_profile(
+                    context.documents.projects,
+                    context.documents.sequences,
+                ),
                 start_frame=start_frame,
                 end_frame=end_frame,
             )

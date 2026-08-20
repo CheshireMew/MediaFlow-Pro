@@ -508,7 +508,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 52
+        height: 44
         color: Theme.surface
 
         Rectangle {
@@ -525,7 +525,7 @@ Rectangle {
         objectName: "previewControlsScroll"
         anchors.fill: previewControlBar
         clip: true
-        contentWidth: Math.max(width, previewControls.implicitWidth + 32)
+        contentWidth: Math.max(width, previewControls.implicitWidth + 24)
         contentHeight: previewControls.implicitHeight
         flickableDirection: Flickable.HorizontalFlick
         boundsBehavior: Flickable.StopAtBounds
@@ -545,11 +545,13 @@ Rectangle {
 
         RowLayout {
             id: previewControls
-            x: Math.max(16, (previewControlsFlick.width - implicitWidth) / 2)
+            x: Math.max(12, (previewControlsFlick.width - implicitWidth) / 2)
             height: previewControlsFlick.height
-            spacing: 8
+            spacing: 5
         AppIconButton {
+            objectName: "previewPreviousButton"
             iconName: "previous"
+            compact: true
             flat: true
             Accessible.name: qsTr("上一帧")
             toolTipText: Accessible.name
@@ -557,7 +559,9 @@ Rectangle {
             onClicked: preview.seek(Math.max(0, preview.position - 1))
         }
         AppIconButton {
+            objectName: "previewPlayButton"
             iconName: preview.playing ? "pause" : "play"
+            compact: true
             Accessible.name: preview.playing ? qsTr("暂停") : qsTr("播放")
             toolTipText: Accessible.name + qsTr("（空格）")
             primary: true
@@ -565,7 +569,9 @@ Rectangle {
             onClicked: preview.playing || root.playbackRequested ? root.pause() : root.playPreview()
         }
         AppIconButton {
+            objectName: "previewStopButton"
             iconName: "stop"
+            compact: true
             flat: true
             Accessible.name: qsTr("停止并回到开头")
             toolTipText: Accessible.name
@@ -580,7 +586,8 @@ Rectangle {
         }
         AppSlider {
             objectName: "previewPositionSlider"
-            Layout.preferredWidth: 140
+            compact: true
+            Layout.preferredWidth: 128
             from: 0
             to: Math.max(0, preview.duration - 1)
             value: preview.position
@@ -590,7 +597,7 @@ Rectangle {
             Accessible.name: qsTr("播放位置")
         }
         AppComboBox {
-            Layout.preferredWidth: 76
+            Layout.preferredWidth: 70
             textRole: "label"
             valueRole: "value"
             model: [
@@ -606,14 +613,17 @@ Rectangle {
             Accessible.name: qsTr("播放速度")
         }
         AppIconButton {
+            objectName: "previewMuteButton"
             iconName: root.previewMuted || root.previewVolume <= 0 ? "mute" : "volume"
+            compact: true
             flat: true
             Accessible.name: root.previewMuted ? qsTr("取消静音") : qsTr("静音")
             toolTipText: Accessible.name
             onClicked: root.toggleMute()
         }
         AppSlider {
-            Layout.preferredWidth: 82
+            compact: true
+            Layout.preferredWidth: 72
             from: 0
             to: 1
             stepSize: 0.01
@@ -633,7 +643,9 @@ Rectangle {
             font.pixelSize: Theme.fontSizeCaption
         }
         AppIconButton {
+            objectName: "previewZoomOutButton"
             iconName: "zoom-out"
+            compact: true
             flat: true
             Accessible.name: qsTr("缩小预览")
             toolTipText: Accessible.name
@@ -650,14 +662,18 @@ Rectangle {
             onClicked: root.resetViewport()
         }
         AppIconButton {
+            objectName: "previewZoomInButton"
             iconName: "zoom-in"
+            compact: true
             flat: true
             Accessible.name: qsTr("放大预览")
             toolTipText: Accessible.name
             onClicked: root.viewportZoom = Math.min(4, root.viewportZoom * 1.2)
         }
         AppIconButton {
+            objectName: "previewFullscreenButton"
             iconName: "fullscreen"
+            compact: true
             flat: true
             Accessible.name: qsTr("切换全屏")
             toolTipText: Accessible.name + " (F11)"

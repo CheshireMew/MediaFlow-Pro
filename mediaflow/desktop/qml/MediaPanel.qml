@@ -18,13 +18,13 @@ Item {
     signal sourceRequested(string assetId, int frame)
     property string searchResultMode: "files"
     readonly property string viewMode: String(
-        settingsController.settingsData.assetViewMode || "list")
-    readonly property var contextAssetData: mediaController.selectedAssetId === contextAssetId
-        ? mediaController.selectedAssetData : ({})
+        mediaflow.settingsController.settingsData.assetViewMode || "list")
+    readonly property var contextAssetData: mediaflow.mediaController.selectedAssetId === contextAssetId
+        ? mediaflow.mediaController.selectedAssetData : ({})
     readonly property int filteredAssetCount: assetViewLoader.item
         ? assetViewLoader.item.count : 0
     readonly property bool canEdit:
-        workspaceController.actionCapabilities.canEdit
+        mediaflow.workspaceViewController.actionCapabilities.canEdit
     readonly property bool modalOpen: replaceDialog.opened
         || newBinDialog.opened
     property string selectedBinId: ""
@@ -33,8 +33,8 @@ Item {
             {label: qsTr("全部素材"), value: ""},
             {label: qsTr("未归档"), value: "__unfiled__"}
         ];
-        for (let index = 0; index < mediaController.assetBinsModel.rowCount(); ++index) {
-            const item = mediaController.assetBinsModel.get(index);
+        for (let index = 0; index < mediaflow.mediaController.assetBinsModel.rowCount(); ++index) {
+            const item = mediaflow.mediaController.assetBinsModel.get(index);
             options.push({
                 label: String(item.displayName) + "  (" + item.assetCount + ")",
                 value: String(item.binId)
@@ -44,14 +44,14 @@ Item {
     }
 
     function openImportDialog() {
-        if (workspaceController.actionCapabilities.canImport)
+        if (mediaflow.workspaceViewController.actionCapabilities.canImport)
             importDialog.open();
     }
 
     function addAssetAtPlayhead(assetId) {
         if (!root.canEdit)
             return;
-        timelineController.dropAssets(
+        mediaflow.timelineClipController.dropAssets(
             [assetId],
             "",
             -1,
@@ -64,13 +64,13 @@ Item {
 
     function openAssetContextMenu(assetId) {
         contextAssetId = assetId;
-        if (!mediaController.isAssetSelected(assetId))
-            mediaController.selectAsset(assetId);
+        if (!mediaflow.mediaController.isAssetSelected(assetId))
+            mediaflow.mediaController.selectAsset(assetId);
         assetContextMenu.popup();
     }
 
     function refreshTask() {
-        taskData = taskController.latestMediaTask(mediaController.selectedAssetId);
+        taskData = mediaflow.taskController.latestMediaTask(mediaflow.mediaController.selectedAssetId);
     }
 
     function viewModeLabel(mode) {
@@ -84,17 +84,17 @@ Item {
     function cycleViewMode() {
         const nextMode = viewMode === "list" ? "thumbnails"
             : viewMode === "thumbnails" ? "large_thumbnails" : "list";
-        settingsController.setAssetViewMode(nextMode);
+        mediaflow.settingsController.setAssetViewMode(nextMode);
     }
 
     Component.onCompleted: refreshTask()
 
     Connections {
-        target: taskController
+        target: mediaflow.taskController
         function onTasksChanged() { root.refreshTask(); }
     }
     Connections {
-        target: mediaController
+        target: mediaflow.mediaController
         function onSelectionChanged() { root.refreshTask(); }
         function onProjectStateChanged() { root.refreshTask(); }
     }
@@ -120,7 +120,7 @@ Item {
         AppMenuItem {
             objectName: "assetOpenFolderMenuItem"
             text: qsTr("打开素材所在文件夹")
-            onTriggered: mediaController.openAssetFolder(root.contextAssetId)
+            onTriggered: mediaflow.mediaController.openAssetFolder(root.contextAssetId)
         }
         AppMenuItem {
             text: qsTr("重新定位")
@@ -139,7 +139,7 @@ Item {
             objectName: "mediaAssetListView"
             clip: true
             spacing: 2
-            model: mediaController.filteredAssetsModel
+            model: mediaflow.mediaController.filteredAssetsModel
             ScrollBar.vertical: AppScrollBar {}
 
             delegate: MediaAssetDelegate {
@@ -165,7 +165,7 @@ Item {
         GridView {
             objectName: "mediaAssetGridView"
             clip: true
-            model: mediaController.filteredAssetsModel
+            model: mediaflow.mediaController.filteredAssetsModel
             cellWidth: root.viewMode === "large_thumbnails" ? 172 : 112
             cellHeight: root.viewMode === "large_thumbnails" ? 140 : 92
             ScrollBar.vertical: AppScrollBar {}
@@ -196,23 +196,23 @@ Item {
             objectName: "mediaImportDialog"
             title: qsTr("导入素材")
             fileMode: FileDialog.OpenFiles
-            currentFolder: workspaceController.defaultImportDirectoryUrl
+            currentFolder: mediaflow.workspaceViewController.defaultImportDirectoryUrl
             nameFilters: [qsTr("素材文件 (*.mp4 *.mov *.mkv *.webm *.mp3 *.wav *.flac *.png *.jpg *.jpeg *.srt *.vtt *.ass *.ssa editable-media.json)"), qsTr("所有文件 (*)")]
-            onAccepted: if (workspaceController.actionCapabilities.canImport)
-                mediaController.importFiles(selectedFiles)
+            onAccepted: if (mediaflow.workspaceViewController.actionCapabilities.canImport)
+                mediaflow.mediaController.importFiles(selectedFiles)
         }
         FolderDialog {
             id: batchRelinkDialog
             title: qsTr("选择离线素材所在目录")
             onAccepted: if (root.canEdit)
-                mediaController.relinkOfflineMedia(selectedFolder.toString())
+                mediaflow.mediaController.relinkOfflineMedia(selectedFolder.toString())
         }
         FileDialog {
             id: selectedRelinkDialog
             title: qsTr("重新定位离线素材")
             fileMode: FileDialog.OpenFile
             onAccepted: if (root.canEdit)
-                mediaController.relinkMedia(root.relinkAssetId, selectedFile.toString())
+                mediaflow.mediaController.relinkMedia(root.relinkAssetId, selectedFile.toString())
         }
         AppDialog {
             id: replaceDialog
@@ -222,11 +222,11 @@ Item {
             modal: true
             title: qsTr("替换为不同内容？")
             standardButtons: Dialog.Yes | Dialog.No
-            onAccepted: mediaController.resolveRelinkReplacement(true)
-            onRejected: mediaController.resolveRelinkReplacement(false)
+            onAccepted: mediaflow.mediaController.resolveRelinkReplacement(true)
+            onRejected: mediaflow.mediaController.resolveRelinkReplacement(false)
             contentItem: Text {
                 width: 360
-                text: qsTr("所选文件的内容指纹与原素材不同：\n%1\n\n确认后会更新关联，并重新生成预览缓存和音频波形。").arg(workspaceController.pendingRelinkPath)
+                text: qsTr("所选文件的内容指纹与原素材不同：\n%1\n\n确认后会更新关联，并重新生成预览缓存和音频波形。").arg(mediaflow.workspaceViewController.pendingRelinkPath)
                 color: Theme.text
                 wrapMode: Text.WordWrap
             }
@@ -243,7 +243,7 @@ Item {
                 newBinName.clear();
                 newBinName.forceActiveFocus();
             }
-            onAccepted: mediaController.createAssetBin(
+            onAccepted: mediaflow.mediaController.createAssetBin(
                 newBinName.text,
                 root.selectedBinId === "__unfiled__" ? "" : root.selectedBinId)
             contentItem: AppTextField {
@@ -253,9 +253,9 @@ Item {
             }
         }
         Connections {
-            target: workspaceController
+            target: mediaflow.workspaceViewController
             function onRelinkConfirmationChanged() {
-                if (workspaceController.relinkConfirmationPending)
+                if (mediaflow.workspaceViewController.relinkConfirmationPending)
                     replaceDialog.open();
                 else
                     replaceDialog.close();
@@ -275,7 +275,7 @@ Item {
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 leftPadding: 12
-                onTextChanged: mediaController.setAssetSearchText(text)
+                onTextChanged: mediaflow.mediaController.setAssetSearchText(text)
                 background: Rectangle {
                     radius: Theme.radiusSmall
                     color: Theme.field
@@ -296,7 +296,7 @@ Item {
             objectName: "openMediaImportButton"
             text: qsTr("导入")
             primary: true
-            enabled: workspaceController.actionCapabilities.canImport
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canImport
             onClicked: importDialog.open()
             }
         }
@@ -308,28 +308,28 @@ Item {
                 id: workspaceDownloadUrl
                 objectName: "workspaceDownloadUrlField"
                 Layout.fillWidth: true
-                placeholderText: qsTr("粘贴视频或播放列表链接")
+                placeholderText: qsTr("粘贴媒体或播放列表链接")
                 text: String(
-                    settingsController.settingsData.lastDownloadUrl
+                    mediaflow.settingsController.settingsData.lastDownloadUrl
                     || "")
                 enabled:
-                    workspaceController.actionCapabilities.canStartTasks
+                    mediaflow.workspaceViewController.actionCapabilities.canStartTasks
                 onAccepted: {
                     const value = text.trim();
                     if (value.length > 0
-                            && !taskController.downloadAnalysisBusy)
-                        taskController.analyzeDownloadUrl(value);
+                            && !mediaflow.taskController.downloadAnalysisBusy)
+                        mediaflow.taskController.analyzeDownloadUrl(value);
                 }
             }
             AppButton {
                 objectName: "workspaceAnalyzeDownloadButton"
-                text: taskController.downloadAnalysisBusy
+                text: mediaflow.taskController.downloadAnalysisBusy
                     ? qsTr("分析中…") : qsTr("下载")
                 enabled:
-                    workspaceController.actionCapabilities.canStartTasks
+                    mediaflow.workspaceViewController.actionCapabilities.canStartTasks
                     && workspaceDownloadUrl.text.trim().length > 0
-                    && !taskController.downloadAnalysisBusy
-                onClicked: taskController.analyzeDownloadUrl(
+                    && !mediaflow.taskController.downloadAnalysisBusy
+                onClicked: mediaflow.taskController.analyzeDownloadUrl(
                     workspaceDownloadUrl.text.trim())
             }
         }
@@ -347,7 +347,7 @@ Item {
                 valueRole: "value"
                 onActivated: {
                     root.selectedBinId = String(currentValue);
-                    mediaController.setAssetBinFilter(root.selectedBinId);
+                    mediaflow.mediaController.setAssetBinFilter(root.selectedBinId);
                 }
             }
             AppIconButton {
@@ -366,22 +366,22 @@ Item {
                 compact: true
                 quiet: true
                 enabled: root.canEdit
-                    && mediaController.selectedAssetIds.length > 0
+                    && mediaflow.mediaController.selectedAssetIds.length > 0
                 onClicked: moveToBinMenu.open()
                 AppMenu {
                     id: moveToBinMenu
                     y: moveToBinButton.height + 4
                     AppMenuItem {
                         text: qsTr("未归档")
-                        onTriggered: mediaController.moveSelectedAssetsToBin("")
+                        onTriggered: mediaflow.mediaController.moveSelectedAssetsToBin("")
                     }
                     Repeater {
-                        model: mediaController.assetBinsModel
+                        model: mediaflow.mediaController.assetBinsModel
                         AppMenuItem {
                             required property string binId
                             required property string displayName
                             text: displayName
-                            onTriggered: mediaController.moveSelectedAssetsToBin(binId)
+                            onTriggered: mediaflow.mediaController.moveSelectedAssetsToBin(binId)
                         }
                     }
                 }
@@ -389,10 +389,10 @@ Item {
         }
 
         AppButton {
-            visible: workspaceController.offlineAssetCount > 0
+            visible: mediaflow.workspaceViewController.offlineAssetCount > 0
             enabled: root.canEdit
             Layout.fillWidth: true
-            text: qsTr("批量重新定位 (%1)").arg(workspaceController.offlineAssetCount)
+            text: qsTr("批量重新定位 (%1)").arg(mediaflow.workspaceViewController.offlineAssetCount)
             onClicked: batchRelinkDialog.open()
         }
 
@@ -408,7 +408,7 @@ Item {
         RowLayout {
             objectName: "assetSearchResultTabs"
             Layout.fillWidth: true
-            visible: mediaController.assetSearchText.length > 0
+            visible: mediaflow.mediaController.assetSearchText.length > 0
             spacing: 4
             AppButton {
                 objectName: "assetSearchFilesTab"
@@ -422,7 +422,7 @@ Item {
             AppButton {
                 objectName: "assetSearchMomentsTab"
                 text: qsTr("内容时刻 %1").arg(
-                    mediaController.filteredAssetMomentsModel.rowCount())
+                    mediaflow.mediaController.filteredAssetMomentsModel.rowCount())
                 compact: true
                 checkable: true
                 checked: root.searchResultMode === "moments"
@@ -438,7 +438,7 @@ Item {
             Loader {
                 id: assetViewLoader
                 anchors.fill: parent
-                visible: mediaController.assetSearchText.length === 0
+                visible: mediaflow.mediaController.assetSearchText.length === 0
                     || root.searchResultMode === "files"
                 sourceComponent: root.viewMode === "list"
                     ? assetListComponent : assetGridComponent
@@ -448,11 +448,11 @@ Item {
                 id: assetMomentList
                 objectName: "assetMomentList"
                 anchors.fill: parent
-                visible: mediaController.assetSearchText.length > 0
+                visible: mediaflow.mediaController.assetSearchText.length > 0
                     && root.searchResultMode === "moments"
                 clip: true
                 spacing: 5
-                model: mediaController.filteredAssetMomentsModel
+                model: mediaflow.mediaController.filteredAssetMomentsModel
                 ScrollBar.vertical: AppScrollBar {}
                 delegate: Rectangle {
                     required property string assetId
@@ -516,7 +516,7 @@ Item {
 
             EmptyState {
                 anchors.fill: parent
-                visible: (mediaController.assetSearchText.length === 0
+                visible: (mediaflow.mediaController.assetSearchText.length === 0
                         || root.searchResultMode === "files")
                     && root.filteredAssetCount === 0
                 iconName: "add"
@@ -528,9 +528,9 @@ Item {
             }
             EmptyState {
                 anchors.fill: parent
-                visible: mediaController.assetSearchText.length > 0
+                visible: mediaflow.mediaController.assetSearchText.length > 0
                     && root.searchResultMode === "moments"
-                    && mediaController.filteredAssetMomentsModel.rowCount() === 0
+                    && mediaflow.mediaController.filteredAssetMomentsModel.rowCount() === 0
                 iconName: "search"
                 title: qsTr("没有匹配的内容时刻")
                 description: qsTr("内容时刻来自真实转写片段和画面高光分析。")
@@ -552,11 +552,11 @@ Item {
         objectName: "mediaFileDropArea"
         anchors.fill: parent
         z: 200
-        enabled: workspaceController.actionCapabilities.canImport
+        enabled: mediaflow.workspaceViewController.actionCapabilities.canImport
         onDropped: function (drop) {
             if (!drop.hasUrls)
                 return;
-            mediaController.importFiles(drop.urls);
+            mediaflow.mediaController.importFiles(drop.urls);
             drop.acceptProposedAction();
         }
     }

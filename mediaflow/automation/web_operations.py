@@ -10,23 +10,20 @@ from mediaflow.domain.task_commands import (
     ExportWebClipCommand,
     RenderWebClipCommand,
 )
-from mediaflow.domain.web_media import WebExportFormat, web_asset_spec_document
+from mediaflow.domain.web_exports import WebExportFormat
+from mediaflow.domain.web_manifest import web_asset_spec_document
 
 
 def import_web(context: OperationContext) -> dict:
     asset = context.project.import_web_package(str(context.required("source")))
     return {
         "asset": asset,
-        "web_asset": web_asset_spec_document(
-            context.project.inspect_web_asset(asset.id)
-        ),
+        "web_asset": web_asset_spec_document(context.project.inspect_web_asset(asset.id)),
     }
 
 
 def inspect_web(context: OperationContext) -> dict:
-    spec = context.project.inspect_web_asset(
-        str(context.required("asset_id"))
-    )
+    spec = context.project.inspect_web_asset(str(context.required("asset_id")))
     return {"web_asset": web_asset_spec_document(spec)}
 
 
@@ -39,11 +36,7 @@ def describe_web_clip_editing(context: OperationContext) -> dict:
     document = context.project.describe_web_clip_editing(
         str(context.required("sequence_id")),
         str(context.required("clip_id")),
-        scene_id=(
-            str(context.arguments["scene_id"])
-            if context.arguments.get("scene_id")
-            else None
-        ),
+        scene_id=(str(context.arguments["scene_id"]) if context.arguments.get("scene_id") else None),
     )
     return {"edit_document": document}
 
@@ -53,11 +46,7 @@ def update_web_clip(context: OperationContext) -> dict:
         str(context.required("sequence_id")),
         str(context.required("clip_id")),
         dict(context.required("updates")),
-        scene_id=(
-            str(context.arguments["scene_id"])
-            if context.arguments.get("scene_id")
-            else None
-        ),
+        scene_id=(str(context.arguments["scene_id"]) if context.arguments.get("scene_id") else None),
         expected_revision=_expected_revision(context),
         actor=context.actor(),
     )
@@ -69,11 +58,7 @@ def diff_web_clip(context: OperationContext) -> dict:
         str(context.required("sequence_id")),
         str(context.required("clip_id")),
         dict(context.required("updates")),
-        scene_id=(
-            str(context.arguments["scene_id"])
-            if context.arguments.get("scene_id")
-            else None
-        ),
+        scene_id=(str(context.arguments["scene_id"]) if context.arguments.get("scene_id") else None),
         expected_revision=_expected_revision(context),
         actor=context.actor(),
     )
@@ -125,11 +110,7 @@ def update_parameter(context: OperationContext) -> dict:
         str(context.required("clip_id")),
         str(context.required("parameter_id")),
         cast(JsonValue, context.arguments["value"]),
-        scene_id=(
-            str(context.arguments["scene_id"])
-            if context.arguments.get("scene_id")
-            else None
-        ),
+        scene_id=(str(context.arguments["scene_id"]) if context.arguments.get("scene_id") else None),
         expected_revision=_expected_revision(context),
         actor=context.actor(),
     )
@@ -169,11 +150,7 @@ def update_parameter_lock(context: OperationContext) -> dict:
         str(context.required("clip_id")),
         str(context.required("parameter_id")),
         bool(context.required("locked")),
-        scene_id=(
-            str(context.arguments["scene_id"])
-            if context.arguments.get("scene_id")
-            else None
-        ),
+        scene_id=(str(context.arguments["scene_id"]) if context.arguments.get("scene_id") else None),
         expected_revision=_expected_revision(context),
     )
     return {"web_clip_state": state}
@@ -211,11 +188,7 @@ def snapshot_data(context: OperationContext) -> dict:
         str(context.required("clip_id")),
         str(context.required("source")),
         scene_id=str(context.required("scene_id")),
-        field_id=(
-            str(context.arguments["field_id"])
-            if context.arguments.get("field_id")
-            else None
-        ),
+        field_id=(str(context.arguments["field_id"]) if context.arguments.get("field_id") else None),
         expected_revision=_expected_revision(context),
     )
     return {"web_clip_state": state}
@@ -274,9 +247,7 @@ def create_batch(context: OperationContext) -> dict:
     records_value = context.arguments.get("records")
     source_value = context.arguments.get("source")
     if (records_value is None) == (source_value is None):
-        raise ValueError(
-            "web.batch.create requires exactly one of records or source"
-        )
+        raise ValueError("web.batch.create requires exactly one of records or source")
     records: list[Mapping[str, object]]
     if records_value is not None:
         records = [
@@ -292,18 +263,11 @@ def create_batch(context: OperationContext) -> dict:
         str(context.required("source_sequence_id")),
         str(context.required("clip_id")),
         records,
-        {
-            str(key): str(value)
-            for key, value in dict(context.required("bindings")).items()
-        },
-        name_template=str(
-            context.arguments.get("name_template", "版本 {index}")
-        ),
+        {str(key): str(value) for key, value in dict(context.required("bindings")).items()},
+        name_template=str(context.arguments.get("name_template", "版本 {index}")),
         actor=context.actor(),
     )
-    return {
-        "variants": variants
-    }
+    return {"variants": variants}
 
 
 def plan_rebind_asset(context: OperationContext) -> dict:
@@ -319,12 +283,7 @@ def commit_rebind_asset(context: OperationContext) -> dict:
         str(context.required("asset_id")),
         str(context.required("source")),
         str(context.required("plan_digest")),
-        {
-            str(path): str(resolution)
-            for path, resolution in dict(
-                context.required("resolutions")
-            ).items()
-        },
+        {str(path): str(resolution) for path, resolution in dict(context.required("resolutions")).items()},
     )
     return {"rebind_commit": report}
 

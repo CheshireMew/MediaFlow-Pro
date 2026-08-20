@@ -22,20 +22,23 @@ from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.domain.task_commands import SequenceBuildUnit
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.file_digest import sha256_file
+from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.mlt.compiler import TimelineCompiler
-from mediaflow.infrastructure.mlt.export_service import (
+from mediaflow.infrastructure.mlt.export_service import MltExportService
+from mediaflow.infrastructure.mlt.export_types import (
     ExportResult,
     MltExportRequest,
-    MltExportService,
 )
 from mediaflow.infrastructure.output_reservation import output_set_transaction
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.subprocess_runner import run_cancellable_streaming
-from mediaflow.infrastructure.web_render_service import (
-    WEB_RENDERER_VERSION,
-    WebRenderService,
+from mediaflow.infrastructure.storage_budget import (
+    estimate_video_cache_bytes,
+    register_project_cache_owner,
+    require_project_cache_budget,
 )
+from mediaflow.infrastructure.web_render_service import WebRenderService
+from mediaflow.infrastructure.web_render_target import WEB_RENDERER_VERSION
 
 BUILD_PROTOCOL_VERSION = 3
 
@@ -47,6 +50,15 @@ class _PreparedUnit:
     cache_key: str
     output_path: Path
     manifest_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedAssembly:
+    path: Path
+    concat_path: Path
+    cache_key: str
+    sha256: str
+    status: Literal["assembled", "reused"]
 
 
 class SegmentedExportService:
@@ -62,6 +74,7 @@ class SegmentedExportService:
         self.compiler = TimelineCompiler(documents, paths)
         self.exporter = MltExportService(self.compiler, self.paths)
         self.web = WebRenderService(documents, self.paths)
+        self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
         self.cache_root = (
             self.paths.project_cache_dir(documents.project_dir)
             / "sequence-build"
@@ -79,9 +92,7 @@ class SegmentedExportService:
         progress=None,
         check_cancelled=None,
     ) -> SequenceBuildResult:
-        if preset.format == ExportFormat.AUDIO:
-            raise ValueError("Segmented export requires a video preset")
-        self._validate_units(state, units)
+        total_frames = self._prepare_build(state, preset, units)
         check = check_cancelled or (lambda: None)
         video_preset = preset.model_copy(
             update={
@@ -90,10 +101,7 @@ class SegmentedExportService:
                 "audio_bitrate": preset.audio_bitrate,
             }
         )
-        prepared = [
-            self._prepare_visual_unit(state, video_preset, unit)
-            for unit in units
-        ]
+        prepared = [self._prepare_visual_unit(state, video_preset, unit) for unit in units]
         unit_results = self._build_visual_units(
             prepared,
             video_preset,
@@ -107,6 +115,67 @@ class SegmentedExportService:
             check_cancelled=check,
         )
         check()
+        assembly = self._prepare_assembly(
+            state,
+            preset,
+            unit_results,
+            audio_result,
+            total_frames,
+            check_cancelled=check,
+        )
+        output, final_probe = self._publish_assembly(
+            state,
+            preset,
+            assembly,
+            output_path,
+            total_frames,
+            overwrite=overwrite,
+        )
+        return self._build_result(
+            output,
+            final_probe,
+            assembly,
+            unit_results,
+            audio_result,
+            total_frames,
+        )
+
+    def _prepare_build(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        units: list[SequenceBuildUnit],
+    ) -> int:
+        if preset.format == ExportFormat.AUDIO:
+            raise ValueError("Segmented export requires a video preset")
+        self._validate_units(state, units)
+        total_frames = sum(unit.end_frame - unit.start_frame for unit in units)
+        project_cache = self.paths.project_cache_dir(self.documents.project_dir)
+        require_project_cache_budget(
+            project_cache,
+            expected_new_bytes=estimate_video_cache_bytes(
+                state.sequence.profile.width,
+                state.sequence.profile.height,
+                total_frames,
+            ),
+            label="MediaFlow segmented export cache",
+        )
+        register_project_cache_owner(
+            project_cache,
+            self.documents.project_dir,
+        )
+        return total_frames
+
+    def _prepare_assembly(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        units: list[SequenceBuildUnitResult],
+        audio: SequenceBuildAudioResult,
+        total_frames: int,
+        *,
+        check_cancelled,
+    ) -> _PreparedAssembly:
         assembly_key = self._hash_document(
             {
                 "protocol": BUILD_PROTOCOL_VERSION,
@@ -114,187 +183,213 @@ class SegmentedExportService:
                 "units": [
                     {
                         "id": item.unit.id,
-                        "frames": item.unit.end_frame - item.unit.start_frame,
+                        "frames": (item.unit.end_frame - item.unit.start_frame),
                         "sha256": item.sha256,
                     }
-                    for item in unit_results
+                    for item in units
                 ],
-                "audio_sha256": audio_result.sha256,
+                "audio_sha256": audio.sha256,
             }
         )
-        assembly_path = self.cache_root / "assemblies" / f"{assembly_key}.{preset.preferred_extension}"
-        assembly_manifest = assembly_path.with_suffix(assembly_path.suffix + ".json")
-        concat_path = assembly_path.with_suffix(".concat.txt")
-        total_frames = sum(unit.end_frame - unit.start_frame for unit in units)
-        assembly_status: Literal["assembled", "reused"] = "reused"
+        path = self.cache_root / "assemblies" / f"{assembly_key}.{preset.preferred_extension}"
+        manifest = path.with_suffix(path.suffix + ".json")
+        concat_path = path.with_suffix(".concat.txt")
         cached = self._read_cache(
-            assembly_path,
-            assembly_manifest,
+            path,
+            manifest,
             assembly_key,
             state,
             preset,
             total_frames,
         )
+        status: Literal["assembled", "reused"] = "reused"
         if cached is None:
-            assembly_status = "assembled"
-            assembly_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(
-                concat_path,
-                "\n".join(
-                    f"file '{self._concat_path(item.output_path)}'"
-                    for item in unit_results
-                )
-                + "\n",
-            )
-            temporary = unique_temporary_sibling(assembly_path, label="assemble")
-            command = [
-                str(self.paths.ffmpeg),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_path),
-            ]
-            if audio_result.output_path is not None:
-                command.extend(
-                    [
-                        "-i",
-                        str(audio_result.output_path),
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "1:a:0",
-                        "-c:v",
-                        "copy",
-                        "-c:a",
-                        str(preset.audio_codec or "aac"),
-                        "-b:a",
-                        str(preset.audio_bitrate),
-                        "-ar",
-                        str(state.sequence.profile.audio_sample_rate),
-                        "-ac",
-                        str(state.sequence.profile.audio_channels),
-                    ]
-                )
-            else:
-                command.extend(["-map", "0:v:0", "-c", "copy"])
-            if preset.container in {"mp4", "mov"}:
-                command.extend(["-movflags", "+faststart"])
-            command.extend(["-f", preset.container, "-y", str(temporary)])
-            result = run_cancellable_streaming(
-                command,
-                timeout=3600,
-                check_cancelled=check,
-            )
-            if result.returncode != 0 or not temporary.is_file() or temporary.stat().st_size == 0:
-                raise RuntimeError(
-                    "Segment assembly failed:\n"
-                    + "\n".join(part for part in (result.stdout, result.stderr) if part)[-4000:]
-                )
-            probe = self.exporter.probe(temporary)
-            self.exporter.validate_probe(
+            status = "assembled"
+            self._assemble_units(
                 state,
                 preset,
-                probe,
-                expected_duration_frames=total_frames,
+                units,
+                audio,
+                total_frames,
+                path,
+                concat_path,
+                check_cancelled=check_cancelled,
             )
-            with output_set_transaction(
-                (assembly_path,),
-                overwrite=True,
-                runtime_dir=self.paths.runtime_dir,
-                failure_archive_directory_name="Invalid Sequence Build Cache",
-            ) as transaction:
-                staged = transaction.temporary_path(assembly_path, "assembly-cache")
-                temporary.replace(staged)
-                transaction.publish()
-                transaction.finalize(
-                    archive_replaced_to=self.cache_root / "archive" / "assemblies"
-                )
             cached = self._write_cache(
-                assembly_path,
-                assembly_manifest,
+                path,
+                manifest,
                 assembly_key,
                 total_frames,
             )
+        return _PreparedAssembly(
+            path=path,
+            concat_path=concat_path,
+            cache_key=assembly_key,
+            sha256=str(cached["output_sha256"]),
+            status=status,
+        )
+
+    def _assemble_units(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        units: list[SequenceBuildUnitResult],
+        audio: SequenceBuildAudioResult,
+        total_frames: int,
+        path: Path,
+        concat_path: Path,
+        *,
+        check_cancelled,
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(
+            concat_path,
+            "\n".join(f"file '{self._concat_path(item.output_path)}'" for item in units) + "\n",
+        )
+        temporary = unique_temporary_sibling(
+            path,
+            label="assemble",
+        )
+        command = [
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_path),
+        ]
+        if audio.output_path is not None:
+            command.extend(
+                [
+                    "-i",
+                    str(audio.output_path),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    str(preset.audio_codec or "aac"),
+                    "-b:a",
+                    str(preset.audio_bitrate),
+                    "-ar",
+                    str(state.sequence.profile.audio_sample_rate),
+                    "-ac",
+                    str(state.sequence.profile.audio_channels),
+                ]
+            )
+        else:
+            command.extend(["-map", "0:v:0", "-c", "copy"])
+        if preset.container in {"mp4", "mov"}:
+            command.extend(["-movflags", "+faststart"])
+        command.extend(["-f", preset.container, "-y", str(temporary)])
+        result = self.ffmpeg.run(
+            command,
+            timeout=3600,
+            check_cancelled=check_cancelled,
+        )
+        if result.returncode != 0 or not temporary.is_file() or temporary.stat().st_size == 0:
+            detail = "\n".join(part for part in (result.stdout, result.stderr) if part)[-4000:]
+            raise RuntimeError(f"Segment assembly failed:\n{detail}")
+        probe = self.exporter.probe(temporary)
+        self.exporter.validate_probe(
+            state,
+            preset,
+            probe,
+            expected_duration_frames=total_frames,
+        )
+        with output_set_transaction(
+            (path,),
+            overwrite=True,
+            runtime_dir=self.paths.runtime_dir,
+            failure_archive_directory_name=("Invalid Sequence Build Cache"),
+        ) as transaction:
+            staged = transaction.temporary_path(
+                path,
+                "assembly-cache",
+            )
+            temporary.replace(staged)
+            transaction.publish()
+            transaction.finalize(archive_replaced_to=(self.cache_root / "archive" / "assemblies"))
+
+    def _publish_assembly(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        assembly: _PreparedAssembly,
+        output_path: str | Path,
+        total_frames: int,
+        *,
+        overwrite: bool,
+    ):
         output = Path(output_path).expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
-        assembly_sha = str(cached["output_sha256"])
-        if not (
-            output.is_file()
-            and sha256_file(output) == assembly_sha
-        ):
+        if not (output.is_file() and sha256_file(output) == assembly.sha256):
             with output_set_transaction(
                 (output,),
                 overwrite=overwrite,
                 runtime_dir=self.paths.runtime_dir,
             ) as transaction:
-                staged = transaction.temporary_path(output, "sequence-build")
-                shutil.copyfile(assembly_path, staged)
+                staged = transaction.temporary_path(
+                    output,
+                    "sequence-build",
+                )
+                shutil.copyfile(assembly.path, staged)
                 transaction.commit()
-        final_probe = self.exporter.probe(output)
+        probe = self.exporter.probe(output)
         self.exporter.validate_probe(
             state,
             preset,
-            final_probe,
+            probe,
             expected_duration_frames=total_frames,
         )
-        actual_codecs = {
-            item.actual_video_codec
-            for item in unit_results
-            if item.actual_video_codec is not None
-        }
-        fallback_reasons = sorted({
-            item.hardware_fallback_reason
-            for item in unit_results
-            if item.hardware_fallback_reason
-        })
-        failure_details = [
-            item.hardware_failure_details
-            for item in unit_results
-            if item.hardware_failure_details
-        ]
+        return output, probe
+
+    @staticmethod
+    def _build_result(
+        output: Path,
+        final_probe,
+        assembly: _PreparedAssembly,
+        units: list[SequenceBuildUnitResult],
+        audio: SequenceBuildAudioResult,
+        total_frames: int,
+    ) -> SequenceBuildResult:
+        actual_codecs = {item.actual_video_codec for item in units if item.actual_video_codec is not None}
+        fallback_reasons = sorted(
+            {item.hardware_fallback_reason for item in units if item.hardware_fallback_reason}
+        )
+        failure_details = [item.hardware_failure_details for item in units if item.hardware_failure_details]
+        requested_codec = units[0].requested_video_codec if units else None
+        actual_codec = (
+            next(iter(actual_codecs))
+            if len(actual_codecs) == 1
+            else ("mixed" if actual_codecs else requested_codec)
+        )
         return SequenceBuildResult(
             export=ExportResult(
                 output_path=output,
-                project_graph_path=concat_path,
+                project_graph_path=assembly.concat_path,
                 probe=final_probe,
                 start_frame=0,
                 end_frame=total_frames,
-                requested_video_codec=(
-                    unit_results[0].requested_video_codec
-                    if unit_results
-                    else None
-                ),
-                actual_video_codec=(
-                    next(iter(actual_codecs))
-                    if len(actual_codecs) == 1
-                    else (
-                        "mixed"
-                        if actual_codecs
-                        else unit_results[0].requested_video_codec
-                    )
-                ),
-                hardware_fallback_reason=(
-                    "; ".join(fallback_reasons) if fallback_reasons else None
-                ),
-                hardware_failure_details=(
-                    "\n\n".join(failure_details) if failure_details else None
-                ),
+                requested_video_codec=requested_codec,
+                actual_video_codec=actual_codec,
+                hardware_fallback_reason=("; ".join(fallback_reasons) if fallback_reasons else None),
+                hardware_failure_details=("\n\n".join(failure_details) if failure_details else None),
                 archived_failed_outputs=tuple(
                     archived
-                    for item in unit_results
+                    for item in units
                     for archived in item.archived_failed_outputs
                     if archived.exists()
                 ),
             ),
-            units=tuple(unit_results),
-            audio=audio_result,
-            assembly_status=assembly_status,
-            assembly_key=assembly_key,
+            units=tuple(units),
+            audio=audio,
+            assembly_status=assembly.status,
+            assembly_key=assembly.cache_key,
         )
 
     def _build_visual_units(
@@ -330,8 +425,7 @@ class SegmentedExportService:
                 hardware_fallback_reason=cached.get("hardware_fallback_reason"),
                 hardware_failure_details=cached.get("hardware_failure_details"),
                 archived_failed_outputs=tuple(
-                    Path(value)
-                    for value in cached.get("archived_failed_outputs", [])
+                    Path(value) for value in cached.get("archived_failed_outputs", [])
                 ),
             )
         requests: list[MltExportRequest] = []
@@ -340,7 +434,7 @@ class SegmentedExportService:
             web_ids = [
                 clip.id
                 for clip in item.state.clips
-                if self.documents.catalog.get_asset(clip.asset_id).kind == AssetKind.WEB
+                if self.documents.assets.get_asset(clip.asset_id).kind == AssetKind.WEB
             ]
             self.web.ensure_clips(
                 item.state,
@@ -446,7 +540,7 @@ class SegmentedExportService:
         web_ids = [
             clip.id
             for clip in audio_state.clips
-            if self.documents.catalog.get_asset(clip.asset_id).kind == AssetKind.WEB
+            if self.documents.assets.get_asset(clip.asset_id).kind == AssetKind.WEB
         ]
         self.web.ensure_clips(
             audio_state,
@@ -520,9 +614,7 @@ class SegmentedExportService:
                 "sequence": state.sequence.model_copy(update={"in_out": None}),
                 "tracks": tracks,
                 "clips": selected_clips,
-                "compounds": [
-                    item for item in state.compounds if set(item.clip_ids).issubset(clip_ids)
-                ],
+                "compounds": [item for item in state.compounds if set(item.clip_ids).issubset(clip_ids)],
                 "transitions": [
                     item
                     for item in state.transitions
@@ -531,21 +623,15 @@ class SegmentedExportService:
                 "markers": [],
                 "ranges": [],
                 "web_states": {
-                    clip_id: value
-                    for clip_id, value in state.web_states.items()
-                    if clip_id in clip_ids
+                    clip_id: value for clip_id, value in state.web_states.items() if clip_id in clip_ids
                 },
             }
         )
 
     def _audio_state(self, state: TimelineState) -> TimelineState:
-        audio_track_ids = {
-            track.id for track in state.tracks if track.kind == TrackKind.AUDIO
-        }
+        audio_track_ids = {track.id for track in state.tracks if track.kind == TrackKind.AUDIO}
         linked_video_track_ids = {
-            track.id
-            for track in state.tracks
-            if track.linked_audio_track_id in audio_track_ids
+            track.id for track in state.tracks if track.linked_audio_track_id in audio_track_ids
         }
         tracks = [
             track
@@ -573,9 +659,7 @@ class SegmentedExportService:
                 "markers": [],
                 "ranges": [],
                 "web_states": {
-                    clip_id: value
-                    for clip_id, value in state.web_states.items()
-                    if clip_id in clip_ids
+                    clip_id: value for clip_id, value in state.web_states.items() if clip_id in clip_ids
                 },
             }
         )
@@ -586,7 +670,9 @@ class SegmentedExportService:
         preset: ExportPreset,
         unit: SequenceBuildUnit,
     ) -> str:
-        assets = assets_in_timeline_clock(self.documents.catalog, state.sequence)
+        assets = assets_in_timeline_clock(
+            self.documents.projects, self.documents.sequences, self.documents.assets, state.sequence
+        )
         asset_ids = sorted({clip.asset_id for clip in state.clips})
         subtitles = []
         if preset.burn_subtitle_track_id:
@@ -598,16 +684,12 @@ class SegmentedExportService:
             subtitles = [
                 {
                     "placement": placement.model_dump(mode="json"),
-                    "text": (
-                        placement.text_override
-                        or segments[placement.segment_id].text
-                    ),
+                    "text": (placement.text_override or segments[placement.segment_id].text),
                 }
                 for placement in self.documents.subtitles.list_subtitle_placements(
                     preset.burn_subtitle_track_id
                 )
-                if placement.start_frame < unit.end_frame
-                and placement.end_frame > unit.start_frame
+                if placement.start_frame < unit.end_frame and placement.end_frame > unit.start_frame
             ]
         return self._hash_document(
             {
@@ -634,8 +716,7 @@ class SegmentedExportService:
                 ],
                 "transitions": [item.model_dump(mode="json") for item in state.transitions],
                 "web_states": {
-                    key: value.model_dump(mode="json")
-                    for key, value in sorted(state.web_states.items())
+                    key: value.model_dump(mode="json") for key, value in sorted(state.web_states.items())
                 },
                 "assets": [self._asset_identity(assets[asset_id]) for asset_id in asset_ids],
                 "subtitles": subtitles,
@@ -644,7 +725,9 @@ class SegmentedExportService:
         )
 
     def _audio_key(self, state: TimelineState, preset: ExportPreset) -> str:
-        assets = assets_in_timeline_clock(self.documents.catalog, state.sequence)
+        assets = assets_in_timeline_clock(
+            self.documents.projects, self.documents.sequences, self.documents.assets, state.sequence
+        )
         asset_ids = sorted({clip.asset_id for clip in state.clips})
         buses = self.documents.audio.list_audio_buses(state.sequence.id)
         return self._hash_document(
@@ -683,8 +766,7 @@ class SegmentedExportService:
                 ],
                 "transitions": [item.model_dump(mode="json") for item in state.transitions],
                 "web_states": {
-                    key: value.model_dump(mode="json")
-                    for key, value in sorted(state.web_states.items())
+                    key: value.model_dump(mode="json") for key, value in sorted(state.web_states.items())
                 },
                 "assets": [self._asset_identity(assets[asset_id]) for asset_id in asset_ids],
                 "buses": [bus.model_dump(mode="json") for bus in buses],
@@ -705,7 +787,7 @@ class SegmentedExportService:
                 "metadata": asset.metadata.model_dump(mode="json"),
                 "source_hash": self.documents.web.get_web_asset_spec(asset.id).source_hash,
             }
-        source = self.documents.catalog.resolve_asset_path(asset)
+        source = self.documents.assets.resolve_asset_path(asset)
         live = fingerprint_file(source)
         return {
             "id": asset.id,
@@ -719,11 +801,11 @@ class SegmentedExportService:
         }
 
     def _has_audible_audio(self, state: TimelineState) -> bool:
-        assets = assets_in_timeline_clock(self.documents.catalog, state.sequence)
-        buses = self.documents.audio.list_audio_buses(state.sequence.id)
-        return bool(
-            select_audible_sequence_audio(state, assets, buses).asset_ids
+        assets = assets_in_timeline_clock(
+            self.documents.projects, self.documents.sequences, self.documents.assets, state.sequence
         )
+        buses = self.documents.audio.list_audio_buses(state.sequence.id)
+        return bool(select_audible_sequence_audio(state, assets, buses).asset_ids)
 
     @staticmethod
     def _validate_units(state: TimelineState, units: list[SequenceBuildUnit]) -> None:
@@ -734,17 +816,12 @@ class SegmentedExportService:
         previous = None
         for unit in units:
             if unit.end_frame > state.duration_frames:
-                raise ValueError(
-                    f"Build unit {unit.id} exceeds timeline duration {state.duration_frames}"
-                )
+                raise ValueError(f"Build unit {unit.id} exceeds timeline duration {state.duration_frames}")
             if previous is not None and unit.start_frame != previous:
                 raise ValueError("Build units must be ordered and contiguous")
             previous = unit.end_frame
         if previous != state.duration_frames:
-            raise ValueError(
-                "Build units must cover the complete sequence duration "
-                f"{state.duration_frames}"
-            )
+            raise ValueError(f"Build units must cover the complete sequence duration {state.duration_frames}")
 
     def _read_cache(
         self,
@@ -793,22 +870,12 @@ class SegmentedExportService:
             "output": str(output),
             "output_sha256": sha256_file(output),
             "bytes": output.stat().st_size,
-            "requested_video_codec": (
-                render.requested_video_codec if render is not None else None
-            ),
-            "actual_video_codec": (
-                render.actual_video_codec if render is not None else None
-            ),
-            "hardware_fallback_reason": (
-                render.hardware_fallback_reason if render is not None else None
-            ),
-            "hardware_failure_details": (
-                render.hardware_failure_details if render is not None else None
-            ),
+            "requested_video_codec": (render.requested_video_codec if render is not None else None),
+            "actual_video_codec": (render.actual_video_codec if render is not None else None),
+            "hardware_fallback_reason": (render.hardware_fallback_reason if render is not None else None),
+            "hardware_failure_details": (render.hardware_failure_details if render is not None else None),
             "archived_failed_outputs": (
-                [str(item) for item in render.archived_failed_outputs]
-                if render is not None
-                else []
+                [str(item) for item in render.archived_failed_outputs] if render is not None else []
             ),
         }
         atomic_write_text(

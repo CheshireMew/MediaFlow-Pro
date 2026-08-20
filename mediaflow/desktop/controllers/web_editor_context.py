@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
+
+from mediaflow.desktop.session_state import DesktopSessionState
 
 if TYPE_CHECKING:
-    from mediaflow.desktop.controllers.project_controller import ProjectSession
-    from mediaflow.service.desktop_proxy import RemoteEditorProject
+    from mediaflow.service.remote_project import RemoteEditorProject
+
+
+class MutableWebSession(Protocol):
+    @property
+    def state(self) -> DesktopSessionState: ...
+
+    def _require_writable(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -24,13 +32,13 @@ class WebEditorContext:
 
 
 def require_mutable_web_clip(
-    session: ProjectSession,
+    session: MutableWebSession,
     clip_id: str,
 ) -> RemoteEditorProject:
     session._require_writable()
     if not clip_id:
         raise ValueError("请先选择网页片段")
-    current = session.binding.current
+    current = session.state.binding.current
     if current is None:
         raise RuntimeError("请先打开一个项目")
     return current

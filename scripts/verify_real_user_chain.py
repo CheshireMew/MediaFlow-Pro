@@ -44,9 +44,7 @@ WEB_MEDIA_STARTER = Path(
         ROOT / "tests" / "fixtures" / "editable-media-v6-react-reference",
     )
 ).resolve()
-WEB_MEDIA_MANIFEST = json.loads(
-    (WEB_MEDIA_STARTER / "editable-media.json").read_text(encoding="utf-8")
-)
+WEB_MEDIA_MANIFEST = json.loads((WEB_MEDIA_STARTER / "editable-media.json").read_text(encoding="utf-8"))
 WEB_SCENE_ID = str(WEB_MEDIA_MANIFEST["scenes"][0]["id"])
 
 
@@ -77,18 +75,16 @@ def wait_project_release(
         process_events(errors)
         if controller.workspace.projectCloseFailed:
             raise RuntimeError(
-                "Project resources could not be released: "
-                f"{controller.workspace.projectCloseError}"
+                f"Project resources could not be released: {controller.workspace.projectCloseError}"
             )
     if controller.workspace.projectReleasePending:
         raise TimeoutError(
-            "Project resources were not released before reopening: "
-            f"{controller.workspace.closingProjectPath}"
+            f"Project resources were not released before reopening: {controller.workspace.closingProjectPath}"
         )
 
 
 def failed_task(controller: EditorControllers):
-    project = controller.session.binding.current
+    project = controller.session.state.binding.current
     if project is None:
         return None
     return next(
@@ -150,27 +146,19 @@ def wait_downloaded_video_selection(
     last_state: dict[str, object] = {}
     while time.monotonic() < deadline:
         process_events(errors)
-        project = controller.session.binding.current
+        project = controller.session.state.binding.current
         if project is None:
             raise RuntimeError("Project closed while waiting for downloaded media")
         run = next(
-            (
-                item
-                for item in project.list_workflow_runs()
-                if item.id == workflow_id
-            ),
+            (item for item in project.list_workflow_runs() if item.id == workflow_id),
             None,
         )
         if run is None:
             raise RuntimeError(f"Download workflow disappeared: {workflow_id}")
         if run.status == WorkflowStatus.BLOCKED:
-            raise RuntimeError(
-                f"Download workflow was blocked before placement: {run.message_code}"
-            )
+            raise RuntimeError(f"Download workflow was blocked before placement: {run.message_code}")
         video_ids = [
-            asset_id
-            for asset_id in run.asset_ids
-            if project.get_asset(asset_id).kind == AssetKind.VIDEO
+            asset_id for asset_id in run.asset_ids if project.get_asset(asset_id).kind == AssetKind.VIDEO
         ]
         selected_id = controller.media.selectedAssetId
         last_state = {
@@ -198,7 +186,7 @@ def place_downloaded_video_on_timeline(
     *,
     timeout: float = 30,
 ) -> str:
-    controller.timeline.dropAssets(
+    controller.timeline_clips.dropAssets(
         [asset_id],
         "",
         -1,
@@ -225,7 +213,7 @@ def wait_for_downloaded_video_placement(
     *,
     timeout: float = 30,
 ) -> str:
-    project = controller.session.binding.current
+    project = controller.session.state.binding.current
     if project is None:
         raise RuntimeError("Project must be open before placing downloaded media")
     sequence_id = controller.workspace.activeSequenceId
@@ -234,10 +222,10 @@ def wait_for_downloaded_video_placement(
     while time.monotonic() < deadline:
         process_events(errors)
         if controller.workspace.profileConfirmationPending:
-            controller.workspace.resolveProfileAdoption(True)
+            controller.workspace_sequence.resolveProfileAdoption(True)
             process_events(errors)
 
-        state = controller.session.binding.timeline.state
+        state = controller.session.state.binding.timeline.state
         session_clip = next(
             (clip for clip in state.clips if clip.asset_id == asset_id),
             None,
@@ -257,23 +245,17 @@ def wait_for_downloaded_video_placement(
             else None
         )
         projected_clip_ids = {
-            str(controller.timeline.clipsModel.get(index)["clipId"])
-            for index in range(controller.timeline.clipsModel.rowCount())
-            if controller.timeline.clipsModel.get(index)["assetId"] == asset_id
+            str(controller.timeline_view.clipsModel.get(index)["clipId"])
+            for index in range(controller.timeline_view.clipsModel.rowCount())
+            if controller.timeline_view.clipsModel.get(index)["assetId"] == asset_id
         }
         last_state = {
-            "profile_confirmation_pending": (
-                controller.workspace.profileConfirmationPending
-            ),
+            "profile_confirmation_pending": (controller.workspace.profileConfirmationPending),
             "session_clip_id": session_clip.id if session_clip else "",
             "session_track_id": session_track.id if session_track else "",
             "projected_clip_ids": sorted(projected_clip_ids),
         }
-        if (
-            session_clip is None
-            or session_track is None
-            or session_clip.id not in projected_clip_ids
-        ):
+        if session_clip is None or session_track is None or session_clip.id not in projected_clip_ids:
             continue
 
         with ProjectRepository.open(project.project_dir, writable=False) as persisted:
@@ -304,11 +286,7 @@ def wait_for_downloaded_video_placement(
             continue
 
         workflow = next(
-            (
-                item
-                for item in project.list_workflow_runs()
-                if item.id == workflow_id
-            ),
+            (item for item in project.list_workflow_runs() if item.id == workflow_id),
             None,
         )
         if workflow is None:
@@ -338,18 +316,14 @@ def wait_export(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         process_events(errors)
-        project = controller.session.binding.current
+        project = controller.session.state.binding.current
         if project is None:
             raise RuntimeError("Project closed while waiting for export")
         tasks = [
             task
             for task in project.list_tasks()
             if task.kind.value == "export"
-            and output.resolve()
-            in {
-                value.resolve(project.project_dir)
-                for value in task.artifacts
-            }
+            and output.resolve() in {value.resolve(project.project_dir) for value in task.artifacts}
         ]
         if tasks and tasks[-1].status == TaskStatus.COMPLETED:
             return
@@ -469,13 +443,11 @@ def import_without_workflow(
     path: Path,
     errors: list[str],
 ) -> str:
-    project = controller.session.binding.current
+    project = controller.session.state.binding.current
     if project is None:
         raise RuntimeError("Project must be open before importing")
     before = {asset.id for asset in project.list_assets()}
-    controller.media.importFiles(
-        [QUrl.fromLocalFile(str(path))]
-    )
+    controller.media.importFiles([QUrl.fromLocalFile(str(path))])
     deadline = time.monotonic() + 30
     asset_id = ""
     run_id = ""
@@ -485,11 +457,7 @@ def import_without_workflow(
         if added:
             asset_id = added[0]
             run = next(
-                (
-                    run
-                    for run in project.list_workflow_runs(active_only=True)
-                    if asset_id in run.asset_ids
-                ),
+                (run for run in project.list_workflow_runs(active_only=True) if asset_id in run.asset_ids),
                 None,
             )
             if run is not None:
@@ -497,7 +465,7 @@ def import_without_workflow(
                 break
     if not asset_id or not run_id:
         raise TimeoutError(f"Imported asset workflow was not visible: {path}")
-    controller.workspace.cancelWorkflow(run_id)
+    controller.workspace_workflow.cancelWorkflow(run_id)
     return asset_id
 
 
@@ -523,8 +491,8 @@ def wait_real_filmstrip(
     errors: list[str],
     timeout: float = 120,
 ) -> list[dict[str, object]]:
-    state = controller.session.binding.timeline.state
-    controller.timeline.requestFilmstrip(
+    state = controller.session.state.binding.timeline.state
+    controller.timeline_view.requestFilmstrip(
         0,
         max((clip.timeline_end for clip in state.clips), default=1),
         6.0,
@@ -534,8 +502,8 @@ def wait_real_filmstrip(
     last_frames: list[dict[str, object]] = []
     while time.monotonic() < deadline:
         process_events(errors)
-        for index in range(controller.timeline.clipsModel.rowCount()):
-            row = controller.timeline.clipsModel.get(index)
+        for index in range(controller.timeline_view.clipsModel.rowCount()):
+            row = controller.timeline_view.clipsModel.get(index)
             if str(row["clipId"]) != clip_id:
                 continue
             last_frames = [dict(item) for item in row.get("filmstripFrames", [])]
@@ -611,9 +579,7 @@ def verify_export_video(
             check=False,
         )
         if result.returncode != 0 or not frame.is_file() or frame.stat().st_size == 0:
-            raise RuntimeError(
-                f"Could not extract exported React evidence frame {index}: {result.stderr}"
-            )
+            raise RuntimeError(f"Could not extract exported React evidence frame {index}: {result.stderr}")
         frame_hashes.append(hashlib.sha256(frame.read_bytes()).hexdigest())
     if len(set(frame_hashes)) != len(frame_hashes):
         raise RuntimeError("The exported React video did not change across sampled frames")
@@ -623,9 +589,7 @@ def verify_export_video(
 def verify(project_parent: Path) -> None:
     """Verify the deterministic React editable-media producer-to-export chain."""
 
-    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(
-        project_parent.resolve() / "editor-service"
-    )
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(project_parent.resolve() / "editor-service")
     configure_application_identity()
     app = QGuiApplication.instance() or QGuiApplication([])
     errors: list[str] = []
@@ -634,29 +598,27 @@ def verify(project_parent: Path) -> None:
     controller.session.events.errorOccurred.connect(errors.append)
     try:
         run_root = project_parent.resolve()
-        controller.workspace.createProject(
+        controller.workspace_project.createProject(
             QUrl.fromLocalFile(str(run_root)).toString(),
             "MediaFlow Pro React 真实链路",
         )
-        project = controller.session.binding.current
+        project = controller.session.state.binding.current
         if project is None:
             raise RuntimeError("React chain project creation did not bind a project")
         sequence_id = controller.workspace.activeSequenceId
 
-        controller.media.importFiles(
-            [QUrl.fromLocalFile(str(WEB_MEDIA_STARTER / "editable-media.json"))]
-        )
+        controller.media.importFiles([QUrl.fromLocalFile(str(WEB_MEDIA_STARTER / "editable-media.json"))])
         web_asset_id = controller.media.selectedAssetId
         asset = project.get_asset(web_asset_id)
         if asset.kind != AssetKind.WEB:
             raise RuntimeError("React package was not imported as a generic web asset")
-        controller.timeline.addTrack("video")
+        controller.timeline_structure.addTrack("video")
         web_track = [
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.VIDEO
         ][-1]
-        controller.timeline.dropAssets(
+        controller.timeline_clips.dropAssets(
             [web_asset_id],
             web_track.id,
             web_track.position,
@@ -666,7 +628,7 @@ def verify(project_parent: Path) -> None:
             True,
             False,
         )
-        web_clip_id = controller.timeline.selectedClipId
+        web_clip_id = controller.timeline_view.selectedClipId
         controller.web.selectLayer("title")
         controller.web.updateLayer("title", {"content": "Real React editable-media chain"})
         controller.web_timeline.setDescriptorKeyframeAtFrame(
@@ -688,8 +650,7 @@ def verify(project_parent: Path) -> None:
 
         persisted = project.get_web_clip(web_clip_id)
         if (
-            persisted.scenes[WEB_SCENE_ID].layers["title"].content
-            != "Real React editable-media chain"
+            persisted.scenes[WEB_SCENE_ID].layers["title"].content != "Real React editable-media chain"
             or persisted.parameters.get("orbit_radius") != 261
         ):
             raise RuntimeError("Desktop React edits did not reach project state")
@@ -715,16 +676,15 @@ def verify(project_parent: Path) -> None:
         )
         task_count = len(project.list_tasks())
 
-        controller.workspace.closeProject()
+        controller.workspace_project.closeProject()
         wait_project_release(controller, errors=errors)
-        controller.workspace.openProject(QUrl.fromLocalFile(str(project_root)).toString())
-        reopened = controller.session.binding.current
+        controller.workspace_project.openProject(QUrl.fromLocalFile(str(project_root)).toString())
+        reopened = controller.session.state.binding.current
         if reopened is None:
             raise RuntimeError("React chain project did not reopen")
         reopened_web = reopened.get_web_clip(web_clip_id)
         if (
-            reopened_web.scenes[WEB_SCENE_ID].layers["title"].content
-            != "Real React editable-media chain"
+            reopened_web.scenes[WEB_SCENE_ID].layers["title"].content != "Real React editable-media chain"
             or reopened_web.parameters.get("orbit_radius") != 261
         ):
             raise RuntimeError("React editable state was not restored after reopening")
@@ -732,9 +692,7 @@ def verify(project_parent: Path) -> None:
             raise RuntimeError("React chain task history changed after reopening")
         raise_ui_errors(errors)
 
-        video_stream = next(
-            item for item in probe["streams"] if item.get("codec_type") == "video"
-        )
+        video_stream = next(item for item in probe["streams"] if item.get("codec_type") == "video")
         report = {
             "schema": "mediaflow-react-real-user-chain/v1",
             "project": str(project_root),
@@ -746,9 +704,7 @@ def verify(project_parent: Path) -> None:
             "web_state_revision": reopened_web.revision,
             "orbit_radius": reopened_web.parameters["orbit_radius"],
             "filmstrip_frame_count": len(filmstrip_frames),
-            "filmstrip_source_frames": sorted(
-                {int(item["sourceFrame"]) for item in filmstrip_frames}
-            ),
+            "filmstrip_source_frames": sorted({int(item["sourceFrame"]) for item in filmstrip_frames}),
             "preview_graph": preview_graph,
             "export": str(output),
             "export_size": output.stat().st_size,
@@ -770,9 +726,7 @@ def verify(project_parent: Path) -> None:
 
 
 def verify_workflow_chain(project_parent: Path) -> None:
-    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(
-        project_parent.resolve() / "editor-service"
-    )
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(project_parent.resolve() / "editor-service")
     configure_application_identity()
     app = QGuiApplication.instance() or QGuiApplication([])
     errors: list[str] = []
@@ -784,18 +738,18 @@ def verify_workflow_chain(project_parent: Path) -> None:
     try:
         run_root = project_parent.resolve()
         download_root = run_root / "downloads"
-        controller.session.service_settings.download.output_directory = str(download_root)
-        controller.session.service_settings.asr.model = "tiny.en"
-        controller.session.service_settings.asr.device = "cpu"
-        controller.session.service_settings.asr.compute_type = "int8"
-        controller.session.service_settings.asr.language = "en"
+        controller.session.state.service_settings.download.output_directory = str(download_root)
+        controller.session.state.service_settings.asr.model = "tiny.en"
+        controller.session.state.service_settings.asr.device = "cpu"
+        controller.session.state.service_settings.asr.compute_type = "int8"
+        controller.session.state.service_settings.asr.language = "en"
         model_override = os.environ.get("MEDIAFLOW_E2E_MODEL", "").strip()
         api_key_override = (
             os.environ.get("MEDIAFLOW_E2E_API_KEY", "").strip()
             or os.environ.get("OPENAI_API_KEY", "").strip()
         )
         if (
-            not controller.session.service_settings.llm_providers
+            not controller.session.state.service_settings.llm_providers
             and model_override
             and api_key_override
         ):
@@ -809,14 +763,14 @@ def verify_workflow_chain(project_parent: Path) -> None:
                 api_key=api_key_override,
                 model=model_override,
             )
-            controller.session.service_settings.llm_providers = [provider]
-            controller.session.service_settings.active_llm_provider_id = provider.id
-        if model_override and controller.session.service_settings.llm_providers:
-            active_provider_id = controller.session.service_settings.active_llm_provider_id
+            controller.session.state.service_settings.llm_providers = [provider]
+            controller.session.state.service_settings.active_llm_provider_id = provider.id
+        if model_override and controller.session.state.service_settings.llm_providers:
+            active_provider_id = controller.session.state.service_settings.active_llm_provider_id
             provider = next(
                 (
                     item
-                    for item in controller.session.service_settings.llm_providers
+                    for item in controller.session.state.service_settings.llm_providers
                     if item.id == active_provider_id
                 ),
                 None,
@@ -826,7 +780,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
             provider.model = model_override
         if not any(
             provider.enabled and provider.api_key
-            for provider in controller.session.service_settings.llm_providers
+            for provider in controller.session.state.service_settings.llm_providers
         ):
             raise RuntimeError(
                 "The isolated real workflow needs MEDIAFLOW_E2E_MODEL and "
@@ -845,39 +799,34 @@ def verify_workflow_chain(project_parent: Path) -> None:
             fixture_thread.start()
             source_url = f"http://127.0.0.1:{fixture_server.server_address[1]}/{fixture.name}"
 
-        controller.workspace.createProject(
+        controller.workspace_project.createProject(
             QUrl.fromLocalFile(str(project_parent)).toString(),
             "MediaFlow Pro 真实链路",
         )
-        current_project = controller.session.binding.current
+        current_project = controller.session.state.binding.current
         if current_project is None:
             raise RuntimeError("Project creation did not bind a project")
         current_project.set_workflow_mode(False)
         controller.tasks.analyzeDownloadUrl(source_url)
         wait_download_plan(controller, errors=errors)
         controller.tasks.submitDownloadPlan(
-            controller.session.service_settings.download.resolution,
+            controller.session.state.service_settings.download.resolution,
             "",
-            controller.session.service_settings.download.download_subtitles,
-            controller.session.service_settings.download.codec,
+            controller.session.state.service_settings.download.download_subtitles,
+            controller.session.state.service_settings.download.codec,
             "",
         )
         workflow_id = controller.workspace.workflowRunId
-        project = controller.session.binding.current
+        project = controller.session.state.binding.current
         if project is None or not workflow_id:
             raise RuntimeError("Download workflow did not start")
-        download_workflow = next(
-            run
-            for run in project.list_workflow_runs()
-            if run.id == workflow_id
-        )
+        download_workflow = next(run for run in project.list_workflow_runs() if run.id == workflow_id)
         request_directories = {
             Path(request.output_directory).expanduser().resolve()
             for request in download_workflow.payload.requests
         }
         if not request_directories or any(
-            not directory.is_relative_to(run_root)
-            for directory in request_directories
+            not directory.is_relative_to(run_root) for directory in request_directories
         ):
             raise RuntimeError(
                 "Download workflow escaped the managed run: "
@@ -895,13 +844,9 @@ def verify_workflow_chain(project_parent: Path) -> None:
             workflow_id,
             errors,
         )
-        downloaded_asset_path = project.resolve_asset_path(
-            project.get_asset(video_asset_id)
-        ).resolve()
+        downloaded_asset_path = project.resolve_asset_path(project.get_asset(video_asset_id)).resolve()
         if not downloaded_asset_path.is_relative_to(run_root):
-            raise RuntimeError(
-                f"Downloaded asset escaped the managed run: {downloaded_asset_path}"
-            )
+            raise RuntimeError(f"Downloaded asset escaped the managed run: {downloaded_asset_path}")
         video_clip_id = place_downloaded_video_on_timeline(
             controller,
             workflow_id,
@@ -911,7 +856,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
         main_sequence_id = controller.workspace.activeSequenceId
 
         raise_ui_errors(errors)
-        controller.workspace.continueWorkflow(workflow_id, "")
+        controller.workspace_workflow.continueWorkflow(workflow_id, "")
         wait_workflow(
             controller,
             WorkflowStage.TRANSCRIBE,
@@ -919,7 +864,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
             timeout=180,
             errors=errors,
         )
-        controller.workspace.continueWorkflow(workflow_id, "")
+        controller.workspace_workflow.continueWorkflow(workflow_id, "")
         wait_workflow(
             controller,
             WorkflowStage.TRANSLATE,
@@ -927,7 +872,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
             timeout=600,
             errors=errors,
         )
-        controller.workspace.continueWorkflow(workflow_id, "zh_CN")
+        controller.workspace_workflow.continueWorkflow(workflow_id, "zh_CN")
         wait_workflow(
             controller,
             WorkflowStage.HIGHLIGHT,
@@ -935,7 +880,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
             timeout=300,
             errors=errors,
         )
-        controller.workspace.continueWorkflow(workflow_id, "")
+        controller.workspace_workflow.continueWorkflow(workflow_id, "")
         wait_workflow(
             controller,
             WorkflowStage.CREATE_SHORTS,
@@ -943,7 +888,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
             timeout=300,
             errors=errors,
         )
-        controller.workspace.continueWorkflow(workflow_id, "")
+        controller.workspace_workflow.continueWorkflow(workflow_id, "")
         wait_workflow(
             controller,
             WorkflowStage.EXPORT,
@@ -952,19 +897,17 @@ def verify_workflow_chain(project_parent: Path) -> None:
             errors=errors,
         )
 
-        project = controller.session.binding.current
+        project = controller.session.state.binding.current
         if project is None:
             raise RuntimeError("Project closed during workflow")
-        workflow = next(
-            run for run in project.list_workflow_runs() if run.id == workflow_id
-        )
+        workflow = next(run for run in project.list_workflow_runs() if run.id == workflow_id)
         translated_id = workflow.payload.translated_document_ids[0]
         short_ids = workflow.payload.short_sequence_ids
         if not short_ids:
             raise RuntimeError("Highlight workflow created no short sequences")
 
-        controller.workspace.selectSequence(main_sequence_id)
-        controller.subtitles.placeSubtitleDocument(translated_id)
+        controller.workspace_sequence.selectSequence(main_sequence_id)
+        controller.subtitle_placement.placeSubtitleDocument(translated_id)
         image = project_parent / "overlay.png"
         music = project_parent / "music.wav"
         create_image(image, paths)
@@ -972,18 +915,18 @@ def verify_workflow_chain(project_parent: Path) -> None:
         image_asset_id = import_without_workflow(controller, image, errors)
         music_asset_id = import_without_workflow(controller, music, errors)
 
-        controller.workspace.selectSequence(main_sequence_id)
+        controller.workspace_sequence.selectSequence(main_sequence_id)
         video_clip = next(
             clip
-            for clip in controller.session.binding.timeline.state.clips
+            for clip in controller.session.state.binding.timeline.state.clips
             if clip.id == video_clip_id and clip.asset_id == video_asset_id
         )
         video_track_position = next(
             track.position
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.id == video_clip.track_id
         )
-        controller.timeline.dropAssets(
+        controller.timeline_clips.dropAssets(
             [image_asset_id],
             video_clip.track_id,
             video_track_position,
@@ -993,18 +936,18 @@ def verify_workflow_chain(project_parent: Path) -> None:
             True,
             False,
         )
-        controller.timeline.addTransitionAfter(video_clip.id, "dissolve", 15)
+        controller.timeline_structure.addTransitionAfter(video_clip.id, "dissolve", 15)
         first_image_clip = next(
             clip
-            for clip in controller.session.binding.timeline.state.clips
+            for clip in controller.session.state.binding.timeline.state.clips
             if clip.asset_id == image_asset_id
         )
         image_track_position = next(
             track.position
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.id == first_image_clip.track_id
         )
-        controller.timeline.dropAssets(
+        controller.timeline_clips.dropAssets(
             [image_asset_id],
             first_image_clip.track_id,
             image_track_position,
@@ -1014,29 +957,27 @@ def verify_workflow_chain(project_parent: Path) -> None:
             True,
             False,
         )
-        overlay_clip = controller.timeline.selectedClipId
-        controller.timeline.addTrack("video")
+        overlay_clip = controller.timeline_view.selectedClipId
+        controller.timeline_structure.addTrack("video")
         overlay_track = [
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.VIDEO
         ][-1]
-        controller.timeline.moveClip(overlay_clip, 0, overlay_track.id)
-        controller.timeline.setClipTransform(overlay_clip, 0.68, 0.08, 0.28, 0.28, 0, 0, 0, 0, 0, 0.9)
-        controller.media.importFiles(
-            [QUrl.fromLocalFile(str(WEB_MEDIA_STARTER / "editable-media.json"))]
-        )
+        controller.timeline_clips.moveClip(overlay_clip, 0, overlay_track.id)
+        controller.timeline_clips.setClipTransform(overlay_clip, 0.68, 0.08, 0.28, 0.28, 0, 0, 0, 0, 0, 0.9)
+        controller.media.importFiles([QUrl.fromLocalFile(str(WEB_MEDIA_STARTER / "editable-media.json"))])
         web_asset_id = controller.media.selectedAssetId
-        controller.timeline.addTrack("video")
+        controller.timeline_structure.addTrack("video")
         web_track = [
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.VIDEO
         ][-1]
-        controller.timeline.dropAssets(
+        controller.timeline_clips.dropAssets(
             [web_asset_id], web_track.id, web_track.position, 0, 3.0, 0, True, False
         )
-        web_clip_id = controller.timeline.selectedClipId
+        web_clip_id = controller.timeline_view.selectedClipId
         controller.web.selectLayer("title")
         controller.web.updateLayer("title", {"content": "Real editable web chain"})
         controller.web_timeline.setDescriptorKeyframeAtFrame(
@@ -1063,10 +1004,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
                 descriptor["default"],
             )
         persisted_web = project.get_web_clip(web_clip_id)
-        if (
-            persisted_web.scenes[WEB_SCENE_ID].layers["title"].content
-            != "Real editable web chain"
-        ):
+        if persisted_web.scenes[WEB_SCENE_ID].layers["title"].content != "Real editable web chain":
             raise RuntimeError("Desktop web edit did not reach project state")
         filmstrip_frames = wait_real_filmstrip(
             controller,
@@ -1075,10 +1013,10 @@ def verify_workflow_chain(project_parent: Path) -> None:
         )
         main_audio_track = next(
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.AUDIO
         )
-        controller.timeline.dropAssets(
+        controller.timeline_clips.dropAssets(
             [music_asset_id],
             main_audio_track.id,
             main_audio_track.position,
@@ -1088,19 +1026,15 @@ def verify_workflow_chain(project_parent: Path) -> None:
             True,
             False,
         )
-        controller.timeline.setClipAudio(controller.timeline.selectedClipId, -8.0, 0.0, 12, 24)
-        master = next(
-            bus
-            for bus in project.list_audio_buses(main_sequence_id)
-            if bus.parent_bus_id is None
-        )
+        controller.timeline_clips.setClipAudio(controller.timeline_view.selectedClipId, -8.0, 0.0, 12, 24)
+        master = next(bus for bus in project.list_audio_buses(main_sequence_id) if bus.parent_bus_id is None)
         controller.audio.updateAudioBus(master.id, -1.0, False, False)
         controller.audio.addAudioEffect(master.id, "limiter")
         main_preview = wait_preview_graph(controller, errors=errors)
 
         main_subtitle_track = next(
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.SUBTITLE
         )
         main_output = project.project_dir / "exports" / "main-real-chain.mp4"
@@ -1117,14 +1051,14 @@ def verify_workflow_chain(project_parent: Path) -> None:
             raise RuntimeError("Workflow did not finish after the verified main export")
 
         short_id = short_ids[0]
-        controller.workspace.selectSequence(short_id)
-        controller.subtitles.placeSubtitleDocument(translated_id)
+        controller.workspace_sequence.selectSequence(short_id)
+        controller.subtitle_placement.placeSubtitleDocument(translated_id)
         short_audio_track = next(
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.AUDIO
         )
-        controller.timeline.dropAssets(
+        controller.timeline_clips.dropAssets(
             [music_asset_id],
             short_audio_track.id,
             short_audio_track.position,
@@ -1136,15 +1070,15 @@ def verify_workflow_chain(project_parent: Path) -> None:
         )
         short_video = next(
             clip
-            for clip in controller.session.binding.timeline.state.clips
+            for clip in controller.session.state.binding.timeline.state.clips
             if clip.asset_id == video_asset_id
         )
         short_audio = next(
             clip
-            for clip in controller.session.binding.timeline.state.clips
+            for clip in controller.session.state.binding.timeline.state.clips
             if clip.asset_id == music_asset_id
         )
-        controller.timeline.trimClip(short_audio.id, 0, min(short_audio.duration, short_video.duration))
+        controller.timeline_clips.trimClip(short_audio.id, 0, min(short_audio.duration, short_video.duration))
         short_preview = wait_preview_graph(
             controller,
             previous=main_preview,
@@ -1152,7 +1086,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
         )
         short_subtitle_track = next(
             track
-            for track in controller.session.binding.timeline.state.tracks
+            for track in controller.session.state.binding.timeline.state.tracks
             if track.kind == TrackKind.SUBTITLE
         )
         short_output = project.project_dir / "exports" / "short-real-chain.mp4"
@@ -1165,10 +1099,10 @@ def verify_workflow_chain(project_parent: Path) -> None:
 
         project_root = project.project_dir
         task_count = len(project.list_tasks())
-        controller.workspace.closeProject()
+        controller.workspace_project.closeProject()
         wait_project_release(controller, errors=errors)
-        controller.workspace.openProject(QUrl.fromLocalFile(str(project_root)).toString())
-        reopened = controller.session.binding.current
+        controller.workspace_project.openProject(QUrl.fromLocalFile(str(project_root)).toString())
+        reopened = controller.session.state.binding.current
         if reopened is None:
             raise RuntimeError("Project did not reopen")
         if len(reopened.list_sequences()) < 2:
@@ -1178,24 +1112,18 @@ def verify_workflow_chain(project_parent: Path) -> None:
         if len(reopened.list_tasks()) != task_count:
             raise RuntimeError("Task history changed after reopening")
         reopened_web = reopened.get_web_clip(web_clip_id)
-        if (
-            reopened_web.scenes[WEB_SCENE_ID].layers["title"].content
-            != "Real editable web chain"
-        ):
+        if reopened_web.scenes[WEB_SCENE_ID].layers["title"].content != "Real editable web chain":
             raise RuntimeError("Editable web state was not restored after reopening")
         raise_ui_errors(errors)
-        if (
-            not project_root.resolve().is_relative_to(run_root)
-            or not downloaded_asset_path.is_relative_to(run_root)
+        if not project_root.resolve().is_relative_to(run_root) or not downloaded_asset_path.is_relative_to(
+            run_root
         ):
             raise RuntimeError("Real workflow artifacts escaped the managed run")
 
         report = {
             "project": str(project_root),
             "source_url": source_url,
-            "download_request_directories": sorted(
-                str(path) for path in request_directories
-            ),
+            "download_request_directories": sorted(str(path) for path in request_directories),
             "downloaded_asset": str(downloaded_asset_path),
             "asset_count": len(reopened.list_assets()),
             "sequence_count": len(reopened.list_sequences()),
@@ -1211,9 +1139,7 @@ def verify_workflow_chain(project_parent: Path) -> None:
             "web_clip_id": web_clip_id,
             "web_state_revision": reopened_web.revision,
             "filmstrip_frame_count": len(filmstrip_frames),
-            "filmstrip_source_frames": sorted(
-                {int(item["sourceFrame"]) for item in filmstrip_frames}
-            ),
+            "filmstrip_source_frames": sorted({int(item["sourceFrame"]) for item in filmstrip_frames}),
             "errors": errors,
         }
         report_path = project_root / "generated" / "real-user-chain-report.json"

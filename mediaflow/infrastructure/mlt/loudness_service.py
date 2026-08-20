@@ -370,8 +370,8 @@ class LoudnessAnalysisService:
         source_paths: tuple[Path, ...],
     ) -> str:
         assets_by_path: dict[str, list[Asset]] = {}
-        for asset in self.compiler.repository.catalog.list_assets():
-            source = self.compiler.repository.catalog.resolve_asset_path(asset)
+        for asset in self.compiler.repository.assets.list_assets():
+            source = self.compiler.repository.assets.resolve_asset_path(asset)
             assets_by_path.setdefault(
                 os.path.normcase(str(source.resolve())),
                 [],

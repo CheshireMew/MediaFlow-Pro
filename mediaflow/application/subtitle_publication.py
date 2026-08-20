@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from mediaflow.application.ports import SubtitlePublicationDocuments
-from mediaflow.atomic_file import atomic_write_bytes
+from mediaflow.application.subtitle_publication_storage import SubtitlePublicationStorage
 from mediaflow.domain.model_base import new_id
 from mediaflow.domain.storage_names import (
     content_addressed_child_path,
@@ -24,18 +24,16 @@ class SubtitleDocumentPublication:
     segments: tuple[SubtitleSegment, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _OutputSnapshot:
-    path: Path
-    existed: bool
-    content: bytes
-
-
 class SubtitlePublicationService:
     """Commit subtitle records and their observable SRT as one user-visible change."""
 
-    def __init__(self, repository: SubtitlePublicationDocuments):
+    def __init__(
+        self,
+        repository: SubtitlePublicationDocuments,
+        storage: SubtitlePublicationStorage,
+    ):
         self.repository = repository
+        self.storage = storage
 
     def document_srt_path(
         self,
@@ -68,7 +66,7 @@ class SubtitlePublicationService:
                 raise PermissionError(
                     "只读项目不能写入项目目录；请选择项目外的导出位置"
                 )
-        _write_document_srt(self.repository, document_id, output)
+        _write_document_srt(self.repository, document_id, output, self.storage)
         return output
 
     def reconcile_document_srts(self) -> tuple[Path, ...]:
@@ -91,9 +89,7 @@ class SubtitlePublicationService:
         stale = tuple(
             path
             for path in (
-                generated_root.rglob("sub-*.srt")
-                if generated_root.is_dir()
-                else ()
+                self.storage.list_files(generated_root, "sub-*.srt")
             )
             if path.resolve() not in expected
         )
@@ -117,7 +113,7 @@ class SubtitlePublicationService:
         )
         with self.repository.transaction():
             snapshots = tuple(
-                _snapshot_output(output) for output in outputs
+                self.storage.snapshot(output) for output in outputs
             )
 
             def rollback(error: BaseException) -> None:
@@ -130,22 +126,19 @@ class SubtitlePublicationService:
                         )
                     )
                 ):
-                    if _snapshot_changed(snapshot):
-                        _rollback_document_srt(
-                            self.repository,
-                            document_id,
-                            snapshot.path,
-                            previous_exists=snapshot.existed,
-                            previous_content=snapshot.content,
+                    if self.storage.changed(snapshot):
+                        self.storage.rollback(
+                            snapshot,
+                            project_dir=self.repository.project_dir,
+                            document_id=document_id,
                             error=error,
                         )
                 for original, archived in reversed(
                     stale_publications
                 ):
-                    if not archived.exists():
+                    if not self.storage.exists(archived):
                         continue
-                    original.parent.mkdir(parents=True, exist_ok=True)
-                    archived.replace(original)
+                    self.storage.move(archived, original)
 
             self.repository.enlist_transaction_publication(
                 on_commit=lambda: None,
@@ -160,10 +153,10 @@ class SubtitlePublicationService:
                     self.repository,
                     document_id,
                     output,
+                    self.storage,
                 )
             for original, archived in stale_publications:
-                archived.parent.mkdir(parents=True, exist_ok=True)
-                original.replace(archived)
+                self.storage.move(original, archived)
         return outputs
 
     def commit_document_change(
@@ -179,17 +172,15 @@ class SubtitlePublicationService:
 
         output = self.document_srt_path(document_id, destination)
         with self.repository.transaction():
-            snapshot = _snapshot_output(output)
+            snapshot = self.storage.snapshot(output)
 
             def rollback(error: BaseException) -> None:
-                if not _snapshot_changed(snapshot):
+                if not self.storage.changed(snapshot):
                     return
-                _rollback_document_srt(
-                    self.repository,
-                    document_id,
-                    output,
-                    previous_exists=snapshot.existed,
-                    previous_content=snapshot.content,
+                self.storage.rollback(
+                    snapshot,
+                    project_dir=self.repository.project_dir,
+                    document_id=document_id,
                     error=error,
                 )
 
@@ -204,6 +195,7 @@ class SubtitlePublicationService:
                 self.repository,
                 document_id,
                 output,
+                self.storage,
             )
             if after_write is not None:
                 after_write(output, result)
@@ -226,7 +218,7 @@ class SubtitlePublicationService:
         )
         with self.repository.transaction():
             snapshots = tuple(
-                _snapshot_output(output) for output in outputs
+                self.storage.snapshot(output) for output in outputs
             )
 
             def rollback(error: BaseException) -> None:
@@ -239,13 +231,11 @@ class SubtitlePublicationService:
                         )
                     )
                 ):
-                    if _snapshot_changed(snapshot):
-                        _rollback_document_srt(
-                            self.repository,
-                            current_document_id,
-                            snapshot.path,
-                            previous_exists=snapshot.existed,
-                            previous_content=snapshot.content,
+                    if self.storage.changed(snapshot):
+                        self.storage.rollback(
+                            snapshot,
+                            project_dir=self.repository.project_dir,
+                            document_id=current_document_id,
                             error=error,
                         )
 
@@ -267,45 +257,21 @@ class SubtitlePublicationService:
                     self.repository,
                     item.document.id,
                     output,
+                    self.storage,
                 )
         return result, outputs
-
-
-def _snapshot_output(output: Path) -> _OutputSnapshot:
-    if output.exists():
-        if not output.is_file():
-            raise RuntimeError(f"字幕发布目标不是普通文件：{output}")
-        return _OutputSnapshot(
-            path=output,
-            existed=True,
-            content=output.read_bytes(),
-        )
-    return _OutputSnapshot(path=output, existed=False, content=b"")
-
-
-def _snapshot_changed(snapshot: _OutputSnapshot) -> bool:
-    try:
-        if not snapshot.path.exists():
-            return snapshot.existed
-        if not snapshot.path.is_file():
-            return True
-        return (
-            not snapshot.existed
-            or snapshot.path.read_bytes() != snapshot.content
-        )
-    except OSError:
-        return True
 
 
 def _write_document_srt(
     repository: SubtitlePublicationDocuments,
     document_id: str,
     output: Path,
+    storage: SubtitlePublicationStorage,
 ) -> bool:
     document = repository.subtitles.get_subtitle_document(document_id)
     segments = repository.subtitles.list_subtitle_segments(document.id)
-    project = repository.catalog.get_project()
-    profile = repository.catalog.get_sequence(project.main_sequence_id).profile
+    project = repository.projects.get_project()
+    profile = repository.sequences.get_sequence(project.main_sequence_id).profile
     content = SubtitleFile.dumps_srt(
         [
             SubtitleCue(
@@ -319,61 +285,4 @@ def _write_document_srt(
         fps_denominator=profile.fps_denominator,
     )
     encoded = content.encode("utf-8-sig")
-    destination = require_windows_interop_path(output)
-    if destination.is_file() and destination.read_bytes() == encoded:
-        return False
-    atomic_write_bytes(destination, encoded)
-    return True
-
-
-def _rollback_document_srt(
-    repository: SubtitlePublicationDocuments,
-    document_id: str,
-    output: Path,
-    *,
-    previous_exists: bool,
-    previous_content: bytes,
-    error: BaseException,
-) -> None:
-    archived: Path | None = None
-    if output.exists():
-        archive_root = repository.project_dir / "archive" / "subtitle-publications"
-        archived = content_addressed_child_path(
-            archive_root,
-            f"{document_id}:{new_id()}",
-            namespace="sub-fail",
-            suffix=output.suffix or ".srt",
-        )
-        try:
-            archived.parent.mkdir(parents=True, exist_ok=True)
-            output.replace(archived)
-        except OSError as archive_error:
-            error.add_note(
-                "未能把失败的字幕发布移入归档："
-                f"{archive_error}"
-            )
-            archived = None
-    if previous_exists:
-        try:
-            atomic_write_bytes(output, previous_content)
-        except OSError as restore_error:
-            error.add_note(
-                "字幕数据库已回滚，但旧 SRT 恢复失败："
-                f"{restore_error}"
-            )
-    elif output.exists() and archived is None:
-        fallback = require_windows_interop_path(
-            content_addressed_child_path(
-                output.parent,
-                f"failed-subtitle-publication:{document_id}:{new_id()}",
-                namespace="sub-fail",
-                suffix=output.suffix or ".srt",
-            )
-        )
-        try:
-            output.replace(fallback)
-        except OSError as withdraw_error:
-            error.add_note(
-                "字幕数据库已回滚，但未登记的 SRT 无法撤回："
-                f"{withdraw_error}"
-            )
+    return storage.publish(require_windows_interop_path(output), encoded)

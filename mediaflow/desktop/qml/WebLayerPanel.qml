@@ -9,34 +9,34 @@ Panel {
     objectName: "webLayerPanel"
     Layout.fillWidth: true
     implicitHeight: content.implicitHeight + 22
-    visible: webController.isWebClip
+    visible: mediaflow.webController.isWebClip
     enabled: canEdit
     opacity: canEdit ? 1.0 : 0.72
     readonly property bool canEdit:
-        Boolean(workspaceController.actionCapabilities.canEdit)
+        Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
     property int playheadFrame: 0
     property string snapshotFieldId: ""
     signal seekRequested(int frame)
-    Component.onCompleted: webTimelineController.setActiveFrame(playheadFrame)
-    onPlayheadFrameChanged: webTimelineController.setActiveFrame(playheadFrame)
+    Component.onCompleted: mediaflow.webTimelineController.setActiveFrame(playheadFrame)
+    onPlayheadFrameChanged: mediaflow.webTimelineController.setActiveFrame(playheadFrame)
 
     FileDialog {
         id: snapshotDialog
         title: qsTr("导入本地数据快照")
         nameFilters: [qsTr("数据文件 (*.json *.csv)")]
-        onAccepted: webController.importDataSnapshot(selectedFile, root.snapshotFieldId)
+        onAccepted: mediaflow.webController.importDataSnapshot(selectedFile, root.snapshotFieldId)
     }
     FileDialog {
         id: rebindDialog
         title: qsTr("选择新版网页包")
         nameFilters: [qsTr("Editable media manifest (editable-media.json)")]
-        onAccepted: webDeliveryController.inspectRebind(selectedFile)
+        onAccepted: mediaflow.webDeliveryController.inspectRebind(selectedFile)
     }
     FileDialog {
         id: batchSourceDialog
         title: qsTr("选择批量记录")
         nameFilters: [qsTr("批量数据 (*.json *.csv)")]
-        onAccepted: webDeliveryController.createBatchVariantsFromFile(
+        onAccepted: mediaflow.webDeliveryController.createBatchVariantsFromFile(
             selectedFile, batchBindings.text, batchNameTemplate.text)
     }
     FileDialog {
@@ -49,9 +49,9 @@ Panel {
         defaultSuffix: exportFormat.currentIndex >= 0
             ? exportFormat.model[exportFormat.currentIndex].suffix
             : ""
-        onAccepted: webDeliveryController.exportSelected(
+        onAccepted: mediaflow.webDeliveryController.exportSelected(
             selectedFile, String(exportFormat.currentValue),
-            webTimelineController.timeMsForFrame(root.playheadFrame), exportBackground.text, true)
+            mediaflow.webTimelineController.timeMsForFrame(root.playheadFrame), exportBackground.text, true)
     }
 
     ColumnLayout {
@@ -63,8 +63,8 @@ Panel {
         spacing: 8
 
         Text {
-            text: webController.componentData.name
-                ? qsTr("网页组件 · ") + webController.componentData.name
+            text: mediaflow.webController.componentData.name
+                ? qsTr("网页组件 · ") + mediaflow.webController.componentData.name
                 : qsTr("网页图层")
             color: Theme.text
             font.pixelSize: Theme.fontSizeBodySmall
@@ -85,25 +85,25 @@ Panel {
             Layout.fillWidth: true
             textRole: "name"
             valueRole: "id"
-            model: webController.variantOptions
+            model: mediaflow.webController.variantOptions
             currentIndex: Math.max(0, indexOfValue(
-                webController.activeVariantId))
-            onActivated: webController.selectVariant(String(currentValue || ""))
+                mediaflow.webController.activeVariantId))
+            onActivated: mediaflow.webController.selectVariant(String(currentValue || ""))
         }
 
         RowLayout {
             Layout.fillWidth: true
             AppButton {
                 Layout.fillWidth: true
-                primary: webController.editMode
+                primary: mediaflow.webController.editMode
                 text: qsTr("网页编辑")
-                onClicked: webController.setEditMode(true)
+                onClicked: mediaflow.webController.setEditMode(true)
             }
             AppButton {
                 Layout.fillWidth: true
-                primary: !webController.editMode
+                primary: !mediaflow.webController.editMode
                 text: qsTr("合成预览")
-                onClicked: webController.setEditMode(false)
+                onClicked: mediaflow.webController.setEditMode(false)
             }
         }
 
@@ -112,7 +112,7 @@ Panel {
             Layout.preferredHeight: Math.min(210, Math.max(44, contentHeight))
             clip: true
             spacing: 4
-            model: webController.layersModel
+            model: mediaflow.webController.layersModel
             delegate: Rectangle {
                 required property string layerId
                 required property string name
@@ -124,8 +124,8 @@ Panel {
                 width: ListView.view.width
                 height: 38
                 radius: Theme.radiusSmall
-                color: webController.selectedLayerId === layerId ? Theme.accentSoft : Theme.surfaceRaised
-                border.color: webController.selectedLayerId === layerId ? Theme.accent : Theme.border
+                color: mediaflow.webController.selectedLayerId === layerId ? Theme.accentSoft : Theme.surfaceRaised
+                border.color: mediaflow.webController.selectedLayerId === layerId ? Theme.accent : Theme.border
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: parentId.length > 0 ? 20 : 8
@@ -166,7 +166,7 @@ Panel {
                         flat: false
                         Accessible.name: layerVisible ? qsTr("隐藏图层") : qsTr("显示图层")
                         toolTipText: Accessible.name
-                        onClicked: webController.updateLayer(layerId, {visible: !layerVisible})
+                        onClicked: mediaflow.webController.updateLayer(layerId, {visible: !layerVisible})
                     }
                     AppIconButton {
                         implicitWidth: 30
@@ -176,18 +176,18 @@ Panel {
                         flat: false
                         Accessible.name: allFieldsLocked ? qsTr("解锁图层") : qsTr("锁定图层")
                         toolTipText: Accessible.name
-                        onClicked: webController.setLayerLocked(layerId, !allFieldsLocked)
+                        onClicked: mediaflow.webController.setLayerLocked(layerId, !allFieldsLocked)
                     }
                 }
                 TapHandler {
-                    onTapped: webController.selectLayer(parent.layerId)
+                    onTapped: mediaflow.webController.selectLayer(parent.layerId)
                 }
             }
         }
 
         Text {
             Layout.fillWidth: true
-            visible: webTimelineController.timelineItemsData.length > 0
+            visible: mediaflow.webTimelineController.timelineItemsData.length > 0
             text: qsTr("场景时间线")
             color: Theme.text
             font.pixelSize: Theme.fontSizeCaption
@@ -196,14 +196,14 @@ Panel {
 
         WebTimelineEditor {
             Layout.fillWidth: true
-            visible: webTimelineController.timelineItemsData.length > 0
+            visible: mediaflow.webTimelineController.timelineItemsData.length > 0
             playheadFrame: root.playheadFrame
             onSeekRequested: function(frame) { root.seekRequested(frame); }
         }
 
         Text {
             Layout.fillWidth: true
-            text: webController.selectedLayerId.length > 0
+            text: mediaflow.webController.selectedLayerId.length > 0
                 ? qsTr("图层属性") : qsTr("选择一个图层")
             color: Theme.text
             font.pixelSize: Theme.fontSizeCaption
@@ -211,7 +211,7 @@ Panel {
         }
 
         Repeater {
-            model: webController.selectedLayerDescriptors
+            model: mediaflow.webController.selectedLayerDescriptors
             WebPropertyEditor {
                 required property var modelData
                 descriptor: modelData
@@ -221,7 +221,7 @@ Panel {
 
         Text {
             Layout.fillWidth: true
-            visible: webController.parameterDescriptors.length > 0
+            visible: mediaflow.webController.parameterDescriptors.length > 0
             text: qsTr("动画与效果参数")
             color: Theme.text
             font.pixelSize: Theme.fontSizeCaption
@@ -229,7 +229,7 @@ Panel {
         }
 
         Repeater {
-            model: webController.parameterDescriptors
+            model: mediaflow.webController.parameterDescriptors
             WebPropertyEditor {
                 required property var modelData
                 descriptor: modelData
@@ -239,7 +239,7 @@ Panel {
 
         Text {
             Layout.fillWidth: true
-            visible: webController.themeDescriptors.length > 0
+            visible: mediaflow.webController.themeDescriptors.length > 0
             text: qsTr("品牌主题")
             color: Theme.text
             font.pixelSize: Theme.fontSizeCaption
@@ -247,7 +247,7 @@ Panel {
         }
 
         Repeater {
-            model: webController.themeDescriptors
+            model: mediaflow.webController.themeDescriptors
             WebPropertyEditor {
                 required property var modelData
                 descriptor: modelData
@@ -282,7 +282,7 @@ Panel {
             Layout.fillWidth: true
             text: qsTr("生成批量短序列")
             enabled: batchRecords.text.length > 0 && batchBindings.text.length > 0
-            onClicked: webDeliveryController.createBatchVariants(
+            onClicked: mediaflow.webDeliveryController.createBatchVariants(
                 batchRecords.text, batchBindings.text, batchNameTemplate.text)
         }
         AppButton {
@@ -306,26 +306,26 @@ Panel {
         }
         AppButton {
             Layout.fillWidth: true
-            visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+            visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
             text: qsTr("复制换版检查为 CLI 请求")
-            onClicked: automationController.copyWebRebindPlanRequest()
+            onClicked: mediaflow.automationController.copyWebRebindPlanRequest()
         }
         Text {
             Layout.fillWidth: true
-            visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+            visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
             text: qsTr("新增 %1 · 保留 %2 · 移除 %3 · 冲突 %4")
-                .arg((webDeliveryController.rebindPlan.added_layers || []).length)
-                .arg((webDeliveryController.rebindPlan.retained_layers || []).length)
-                .arg((webDeliveryController.rebindPlan.removed_layers || []).length)
-                .arg((webDeliveryController.rebindPlan.conflicts || []).length)
-            color: (webDeliveryController.rebindPlan.conflicts || []).length > 0
+                .arg((mediaflow.webDeliveryController.rebindPlan.added_layers || []).length)
+                .arg((mediaflow.webDeliveryController.rebindPlan.retained_layers || []).length)
+                .arg((mediaflow.webDeliveryController.rebindPlan.removed_layers || []).length)
+                .arg((mediaflow.webDeliveryController.rebindPlan.conflicts || []).length)
+            color: (mediaflow.webDeliveryController.rebindPlan.conflicts || []).length > 0
                 ? Theme.warning : Theme.textMuted
             font.pixelSize: Theme.fontSizeCaption
             wrapMode: Text.WordWrap
         }
 
         Repeater {
-            model: webDeliveryController.rebindPlan.conflicts || []
+            model: mediaflow.webDeliveryController.rebindPlan.conflicts || []
             ColumnLayout {
                 required property var modelData
                 Layout.fillWidth: true
@@ -341,13 +341,13 @@ Panel {
                     Layout.fillWidth: true
                     model: modelData.allowed_resolutions || []
                     currentIndex: {
-                        const selected = (webDeliveryController.rebindPlan.resolutions || {})[
+                        const selected = (mediaflow.webDeliveryController.rebindPlan.resolutions || {})[
                             String(modelData.path)];
                         return selected ? Math.max(0, model.indexOf(selected)) : -1;
                     }
                     displayText: currentIndex < 0
                         ? qsTr("请选择此项如何处理") : currentText
-                    onActivated: webDeliveryController.setRebindResolution(
+                    onActivated: mediaflow.webDeliveryController.setRebindResolution(
                         String(modelData.path), String(currentValue))
                 }
             }
@@ -355,22 +355,22 @@ Panel {
 
         AppButton {
             Layout.fillWidth: true
-            visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+            visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
             primary: true
             text: qsTr("按已审阅计划重新绑定")
             enabled: Object.keys(
-                webDeliveryController.rebindPlan.resolutions || {}).length
-                === (webDeliveryController.rebindPlan.conflicts || []).length
-            onClicked: webDeliveryController.commitRebind()
+                mediaflow.webDeliveryController.rebindPlan.resolutions || {}).length
+                === (mediaflow.webDeliveryController.rebindPlan.conflicts || []).length
+            onClicked: mediaflow.webDeliveryController.commitRebind()
         }
         AppButton {
             Layout.fillWidth: true
-            visible: String(webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+            visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
             text: qsTr("复制换版提交为 CLI 请求")
             enabled: Object.keys(
-                webDeliveryController.rebindPlan.resolutions || {}).length
-                === (webDeliveryController.rebindPlan.conflicts || []).length
-            onClicked: automationController.copyWebRebindCommitRequest()
+                mediaflow.webDeliveryController.rebindPlan.resolutions || {}).length
+                === (mediaflow.webDeliveryController.rebindPlan.conflicts || []).length
+            onClicked: mediaflow.automationController.copyWebRebindCommitRequest()
         }
 
         Text {
@@ -387,7 +387,7 @@ Panel {
                 Layout.fillWidth: true
                 textRole: "label"
                 valueRole: "value"
-                model: webDeliveryController.exportFormatOptions
+                model: mediaflow.webDeliveryController.exportFormatOptions
             }
             AppTextField {
                 id: exportBackground
@@ -404,14 +404,14 @@ Panel {
 
         Text {
             Layout.fillWidth: true
-            visible: webController.dataDescriptors.length > 0
+            visible: mediaflow.webController.dataDescriptors.length > 0
             text: qsTr("数据与图表")
             color: Theme.text
             font.pixelSize: Theme.fontSizeCaption
             font.weight: Font.DemiBold
         }
         Repeater {
-            model: webController.dataDescriptors
+            model: mediaflow.webController.dataDescriptors
             ColumnLayout {
                 required property var modelData
                 Layout.fillWidth: true

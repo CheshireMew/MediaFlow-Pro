@@ -34,7 +34,7 @@ from mediaflow.domain.timeline import Clip, Track
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.service.client import shutdown_sync_service
-from scripts.run_artifacts import verification_run
+from scripts.run_artifacts import verification_run, verification_workspace_root
 
 CLIP_COUNT = 500
 SUBTITLE_COUNT = 5_000
@@ -76,8 +76,8 @@ def create_fixture(root: Path) -> Path:
     if generated.returncode != 0:
         raise RuntimeError(generated.stderr.decode(errors="replace"))
     with ProjectRepository.create(project_dir, "Large Project") as repository:
-        asset = repository.catalog.import_external_asset(source, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": MediaMetadata(
@@ -91,7 +91,7 @@ def create_fixture(root: Path) -> Path:
                 }
             )
         )
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         state = repository.timeline.load_timeline(project.main_sequence_id)
         video_track = Track(
             sequence_id=project.main_sequence_id,
@@ -144,13 +144,16 @@ def create_fixture(root: Path) -> Path:
 
 
 def _performance_passed(report: dict[str, object]) -> bool:
-    return all(
-        report[key] is True
-        for key in ("open_passed", "visible_passed", "edit_passed")
-    )
+    return all(report[key] is True for key in ("open_passed", "visible_passed", "edit_passed"))
 
 
-def verify(root: Path, *, enforce_limits: bool = True) -> dict:
+def verify(
+    root: Path,
+    *,
+    evidence_root: Path | None = None,
+    enforce_limits: bool = True,
+) -> dict:
+    evidence = evidence_root or root
     os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(root / "editor-service")
     project_dir = create_fixture(root)
     configure_application_identity()
@@ -159,28 +162,25 @@ def verify(root: Path, *, enforce_limits: bool = True) -> dict:
     engine, controllers = create_engine(app)
     try:
         started = time.perf_counter()
-        controllers.workspace.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
+        controllers.workspace_project.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
         open_seconds = time.perf_counter() - started
         for _ in range(12):
             QCoreApplication.processEvents()
         visible_seconds = time.perf_counter() - started
         if not controllers.workspace.hasProject:
             raise RuntimeError("The large project did not open")
-        if controllers.timeline.clipsModel.rowCount() != CLIP_COUNT:
+        if controllers.timeline_view.clipsModel.rowCount() != CLIP_COUNT:
             raise RuntimeError(
-                f"Only {controllers.timeline.clipsModel.rowCount()} clips reached the QML model"
+                f"Only {controllers.timeline_view.clipsModel.rowCount()} clips reached the QML model"
             )
-        if (
-            controllers.subtitles.subtitleTextAtFrame(SUBTITLE_COUNT - 1)
-            != f"字幕 {SUBTITLE_COUNT}"
-        ):
+        if controllers.subtitle_view.subtitleTextAtFrame(SUBTITLE_COUNT - 1) != f"字幕 {SUBTITLE_COUNT}":
             raise RuntimeError("The final subtitle did not reach the preview consumer")
 
-        last_clip_id = controllers.timeline.clipsModel.get(CLIP_COUNT - 1)["clipId"]
+        last_clip_id = controllers.timeline_view.clipsModel.get(CLIP_COUNT - 1)["clipId"]
         started = time.perf_counter()
-        controllers.timeline.moveClip(last_clip_id, SUBTITLE_COUNT, "")
+        controllers.timeline_clips.moveClip(last_clip_id, SUBTITLE_COUNT, "")
         edit_seconds = time.perf_counter() - started
-        projected = controllers.timeline.clipsModel.get(CLIP_COUNT - 1)
+        projected = controllers.timeline_view.clipsModel.get(CLIP_COUNT - 1)
         if projected["startFrame"] != SUBTITLE_COUNT:
             raise RuntimeError("The measured edit did not reach the QML model")
         sequence_id = controllers.workspace.activeSequenceId
@@ -188,28 +188,17 @@ def verify(root: Path, *, enforce_limits: bool = True) -> dict:
             project_dir,
             writable=False,
         ) as persisted_repository:
-            persisted_state = persisted_repository.timeline.load_timeline(
-                sequence_id
-            )
+            persisted_state = persisted_repository.timeline.load_timeline(sequence_id)
         persisted_clip = next(
-            (
-                clip
-                for clip in persisted_state.clips
-                if clip.id == last_clip_id
-            ),
+            (clip for clip in persisted_state.clips if clip.id == last_clip_id),
             None,
         )
-        if (
-            persisted_clip is None
-            or persisted_clip.timeline_start != SUBTITLE_COUNT
-        ):
-            raise RuntimeError(
-                "The measured edit reached the model but not persistent storage"
-            )
+        if persisted_clip is None or persisted_clip.timeline_start != SUBTITLE_COUNT:
+            raise RuntimeError("The measured edit reached the model but not persistent storage")
 
         window = engine.rootObjects()[0]
         quick_window = wrapInstance(getCppPointer(window)[0], QQuickWindow)
-        screenshot = root / "large-project.png"
+        screenshot = evidence / "large-project.png"
         if not quick_window.grabWindow().save(str(screenshot)):
             raise RuntimeError("The large-project workspace did not render")
         report = {
@@ -228,7 +217,7 @@ def verify(root: Path, *, enforce_limits: bool = True) -> dict:
             "screenshot": str(screenshot),
             "project": str(project_dir),
         }
-        report_path = root / "performance-report.json"
+        report_path = evidence / "performance-report.json"
         atomic_write_text(report_path, json.dumps(report, ensure_ascii=False, indent=2))
         if enforce_limits and not _performance_passed(report):
             raise RuntimeError(json.dumps(report, ensure_ascii=False, indent=2))
@@ -255,7 +244,11 @@ def main(argv: list[str] | None = None) -> None:
         for attempt_number in range(1, MAX_PERFORMANCE_ATTEMPTS + 1):
             attempt_root = run_dir / f"attempt-{attempt_number}"
             attempt_root.mkdir()
-            report = verify(attempt_root, enforce_limits=False)
+            report = verify(
+                verification_workspace_root(attempt_root),
+                evidence_root=attempt_root,
+                enforce_limits=False,
+            )
             attempts.append(report)
             if _performance_passed(report):
                 summary = {

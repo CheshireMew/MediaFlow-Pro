@@ -49,7 +49,7 @@ def test_diagnostics_bundle_is_a_persistent_task_with_consistent_project_evidenc
     tasks.register(TaskKind.DIAGNOSTICS, handler.handle)
     output = tmp_path / "diagnostics.zip"
     try:
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         receipt = tasks.start(
             project_id=project.id,
             sequence_id=project.main_sequence_id,

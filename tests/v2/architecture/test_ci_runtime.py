@@ -470,4 +470,4 @@ def test_qt_preparation_publishes_only_a_complete_checksum_verified_sdk(
         for relative in prepare_ci_qt.REQUIRED_QT_FILES
     )
     assert (installed / "lib" / "libicui18n.so.73").is_file()
-    assert not list(qt_root.glob("install-*"))
+    assert not list(qt_root.glob("i-*"))

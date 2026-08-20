@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+# Archived after the QML subtitle surface was split into focused controllers.
+
 from bisect import bisect_right
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 
+from mediaflow.desktop.editor_planning import current_transcription_plan
 from mediaflow.desktop.presentation_catalogs import (
     translation_language_options,
     translation_mode_options,
 )
-from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.enums import (
     TrackKind,
 )
-from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.subtitles import SubtitleSegment
 from mediaflow.domain.task_commands import (
@@ -55,19 +56,19 @@ class SubtitleController(ControllerFacet):
 
     @Property(str, notify=selectionChanged)
     def selectedDocumentId(self) -> str:
-        return self._session.selection.document_id
+        return self._session.state.selection.document_id
 
     @Property(str, notify=selectionChanged)
     def selectedSubtitleSegmentId(self) -> str:
         return (
-            self._session.selection.subtitle_segment_ids[-1]
-            if self._session.selection.subtitle_segment_ids
+            self._session.state.selection.subtitle_segment_ids[-1]
+            if self._session.state.selection.subtitle_segment_ids
             else ""
         )
 
     @Property("QVariantList", notify=selectionChanged)
     def selectedSubtitleSegmentIds(self) -> list[str]:
-        return list(self._session.selection.subtitle_segment_ids)
+        return list(self._session.state.selection.subtitle_segment_ids)
 
     @Property("QVariantMap", notify=selectionChanged)
     def selectedSubtitleSegmentData(self) -> dict:
@@ -76,27 +77,27 @@ class SubtitleController(ControllerFacet):
 
     @Property(str, notify=selectionChanged)
     def selectedSubtitlePlacementId(self) -> str:
-        return self._session.selection.subtitle_placement_id
+        return self._session.state.selection.subtitle_placement_id
 
     @Property("QVariantMap", notify=selectionChanged)
     def selectedSubtitlePlacementData(self) -> dict:
         row = self._session.models.subtitle_placements.findRow(
-            "placementId", self._session.selection.subtitle_placement_id
+            "placementId", self._session.state.selection.subtitle_placement_id
         )
         return self._session.models.subtitle_placements.get(row)
 
     @Slot(str)
     def selectSubtitleDocument(self, document_id: str) -> None:
-        self._session.selection.document_id = document_id
-        self._session.selection.subtitle_segment_ids = []
+        self._session.state.selection.document_id = document_id
+        self._session.state.selection.subtitle_segment_ids = []
         self._session.projectors.subtitles.refresh_segments()
         self._session.events.selectionChanged.emit()
 
     @Slot(str)
     @Slot(str, bool)
     def selectSubtitleSegment(self, segment_id: str, toggle: bool = False) -> None:
-        self._session.selection.subtitle_segment_ids = self._session._updated_selection(
-            self._session.selection.subtitle_segment_ids,
+        self._session.state.selection.subtitle_segment_ids = self._session._updated_selection(
+            self._session.state.selection.subtitle_segment_ids,
             segment_id,
             toggle=toggle,
         )
@@ -104,7 +105,7 @@ class SubtitleController(ControllerFacet):
 
     @Slot(str, result=bool)
     def isSubtitleSegmentSelected(self, segment_id: str) -> bool:
-        return segment_id in self._session.selection.subtitle_segment_ids
+        return segment_id in self._session.state.selection.subtitle_segment_ids
 
     @Slot(str)
     def selectSubtitlePlacement(self, placement_id: str) -> None:
@@ -118,21 +119,21 @@ class SubtitleController(ControllerFacet):
             row = self._session.models.subtitle_placements.get(index)
             if int(row.get("startFrame", 0)) <= frame < int(row.get("endFrame", 0)):
                 active = row
-                if row.get("placementId") == self._session.selection.subtitle_placement_id:
+                if row.get("placementId") == self._session.state.selection.subtitle_placement_id:
                     break
         if active is None:
-            if self._session.selection.subtitle_placement_id:
-                self._session.selection.subtitle_placement_id = ""
-                self._session.selection.subtitle_segment_ids = []
+            if self._session.state.selection.subtitle_placement_id:
+                self._session.state.selection.subtitle_placement_id = ""
+                self._session.state.selection.subtitle_segment_ids = []
                 self._session.events.selectionChanged.emit()
             return
-        if active.get("placementId") != self._session.selection.subtitle_placement_id:
+        if active.get("placementId") != self._session.state.selection.subtitle_placement_id:
             self._select_subtitle_placement_context(str(active["placementId"]))
 
     @Slot(str)
     @report_ui_errors
     def previewSubtitlePlacement(self, placement_id: str) -> None:
-        placement = self._session.binding.current.get_subtitle_placement(placement_id)
+        placement = self._session.state.binding.current.get_subtitle_placement(placement_id)
         self._select_subtitle_placement_context(placement_id)
         self._session.events.previewRangeRequested.emit(placement.start_frame, placement.end_frame)
 
@@ -147,8 +148,8 @@ class SubtitleController(ControllerFacet):
         self.selectSubtitleSegment(segment_id)
         segment = next(
             item
-            for item in self._session.binding.current.list_subtitle_segments(
-                self._session.selection.document_id
+            for item in self._session.state.binding.current.list_subtitle_segments(
+                self._session.state.selection.document_id
             )
             if item.id == segment_id
         )
@@ -168,8 +169,8 @@ class SubtitleController(ControllerFacet):
         return self._main_frame_in_active_clock(fallback_frame)
 
     def _main_frame_in_active_clock(self, frame: int) -> int:
-        current = self._session.binding.current
-        active_sequence_id = self._session.binding.active_sequence_id
+        current = self._session.state.binding.current
+        active_sequence_id = self._session.state.binding.active_sequence_id
         if current is None or not active_sequence_id:
             return max(0, int(frame))
         project = current.get_project()
@@ -187,14 +188,14 @@ class SubtitleController(ControllerFacet):
     @Property(bool, notify=historyChanged)
     def canTranscribeCurrentSequence(self) -> bool:
         try:
-            return self._current_transcription_plan().region_count > 0
+            return current_transcription_plan(self._session).region_count > 0
         except (RuntimeError, ValueError):
             return False
 
     @Property("QVariantMap", notify=historyChanged)
     def transcriptionPlanSummary(self) -> dict:
         try:
-            plan = self._current_transcription_plan()
+            plan = current_transcription_plan(self._session)
         except (RuntimeError, ValueError) as error:
             return {"available": False, "error": str(error)}
         return {
@@ -214,17 +215,17 @@ class SubtitleController(ControllerFacet):
 
     @Slot(str, result="QVariantMap")
     def sequenceTranscriptionSummary(self, sequence_id: str) -> dict:
-        if not sequence_id or not self._session.binding.current:
+        if not sequence_id or not self._session.state.binding.current:
             return {}
         documents = [
             item
-            for item in self._session.binding.current.list_subtitle_documents(sequence_id=sequence_id)
+            for item in self._session.state.binding.current.list_subtitle_documents(sequence_id=sequence_id)
             if item.is_source and item.source_document_id is None and item.purpose == "sequence_transcript"
         ]
         if not documents:
             return {}
         document = documents[-1]
-        segment_count, start_frame, end_frame = self._session.binding.current.subtitle_segment_summary(
+        segment_count, start_frame, end_frame = self._session.state.binding.current.subtitle_segment_summary(
             document.id
         )
         return {
@@ -246,7 +247,7 @@ class SubtitleController(ControllerFacet):
         snap_enabled: bool,
     ) -> None:
         self._session._require_writable()
-        placement = self._session.binding.current.get_subtitle_placement(placement_id)
+        placement = self._session.state.binding.current.get_subtitle_placement(placement_id)
         self._require_unlocked_subtitle_track(placement.track_id)
         duration = placement.end_frame - placement.start_frame
         next_start = max(0, int(start_frame))
@@ -265,7 +266,7 @@ class SubtitleController(ControllerFacet):
             ]
             if adjustments:
                 next_start = max(0, next_start + min(adjustments, key=lambda value: abs(value)))
-        self._session.binding.current.update_subtitle_placement_range(
+        self._session.state.binding.current.update_subtitle_placement_range(
             placement_id,
             start_frame=next_start,
             end_frame=next_start + duration,
@@ -284,7 +285,7 @@ class SubtitleController(ControllerFacet):
         snap_enabled: bool,
     ) -> None:
         self._session._require_writable()
-        placement = self._session.binding.current.get_subtitle_placement(placement_id)
+        placement = self._session.state.binding.current.get_subtitle_placement(placement_id)
         self._require_unlocked_subtitle_track(placement.track_id)
         next_start = max(0, int(start_frame))
         next_end = max(next_start + 1, int(end_frame))
@@ -296,12 +297,12 @@ class SubtitleController(ControllerFacet):
             )
             tolerance = self._session._snap_tolerance_frames(pixels_per_frame)
             if next_start != placement.start_frame:
-                next_start = self._session.binding.timeline.snap_frame(next_start, targets, tolerance)
+                next_start = self._session.state.binding.timeline.snap_frame(next_start, targets, tolerance)
                 next_start = max(0, min(next_start, next_end - 1))
             if next_end != placement.end_frame:
-                next_end = self._session.binding.timeline.snap_frame(next_end, targets, tolerance)
+                next_end = self._session.state.binding.timeline.snap_frame(next_end, targets, tolerance)
                 next_end = max(next_start + 1, next_end)
-        self._session.binding.current.update_subtitle_placement_range(
+        self._session.state.binding.current.update_subtitle_placement_range(
             placement_id,
             start_frame=next_start,
             end_frame=next_end,
@@ -312,9 +313,9 @@ class SubtitleController(ControllerFacet):
     @report_ui_errors
     def resetSubtitlePlacementTiming(self, placement_id: str) -> None:
         self._session._require_writable()
-        placement = self._session.binding.current.get_subtitle_placement(placement_id)
+        placement = self._session.state.binding.current.get_subtitle_placement(placement_id)
         self._require_unlocked_subtitle_track(placement.track_id)
-        self._session.binding.current.reset_subtitle_placement_range(placement_id)
+        self._session.state.binding.current.reset_subtitle_placement_range(placement_id)
         self._finish_subtitle_placement_edit(placement_id, "已恢复字幕文档时间")
 
     @Slot(str, str, str, int)
@@ -329,7 +330,7 @@ class SubtitleController(ControllerFacet):
         self._session._require_writable()
         selected_asr = AsrSettings.model_validate(
             {
-                **self._session.service_settings.asr.model_dump(mode="python"),
+                **self._session.state.service_settings.asr.model_dump(mode="python"),
                 "model": model.strip(),
                 "device": device,
                 "language": language.strip() or "auto",
@@ -338,10 +339,10 @@ class SubtitleController(ControllerFacet):
         )
         if not selected_asr.model:
             raise ValueError("请选择转录模型")
-        candidate = self._session.service_settings.model_copy(deep=True)
+        candidate = self._session.state.service_settings.model_copy(deep=True)
         candidate.asr = selected_asr.model_copy(deep=True)
         self._session.settings_persistence.commit(candidate, "转录设置已更新")
-        plan = self._current_transcription_plan(selected_asr)
+        plan = current_transcription_plan(self._session, selected_asr)
         if plan.region_count <= 0:
             raise ValueError("请指定主要对白轨，并确认当前范围内有对白素材")
         self._session.tasks.start(
@@ -350,41 +351,13 @@ class SubtitleController(ControllerFacet):
             sequence_id=plan.sequence_id,
         )
 
-    def _current_transcription_plan(
-        self,
-        asr: AsrSettings | None = None,
-    ) -> TranscriptionPlan:
-        if (
-            not self._session.binding.current
-            or not self._session.binding.timeline
-            or not self._session.binding.active_sequence_id
-        ):
-            raise RuntimeError("当前没有可转录的时间轴")
-        state = self._session.binding.timeline.state
-        duration = state.duration_frames
-        if duration <= 0:
-            raise ValueError("当前时间轴还没有可转录的素材")
-        bounds = state.sequence.in_out
-        start_frame = min(duration, bounds.in_frame) if bounds else 0
-        end_frame = min(duration, bounds.out_frame) if bounds else duration
-        project = self._session.binding.current.get_project()
-        project_profile = self._session.binding.current.get_sequence(project.main_sequence_id).profile
-        return build_dialogue_transcription_plan(
-            state,
-            {asset.id: asset for asset in self._session.binding.current.list_assets()},
-            asr or self._session.service_settings.asr,
-            project_profile=project_profile,
-            start_frame=start_frame,
-            end_frame=end_frame,
-        )
-
     @Slot(str, str, str)
     @report_ui_errors
     def translateDocument(self, document_id: str, target_language: str, mode: str) -> None:
         self._session._require_writable()
         if not document_id:
             raise ValueError("请先选择源字幕文档")
-        language = target_language.strip() or self._session.service_settings.translation.target_language
+        language = target_language.strip() or self._session.state.service_settings.translation.target_language
         if mode not in {"standard", "intelligent", "proofread"}:
             raise ValueError("请选择有效的翻译模式")
         self._session.tasks.start(
@@ -400,14 +373,14 @@ class SubtitleController(ControllerFacet):
     def translateSelectedSubtitleSegments(self) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        if not self._session.selection.subtitle_segment_ids:
+        if not self._session.state.selection.subtitle_segment_ids:
             raise ValueError("请先选择要翻译的字幕段")
-        mode = self._session.service_settings.translation.mode
-        language = self._session.service_settings.translation.target_language
+        mode = self._session.state.service_settings.translation.mode
+        language = self._session.state.service_settings.translation.target_language
         self._session.tasks.start(
             TranslateSegmentsCommand(
-                document_id=self._session.selection.document_id,
-                segment_ids=list(self._session.selection.subtitle_segment_ids),
+                document_id=self._session.state.selection.document_id,
+                segment_ids=list(self._session.state.selection.subtitle_segment_ids),
                 target_language=language or "und",
                 mode=mode,
             ),
@@ -440,21 +413,23 @@ class SubtitleController(ControllerFacet):
 
     @Slot(str, str, result="QVariantMap")
     def translationComparison(self, document_id: str, target_language: str) -> dict:
-        if not document_id or not self._session.binding.current:
+        if not document_id or not self._session.state.binding.current:
             return {}
-        selected = self._session.binding.current.get_subtitle_document(document_id)
-        documents = self._session.binding.current.list_subtitle_documents()
+        selected = self._session.state.binding.current.get_subtitle_document(document_id)
+        documents = self._session.state.binding.current.list_subtitle_documents()
         if selected.source_document_id:
-            source = self._session.binding.current.get_subtitle_document(selected.source_document_id)
+            source = self._session.state.binding.current.get_subtitle_document(selected.source_document_id)
             target = selected
         else:
             source = selected
             candidates = [item for item in documents if item.source_document_id == source.id]
             preferred = [item for item in candidates if item.language == target_language]
             target = (preferred or candidates)[-1] if (preferred or candidates) else None
-        source_segments = self._session.binding.current.list_subtitle_segments(source.id)
+        source_segments = self._session.state.binding.current.list_subtitle_segments(source.id)
         target_segments = (
-            self._session.binding.current.list_subtitle_segments(target.id) if target is not None else []
+            self._session.state.binding.current.list_subtitle_segments(target.id)
+            if target is not None
+            else []
         )
         rows: list[dict] = []
         matched_source_ids: set[str] = set()
@@ -497,7 +472,7 @@ class SubtitleController(ControllerFacet):
         source_text = "\n".join(segment.text for segment in source_segments).casefold()
         glossary_hits = sum(
             1
-            for term in self._session.service_settings.translation.glossary_terms
+            for term in self._session.state.service_settings.translation.glossary_terms
             if term.source.casefold() in source_text
         )
         return {
@@ -520,10 +495,10 @@ class SubtitleController(ControllerFacet):
         self._session._require_writable()
         segment = next(
             item
-            for item in self._session.binding.current.list_subtitle_segments(target_document_id)
+            for item in self._session.state.binding.current.list_subtitle_segments(target_document_id)
             if item.id == target_segment_id
         )
-        self._session.binding.current.update_subtitle_segment(
+        self._session.state.binding.current.update_subtitle_segment(
             target_document_id,
             target_segment_id,
             start_frame=segment.start_frame,
@@ -545,26 +520,30 @@ class SubtitleController(ControllerFacet):
         subtitle_track = next(
             (
                 track
-                for track in self._session.binding.timeline.state.tracks
+                for track in self._session.state.binding.timeline.state.tracks
                 if track.kind == TrackKind.SUBTITLE and not track.locked
             ),
             None,
         )
         if subtitle_track is None:
-            subtitle_track = self._session.binding.timeline.add_track(TrackKind.SUBTITLE)
-        document = self._session.binding.current.get_subtitle_document(document_id)
+            subtitle_track = self._session.state.binding.timeline.add_track(TrackKind.SUBTITLE)
+        document = self._session.state.binding.current.get_subtitle_document(document_id)
         media_asset_id = document.media_asset_id or document.asset_id
         matching_clips = [
-            clip for clip in self._session.binding.timeline.state.clips if clip.asset_id == media_asset_id
+            clip
+            for clip in self._session.state.binding.timeline.state.clips
+            if clip.asset_id == media_asset_id
         ]
         if matching_clips:
-            placements = self._session.binding.current.place_subtitle_document(
+            placements = self._session.state.binding.current.place_subtitle_document(
                 document_id,
                 subtitle_track.id,
                 follow_clips=True,
             )
         else:
-            placements = self._session.binding.current.place_subtitle_document(document_id, subtitle_track.id)
+            placements = self._session.state.binding.current.place_subtitle_document(
+                document_id, subtitle_track.id
+            )
         self._session.projectors.timeline.refresh_timeline()
         self._session.projectors.timeline.refresh_preview_subtitles()
         self._session.events.projectStateChanged.emit()
@@ -580,11 +559,11 @@ class SubtitleController(ControllerFacet):
     ) -> None:
         self._session._require_writable()
         if apply_to_document:
-            self._session.binding.current.apply_subtitle_placement_to_document(placement_id, text)
+            self._session.state.binding.current.apply_subtitle_placement_to_document(placement_id, text)
             self._session.projectors.subtitles.refresh_documents()
             self._session._set_status("修改已应用到字幕文档")
         else:
-            self._session.binding.current.update_subtitle_placement_text(placement_id, text)
+            self._session.state.binding.current.update_subtitle_placement_text(placement_id, text)
             self._session._set_status("已保存序列字幕覆盖")
         self._session.projectors.timeline.refresh_preview_subtitles()
         self._session.events.selectionChanged.emit()
@@ -601,8 +580,8 @@ class SubtitleController(ControllerFacet):
     ) -> bool:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        segment = self._session.binding.current.update_subtitle_segment(
-            self._session.selection.document_id,
+        segment = self._session.state.binding.current.update_subtitle_segment(
+            self._session.state.selection.document_id,
             segment_id,
             start_frame=start_frame,
             end_frame=end_frame,
@@ -616,17 +595,19 @@ class SubtitleController(ControllerFacet):
     def addSubtitleSegment(self) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        segments = self._session.binding.current.list_subtitle_segments(self._session.selection.document_id)
+        segments = self._session.state.binding.current.list_subtitle_segments(
+            self._session.state.selection.document_id
+        )
         selected = next(
             (item for item in segments if item.id == self.selectedSubtitleSegmentId),
             None,
         )
         start_frame = selected.end_frame if selected else (segments[-1].end_frame if segments else 0)
-        profile = self._session.binding.current.get_sequence(
-            self._session.binding.current.get_project().main_sequence_id
+        profile = self._session.state.binding.current.get_sequence(
+            self._session.state.binding.current.get_project().main_sequence_id
         ).profile
-        segment = self._session.binding.current.add_subtitle_segment(
-            self._session.selection.document_id,
+        segment = self._session.state.binding.current.add_subtitle_segment(
+            self._session.state.selection.document_id,
             start_frame=start_frame,
             end_frame=start_frame + max(1, round(profile.fps * 2)),
             text="新字幕",
@@ -638,9 +619,9 @@ class SubtitleController(ControllerFacet):
     def deleteSelectedSubtitleSegments(self) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        count = self._session.binding.current.delete_subtitle_segments(
-            self._session.selection.document_id,
-            self._session.selection.subtitle_segment_ids,
+        count = self._session.state.binding.current.delete_subtitle_segments(
+            self._session.state.selection.document_id,
+            self._session.state.selection.subtitle_segment_ids,
         )
         self._session._finish_subtitle_edit([], "已删除 %1 条字幕", count)
 
@@ -649,9 +630,9 @@ class SubtitleController(ControllerFacet):
     def mergeSelectedSubtitleSegments(self) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        merged = self._session.binding.current.merge_subtitle_segments(
-            self._session.selection.document_id,
-            self._session.selection.subtitle_segment_ids,
+        merged = self._session.state.binding.current.merge_subtitle_segments(
+            self._session.state.selection.document_id,
+            self._session.state.selection.subtitle_segment_ids,
         )
         self._session._finish_subtitle_edit([merged.id], "字幕已合并")
 
@@ -660,8 +641,8 @@ class SubtitleController(ControllerFacet):
     def splitSubtitleSegment(self, segment_id: str, split_frame: int) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        first, second = self._session.binding.current.split_subtitle_segment(
-            self._session.selection.document_id,
+        first, second = self._session.state.binding.current.split_subtitle_segment(
+            self._session.state.selection.document_id,
             segment_id,
             split_frame=None if split_frame < 0 else split_frame,
         )
@@ -672,8 +653,8 @@ class SubtitleController(ControllerFacet):
     def smartSplitSubtitleDocument(self, text_limit: int) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        count = self._session.binding.current.smart_split_subtitle_document(
-            self._session.selection.document_id,
+        count = self._session.state.binding.current.smart_split_subtitle_document(
+            self._session.state.selection.document_id,
             text_limit=text_limit,
         )
         self._session._finish_subtitle_edit([], "智能拆分完成，共拆分 %1 条", count)
@@ -683,21 +664,23 @@ class SubtitleController(ControllerFacet):
     def fixSubtitleOverlaps(self) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        count = self._session.binding.current.fix_subtitle_overlaps(self._session.selection.document_id)
+        count = self._session.state.binding.current.fix_subtitle_overlaps(
+            self._session.state.selection.document_id
+        )
         self._session._finish_subtitle_edit([], "已修复 %1 条重叠字幕", count)
 
     @Slot()
     @report_ui_errors
     def copySelectedSubtitleSegments(self) -> None:
         self._session._require_subtitle_document()
-        text = self._session.binding.current.selected_subtitle_segments_srt(
-            self._session.selection.document_id,
-            self._session.selection.subtitle_segment_ids,
+        text = self._session.state.binding.current.selected_subtitle_segments_srt(
+            self._session.state.selection.document_id,
+            self._session.state.selection.subtitle_segment_ids,
         )
         QGuiApplication.clipboard().setText(text)
         self._session._set_status(
             "已复制 %1 条字幕",
-            len(self._session.selection.subtitle_segment_ids),
+            len(self._session.state.selection.subtitle_segment_ids),
         )
 
     @Slot()
@@ -705,13 +688,13 @@ class SubtitleController(ControllerFacet):
     def pasteReplaceSelectedSubtitleSegments(self) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        count = self._session.binding.current.replace_selected_subtitle_texts(
-            self._session.selection.document_id,
-            self._session.selection.subtitle_segment_ids,
+        count = self._session.state.binding.current.replace_selected_subtitle_texts(
+            self._session.state.selection.document_id,
+            self._session.state.selection.subtitle_segment_ids,
             QGuiApplication.clipboard().text(),
         )
         self._session._finish_subtitle_edit(
-            list(self._session.selection.subtitle_segment_ids),
+            list(self._session.state.selection.subtitle_segment_ids),
             "已替换 %1 条字幕",
             count,
         )
@@ -720,7 +703,9 @@ class SubtitleController(ControllerFacet):
     @report_ui_errors
     def openSubtitleFolder(self) -> None:
         self._session._require_subtitle_document()
-        output = self._session.binding.current.write_subtitle_srt(self._session.selection.document_id)
+        output = self._session.state.binding.current.write_subtitle_srt(
+            self._session.state.selection.document_id
+        )
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(output.parent))):
             raise RuntimeError("无法打开字幕所在文件夹")
 
@@ -729,8 +714,8 @@ class SubtitleController(ControllerFacet):
     def replaceSubtitleText(self, search: str, replacement: str, match_case: bool) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        count = self._session.binding.current.replace_all_subtitle_text(
-            self._session.selection.document_id,
+        count = self._session.state.binding.current.replace_all_subtitle_text(
+            self._session.state.selection.document_id,
             search,
             replacement,
             match_case=match_case,
@@ -750,8 +735,8 @@ class SubtitleController(ControllerFacet):
     ) -> None:
         self._session._require_writable()
         self._session._require_subtitle_document()
-        updated = self._session.binding.current.replace_subtitle_match(
-            self._session.selection.document_id,
+        updated = self._session.state.binding.current.replace_subtitle_match(
+            self._session.state.selection.document_id,
             segment_id,
             start,
             end,
@@ -765,8 +750,8 @@ class SubtitleController(ControllerFacet):
     def findSubtitleMatches(self, search: str, match_case: bool) -> list[dict]:
         try:
             self._session._require_subtitle_document()
-            return self._session.binding.current.find_subtitle_matches(
-                self._session.selection.document_id,
+            return self._session.state.binding.current.find_subtitle_matches(
+                self._session.state.selection.document_id,
                 search,
                 match_case=match_case,
             )
@@ -782,25 +767,26 @@ class SubtitleController(ControllerFacet):
         destination = self._session._local_path(path_url)
         if destination.suffix.lower() != ".srt":
             destination = destination.with_suffix(".srt")
-        output = self._session.binding.current.write_subtitle_srt(document_id, destination)
+        output = self._session.state.binding.current.write_subtitle_srt(document_id, destination)
         self._session._set_status("字幕已导出到 %1", output)
 
     @Slot(int, result=str)
     def subtitleTextAtFrame(self, frame: int) -> str:
-        if not self._session.presentation.preview_subtitles:
+        if not self._session.state.presentation.preview_subtitles:
             return ""
         index = (
-            bisect_right(self._session.presentation.preview_subtitles, frame, key=lambda item: item[0]) - 1
+            bisect_right(self._session.state.presentation.preview_subtitles, frame, key=lambda item: item[0])
+            - 1
         )
         if index >= 0:
-            start, end, text = self._session.presentation.preview_subtitles[index]
+            start, end, text = self._session.state.presentation.preview_subtitles[index]
             if start <= frame < end:
                 return text
         return ""
 
     @Slot(str, int, result=str)
     def subtitleTextForTrackAtFrame(self, track_id: str, frame: int) -> str:
-        subtitles = self._session.presentation.preview_subtitles_by_track.get(track_id, [])
+        subtitles = self._session.state.presentation.preview_subtitles_by_track.get(track_id, [])
         if not subtitles:
             return ""
         index = bisect_right(subtitles, frame, key=lambda item: item[0]) - 1
@@ -817,17 +803,17 @@ class SubtitleController(ControllerFacet):
             return
         document_id = str(row.get("documentId") or "")
         segment_id = str(row.get("segmentId") or "")
-        document_changed = document_id and document_id != self._session.selection.document_id
-        self._session.selection.subtitle_placement_id = placement_id
+        document_changed = document_id and document_id != self._session.state.selection.document_id
+        self._session.state.selection.subtitle_placement_id = placement_id
         if document_changed:
-            self._session.selection.document_id = document_id
+            self._session.state.selection.document_id = document_id
             self._session.projectors.subtitles.refresh_segments()
-        self._session.selection.subtitle_segment_ids = [segment_id] if segment_id else []
+        self._session.state.selection.subtitle_segment_ids = [segment_id] if segment_id else []
         self._session.events.selectionChanged.emit()
 
     def _require_unlocked_subtitle_track(self, track_id: str) -> None:
         track = next(
-            (item for item in self._session.binding.timeline.state.tracks if item.id == track_id), None
+            (item for item in self._session.state.binding.timeline.state.tracks if item.id == track_id), None
         )
         if track is None:
             raise KeyError(track_id)
@@ -840,7 +826,7 @@ class SubtitleController(ControllerFacet):
         status_source: str,
         *status_arguments: object,
     ) -> None:
-        self._session.selection.subtitle_placement_id = placement_id
+        self._session.state.selection.subtitle_placement_id = placement_id
         self._session.projectors.timeline.refresh_preview_subtitles()
         self._select_subtitle_placement_context(placement_id)
         self._session.projectors.timeline.schedule_preview_graph()

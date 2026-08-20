@@ -95,6 +95,7 @@ class TaskKind(DomainEnum):
     WAVEFORM = "waveform"
     TRANSCRIBE = "transcribe"
     TRANSLATE = "translate"
+    DUBBING = "dubbing"
     HIGHLIGHT = "highlight"
     EXPORT = "export"
     WEB_RENDER = "web_render"

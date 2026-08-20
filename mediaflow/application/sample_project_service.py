@@ -5,7 +5,7 @@ import zlib
 from collections.abc import Callable
 from pathlib import Path
 
-from mediaflow.atomic_file import atomic_write_bytes
+from mediaflow.application.sample_project_storage import SampleProjectStorage
 from mediaflow.domain.enums import (
     AssetKind,
     AssetOrigin,
@@ -19,19 +19,25 @@ from mediaflow.domain.project import Asset, MediaMetadata
 class SampleProjectService:
     """Populate a newly created project through the normal project contracts."""
 
-    def __init__(self, repository, timeline: Callable, project_dir: Path) -> None:
+    def __init__(
+        self,
+        repository,
+        timeline: Callable,
+        project_dir: Path,
+        storage: SampleProjectStorage,
+    ) -> None:
         self.repository = repository
         self.timeline = timeline
         self.project_dir = project_dir
+        self.storage = storage
 
     def populate(self) -> None:
-        if self.repository.catalog.list_assets():
+        if self.repository.assets.list_assets():
             raise ValueError("示例内容只能写入空项目")
-        project = self.repository.catalog.get_project()
-        source_dir = self.project_dir / "sources"
-        source_dir.mkdir(parents=True, exist_ok=True)
-        scenes_bin = self.repository.catalog.create_asset_bin("示例场景")
-        accents_bin = self.repository.catalog.create_asset_bin("强调画面", scenes_bin.id)
+        project = self.repository.projects.get_project()
+        source_dir = self.storage.prepare_source_directory(self.project_dir)
+        scenes_bin = self.repository.assets.create_asset_bin("示例场景")
+        accents_bin = self.repository.assets.create_asset_bin("强调画面", scenes_bin.id)
         palette = (
             ("01-opening.png", "开场 · 工作台", (33, 48, 81), (91, 141, 239), scenes_bin.id),
             ("02-story.png", "主体 · 内容节奏", (52, 38, 62), (230, 111, 155), scenes_bin.id),
@@ -40,9 +46,12 @@ class SampleProjectService:
         assets = []
         for index, (filename, name, background, accent, bin_id) in enumerate(palette):
             path = source_dir / filename
-            self._write_sample_png(path, background, accent, index)
+            self.storage.write_generated_image(
+                path,
+                self._sample_png(background, accent, index),
+            )
             assets.append(
-                self.repository.catalog.add_asset(
+                self.repository.assets.add_asset(
                     Asset(
                         project_id=project.id,
                         name=name,
@@ -95,7 +104,7 @@ class SampleProjectService:
         editor.add_marker(120, "观察转场和效果")
         editor.add_range(120, 240, "重点片段")
 
-        short = self.repository.catalog.create_short_sequence("竖屏精选")
+        short = self.repository.sequences.create_short_sequence("竖屏精选")
         short_editor = self.timeline(short.id)
         short_track = short_editor.add_track(TrackKind.VIDEO, "视频 1")
         for index, asset in enumerate((assets[1], assets[2])):
@@ -108,12 +117,11 @@ class SampleProjectService:
             )
 
     @staticmethod
-    def _write_sample_png(
-        path: Path,
+    def _sample_png(
         background: tuple[int, int, int],
         accent: tuple[int, int, int],
         variant: int,
-    ) -> None:
+    ) -> bytes:
         width, height = 960, 540
         rows = bytearray()
         gradient_row = bytearray()
@@ -157,8 +165,7 @@ class SampleProjectService:
                 + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
             )
 
-        atomic_write_bytes(
-            path,
+        return (
             signature
             + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(bytes(rows), level=7))

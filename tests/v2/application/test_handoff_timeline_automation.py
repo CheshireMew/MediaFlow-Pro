@@ -225,5 +225,11 @@ def test_cli_batch_uses_the_same_atomic_editor_service_boundary(
         arguments={"since_revision": base_revision},
     )
     assert len(changes["events"]) == 1
-    assert changes["events"][0]["undo_group_id"] == "semantic-markers-batch"
-    assert changes["events"][0]["write_set"] == [f"/sequences/{sequence_id}/markers/new"]
+    event = changes["events"][0]
+    assert event["undo_group_id"] == "semantic-markers-batch"
+    marker_ids = {item["result"]["marker"]["id"] for item in response["result"]["results"]}
+    expected_paths = sorted(f"/sequences/{sequence_id}/markers/{marker_id}" for marker_id in marker_ids)
+    assert event["write_set"] == expected_paths
+    assert [(change["path"], change["action"]) for change in event["changes"]] == [
+        (path, "create") for path in expected_paths
+    ]

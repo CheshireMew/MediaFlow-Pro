@@ -7,6 +7,7 @@ from pydantic import Field, JsonValue, model_serializer, model_validator
 
 from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.collaboration import ProjectChangeEvent
+from mediaflow.domain.dubbing import DubbingSession, DubbingSettings
 from mediaflow.domain.enums import (
     ExportFormat,
     TrackKind,
@@ -44,18 +45,20 @@ from mediaflow.domain.transcript_edits import (
     TranscriptEditResult,
     TranscriptSnapshot,
 )
-from mediaflow.domain.web_media import (
+from mediaflow.domain.web_exports import WebExportFormat
+from mediaflow.domain.web_manifest import (
     WebAssetSpec,
+    web_asset_spec_document,
+)
+from mediaflow.domain.web_manifest_primitives import WebEditableField
+from mediaflow.domain.web_state import (
     WebClipState,
     WebEasing,
-    WebEditableField,
     WebEditDocument,
-    WebExportFormat,
     WebRebindCommitReport,
     WebRebindPlan,
     WebStateDiff,
     WebVariantResult,
-    web_asset_spec_document,
 )
 from mediaflow.domain.workflows import WorkflowRun
 
@@ -70,66 +73,6 @@ class PublicWebAssetSpec(WebAssetSpec):
 
 class EmptyArguments(DomainModel):
     pass
-
-
-class SpeechTranscribeArguments(DomainModel):
-    input_path: str = Field(min_length=1)
-    output_path: str = Field(min_length=1)
-    language: str | None = None
-    model: str | None = None
-    device: Literal["auto", "cuda", "cpu"] | None = None
-    compute_type: str | None = None
-    overwrite: bool = False
-
-
-class SpeechSegmentResult(DomainModel):
-    start_seconds: float = Field(ge=0)
-    end_seconds: float = Field(gt=0)
-    text: str = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def positive_range(self) -> SpeechSegmentResult:
-        if self.end_seconds <= self.start_seconds:
-            raise ValueError("Speech segment end must be after start")
-        return self
-
-
-class SpeechTranscriptionResult(DomainModel):
-    engine: Literal["faster-whisper-xxl"] = "faster-whisper-xxl"
-    engine_version: str
-    input_path: str
-    input_sha256: str = Field(pattern="^[a-f0-9]{64}$")
-    output_path: str
-    output_sha256: str = Field(pattern="^[a-f0-9]{64}$")
-    language: str
-    duration_seconds: float = Field(gt=0)
-    segments: list[SpeechSegmentResult] = Field(min_length=1)
-
-
-class SpeechSynthesizeArguments(DomainModel):
-    text: str = Field(min_length=1)
-    text_language: str = Field(min_length=1)
-    reference_audio: str = Field(min_length=1)
-    reference_text: str = Field(min_length=1)
-    reference_language: str = Field(min_length=1)
-    output_path: str = Field(min_length=1)
-    auxiliary_reference_audio: list[str] = Field(default_factory=list, max_length=5)
-    speed_factor: float = Field(default=1.0, ge=0.5, le=2.0)
-    seed: int = -1
-    timeout_seconds: int = Field(default=900, ge=30, le=3600)
-    overwrite: bool = False
-
-
-class SpeechSynthesisResult(DomainModel):
-    engine: Literal["gpt-sovits-v2pro"] = "gpt-sovits-v2pro"
-    engine_version: str
-    output_path: str
-    output_sha256: str = Field(pattern="^[a-f0-9]{64}$")
-    duration_seconds: float = Field(gt=0)
-    sample_rate: int = Field(gt=0)
-    channels: int = Field(gt=0)
-    reference_audio_sha256: str = Field(pattern="^[a-f0-9]{64}$")
-    device: Literal["cuda", "cpu"]
 
 
 class ReferenceComparisonArguments(DomainModel):
@@ -219,11 +162,7 @@ class TranscriptSequenceTranscribeArguments(SequenceArguments):
 
     @model_validator(mode="after")
     def valid_range(self) -> TranscriptSequenceTranscribeArguments:
-        if (
-            self.start_frame is not None
-            and self.end_frame is not None
-            and self.end_frame <= self.start_frame
-        ):
+        if self.start_frame is not None and self.end_frame is not None and self.end_frame <= self.start_frame:
             raise ValueError("end_frame must be after start_frame")
         return self
 
@@ -368,6 +307,60 @@ class TranscriptEditPreviewArguments(DomainModel):
 class TranscriptEditApplyArguments(DomainModel):
     plan: TranscriptEditPlan
     accept_warnings: bool | None = None
+
+
+class DubbingPrepareArguments(SequenceArguments):
+    source_document_id: str = Field(min_length=1)
+    target_language: str = Field(default="zh_CN", min_length=1)
+    target_document_id: str | None = None
+    settings: DubbingSettings = Field(default_factory=DubbingSettings)
+
+
+class DubbingSessionArguments(DomainModel):
+    session_id: str = Field(min_length=1)
+
+
+class DubbingListArguments(SequenceArguments):
+    pass
+
+
+class DubbingSynthesizeArguments(SequenceArguments):
+    session_id: str = Field(min_length=1)
+    utterance_ids: list[str] = Field(default_factory=list)
+    regenerate: bool = False
+
+
+class DubbingCommitArguments(SequenceArguments):
+    session_id: str = Field(min_length=1)
+    track_name: str = Field(default="中文配音", min_length=1)
+    mute_source_dialogue: bool = True
+
+
+class DubbingSpeakerUpdateArguments(DomainModel):
+    session_id: str = Field(min_length=1)
+    speaker_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=0)
+    display_name: str = Field(min_length=1)
+    review_status: Literal["automatic", "accepted", "needs_review"]
+    primary_reference_id: str = Field(min_length=1)
+
+
+class DubbingReferenceUpdateArguments(DomainModel):
+    session_id: str = Field(min_length=1)
+    speaker_id: str = Field(min_length=1)
+    reference_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=0)
+    text: str = Field(min_length=1)
+    language: str = Field(min_length=1)
+
+
+class DubbingUtteranceUpdateArguments(DomainModel):
+    session_id: str = Field(min_length=1)
+    utterance_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=0)
+    target_text: str = Field(min_length=1)
+    speaker_id: str = Field(min_length=1)
+    review_status: Literal["automatic", "accepted", "needs_review"]
 
 
 class AudioBusChanges(DomainModel):
@@ -733,6 +726,14 @@ class SubtitleListResult(DomainModel):
 
 class SubtitleSegmentResult(DomainModel):
     segment: SubtitleSegment
+
+
+class DubbingSessionResult(DomainModel):
+    session: DubbingSession
+
+
+class DubbingSessionListResult(DomainModel):
+    sessions: list[DubbingSession]
 
 
 class TranscriptResult(DomainModel):

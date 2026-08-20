@@ -53,6 +53,34 @@ class SpeechSynthesisSettings(DomainModel):
     startup_timeout_seconds: int = Field(default=300, ge=30, le=900)
 
 
+class SpeakerDiarizationSettings(DomainModel):
+    backend: Literal["transcript_clustering", "community_1"] = (
+        "transcript_clustering"
+    )
+    clustering_python_executable: str | None = None
+    embedding_model_path: str | None = None
+    clustering_num_threads: int = Field(default=4, ge=1, le=32)
+    clustering_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
+    python_executable: str | None = None
+    model: str = "pyannote/speaker-diarization-community-1"
+    hugging_face_token: str = ""
+    device: Literal["auto", "cuda", "cpu"] = "auto"
+    timeout_seconds: int = Field(default=7200, ge=60, le=86400)
+
+    @field_validator("model")
+    @classmethod
+    def required_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Speaker diarization model cannot be empty")
+        return normalized
+
+    @field_validator("hugging_face_token")
+    @classmethod
+    def normalized_token(cls, value: str) -> str:
+        return value.strip()
+
+
 class GlossaryTermSettings(DomainModel):
     id: str = Field(default_factory=new_id)
     source: str
@@ -123,6 +151,7 @@ class LlmProviderSettings(DomainModel):
 
 
 WorkspaceLayoutPreset = Literal["standard", "media", "vertical"]
+AssetViewMode = Literal["list", "thumbnails", "large_thumbnails"]
 
 
 class WorkspacePanelLayoutSettings(DomainModel):
@@ -165,7 +194,7 @@ class WorkspaceLayoutsSettings(DomainModel):
 class UiSettings(DomainModel):
     language: Literal["zh_CN", "en", "ja"] = "zh_CN"
     theme: Literal["dark", "high_contrast"] = "dark"
-    asset_view_mode: Literal["list", "thumbnails", "large_thumbnails"] = "list"
+    asset_view_mode: AssetViewMode = "list"
     window_width: int = 1600
     window_height: int = 980
     window_maximized: bool = False
@@ -198,6 +227,9 @@ class ServiceSettings(SettingsDocument):
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     asr: AsrSettings = Field(default_factory=AsrSettings)
     speech_synthesis: SpeechSynthesisSettings = Field(default_factory=SpeechSynthesisSettings)
+    speaker_diarization: SpeakerDiarizationSettings = Field(
+        default_factory=SpeakerDiarizationSettings
+    )
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     preview: PreviewSettings = Field(default_factory=PreviewSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)

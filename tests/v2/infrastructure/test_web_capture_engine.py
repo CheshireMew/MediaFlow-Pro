@@ -10,10 +10,11 @@ from pathlib import Path
 import pytest
 
 import mediaflow.infrastructure.web_capture_engine as web_capture_module
+import mediaflow.infrastructure.web_capture_scheduler as web_capture_scheduler_module
 from mediaflow.application.task_service import TaskStopped
 from mediaflow.domain.enums import TaskStatus
-from mediaflow.domain.web_media import (
-    EditableMediaManifest,
+from mediaflow.domain.web_manifest import EditableMediaManifest
+from mediaflow.domain.web_state import (
     WebClipState,
     web_runtime_state,
 )
@@ -219,7 +220,7 @@ def test_worker_sizing_reports_memory_as_the_real_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        web_capture_module,
+        web_capture_scheduler_module,
         "available_physical_memory_bytes",
         lambda: 512 * 1024**2,
     )
@@ -304,8 +305,7 @@ def test_real_react_retryable_frame_replaces_page_and_preserves_order() -> None:
                 url=preview.url_for(
                     manifest.entry,
                     query=(
-                        "capture=1&variant=landscape&scene=react-orbit"
-                        "&frame_delay_ms=15&fail_once_frame=2"
+                        "capture=1&variant=landscape&scene=react-orbit&frame_delay_ms=15&fail_once_frame=2"
                     ),
                 ),
                 allowed_origin=preview.url_for(""),
@@ -329,11 +329,7 @@ def test_real_react_retryable_frame_replaces_page_and_preserves_order() -> None:
         image = cv2.imdecode(numpy.frombuffer(payload, dtype=numpy.uint8), cv2.IMREAD_COLOR)
         assert image is not None
         progress = image[640:648, 74:1206]
-        accent = (
-            (progress[:, :, 0] > 180)
-            & (progress[:, :, 1] > 130)
-            & (progress[:, :, 2] > 90)
-        )
+        accent = (progress[:, :, 0] > 180) & (progress[:, :, 1] > 130) & (progress[:, :, 2] > 90)
         progress_pixels.append(int(accent.sum()))
     assert progress_pixels == sorted(progress_pixels)
     assert len(set(progress_pixels)) == len(progress_pixels)

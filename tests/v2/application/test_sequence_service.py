@@ -78,15 +78,15 @@ def test_short_sequence_clones_and_replaces_the_complete_audio_graph(
     source_path.write_bytes(b"audio-source")
     project_dir = tmp_path / "Audio Graph Short"
     with ProjectRepository.create(project_dir, "Audio Graph Short") as repository:
-        asset = repository.catalog.import_external_asset(source_path, AssetKind.AUDIO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source_path, AssetKind.AUDIO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(update={"duration_frames": 120, "has_audio": True})
                 }
             )
         )
-        project = repository.catalog.get_project()
+        project = repository.projects.get_project()
         source_editor = TimelineEditor(repository, project.main_sequence_id)
         buses = repository.audio.list_audio_buses(project.main_sequence_id)
         master = next(bus for bus in buses if bus.parent_bus_id is None)
@@ -196,7 +196,7 @@ def test_short_sequence_clones_and_replaces_the_complete_audio_graph(
     with ProjectRepository.open(project_dir) as reopened:
         assert _audio_graph_signature(reopened, short.id) == _audio_graph_signature(
             reopened,
-            reopened.catalog.get_project().main_sequence_id,
+            reopened.projects.get_project().main_sequence_id,
         )
         assert (
             "avfilter.highpass"
@@ -213,15 +213,15 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
     source_path.write_bytes(b"video-source")
     project_dir = tmp_path / "Subtitle Override Short"
     with ProjectRepository.create(project_dir, "Subtitle Override Short") as repository:
-        asset = repository.catalog.import_external_asset(source_path, AssetKind.VIDEO)
-        asset = repository.catalog.update_asset(
+        asset = repository.assets.import_external_asset(source_path, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
             asset.model_copy(
                 update={
                     "metadata": asset.metadata.model_copy(update={"duration_frames": 100, "has_video": True})
                 }
             )
         )
-        source_sequence_id = repository.catalog.get_project().main_sequence_id
+        source_sequence_id = repository.projects.get_project().main_sequence_id
         editor = TimelineEditor(repository, source_sequence_id)
         video_track = editor.add_track(TrackKind.VIDEO, "Video")
         subtitle_track = editor.add_track(TrackKind.SUBTITLE, "Subtitle")
@@ -233,7 +233,7 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
             duration=100,
         )
         document = SubtitleDocument(
-            project_id=repository.catalog.get_project().id,
+            project_id=repository.projects.get_project().id,
             asset_id=asset.id,
             language="zh-CN",
         )
@@ -288,7 +288,7 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
         )
         assert reopened.subtitles.list_subtitle_placements(before_sync_track.id)[0].timing_overridden is True
         SequenceService(reopened).sync_short_from_bounds(
-            reopened.catalog.get_project().main_sequence_id,
+            reopened.projects.get_project().main_sequence_id,
             short_id,
             5,
             55,

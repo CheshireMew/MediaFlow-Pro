@@ -9,6 +9,8 @@ Item {
     property var workspaceItem: null
     readonly property string layoutPreset: workspaceItem
         ? String(workspaceItem.layoutPreset) : "standard"
+    readonly property real statusControlWidth: Math.max(
+        112, Math.min(statusText.implicitWidth, 220) + 34)
 
     ProjectVersionsDialog {
         id: projectVersionsDialog
@@ -22,8 +24,7 @@ Item {
         }
     }
 
-    implicitWidth: Math.min(statusText.implicitWidth, 220)
-        + 34
+    implicitWidth: statusControlWidth
         + undoButton.implicitWidth
         + redoButton.implicitWidth
         + taskActivity.implicitWidth
@@ -41,7 +42,7 @@ Item {
 
         Rectangle {
             Layout.minimumWidth: 112
-            Layout.preferredWidth: Math.min(statusText.implicitWidth, 220) + 34
+            Layout.preferredWidth: root.statusControlWidth
             Layout.preferredHeight: 28
             radius: 14
             color: Theme.surfaceRaised
@@ -55,7 +56,7 @@ Item {
                 width: 7
                 height: 7
                 radius: 4
-                color: workspaceController.readOnly ? Theme.warning : Theme.success
+                color: mediaflow.workspaceViewController.readOnly ? Theme.warning : Theme.success
             }
 
             Text {
@@ -66,10 +67,10 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 11
                 anchors.verticalCenter: parent.verticalCenter
-                text: workspaceController.readOnly
+                text: mediaflow.workspaceViewController.readOnly
                     ? qsTr("只读")
-                    : workspaceController.statusMessage || qsTr("已保存")
-                color: workspaceController.readOnly ? Theme.warning : Theme.textSubtle
+                    : mediaflow.workspaceViewController.statusMessage || qsTr("已保存")
+                color: mediaflow.workspaceViewController.readOnly ? Theme.warning : Theme.textSubtle
                 font.pixelSize: Theme.fontSizeCaption
                 elide: Text.ElideRight
                 ToolTip.visible: statusHover.hovered && implicitWidth > width
@@ -84,54 +85,57 @@ Item {
             id: undoButton
             objectName: "workspaceUndoButton"
             iconName: "undo"
+            compact: true
             Accessible.name: qsTr("撤销")
             toolTipText: Accessible.name + " (Ctrl+Z)"
-            enabled: workspaceController.actionCapabilities.canEdit
-                && timelineController.canUndo
-            onClicked: timelineController.undo()
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                && mediaflow.timelineViewController.canUndo
+            onClicked: mediaflow.timelineStructureController.undo()
         }
 
         AppIconButton {
             id: redoButton
             objectName: "workspaceRedoButton"
             iconName: "redo"
+            compact: true
             Accessible.name: qsTr("重做")
             toolTipText: Accessible.name + " (Ctrl+Y)"
-            enabled: workspaceController.actionCapabilities.canEdit
-                && timelineController.canRedo
-            onClicked: timelineController.redo()
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                && mediaflow.timelineViewController.canRedo
+            onClicked: mediaflow.timelineStructureController.redo()
         }
 
         Item {
             id: taskActivity
             objectName: "globalTaskActivity"
-            Layout.preferredWidth: Theme.iconButtonSize
-            Layout.preferredHeight: Theme.iconButtonSize
-            implicitWidth: Theme.iconButtonSize
-            implicitHeight: Theme.iconButtonSize
+            Layout.preferredWidth: Theme.iconButtonSizeCompact
+            Layout.preferredHeight: Theme.iconButtonSizeCompact
+            implicitWidth: Theme.iconButtonSizeCompact
+            implicitHeight: Theme.iconButtonSizeCompact
             AppIconButton {
                 anchors.fill: parent
                 iconName: "tasks"
-                Accessible.name: taskController.activeTaskCount > 0
-                    ? qsTr("任务中心，%1 个活动任务").arg(taskController.activeTaskCount)
+                compact: true
+                Accessible.name: mediaflow.taskController.activeTaskCount > 0
+                    ? qsTr("任务中心，%1 个活动任务").arg(mediaflow.taskController.activeTaskCount)
                     : qsTr("任务中心")
                 toolTipText: Accessible.name
-                onClicked: taskController.openTaskCenter()
+                onClicked: mediaflow.taskController.openTaskCenter()
             }
             Rectangle {
-                visible: taskController.activeTaskCount > 0
+                visible: mediaflow.taskController.activeTaskCount > 0
                 anchors.right: parent.right
                 anchors.top: parent.top
                 width: Math.max(14, taskCount.implicitWidth + 6)
                 height: 14
                 radius: 7
-                color: taskController.pausedTaskCount > 0
+                color: mediaflow.taskController.pausedTaskCount > 0
                     ? Theme.warning : Theme.accent
                 Text {
                     id: taskCount
                     anchors.centerIn: parent
-                    text: taskController.activeTaskCount > 99
-                        ? "99+" : String(taskController.activeTaskCount)
+                    text: mediaflow.taskController.activeTaskCount > 99
+                        ? "99+" : String(mediaflow.taskController.activeTaskCount)
                     color: Theme.onAccent
                     font.pixelSize: 9
                     font.weight: Font.Bold
@@ -177,7 +181,7 @@ Item {
                 AppMenuSeparator {}
                 AppMenuItem {
                     text: qsTr("界面导览")
-                    onTriggered: workspaceController.showWorkspaceTour()
+                    onTriggered: mediaflow.workspaceProjectController.showWorkspaceTour()
                 }
                 AppMenuSeparator {}
                 AppMenuItem {
@@ -234,6 +238,7 @@ Item {
             id: versionsButton
             objectName: "openProjectVersionsButton"
             iconName: "duplicate"
+            compact: true
             Accessible.name: qsTr("版本")
             toolTipText: Accessible.name
             onClicked: projectVersionsDialog.open()
@@ -244,8 +249,8 @@ Item {
             text: qsTr("关闭项目")
             quiet: true
             implicitHeight: Theme.controlHeightCompact
-            enabled: workspaceController.actionCapabilities.canCloseProject
-            onClicked: workspaceController.closeProject()
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canCloseProject
+            onClicked: mediaflow.workspaceProjectController.closeProject()
         }
 
         AppButton {
@@ -254,7 +259,7 @@ Item {
             text: qsTr("导出")
             primary: true
             implicitHeight: Theme.controlHeightCompact
-            enabled: workspaceController.actionCapabilities.canStartTasks
+            enabled: mediaflow.workspaceViewController.actionCapabilities.canStartTasks
             onClicked: root.exportRequested()
         }
     }

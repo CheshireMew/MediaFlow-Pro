@@ -24,13 +24,17 @@ from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.subtitle_file_store import LocalSubtitleFileStore
+from mediaflow.infrastructure.subtitle_publication_storage import (
+    LocalSubtitlePublicationStorage,
+)
 from mediaflow.infrastructure.translation_cache import TranslationCache
 
 pytestmark = pytest.mark.integration
 
 
 def _translation_service(repository: ProjectRepository) -> TranslationService:
-    publication = SubtitlePublicationService(repository)
+    publication = SubtitlePublicationService(repository, LocalSubtitlePublicationStorage())
     return TranslationService(
         repository,
         OpenAIJsonClient,
@@ -138,9 +142,16 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
             encoding="utf-8",
         )
         with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-            asset = repository.catalog.import_external_asset(media, AssetKind.VIDEO)
-            publication = SubtitlePublicationService(repository)
-            source = SubtitleAcquisitionService(repository, publication).import_subtitle_file(
+            asset = repository.assets.import_external_asset(media, AssetKind.VIDEO)
+            publication = SubtitlePublicationService(
+                repository,
+                LocalSubtitlePublicationStorage(),
+            )
+            source = SubtitleAcquisitionService(
+                repository,
+                publication,
+                LocalSubtitleFileStore(),
+            ).import_subtitle_file(
                 subtitle,
                 AssetService(
                     repository,
@@ -148,7 +159,7 @@ def test_openai_protocol_translation_and_highlight_become_project_data(tmp_path:
                 ),
             )
             segments = repository.subtitles.list_subtitle_segments(source.id)
-            assert repository.catalog.get_asset(source.asset_id).kind == AssetKind.SUBTITLE
+            assert repository.assets.get_asset(source.asset_id).kind == AssetKind.SUBTITLE
             assert source.media_asset_id == asset.id
             assert [item.text for item in segments] == ["Hello", "World"]
             provider = LlmProviderSettings(
@@ -342,8 +353,8 @@ def test_translation_batches_use_concurrency_context_and_single_line_fallback(
         media = tmp_path / "source.mp4"
         media.write_bytes(b"media")
         with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
-            asset = repository.catalog.import_external_asset(media, AssetKind.VIDEO)
-            project = repository.catalog.get_project()
+            asset = repository.assets.import_external_asset(media, AssetKind.VIDEO)
+            project = repository.projects.get_project()
             source = SubtitleDocument(project_id=project.id, asset_id=asset.id, language="en")
             segments = [
                 SubtitleSegment(

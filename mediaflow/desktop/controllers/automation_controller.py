@@ -1,41 +1,41 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 
 from PySide6.QtCore import Property, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
 from mediaflow.automation.request_factory import AutomationRequestFactory
+from mediaflow.desktop.editor_planning import (
+    current_transcription_plan,
+    export_preset_for_options,
+    next_default_export_output,
+    web_scene_time_for_frame,
+)
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import DiagnosticsBundleCommand
 
 from .controller_facet import ControllerFacet, report_ui_errors
+from .controller_scopes import AutomationControllerScope
 from .web_editor_context import coerce_web_descriptor_value, find_web_descriptor
 
 
-class AutomationController(ControllerFacet):
+class AutomationController(ControllerFacet[AutomationControllerScope]):
     requestPreviewChanged = Signal()
     requestPrepared = Signal()
     projectStateChanged = Signal()
 
     def __init__(
         self,
-        session,
+        session: AutomationControllerScope,
         *,
-        export,
-        subtitles,
         web,
-        web_timeline,
-        web_delivery,
     ):
         super().__init__(session)
         self.setObjectName("automationController")
         self._factory = AutomationRequestFactory()
-        self._export = export
-        self._subtitles = subtitles
         self._web = web
-        self._web_timeline = web_timeline
-        self._web_delivery = web_delivery
         self._request_preview = ""
         self._request_title = ""
 
@@ -53,14 +53,14 @@ class AutomationController(ControllerFacet):
 
     @Property(str, notify=projectStateChanged)
     def diagnosticsDefaultPath(self) -> str:
-        current = self._session.binding.current
+        current = self._session.state.binding.current
         if current is None:
             return ""
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return str(current.project_dir / "exports" / f"diagnostics-{stamp}.zip")
 
     def _copy(self, title: str, operation: str, arguments: dict) -> None:
-        current = self._session.binding.current
+        current = self._session.state.binding.current
         if current is None:
             raise RuntimeError("请先打开一个项目")
         request = self._factory.create(
@@ -72,7 +72,7 @@ class AutomationController(ControllerFacet):
             client_id=f"mediaflow-desktop:{current.actor_id}",
         )
         rendered = self._factory.canonical_json(request)
-        application = QGuiApplication.instance()
+        application = cast(QGuiApplication | None, QGuiApplication.instance())
         if application is None:
             raise RuntimeError("桌面剪贴板尚未初始化")
         application.clipboard().setText(rendered)
@@ -90,13 +90,13 @@ class AutomationController(ControllerFacet):
         options: dict,
     ) -> None:
         self._session._require_exportable_sequence()
-        output = self._export._next_default_output(suffix)
-        preset = self._export._preset_for_options(format_name, options)
+        output = next_default_export_output(self._session, suffix)
+        preset = export_preset_for_options(self._session, format_name, options)
         self._copy(
             "导出当前序列",
             "export.sequence",
             {
-                "sequence_id": self._session.binding.active_sequence_id,
+                "sequence_id": self._session.state.binding.active_sequence_id,
                 "output_path": str(output),
                 "format": preset.format.value,
                 "preset": preset.model_dump(mode="json"),
@@ -116,14 +116,14 @@ class AutomationController(ControllerFacet):
         self._session._require_writable()
         selected_asr = AsrSettings.model_validate(
             {
-                **self._session.service_settings.asr.model_dump(mode="python"),
+                **self._session.state.service_settings.asr.model_dump(mode="python"),
                 "model": model.strip(),
                 "device": device,
                 "language": language.strip() or "auto",
                 "parallel_chunks": parallel_chunks,
             }
         )
-        plan = self._subtitles._current_transcription_plan(selected_asr)
+        plan = current_transcription_plan(self._session, selected_asr)
         self._copy(
             "转录当前时间轴",
             "transcript.sequence.transcribe",
@@ -142,7 +142,7 @@ class AutomationController(ControllerFacet):
         descriptor = find_web_descriptor(context.edit_document, target, source_id)
         typed = coerce_web_descriptor_value(descriptor, value)
         base = {
-            "sequence_id": self._session.binding.active_sequence_id,
+            "sequence_id": self._session.state.binding.active_sequence_id,
             "clip_id": context.clip_id,
             "expected_revision": int(context.persistent_state.get("revision", 0)),
         }
@@ -191,9 +191,9 @@ class AutomationController(ControllerFacet):
         context = self._web.context_snapshot()
         descriptor = find_web_descriptor(context.edit_document, target, source_id)
         typed = coerce_web_descriptor_value(descriptor, value)
-        scene_id, time_ms = self._web_timeline._scene_time_for_frame(frame)
+        scene_id, time_ms = web_scene_time_for_frame(self._session, context, frame)
         base = {
-            "sequence_id": self._session.binding.active_sequence_id,
+            "sequence_id": self._session.state.binding.active_sequence_id,
             "clip_id": context.clip_id,
             "scene_id": scene_id,
             "time_ms": time_ms,
@@ -222,9 +222,9 @@ class AutomationController(ControllerFacet):
         frame: int,
     ) -> None:
         context = self._web.context_snapshot()
-        scene_id, time_ms = self._web_timeline._scene_time_for_frame(frame)
+        scene_id, time_ms = web_scene_time_for_frame(self._session, context, frame)
         base = {
-            "sequence_id": self._session.binding.active_sequence_id,
+            "sequence_id": self._session.state.binding.active_sequence_id,
             "clip_id": context.clip_id,
             "scene_id": scene_id,
             "time_ms": time_ms,
@@ -245,7 +245,7 @@ class AutomationController(ControllerFacet):
     @report_ui_errors
     def copyWebRebindPlanRequest(self) -> None:
         context = self._web.context_snapshot()
-        source = self._web_delivery._pending_rebind_source
+        source = self._session.state.web_delivery.pending_rebind_source
         if not context.asset_id or not source:
             raise ValueError("请先检查新版网页包")
         self._copy(
@@ -258,17 +258,17 @@ class AutomationController(ControllerFacet):
     @report_ui_errors
     def copyWebRebindCommitRequest(self) -> None:
         context = self._web.context_snapshot()
-        delivery = self._web_delivery
-        if not context.asset_id or not delivery._pending_rebind_source:
+        delivery = self._session.state.web_delivery
+        if not context.asset_id or not delivery.pending_rebind_source:
             raise ValueError("请先检查新版网页包")
         self._copy(
             "提交网页换版计划",
             "web.asset.rebind.commit",
             {
                 "asset_id": context.asset_id,
-                "source": delivery._pending_rebind_source,
-                "plan_digest": str(delivery._rebind_plan.get("plan_digest") or ""),
-                "resolutions": dict(delivery._rebind_resolutions),
+                "source": delivery.pending_rebind_source,
+                "plan_digest": str(delivery.rebind_plan.get("plan_digest") or ""),
+                "resolutions": dict(delivery.rebind_resolutions),
             },
         )
 
@@ -278,7 +278,7 @@ class AutomationController(ControllerFacet):
         self._copy(
             "检查项目交接状态",
             "project.handoff.inspect",
-            {"sequence_id": self._session.binding.active_sequence_id},
+            {"sequence_id": self._session.state.binding.active_sequence_id},
         )
 
     @Slot(str, "QVariantList", bool)
@@ -310,6 +310,6 @@ class AutomationController(ControllerFacet):
                 output_path=str(output),
                 overwrite=overwrite,
             ),
-            sequence_id=self._session.binding.active_sequence_id,
+            sequence_id=self._session.state.binding.active_sequence_id,
         )
         self._session._set_status("诊断包任务已加入任务中心")

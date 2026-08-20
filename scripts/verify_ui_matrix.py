@@ -20,7 +20,7 @@ from mediaflow.desktop.presentation_catalogs import (
     WORKSPACE_MODE_KEYS,
     WORKSPACE_NAVIGATION_MODE_KEYS,
 )
-from scripts.run_artifacts import verification_run
+from scripts.run_artifacts import verification_run, verification_workspace_root
 
 LANGUAGES = ("zh_CN", "en", "ja")
 SCALES = ("1", "1.5", "2")
@@ -31,13 +31,14 @@ UI_MATRIX_WORKERS = 3
 
 
 def probe(root: Path, language: str, scale: str) -> dict:
+    workspace = verification_workspace_root(root)
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["QT_SCALE_FACTOR"] = scale
-    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(root / "settings" / "service-settings.json")
-    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(root / "settings" / "desktop-settings.json")
-    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(root / "media")
-    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(root / "projects")
-    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(root / "editor-service")
+    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(workspace / "settings" / "service-settings.json")
+    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(workspace / "settings" / "desktop-settings.json")
+    os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(workspace / "media")
+    os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(workspace / "projects")
+    os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(workspace / "editor-service")
 
     from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPointF, QUrl
     from PySide6.QtGui import QGuiApplication
@@ -59,8 +60,8 @@ def probe(root: Path, language: str, scale: str) -> dict:
     service_settings = ServiceSettings()
     desktop_settings = DesktopSettings()
     desktop_settings.ui.language = language
-    service_settings_path = root / "settings" / "service-settings.json"
-    desktop_settings_path = root / "settings" / "desktop-settings.json"
+    service_settings_path = workspace / "settings" / "service-settings.json"
+    desktop_settings_path = workspace / "settings" / "desktop-settings.json"
     ServiceSettingsRepository(service_settings_path).save(service_settings)
     DesktopSettingsRepository(desktop_settings_path).save(desktop_settings)
     configure_application_identity()
@@ -70,6 +71,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
     configure_application_font(app)
     engine, controllers = create_engine(app)
     workspace_controller = controllers.workspace
+    workspace_project_controller = controllers.workspace_project
 
     def visual_items(item: QQuickItem):
         for child in item.childItems():
@@ -104,12 +106,12 @@ def probe(root: Path, language: str, scale: str) -> dict:
         ):
             raise RuntimeError("Custom window title bar controls were not created")
 
-        workspace_controller.createProject(
-            QUrl.fromLocalFile(str(root)).toString(),
+        workspace_project_controller.createProject(
+            QUrl.fromLocalFile(str(workspace / "projects")).toString(),
             "UI Matrix",
         )
         project_path = Path(workspace_controller.projectPath)
-        workspace_controller.closeProject()
+        workspace_project_controller.closeProject()
         home_results = []
         for home_width, home_height in HOME_SIZES:
             window.setWidth(home_width)
@@ -143,7 +145,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 }
             )
 
-        workspace_controller.openProject(QUrl.fromLocalFile(str(project_path)).toString())
+        workspace_project_controller.openProject(QUrl.fromLocalFile(str(project_path)).toString())
         for _ in range(12):
             QCoreApplication.processEvents()
             time.sleep(0.02)
@@ -469,9 +471,7 @@ def _run_scenario(scenario: Path, language: str, scale: str) -> tuple[dict, floa
 
 def orchestrate(root: Path) -> dict:
     scenarios = [
-        (root / f"{language}-{scale}x", language, scale)
-        for language in LANGUAGES
-        for scale in SCALES
+        (root / f"{language}-{scale}x", language, scale) for language in LANGUAGES for scale in SCALES
     ]
     for scenario, _language, _scale in scenarios:
         scenario.mkdir()

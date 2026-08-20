@@ -27,6 +27,10 @@ from mediaflow.infrastructure.output_reservation import (
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyService
 from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.infrastructure.subtitle_file_store import LocalSubtitleFileStore
+from mediaflow.infrastructure.subtitle_publication_storage import (
+    LocalSubtitlePublicationStorage,
+)
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import (
     InfrastructureAssetTaskRuntime,
@@ -89,8 +93,8 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
     )
     assets = AssetService(repository, MediaProbe(paths))
     asset = assets.import_external(source)
-    project = repository.catalog.get_project()
-    sequence = repository.catalog.get_sequence(project.main_sequence_id)
+    project = repository.projects.get_project()
+    sequence = repository.sequences.get_sequence(project.main_sequence_id)
 
     try:
         handlers = AssetTaskHandlers(
@@ -99,7 +103,11 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
             InfrastructureAssetTaskRuntime(repository, paths),
             SubtitleAcquisitionService(
                 repository,
-                SubtitlePublicationService(repository),
+                SubtitlePublicationService(
+                    repository,
+                    LocalSubtitlePublicationStorage(),
+                ),
+                LocalSubtitleFileStore(),
             ),
         )
         published = threading.Event()
@@ -136,7 +144,7 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
             cancelled = tasks.wait(cancelled_start.id, timeout=30)
             tasks.events.unsubscribe(subscription)
 
-            unpublished = repository.catalog.get_asset(asset.id)
+            unpublished = repository.assets.get_asset(asset.id)
             assert cancellation_requested.is_set()
             assert cancelled.status == TaskStatus.CANCELLED
             assert cancelled.artifacts == []
@@ -158,7 +166,7 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
             assert completed.status == TaskStatus.COMPLETED
             assert len(completed.artifacts) == 1
             artifact = completed.artifacts[0].resolve(repository.project_dir)
-            persisted = repository.catalog.get_asset(asset.id)
+            persisted = repository.assets.get_asset(asset.id)
             assert persisted.proxy_path is not None
             assert artifact == (repository.project_dir / persisted.proxy_path).resolve()
             assert artifact.is_file()
@@ -245,7 +253,7 @@ def test_hdr_proxy_db_commit_failure_restores_both_registered_outputs(
         ):
             service.generate(first, profile)
 
-        persisted = repository.catalog.get_asset(asset.id)
+        persisted = repository.assets.get_asset(asset.id)
         assert reject_outer_commit is False
         assert persisted.proxy_path == first.proxy_path
         assert persisted.sdr_preview_proxy_path == first.sdr_preview_proxy_path

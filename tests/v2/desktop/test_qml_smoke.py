@@ -150,13 +150,13 @@ def test_service_backed_preview_request_reaches_qml_projection(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Preview service chain",
         )
         source = tmp_path / "preview-source.mp4"
         generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
-        project = controllers.session.binding.current
+        project = controllers.session.state.binding.current
         assert project is not None
         asset = project.import_external_asset(source)
         project.adopt_main_profile_from_video(asset.id)
@@ -171,17 +171,17 @@ def test_service_backed_preview_request_reaches_qml_projection(
             source_in=0,
             duration=asset.metadata.duration_frames,
         )
-        controllers.session.binding.timeline = timeline
+        controllers.session.state.binding.timeline = timeline
         controllers.session.projectors.timeline.refresh_timeline()
 
         assert _process_until(
-            lambda: controllers.session.requests.preview_id > 0,
+            lambda: controllers.session.state.requests.preview_id > 0,
             timeout=5,
         )
         assert _process_until(
             lambda: bool(controllers.workspace.previewGraphPath),
             timeout=20,
-        ), repr(controllers.session.requests.preview_future)
+        ), repr(controllers.session.state.requests.preview_future)
         assert Path(controllers.workspace.previewGraphPath).is_file()
     finally:
         controllers.shutdown()
@@ -198,7 +198,7 @@ def test_connected_workspace_command_reaches_real_qml_preview(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Workspace command chain",
         )
@@ -276,9 +276,7 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
         DesktopPresentationApplication(EditorApplication()),
     )
     try:
-        monospace_family = str(
-            engine.rootContext().contextProperty("applicationMonospaceFontFamily")
-        )
+        monospace_family = str(engine.rootContext().contextProperty("applicationMonospaceFontFamily"))
         assert monospace_family
         assert QFontDatabase.hasFamily(monospace_family)
         window = engine.rootObjects()[0]
@@ -303,15 +301,11 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
         assert recent_origin.y() >= 0
         assert recent_origin.y() + recent_section.height() <= window.height()
         assert empty_origin.y() >= recent_origin.y()
-        assert empty_origin.y() + empty_state.height() <= (
-            recent_origin.y() + recent_section.height()
+        assert empty_origin.y() + empty_state.height() <= (recent_origin.y() + recent_section.height())
+        assert (
+            abs(empty_origin.x() + empty_state.width() / 2 - recent_origin.x() - recent_section.width() / 2)
+            <= 2
         )
-        assert abs(
-            empty_origin.x()
-            + empty_state.width() / 2
-            - recent_origin.x()
-            - recent_section.width() / 2
-        ) <= 2
 
         content = empty_state.childItems()[0]
         title = empty_state.findChild(QQuickItem, "emptyStateTitle")
@@ -350,7 +344,7 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
         )
         assert (tmp_path / "Projects" / "未命名项目 1" / "project.mfp").is_file()
 
-        closing_project = controllers.session.binding.current
+        closing_project = controllers.session.state.binding.current
         assert closing_project is not None
         monkeypatch.setattr(
             "mediaflow.desktop.coordinators.project_lifecycle.PROJECT_CLOSE_TIMEOUT_SECONDS",
@@ -372,12 +366,10 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
                     raise RuntimeError("test did not release the slow task") from None
                 raise
 
-        closing_project._tasks._handlers[TaskKind.ANALYZE] = slow_stop
-        slow_task = closing_project.start_task(
-            AnalyzeDownloadCommand(url="test://desktop-slow-close")
-        )
+        closing_project._tasks._execution.handlers[TaskKind.ANALYZE] = slow_stop
+        slow_task = closing_project.start_task(AnalyzeDownloadCommand(url="test://desktop-slow-close"))
         assert handler_started.wait(timeout=5)
-        controllers.workspace.closeProject()
+        controllers.workspace_project.closeProject()
         assert _process_until(
             lambda: page_loader.property("item") is not None
             and page_loader.property("item").objectName() == "homeView"
@@ -391,7 +383,7 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
         assert closing_panel is not None and closing_panel.isVisible()
         assert create_hero is not None and create_hero.property("enabled") is False
         assert _process_until(lambda: controllers.workspace.projectCloseFailed)
-        assert controllers.session.requests.closing_project is closing_project
+        assert controllers.session.state.requests.closing_project is closing_project
         assert controllers.workspace.projectClosing is False
         assert controllers.workspace.projectCloseError
         assert stop_observed.is_set()
@@ -407,21 +399,78 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
             observer.close()
 
         allow_handler_to_stop.set()
-        assert _process_until(
-            lambda: closing_project.get_task(slow_task.id).status == TaskStatus.PAUSED
-        )
+        assert _process_until(lambda: closing_project.get_task(slow_task.id).status == TaskStatus.PAUSED)
         assert QMetaObject.invokeMethod(retry_close, "click")
         assert _process_until(lambda: not controllers.workspace.projectReleasePending)
-        assert controllers.session.requests.closing_project is None
+        assert controllers.session.state.requests.closing_project is None
         assert create_hero.property("enabled") is True
 
-        controllers.workspace.openProject(str(closing_project.project_dir))
+        controllers.workspace_project.openProject(str(closing_project.project_dir))
         assert _process_until(
-            lambda: controllers.workspace.hasProject
-            and controllers.workspace.projectName == "未命名项目 1"
+            lambda: controllers.workspace.hasProject and controllers.workspace.projectName == "未命名项目 1"
         )
         assert controllers.workspace.readOnly is False
-        assert controllers.session.binding.current.get_task(slow_task.id).status == TaskStatus.PAUSED
+        assert controllers.session.state.binding.current.get_task(slow_task.id).status == TaskStatus.PAUSED
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_home_recent_project_uses_compact_remove_action(tmp_path: Path) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    project_path = tmp_path / "Recent project"
+    try:
+        window = engine.rootObjects()[0]
+        window.setWidth(1600)
+        window.setHeight(980)
+        project = controllers.session._api.create_project(project_path, "Recent project")
+        project.close()
+        controllers.session.lifecycle.remember_recent(project_path)
+        assert _process_until(lambda: controllers.workspace.recentProjectsModel.rowCount() == 1)
+
+        page_loader = window.findChild(QObject, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(lambda: page_loader.property("item") is not None)
+        home = page_loader.property("item")
+        download_url = home.findChild(QQuickItem, "downloadUrlField")
+        assert _process_until(
+            lambda: any(
+                item.objectName() == "removeRecentProjectButton" and item.isVisible()
+                for item in _visual_items(home)
+            )
+        )
+        remove_button = next(
+            (
+                item
+                for item in _visual_items(home)
+                if item.objectName() == "removeRecentProjectButton" and item.isVisible()
+            ),
+            None,
+        )
+
+        assert download_url is not None
+        assert download_url.property("placeholderText") == "粘贴媒体或播放列表链接"
+        assert remove_button is not None
+        assert remove_button.property("text") == ""
+        assert remove_button.property("iconName") == "close"
+        assert remove_button.property("toolTipText") == "移除"
+        assert remove_button.width() == 28
+        assert remove_button.height() == 28
+
+        for _ in range(10):
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+        rendered = window.grabWindow()
+        screenshot = tmp_path / "home-compact-recent-remove.png"
+        assert not rendered.isNull() and rendered.save(str(screenshot))
+
+        assert QMetaObject.invokeMethod(remove_button, "click")
+        assert _process_until(lambda: controllers.workspace.recentProjectsModel.rowCount() == 0)
+        assert (project_path / "project.mfp").is_file()
     finally:
         controllers.shutdown()
         engine.deleteLater()
@@ -448,9 +497,7 @@ def test_saved_maximized_window_keeps_clamped_normal_geometry(
         expected_width = min(available.width(), max(window.minimumWidth(), 1024))
         expected_height = min(available.height(), max(window.minimumHeight(), 640))
 
-        assert _process_until(
-            lambda: window.visibility() == QWindow.Visibility.Maximized
-        )
+        assert _process_until(lambda: window.visibility() == QWindow.Visibility.Maximized)
         assert window.minimumWidth() <= available.width()
         assert window.minimumHeight() <= available.height()
         assert window.property("restorableWidth") == expected_width
@@ -494,10 +541,60 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
         workspace = page_loader.property("item")
         tour = window.findChild(QQuickItem, "workspaceTour")
         assert tour is not None and _process_until(tour.isVisible)
+        tour_highlight = tour.findChild(QQuickItem, "workspaceTourHighlight")
+        tour_card = tour.findChild(QQuickItem, "workspaceTourCard")
+        assert tour_highlight is not None and tour_card is not None
+        tour_targets = (
+            workspace.findChild(QQuickItem, "toolPanelContainer"),
+            workspace.findChild(QQuickItem, "previewPanel"),
+            workspace.findChild(QQuickItem, "inspectorPanel"),
+            workspace.findChild(QQuickItem, "timelinePanel"),
+        )
+        assert all(item is not None and item.isVisible() for item in tour_targets)
+        for step, target_item in enumerate(tour_targets):
+            tour.setProperty("step", step)
+            target_origin = target_item.mapToItem(tour, QPointF(0, 0))
+            expected_x = max(8, target_origin.x() - 5)
+            expected_y = max(8, target_origin.y() - 5)
+            expected_right = min(tour.width() - 8, target_origin.x() + target_item.width() + 5)
+            expected_bottom = min(tour.height() - 8, target_origin.y() + target_item.height() + 5)
+            assert _process_until(
+                lambda expected_x=expected_x,
+                expected_y=expected_y,
+                expected_right=expected_right,
+                expected_bottom=expected_bottom: abs(tour_highlight.x() - expected_x) <= 1
+                and abs(tour_highlight.y() - expected_y) <= 1
+                and abs(tour_highlight.width() - (expected_right - expected_x)) <= 1
+                and abs(tour_highlight.height() - (expected_bottom - expected_y)) <= 1
+            )
+            highlight_left = tour_highlight.x()
+            highlight_top = tour_highlight.y()
+            highlight_right = highlight_left + tour_highlight.width()
+            highlight_bottom = highlight_top + tour_highlight.height()
+            card_left = tour_card.x()
+            card_top = tour_card.y()
+            card_right = card_left + tour_card.width()
+            card_bottom = card_top + tour_card.height()
+            assert (
+                card_right <= highlight_left
+                or card_left >= highlight_right
+                or card_bottom <= highlight_top
+                or card_top >= highlight_bottom
+            )
+        tour.setProperty("step", 1)
+        assert _process_until(lambda: tour_highlight.width() > 0)
+        tour_render = window.grabWindow()
+        tour_screenshot = tmp_path / "sample-guided-tour.png"
+        assert not tour_render.isNull() and tour_render.save(str(tour_screenshot))
+        visual_qa_directory = os.environ.get("MEDIAFLOW_VISUAL_QA_DIR", "").strip()
+        if visual_qa_directory:
+            visual_qa_path = Path(visual_qa_directory)
+            visual_qa_path.mkdir(parents=True, exist_ok=True)
+            assert tour_render.save(str(visual_qa_path / "sample-guided-tour.png"))
         assert controllers.media.assetsModel.rowCount() == 3
         assert controllers.media.assetBinsModel.rowCount() == 2
         assert controllers.workspace.sequencesModel.rowCount() == 2
-        assert controllers.timeline.clipsModel.rowCount() == 3
+        assert controllers.timeline_view.clipsModel.rowCount() == 3
         assert all(
             window.findChild(QQuickItem, object_name) is not None
             for object_name in ("workspaceLayoutButton", "globalTaskActivity")
@@ -512,6 +609,44 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
                 "assetSearchResultTabs",
             )
         )
+        compact_icon_buttons = tuple(
+            window.findChild(QQuickItem, object_name)
+            for object_name in (
+                "workspaceUndoButton",
+                "workspaceRedoButton",
+                "openProjectVersionsButton",
+                "previewPreviousButton",
+                "previewPlayButton",
+                "previewStopButton",
+                "previewMuteButton",
+                "previewZoomOutButton",
+                "previewZoomInButton",
+                "previewFullscreenButton",
+                "timelineSplitButton",
+                "timelineDuplicateButton",
+                "timelineDeleteButton",
+            )
+        )
+        assert all(button is not None and button.width() <= 28 for button in compact_icon_buttons)
+        assert all(button.property("usesLucideIcon") is True for button in compact_icon_buttons)
+        media_view_mode_button = workspace.findChild(QQuickItem, "mediaViewModeButton")
+        assert media_view_mode_button is not None
+        assert media_view_mode_button.width() <= 28 and media_view_mode_button.height() <= 28
+        assert media_view_mode_button.property("usesLucideIcon") is True
+        controllers.session.state.presentation.status_message = "已保存"
+        controllers.session.updates.commit(status=True)
+        status_message = window.findChild(QQuickItem, "workspaceStatusMessage")
+        assert status_message is not None
+        assert _process_until(lambda: status_message.property("text") == "已保存")
+        title_bar = window.findChild(QQuickItem, "appTitleBar")
+        export_button = window.findChild(QQuickItem, "titleExportButton")
+        minimize_button = window.findChild(QQuickItem, "minimizeWindowButton")
+        assert title_bar is not None and export_button is not None and minimize_button is not None
+        export_right = export_button.mapToItem(
+            title_bar, QPointF(export_button.width(), 0)
+        ).x()
+        minimize_left = minimize_button.mapToItem(title_bar, QPointF(0, 0)).x()
+        assert minimize_left - export_right >= 8
 
         first_asset = controllers.media.assetsModel.get(0)["assetId"]
         controllers.media.openSourceMonitor(first_asset)
@@ -523,38 +658,33 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
 
         controllers.settings.setWorkspaceLayoutPreset("media")
         assert _process_until(lambda: workspace.property("layoutPreset") == "media")
-        controllers.settings.saveWorkspaceLayout(
-            "media", 480, 380, 320, True, False, True
-        )
+        controllers.settings.saveWorkspaceLayout("media", 480, 380, 320, True, False, True)
         inspector = workspace.findChild(QQuickItem, "inspectorPanel")
         assert inspector is not None and _process_until(lambda: not inspector.isVisible())
         controllers.settings.setWorkspaceLayoutPreset("standard")
         assert _process_until(
-            lambda: workspace.property("layoutPreset") == "standard"
-            and inspector.isVisible()
+            lambda: workspace.property("layoutPreset") == "standard" and inspector.isVisible()
         )
         workspace.setProperty("maximizedPanel", "preview")
         tool_panel = workspace.findChild(QQuickItem, "toolPanelContainer")
         timeline = workspace.findChild(QQuickItem, "timelinePanel")
         assert _process_until(
-            lambda: not tool_panel.isVisible()
-            and not inspector.isVisible()
-            and not timeline.isVisible()
+            lambda: not tool_panel.isVisible() and not inspector.isVisible() and not timeline.isVisible()
         )
         workspace.setProperty("maximizedPanel", "")
         assert _process_until(
             lambda: tool_panel.isVisible() and inspector.isVisible() and timeline.isVisible()
         )
 
-        first_clip = controllers.timeline.clipsModel.get(1)["clipId"]
-        second_clip = controllers.timeline.clipsModel.get(2)["clipId"]
-        controllers.timeline.selectClip(first_clip)
+        first_clip = controllers.timeline_view.clipsModel.get(1)["clipId"]
+        second_clip = controllers.timeline_view.clipsModel.get(2)["clipId"]
+        controllers.timeline_view.selectClip(first_clip)
         effect_panel = workspace.findChild(QQuickItem, "visualEffectStackPanel")
         replace_button = workspace.findChild(QQuickItem, "replaceClipSourceButton")
         assert effect_panel is not None and _process_until(effect_panel.isVisible)
-        assert controllers.timeline.selectedClipVisualEffects
+        assert controllers.timeline_effects.selectedClipVisualEffects
         assert replace_button is not None and replace_button.isVisible()
-        controllers.timeline.selectClip(second_clip, True)
+        controllers.timeline_view.selectClip(second_clip, True)
         multi_panel = workspace.findChild(QQuickItem, "multiClipInspector")
         assert multi_panel is not None and _process_until(multi_panel.isVisible)
 
@@ -564,6 +694,8 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
         rendered = window.grabWindow()
         screenshot = tmp_path / "sample-evolved-workspace.png"
         assert not rendered.isNull() and rendered.save(str(screenshot))
+        if visual_qa_directory:
+            assert rendered.save(str(visual_qa_path / "sample-evolved-workspace.png"))
         assert screenshot.is_file() and screenshot.stat().st_size > 0
     finally:
         controllers.shutdown()
@@ -580,7 +712,7 @@ def test_settings_exposes_selectable_external_speech_components(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Speech Settings",
         )
@@ -603,9 +735,27 @@ def test_settings_exposes_selectable_external_speech_components(
         download = workspace.findChild(QQuickItem, "downloadSelectedRuntimeComponents")
         root_field = workspace.findChild(QQuickItem, "gptSoVitsRootField")
         model_directory_field = workspace.findChild(QQuickItem, "asrModelDirectoryField")
+        diarization_python_field = workspace.findChild(
+            QQuickItem,
+            "diarizationPythonField",
+        )
+        speaker_clustering_install = workspace.findChild(
+            QQuickItem,
+            "installSpeakerClusteringButton",
+        )
         assert all(
             item is not None
-            for item in (dialog, tabs, xxl, gpt, download, root_field, model_directory_field)
+            for item in (
+                dialog,
+                tabs,
+                xxl,
+                gpt,
+                download,
+                root_field,
+                model_directory_field,
+                diarization_python_field,
+                speaker_clustering_install,
+            )
         )
         assert QMetaObject.invokeMethod(dialog, "open")
         tabs.setProperty("currentIndex", 1)
@@ -616,6 +766,50 @@ def test_settings_exposes_selectable_external_speech_components(
         xxl.setProperty("checked", True)
         assert _process_until(lambda: download.property("enabled") is True)
         dialog.close()
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_transcript_workspace_exposes_multi_speaker_dubbing_panel(
+    tmp_path: Path,
+) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Dubbing workspace",
+        )
+        window = engine.rootObjects()[0]
+        page_loader = window.findChild(QObject, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        workspace.setProperty("activeMode", "transcript")
+        tabs = workspace.findChild(QQuickItem, "transcriptWorkspaceTabs")
+        assert tabs is not None
+        tabs.setProperty("currentIndex", 4)
+        panel = workspace.findChild(QQuickItem, "dubbingPanel")
+        assert panel is not None
+        assert _process_until(panel.isVisible)
+        transcribe_button = workspace.findChild(
+            QQuickItem,
+            "dubbingTranscribeSourceButton",
+        )
+        assert transcribe_button is not None
+        assert transcribe_button.isVisible()
+        assert transcribe_button.property("enabled") is False
+        readiness = controllers.dubbing.sourceReadiness()
+        assert readiness["available"] is False
+        assert readiness["active"] is False
+        assert readiness["reason"]
     finally:
         controllers.shutdown()
         engine.deleteLater()
@@ -663,9 +857,7 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.openProject(
-            QUrl.fromLocalFile(str(project_root)).toString()
-        )
+        controllers.workspace_project.openProject(QUrl.fromLocalFile(str(project_root)).toString())
         assert controllers.workspace.readOnly is True
         window = engine.rootObjects()[0]
         page_loader = window.findChild(QQuickItem, "pageLoader")
@@ -681,27 +873,21 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
         def mute_button(kind: str):
             object_name = f"trackMuteButton_{track_ids[kind]}"
             return next(
-                (
-                    item
-                    for item in _visual_items(track_controls)
-                    if item.objectName() == object_name
-                ),
+                (item for item in _visual_items(track_controls) if item.objectName() == object_name),
                 None,
             )
 
         mute_controls_ready = _process_until(
             lambda: track_controls.isVisible()
-            and controllers.timeline.tracksModel.rowCount() >= 3
+            and controllers.timeline_view.tracksModel.rowCount() >= 3
             and all(mute_button(kind) is not None for kind in ("video", "audio"))
         )
         assert mute_controls_ready, {
             "trackControlsVisible": track_controls.isVisible(),
-            "trackCount": controllers.timeline.tracksModel.rowCount(),
+            "trackCount": controllers.timeline_view.tracksModel.rowCount(),
             "trackIds": track_ids,
             "muteObjects": [
-                item.objectName()
-                for item in _visual_items(track_controls)
-                if "Mute" in item.objectName()
+                item.objectName() for item in _visual_items(track_controls) if "Mute" in item.objectName()
             ],
         }
         for kind in ("video", "audio"):
@@ -718,22 +904,16 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
         assert user_errors == ["项目以只读方式打开"]
         assert controllers.tasks.tasksModel.rowCount() == task_count_before_read_only_action
         preview_errors: list[str] = []
-        controllers.workspace.errorOccurred.connect(
-            preview_errors.append
-        )
-        controllers.workspace.reportPreviewDroppedFrames(
-            controllers.session.service_settings.preview.dropped_frame_proxy_threshold
+        controllers.workspace.errorOccurred.connect(preview_errors.append)
+        controllers.workspace_sequence.reportPreviewDroppedFrames(
+            controllers.session.state.service_settings.preview.dropped_frame_proxy_threshold
         )
         QCoreApplication.processEvents()
         assert preview_errors == []
-        assert (
-            controllers.tasks.tasksModel.rowCount()
-            == task_count_before_read_only_action
-        )
+        assert controllers.tasks.tasksModel.rowCount() == task_count_before_read_only_action
         assert _process_until(
             lambda: any(
-                "项目以只读方式打开" in str(item.property("text") or "")
-                and item.isVisible()
+                "项目以只读方式打开" in str(item.property("text") or "") and item.isVisible()
                 for item in _visual_items(window.contentItem())
             )
         )
@@ -747,10 +927,7 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
         media_drop = workspace.findChild(QQuickItem, "mediaFileDropArea")
         timeline_drop = workspace.findChild(QQuickItem, "timelineDropArea")
         assert import_button is not None and import_button.property("enabled") is False
-        assert (
-            download_button is not None
-            and download_button.property("enabled") is False
-        )
+        assert download_button is not None and download_button.property("enabled") is False
         assert import_dialog is not None and import_dialog.property("visible") is False
         assert media_drop is not None and media_drop.property("enabled") is False
         assert timeline_drop is not None and timeline_drop.property("enabled") is False
@@ -787,14 +964,11 @@ def test_read_only_project_disables_mutations_across_qml_entry_points(
         workspace.setProperty("activeMode", "tasks")
         assert _process_until(
             lambda: any(
-                item.property("text") == "重试" and item.isVisible()
-                for item in _visual_items(workspace)
+                item.property("text") == "重试" and item.isVisible() for item in _visual_items(workspace)
             )
         )
         retry_button = next(
-            item
-            for item in _visual_items(workspace)
-            if item.property("text") == "重试" and item.isVisible()
+            item for item in _visual_items(workspace) if item.property("text") == "重试" and item.isVisible()
         )
         assert retry_button.property("enabled") is False
     finally:
@@ -813,7 +987,7 @@ def test_export_capability_follows_real_active_sequence_content(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Export Capability",
         )
@@ -868,15 +1042,13 @@ def test_export_capability_follows_real_active_sequence_content(
 
         source = tmp_path / "exportable-source.mp4"
         generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
-        controllers.media.importFiles(
-            [QUrl.fromLocalFile(str(source))]
-        )
+        controllers.media.importFiles([QUrl.fromLocalFile(str(source))])
         assert _process_until(
             lambda: controllers.media.assetsModel.rowCount() == 1,
             timeout=20,
         )
         asset_id = controllers.media.assetsModel.get(0)["assetId"]
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.dropAssets(
             [asset_id],
             "",
             -1,
@@ -887,25 +1059,25 @@ def test_export_capability_follows_real_active_sequence_content(
             False,
         )
         placed = _process_until(
-            lambda: controllers.timeline.clipsModel.rowCount() == 1
+            lambda: controllers.timeline_view.clipsModel.rowCount() == 1
             and controllers.export.canExportSequence,
             timeout=20,
         )
         assert placed, {
-            "trackCount": controllers.timeline.tracksModel.rowCount(),
-            "clipCount": controllers.timeline.clipsModel.rowCount(),
-            "pendingAssetIds": list(controllers.session.asset_state.pending_batch_ids),
-            "pendingProfileAssetId": controllers.session.asset_state.pending_profile_asset_id,
+            "trackCount": controllers.timeline_view.tracksModel.rowCount(),
+            "clipCount": controllers.timeline_view.clipsModel.rowCount(),
+            "pendingAssetIds": list(controllers.session.state.assets.pending_batch_ids),
+            "pendingProfileAssetId": controllers.session.state.assets.pending_profile_asset_id,
             "status": controllers.workspace.statusMessage,
             "errors": errors,
         }
         assert all(button.isEnabled() for button in export_buttons)
         video_track = next(
-            controllers.timeline.tracksModel.get(index)
-            for index in range(controllers.timeline.tracksModel.rowCount())
-            if controllers.timeline.tracksModel.get(index)["kind"] == "video"
+            controllers.timeline_view.tracksModel.get(index)
+            for index in range(controllers.timeline_view.tracksModel.rowCount())
+            if controllers.timeline_view.tracksModel.get(index)["kind"] == "video"
         )
-        controllers.timeline.updateTrack(
+        controllers.timeline_structure.updateTrack(
             video_track["trackId"],
             False,
             video_track["locked"],
@@ -917,7 +1089,7 @@ def test_export_capability_follows_real_active_sequence_content(
             lambda: not controllers.export.canExportSequence
             and all(not button.isEnabled() for button in export_buttons)
         )
-        controllers.timeline.updateTrack(
+        controllers.timeline_structure.updateTrack(
             video_track["trackId"],
             True,
             video_track["locked"],
@@ -944,20 +1116,20 @@ def test_export_capability_follows_real_active_sequence_content(
         assert export_task["artifacts"]
         assert Path(export_task["artifacts"][0]).is_file()
 
-        controllers.workspace.createShortSequence("Empty Sequence")
+        controllers.workspace_sequence.createShortSequence("Empty Sequence")
         assert _process_until(
             lambda: not controllers.export.canExportSequence
             and all(not button.isEnabled() for button in export_buttons)
         )
-        controllers.workspace.selectSequence(main_sequence_id)
+        controllers.workspace_sequence.selectSequence(main_sequence_id)
         assert _process_until(
             lambda: controllers.export.canExportSequence
             and all(button.isEnabled() for button in export_buttons)
         )
-        controllers.timeline.selectAllClips()
-        controllers.timeline.deleteSelectedClips(False)
+        controllers.timeline_view.selectAllClips()
+        controllers.timeline_clips.deleteSelectedClips(False)
         assert _process_until(
-            lambda: controllers.timeline.clipsModel.rowCount() == 0
+            lambda: controllers.timeline_view.clipsModel.rowCount() == 0
             and not controllers.export.canExportSequence
             and all(not button.isEnabled() for button in export_buttons)
         )
@@ -983,7 +1155,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Drag Placement",
         )
@@ -1031,7 +1203,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         media_search.setProperty("text", "")
         window.contentItem().forceActiveFocus()
 
-        assert controllers.timeline.tracksModel.rowCount() == 0
+        assert controllers.timeline_view.tracksModel.rowCount() == 0
         preview_viewport = window.findChild(QQuickItem, "previewViewport")
         assert preview_viewport is not None
         preview_viewport.seek(17)
@@ -1069,17 +1241,17 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
             QPointF(75 * 3.0, 36),
         )
         assert _process_until(
-            lambda: controllers.timeline.clipsModel.rowCount() == 1
+            lambda: controllers.timeline_view.clipsModel.rowCount() == 1
             and controllers.workspace.profileConfirmed,
             timeout=20,
         )
-        first_clip = controllers.timeline.clipsModel.get(0)
+        first_clip = controllers.timeline_view.clipsModel.get(0)
         video_track = next(
-            controllers.timeline.tracksModel.get(index)
-            for index in range(controllers.timeline.tracksModel.rowCount())
-            if controllers.timeline.tracksModel.get(index)["kind"] == "video"
+            controllers.timeline_view.tracksModel.get(index)
+            for index in range(controllers.timeline_view.tracksModel.rowCount())
+            if controllers.timeline_view.tracksModel.get(index)["kind"] == "video"
         )
-        assert controllers.timeline.tracksModel.rowCount() == 2
+        assert controllers.timeline_view.tracksModel.rowCount() == 2
         assert first_clip["trackId"] == video_track["trackId"]
         assert first_clip["startFrame"] == 0
         assert controllers.workspace.profileLabel == "640×360  25 fps"
@@ -1099,7 +1271,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert first_clip_item.isVisible()
         assert abs(first_clip_item.x()) <= 1
         assert _process_until(
-            lambda: controllers.timeline.clipsModel.get(0)["waveformReady"],
+            lambda: controllers.timeline_view.clipsModel.get(0)["waveformReady"],
             timeout=20,
         )
         assert _process_until(
@@ -1112,7 +1284,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         clip_context_menu = window.findChild(QObject, "timelineClipContextMenu")
         assert clip_context_menu is not None
         assert _process_until(lambda: clip_context_menu.property("visible"))
-        assert controllers.timeline.selectedClipId == first_clip["clipId"]
+        assert controllers.timeline_view.selectedClipId == first_clip["clipId"]
         split_menu_item = window.findChild(QQuickItem, "timelineSplitClipMenuItem")
         detach_menu_item = window.findChild(QQuickItem, "timelineDetachAudioMenuItem")
         assert split_menu_item is not None and split_menu_item.isVisible()
@@ -1120,7 +1292,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert detach_menu_item.property("enabled") is True
         assert QMetaObject.invokeMethod(detach_menu_item, "click")
         assert _process_until(
-            lambda: controllers.timeline.clipsModel.rowCount() == 2
+            lambda: controllers.timeline_view.clipsModel.rowCount() == 2
             and not clip_context_menu.property("visible")
         )
         timeline_view.openClipContextMenu(first_clip["clipId"])
@@ -1134,9 +1306,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         detach_background = detach_menu_item.property("background")
         detach_content = detach_menu_item.property("contentItem")
         assert detach_background is not None and detach_content is not None
-        assert _process_until(
-            lambda: detach_background.property("color") == QColor("#36373b")
-        )
+        assert _process_until(lambda: detach_background.property("color") == QColor("#36373b"))
         assert detach_content.property("textColor") == QColor("#62656b")
         split_content = split_menu_item.property("contentItem")
         split_text_items = {
@@ -1153,8 +1323,8 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert context_menu_render_path.is_file() and context_menu_render_path.stat().st_size > 0
         QTest.keyClick(window, Qt.Key_Escape)
         assert _process_until(lambda: not clip_context_menu.property("visible"))
-        controllers.timeline.undo()
-        assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 1)
+        controllers.timeline_structure.undo()
+        assert _process_until(lambda: controllers.timeline_view.clipsModel.rowCount() == 1)
         assert _process_until(
             lambda: any(
                 item.isVisible() and item.property("assetId") == first_clip["assetId"]
@@ -1183,15 +1353,11 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
             and preview_player.property("duration") == controllers.workspace.timelineDurationFrames
             and not preview_player.property("errorString"),
             timeout=20,
-            )
+        )
         initial_preview_graph = Path(controllers.workspace.previewGraphPath)
         assert initial_preview_graph.name.startswith("pv-")
         assert initial_preview_graph.is_relative_to(
-            (
-                RuntimeContext.discover().paths.runtime_dir
-                / "cache"
-                / "projects"
-            ).resolve()
+            (RuntimeContext.discover().paths.runtime_dir / "cache" / "projects").resolve()
         )
 
         timeline_view.setProperty("pixelsPerFrame", 0.5)
@@ -1263,7 +1429,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
 
         sequence_last_frame = controllers.workspace.timelineDurationFrames - 1
         playback_frame = max(3, sequence_last_frame // 2)
-        controllers.timeline.setSequenceInOut(0, 2)
+        controllers.timeline_structure.setSequenceInOut(0, 2)
         timeline_view.seekToFrame(playback_frame)
         assert _process_until(
             lambda: preview_player.property("position") == playback_frame
@@ -1280,7 +1446,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         QCoreApplication.processEvents()
         assert preview_player.property("playing") is False
         assert preview_player.property("position") == sequence_last_frame
-        controllers.timeline.clearSequenceInOut()
+        controllers.timeline_structure.clearSequenceInOut()
         timeline_view.setProperty("pixelsPerFrame", 3.0)
         timeline_scroll.setProperty("contentX", 0.0)
         timeline_view.seekToFrame(0)
@@ -1342,7 +1508,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert window.findChild(QObject, "mediaListViewModeButton") is None
         assert window.findChild(QObject, "mediaThumbnailViewModeButton") is None
         assert window.findChild(QObject, "mediaLargeThumbnailViewModeButton") is None
-        assert view_mode_button.width() == 32
+        assert view_mode_button.width() == 28
         assert view_mode_button.property("iconKind") == "list"
         assert QMetaObject.invokeMethod(view_mode_button, "click")
         assert _process_until(
@@ -1370,10 +1536,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         large_delegate = asset_delegate(image_asset["assetId"])
         assert large_delegate.property("viewMode") == "large_thumbnails"
         assert large_delegate.height() == 132
-        assert (
-            DesktopSettingsRepository().load().ui.asset_view_mode
-            == "large_thumbnails"
-        )
+        assert DesktopSettingsRepository().load().ui.asset_view_mode == "large_thumbnails"
         large_thumbnail_render = window.grabWindow()
         assert not large_thumbnail_render.isNull()
         assert large_thumbnail_render.save(str(tmp_path / "media-large-thumbnail-view.png"))
@@ -1393,11 +1556,11 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
                 video_track["position"] * 73 + 36,
             ),
         )
-        assert controllers.timeline.clipsModel.rowCount() == 2
+        assert controllers.timeline_view.clipsModel.rowCount() == 2
         snapped_image = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["assetKind"] == "image"
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["assetKind"] == "image"
         )
         assert snapped_image["trackId"] == video_track["trackId"]
         assert snapped_image["startFrame"] == first_clip["endFrame"]
@@ -1409,19 +1572,19 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         )
         assert initial_preview_graph.is_file()
 
-        track_count = controllers.timeline.tracksModel.rowCount()
+        track_count = controllers.timeline_view.tracksModel.rowCount()
         _drag_quick_item(
             window,
             image_delegate,
             timeline_drop_area,
             QPointF(0, video_track["position"] * 73 + 36),
         )
-        assert controllers.timeline.tracksModel.rowCount() == track_count + 1
+        assert controllers.timeline_view.tracksModel.rowCount() == track_count + 1
         overlapping_image = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["assetKind"] == "image"
-            and controllers.timeline.clipsModel.get(index)["startFrame"] == 0
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["assetKind"] == "image"
+            and controllers.timeline_view.clipsModel.get(index)["startFrame"] == 0
         )
         assert overlapping_image["trackId"] != video_track["trackId"]
 
@@ -1496,12 +1659,12 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
             subtitle_source.parent.resolve(),
         ]
         audio_track = next(
-            controllers.timeline.tracksModel.get(index)
-            for index in range(controllers.timeline.tracksModel.rowCount())
-            if controllers.timeline.tracksModel.get(index)["kind"] == "audio"
+            controllers.timeline_view.tracksModel.get(index)
+            for index in range(controllers.timeline_view.tracksModel.rowCount())
+            if controllers.timeline_view.tracksModel.get(index)["kind"] == "audio"
         )
-        track_count = controllers.timeline.tracksModel.rowCount()
-        controllers.timeline.dropAssets(
+        track_count = controllers.timeline_view.tracksModel.rowCount()
+        controllers.timeline_clips.dropAssets(
             [subtitle_asset["assetId"]],
             audio_track["trackId"],
             audio_track["position"],
@@ -1511,9 +1674,9 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
             True,
             False,
         )
-        assert controllers.timeline.tracksModel.rowCount() == track_count + 1
-        assert _process_until(lambda: controllers.subtitles.subtitlePlacementsModel.rowCount() == 1)
-        placement = controllers.subtitles.subtitlePlacementsModel.get(0)
+        assert controllers.timeline_view.tracksModel.rowCount() == track_count + 1
+        assert _process_until(lambda: controllers.subtitle_view.subtitlePlacementsModel.rowCount() == 1)
+        placement = controllers.subtitle_view.subtitlePlacementsModel.get(0)
         assert placement["audioTrackPosition"] == audio_track["position"]
         for _ in range(10):
             QCoreApplication.processEvents()
@@ -1523,7 +1686,7 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
         assert not rendered.isNull() and rendered.save(str(screenshot))
 
         long_timeline_frame = 2 * 60 * 60 * 25
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.dropAssets(
             [image_asset["assetId"]],
             video_track["trackId"],
             video_track["position"],
@@ -1576,9 +1739,9 @@ def test_drag_import_placement_snap_tracks_and_first_video_profile(
             lambda: asset_context_menu.property("visible")
         )
         assert add_at_playhead is not None and add_at_playhead.isVisible()
-        clip_count = controllers.timeline.clipsModel.rowCount()
+        clip_count = controllers.timeline_view.clipsModel.rowCount()
         assert QMetaObject.invokeMethod(add_at_playhead, "click")
-        assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == clip_count + 1)
+        assert _process_until(lambda: controllers.timeline_view.clipsModel.rowCount() == clip_count + 1)
         assert _process_until(lambda: not asset_context_menu.property("visible"))
         status_message = window.findChild(QQuickItem, "workspaceStatusMessage")
         assert status_message is not None
@@ -1629,12 +1792,12 @@ print('100%', flush=True)
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Timeline Transcription",
         )
         sequence_id = controllers.workspace.activeSequenceId
-        controllers.timeline.importFilesToTimeline(
+        controllers.timeline_clips.importFilesToTimeline(
             [QUrl.fromLocalFile(str(source))],
             "",
             0,
@@ -1645,7 +1808,7 @@ print('100%', flush=True)
             True,
         )
         assert _process_until(
-            lambda: controllers.timeline.clipsModel.rowCount() == 1,
+            lambda: controllers.timeline_view.clipsModel.rowCount() == 1,
             timeout=20,
         )
 
@@ -1683,7 +1846,7 @@ print('100%', flush=True)
         assert device_select is not None and device_select.isVisible()
         assert parallel_select is not None and parallel_select.isVisible()
         assert model_select.property("currentValue") == "tiny.en"
-        plan_summary = controllers.subtitles.transcriptionPlanSummary
+        plan_summary = controllers.subtitle_transcription.transcriptionPlanSummary
         assert plan_summary["available"] is True
         assert plan_summary["sourceCount"] == 1
         assert plan_summary["regionCount"] == 1
@@ -1702,39 +1865,39 @@ print('100%', flush=True)
         def transcription_completed() -> bool:
             return any(
                 isinstance(task.command, TranscribeSequenceCommand) and task.status == TaskStatus.COMPLETED
-                for task in controllers.session.binding.current.list_tasks()
+                for task in controllers.session.state.binding.current.list_tasks()
             )
 
         assert _process_until(transcription_completed, timeout=20)
         transcription_task = next(
             task
-            for task in controllers.session.binding.current.list_tasks()
+            for task in controllers.session.state.binding.current.list_tasks()
             if isinstance(task.command, TranscribeSequenceCommand)
         )
         assert transcription_task.command.plan.asr.model == "tiny.en"
         assert transcription_task.command.plan.timeline_signature != "legacy"
         assert progress_snapshots
         assert progress_snapshots == sorted(progress_snapshots)
-        documents = controllers.session.binding.current.list_subtitle_documents(sequence_id=sequence_id)
+        documents = controllers.session.state.binding.current.list_subtitle_documents(sequence_id=sequence_id)
         assert len(documents) == 1
         assert documents[0].purpose == "sequence_transcript"
         assert not (
-            controllers.session.binding.current.project_dir
+            controllers.session.state.binding.current.project_dir
             / "generated"
             / "audio"
             / f"{sequence_id}-transcription.wav"
         ).exists()
-        segments = controllers.session.binding.current.list_subtitle_segments(documents[0].id)
+        segments = controllers.session.state.binding.current.list_subtitle_segments(documents[0].id)
         assert [segment.text for segment in segments] == ["Timeline button output"]
-        words = controllers.session.binding.current.list_subtitle_words(documents[0].id)
+        words = controllers.session.state.binding.current.list_subtitle_words(documents[0].id)
         assert [word.text for word in words] == ["Timeline", "button", "output"]
         assert all(word.timing_source == "estimated" for word in words)
         subtitle_track = next(
             track
-            for track in controllers.session.binding.current.load_timeline(sequence_id).tracks
+            for track in controllers.session.state.binding.current.load_timeline(sequence_id).tracks
             if track.kind == TrackKind.SUBTITLE
         )
-        assert len(controllers.session.binding.current.list_subtitle_placements(subtitle_track.id)) == 1
+        assert len(controllers.session.state.binding.current.list_subtitle_placements(subtitle_track.id)) == 1
 
         result_panel = workspace.findChild(QQuickItem, "transcriptResultPanel")
         open_subtitles = workspace.findChild(QQuickItem, "transcriptOpenSubtitleButton")
@@ -1759,24 +1922,19 @@ print('100%', flush=True)
         )
         subtitle_list = workspace.findChild(QQuickItem, "subtitleSegmentList")
         assert subtitle_list is not None and subtitle_list.isVisible()
-        controllers.subtitles.selectSubtitleSegment(segments[0].id, False)
-        subtitle_text_editor = workspace.findChild(
-            QQuickItem, "subtitleSegmentTextEditor")
-        subtitle_save = workspace.findChild(
-            QQuickItem, "subtitleSegmentSaveButton")
+        controllers.subtitle_view.selectSubtitleSegment(segments[0].id, False)
+        subtitle_text_editor = workspace.findChild(QQuickItem, "subtitleSegmentTextEditor")
+        subtitle_save = workspace.findChild(QQuickItem, "subtitleSegmentSaveButton")
         assert subtitle_text_editor is not None and subtitle_save is not None
         subtitle_text_editor.forceActiveFocus()
-        assert _process_until(
-            lambda: subtitle_text_editor.property("activeFocus") is True)
+        assert _process_until(lambda: subtitle_text_editor.property("activeFocus") is True)
         subtitle_text_editor.setProperty("text", "Timeline button draft")
         controllers.settings.selectGlossaryTerm("")
         QCoreApplication.processEvents()
         assert subtitle_text_editor.property("text") == "Timeline button draft"
         assert QMetaObject.invokeMethod(subtitle_save, "click")
         assert _process_until(
-            lambda: controllers.session.binding.current.list_subtitle_segments(
-                documents[0].id
-            )[0].text
+            lambda: controllers.session.state.binding.current.list_subtitle_segments(documents[0].id)[0].text
             == "Timeline button draft"
         )
         rendered = window.grabWindow()
@@ -1863,13 +2021,15 @@ print('100%', flush=True)
     app = QGuiApplication.instance() or QGuiApplication([])
     configure_application_font(app)
     engine, controllers = create_engine(app)
+    delivery_errors: list[str] = []
+    controllers.tasks.errorOccurred.connect(delivery_errors.append)
     try:
-        controllers.workspace.createProject(
+        controllers.workspace_project.createProject(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Large Timeline Transcription",
         )
         sequence_id = controllers.workspace.activeSequenceId
-        controllers.timeline.importFilesToTimeline(
+        controllers.timeline_clips.importFilesToTimeline(
             [QUrl.fromLocalFile(str(source))],
             "",
             0,
@@ -1880,7 +2040,7 @@ print('100%', flush=True)
             True,
         )
         assert _process_until(
-            lambda: controllers.timeline.clipsModel.rowCount() == 1,
+            lambda: controllers.timeline_view.clipsModel.rowCount() == 1,
             timeout=20,
         )
 
@@ -1907,19 +2067,48 @@ print('100%', flush=True)
         assert transcribe_button is not None
         assert QMetaObject.invokeMethod(transcribe_button, "click")
 
-        def transcription_completed() -> bool:
-            return any(
-                isinstance(task.command, TranscribeSequenceCommand) and task.status == TaskStatus.COMPLETED
-                for task in controllers.session.binding.current.list_tasks()
-            )
+        def transcription_settled() -> bool:
+            return bool(delivery_errors) or controllers.tasks.latestTask("transcribe", sequence_id).get(
+                "status"
+            ) in {
+                TaskStatus.COMPLETED.value,
+                TaskStatus.FAILED.value,
+                TaskStatus.CANCELLED.value,
+            }
 
-        assert _process_until(transcription_completed, timeout=90)
-        documents = controllers.session.binding.current.list_subtitle_documents(sequence_id=sequence_id)
+        assert _process_until(transcription_settled, timeout=90)
+        task_row = controllers.tasks.latestTask("transcribe", sequence_id)
+        assert task_row.get("status") == TaskStatus.COMPLETED.value, {
+            "task": task_row,
+            "deliveryErrors": delivery_errors,
+            "eventCursor": controllers.session.state.tasks.cursor,
+            "eventsAfterCursor": [
+                (event.cursor, event.event_type, event.revision, event.payload.get("status"))
+                for event in controllers.session.state.binding.current.task_events_after(
+                    controllers.session.state.tasks.cursor
+                )
+            ],
+            "projectedTasks": [
+                (task.id, task.status.value, task.revision)
+                for task in controllers.session.state.tasks.items.values()
+                if isinstance(task.command, TranscribeSequenceCommand)
+            ],
+            "projectTasks": [
+                (task.id, task.status.value, task.revision)
+                for task in controllers.session.state.binding.current.list_tasks()
+                if isinstance(task.command, TranscribeSequenceCommand)
+            ],
+        }
+        assert any(
+            isinstance(task.command, TranscribeSequenceCommand) and task.status == TaskStatus.COMPLETED
+            for task in controllers.session.state.binding.current.list_tasks()
+        )
+        documents = controllers.session.state.binding.current.list_subtitle_documents(sequence_id=sequence_id)
         document = next(item for item in documents if item.purpose == "sequence_transcript")
-        assert len(controllers.session.binding.current.list_subtitle_segments(document.id)) == 3000
-        assert len(controllers.session.binding.current.list_subtitle_words(document.id)) == 6000
-        assert controllers.subtitles.selectedDocumentId == ""
-        assert controllers.subtitles.subtitleSegmentsModel.rowCount() == 0
+        assert len(controllers.session.state.binding.current.list_subtitle_segments(document.id)) == 3000
+        assert len(controllers.session.state.binding.current.list_subtitle_words(document.id)) == 6000
+        assert controllers.subtitle_view.selectedDocumentId == ""
+        assert controllers.subtitle_view.subtitleSegmentsModel.rowCount() == 0
         result_panel = workspace.findChild(QQuickItem, "transcriptResultPanel")
         assert _process_until(lambda: result_panel is not None and result_panel.isVisible())
         assert workspace.findChild(QQuickItem, "transcriptWordEditor") is None
@@ -1982,15 +2171,14 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
-        controllers.workspace.createProject(QUrl.fromLocalFile(str(tmp_path)).toString(), "UI Test")
+        controllers.workspace_project.createProject(QUrl.fromLocalFile(str(tmp_path)).toString(), "UI Test")
         assert controllers.workspace.hasProject is True
         assert controllers.workspace.sequencesModel.rowCount() == 1
-        assert controllers.timeline.tracksModel.rowCount() == 0
+        assert controllers.timeline_view.tracksModel.rowCount() == 0
 
         assert _process_until(
             lambda: any(
-                option["value"] == "software"
-                and "h264" in option["formats"]
+                option["value"] == "software" and "h264" in option["formats"]
                 for option in controllers.export.encoderPolicyOptions
             )
         )
@@ -1998,8 +2186,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             next(
                 option["label"]
                 for option in controllers.export.encoderPolicyOptions
-                if option["value"] == "software"
-                and "h264" in option["formats"]
+                if option["value"] == "software" and "h264" in option["formats"]
             )
             == "H.264 软件"
         )
@@ -2052,9 +2239,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             server.shutdown()
             server.server_close()
             server_thread.join(timeout=5)
-        controllers.media.importFiles(
-            [QUrl.fromLocalFile(str(source))]
-        )
+        controllers.media.importFiles([QUrl.fromLocalFile(str(source))])
         assert _process_until(
             lambda: controllers.media.assetsModel.rowCount() == 1
             and controllers.workspace.workflowStage == "prepare_media"
@@ -2066,36 +2251,34 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.workspace.workflowStatus == "awaiting_confirmation"
 
         asset_id = controllers.media.assetsModel.get(0)["assetId"]
-        controllers.timeline.dropAssets([asset_id], "", -1, 0, 3.0, 0, True, False)
+        controllers.timeline_clips.dropAssets([asset_id], "", -1, 0, 3.0, 0, True, False)
         QCoreApplication.processEvents()
 
-        assert controllers.timeline.clipsModel.rowCount() == 1
-        assert controllers.timeline.selectedClipId == controllers.timeline.clipsModel.get(0)["clipId"]
+        assert controllers.timeline_view.clipsModel.rowCount() == 1
+        assert (
+            controllers.timeline_view.selectedClipId == controllers.timeline_view.clipsModel.get(0)["clipId"]
+        )
         assert engine.rootObjects()[0].title() == "UI Test"
         assert (
             controllers.session.projectors.timeline._preview_timer.isActive()
-            or controllers.session.requests.preview_id > 0
+            or controllers.session.state.requests.preview_id > 0
         )
         assert _process_until(
-            lambda: controllers.session.requests.preview_id > 0,
+            lambda: controllers.session.state.requests.preview_id > 0,
             timeout=5,
         ), {
             "timer_active": controllers.session.projectors.timeline._preview_timer.isActive(),
-            "timer_remaining_ms": (
-                controllers.session.projectors.timeline._preview_timer.remainingTime()
-            ),
+            "timer_remaining_ms": (controllers.session.projectors.timeline._preview_timer.remainingTime()),
         }
 
         preview_ready = _process_until(
             lambda: bool(controllers.workspace.previewGraphPath),
             timeout=30,
         )
-        preview_future = controllers.session.requests.preview_future
+        preview_future = controllers.session.state.requests.preview_future
         assert preview_ready, {
-            "preview_request_id": controllers.session.requests.preview_id,
-            "preview_timer_active": (
-                controllers.session.projectors.timeline._preview_timer.isActive()
-            ),
+            "preview_request_id": controllers.session.state.requests.preview_id,
+            "preview_timer_active": (controllers.session.projectors.timeline._preview_timer.isActive()),
             "preview_timer_remaining_ms": (
                 controllers.session.projectors.timeline._preview_timer.remainingTime()
             ),
@@ -2106,12 +2289,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 if preview_future is not None and preview_future.done()
                 else ""
             ),
-            "last_error_id": controllers.session.presentation.last_error_id,
-            "status": controllers.session.presentation.status_message,
+            "last_error_id": controllers.session.state.presentation.last_error_id,
+            "status": controllers.session.state.presentation.status_message,
         }
         source_preview_graph = controllers.workspace.previewGraphPath
-        controllers.workspace.reportPreviewDroppedFrames(
-            controllers.session.service_settings.preview.dropped_frame_proxy_threshold
+        controllers.workspace_sequence.reportPreviewDroppedFrames(
+            controllers.session.state.service_settings.preview.dropped_frame_proxy_threshold
         )
         assert _process_until(
             lambda: any(
@@ -2122,7 +2305,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             and controllers.media.assetsModel.get(0)["proxyReady"],
             timeout=30,
         )
-        project = controllers.session.binding.current
+        project = controllers.session.state.binding.current
         assert project is not None
         proxied_asset = project.get_asset(asset_id)
         assert proxied_asset.proxy_path
@@ -2147,8 +2330,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert preview_player is not None
         assert _process_until(
-            lambda: preview_player.property("duration") > 0
-            and not preview_player.property("errorString"),
+            lambda: preview_player.property("duration") > 0 and not preview_player.property("errorString"),
             timeout=30,
         )
         proxy_start_position = int(preview_player.property("position"))
@@ -2162,8 +2344,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert controllers.workspace.workflowStage == "prepare_media"
         assert controllers.workspace.workflowStatus == "awaiting_confirmation"
 
-        analyzed_clip_before = dict(controllers.timeline.clipsModel.get(0))
-        controllers.timeline.analyzeSequenceBoundaries()
+        analyzed_clip_before = dict(controllers.timeline_view.clipsModel.get(0))
+        controllers.timeline_analysis.analyzeSequenceBoundaries()
         boundary_deadline = time.monotonic() + 30
         boundary_task = None
         while time.monotonic() < boundary_deadline:
@@ -2188,12 +2370,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             0,
             analyzed_clip_before["endFrame"],
         )
-        analyzed_clip_after = controllers.timeline.clipsModel.get(0)
+        analyzed_clip_after = controllers.timeline_view.clipsModel.get(0)
         assert {key: value for key, value in analyzed_clip_after.items() if key != "waveformReady"} == {
             key: value for key, value in analyzed_clip_before.items() if key != "waveformReady"
         }
 
-        controllers.timeline.setSequenceInOut(1, analyzed_clip_before["endFrame"] - 1)
+        controllers.timeline_structure.setSequenceInOut(1, analyzed_clip_before["endFrame"] - 1)
         assert (controllers.workspace.sequenceInFrame, controllers.workspace.sequenceOutFrame) == (
             1,
             analyzed_clip_before["endFrame"] - 1,
@@ -2217,41 +2399,39 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         in_out_render = engine.rootObjects()[0].grabWindow()
         assert not in_out_render.isNull()
         assert in_out_render.save(str(tmp_path / "sequence-in-out.png"))
-        controllers.timeline.undo()
+        controllers.timeline_structure.undo()
         assert (controllers.workspace.sequenceInFrame, controllers.workspace.sequenceOutFrame) == (
             0,
             analyzed_clip_before["endFrame"],
         )
-        controllers.timeline.redo()
+        controllers.timeline_structure.redo()
         assert controllers.workspace.sequenceInFrame == 1
 
-        first_clip = controllers.timeline.clipsModel.get(0)
-        controllers.timeline.duplicateClip(first_clip["clipId"], 3.0, first_clip["endFrame"])
-        assert controllers.timeline.clipsModel.rowCount() == 2
-        second_clip_id = controllers.timeline.clipsModel.get(1)["clipId"]
-        controllers.timeline.addTransitionAfter(first_clip["clipId"], "dissolve", 8)
-        assert controllers.timeline.transitionsModel.rowCount() == 1
-        transition_id = controllers.timeline.transitionsModel.get(0)["transitionId"]
-        controllers.timeline.selectTransition(transition_id)
+        first_clip = controllers.timeline_view.clipsModel.get(0)
+        controllers.timeline_clips.duplicateClip(first_clip["clipId"], 3.0, first_clip["endFrame"])
+        assert controllers.timeline_view.clipsModel.rowCount() == 2
+        second_clip_id = controllers.timeline_view.clipsModel.get(1)["clipId"]
+        controllers.timeline_structure.addTransitionAfter(first_clip["clipId"], "dissolve", 8)
+        assert controllers.timeline_view.transitionsModel.rowCount() == 1
+        transition_id = controllers.timeline_view.transitionsModel.get(0)["transitionId"]
+        controllers.timeline_view.selectTransition(transition_id)
         workspace = engine.rootObjects()[0].findChild(QQuickItem, "workspace")
         assert workspace is not None
         QCoreApplication.processEvents()
-        transition_kind = engine.rootObjects()[0].findChild(
-            QQuickItem, "selectedTransitionKind")
-        transition_duration = engine.rootObjects()[0].findChild(
-            QQuickItem, "selectedTransitionDuration")
+        transition_kind = engine.rootObjects()[0].findChild(QQuickItem, "selectedTransitionKind")
+        transition_duration = engine.rootObjects()[0].findChild(QQuickItem, "selectedTransitionDuration")
         assert transition_kind is not None and transition_duration is not None
         assert _process_until(
             lambda: transition_kind.property("currentValue") == "dissolve"
             and transition_duration.property("value") == 8
         )
-        controllers.timeline.updateTransition(transition_id, "fade", 6)
-        assert controllers.timeline.transitionsModel.get(0)["durationFrames"] == 6
+        controllers.timeline_structure.updateTransition(transition_id, "fade", 6)
+        assert controllers.timeline_view.transitionsModel.get(0)["durationFrames"] == 6
         assert _process_until(
             lambda: transition_kind.property("currentValue") == "fade"
             and transition_duration.property("value") == 6
         )
-        controllers.timeline.clearSelection()
+        controllers.timeline_view.clearSelection()
         multi_select_button = engine.rootObjects()[0].findChild(QQuickItem, "timelineMultiSelectButton")
         assert multi_select_button is not None
         assert QMetaObject.invokeMethod(multi_select_button, "click")
@@ -2273,15 +2453,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 Qt.NoModifier,
                 QPoint(round(click_point.x()), round(click_point.y())),
             )
-        assert controllers.timeline.selectedClipIds == [
+        assert controllers.timeline_view.selectedClipIds == [
             first_clip["clipId"],
             second_clip_id,
         ]
-        assert controllers.timeline.canCreateCompoundClip is True
-        controllers.timeline.createCompoundClip()
-        assert controllers.timeline.compoundClipsModel.rowCount() == 1
-        compound_id = controllers.timeline.compoundClipsModel.get(0)["compoundId"]
-        assert controllers.timeline.selectedCompoundId == compound_id
+        assert controllers.timeline_view.canCreateCompoundClip is True
+        controllers.timeline_structure.createCompoundClip()
+        assert controllers.timeline_view.compoundClipsModel.rowCount() == 1
+        compound_id = controllers.timeline_view.compoundClipsModel.get(0)["compoundId"]
+        assert controllers.timeline_view.selectedCompoundId == compound_id
         compound_item = None
         compound_repeater = engine.rootObjects()[0].findChild(QQuickItem, "compoundClipRepeater")
         assert compound_repeater is not None
@@ -2303,7 +2483,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         compound_render = engine.rootObjects()[0].grabWindow()
         assert not compound_render.isNull()
         assert compound_render.save(str(tmp_path / "compound-clip-selected.png"))
-        controllers.timeline.moveClip(
+        controllers.timeline_clips.moveClip(
             first_clip["clipId"],
             5,
             first_clip["trackId"],
@@ -2311,9 +2491,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             0,
             False,
         )
-        assert controllers.timeline.clipsModel.get(0)["startFrame"] == 5
-        assert controllers.timeline.clipsModel.get(1)["startFrame"] == first_clip["endFrame"] + 5
-        controllers.timeline.moveClip(
+        assert controllers.timeline_view.clipsModel.get(0)["startFrame"] == 5
+        assert controllers.timeline_view.clipsModel.get(1)["startFrame"] == first_clip["endFrame"] + 5
+        controllers.timeline_clips.moveClip(
             first_clip["clipId"],
             2,
             first_clip["trackId"],
@@ -2321,15 +2501,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             0,
             True,
         )
-        assert controllers.timeline.clipsModel.get(0)["startFrame"] == 0
-        controllers.timeline.deleteSelectedClips(False)
-        assert controllers.timeline.clipsModel.rowCount() == 0
-        controllers.timeline.undo()
-        assert controllers.timeline.clipsModel.rowCount() == 2
-        assert controllers.timeline.compoundClipsModel.rowCount() == 1
-        controllers.timeline.selectCompoundClip(compound_id)
-        controllers.timeline.dissolveSelectedCompoundClip()
-        assert controllers.timeline.compoundClipsModel.rowCount() == 0
+        assert controllers.timeline_view.clipsModel.get(0)["startFrame"] == 0
+        controllers.timeline_clips.deleteSelectedClips(False)
+        assert controllers.timeline_view.clipsModel.rowCount() == 0
+        controllers.timeline_structure.undo()
+        assert controllers.timeline_view.clipsModel.rowCount() == 2
+        assert controllers.timeline_view.compoundClipsModel.rowCount() == 1
+        controllers.timeline_view.selectCompoundClip(compound_id)
+        controllers.timeline_structure.dissolveSelectedCompoundClip()
+        assert controllers.timeline_view.compoundClipsModel.rowCount() == 0
         QCoreApplication.processEvents()
         transition_item = next(
             item for item in _visual_items(transition_layer) if item.objectName() == "timelineTransition"
@@ -2338,19 +2518,19 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         transition_render = engine.rootObjects()[0].grabWindow()
         assert not transition_render.isNull()
         assert transition_render.save(str(tmp_path / "transition-crossfade-marker.png"))
-        controllers.timeline.selectClip(first_clip["clipId"])
-        controllers.timeline.addTimelineMarker(12)
-        controllers.timeline.setRangeIn(10)
-        controllers.timeline.commitTimelineRange(24)
-        assert controllers.timeline.timelineMarkersModel.rowCount() == 1
-        assert controllers.timeline.timelineRangesModel.get(0)["endFrame"] == 24
-        controllers.timeline.undo()
-        assert controllers.timeline.timelineRangesModel.rowCount() == 0
-        controllers.timeline.redo()
-        assert controllers.timeline.timelineRangesModel.rowCount() == 1
+        controllers.timeline_view.selectClip(first_clip["clipId"])
+        controllers.timeline_structure.addTimelineMarker(12)
+        controllers.timeline_structure.setRangeIn(10)
+        controllers.timeline_structure.commitTimelineRange(24)
+        assert controllers.timeline_view.timelineMarkersModel.rowCount() == 1
+        assert controllers.timeline_view.timelineRangesModel.get(0)["endFrame"] == 24
+        controllers.timeline_structure.undo()
+        assert controllers.timeline_view.timelineRangesModel.rowCount() == 0
+        controllers.timeline_structure.redo()
+        assert controllers.timeline_view.timelineRangesModel.rowCount() == 1
         QCoreApplication.processEvents()
 
-        controllers.workspace.updateSequenceProfile(1080, 1920, 30, 1, "sdr_bt709", 2)
+        controllers.workspace_sequence.updateSequenceProfile(1080, 1920, 30, 1, "sdr_bt709", 2)
         assert (controllers.workspace.profileWidth, controllers.workspace.profileHeight) == (1080, 1920)
         assert (controllers.workspace.profileFpsNumerator, controllers.workspace.profileFpsDenominator) == (
             30,
@@ -2409,19 +2589,19 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             controllers.workspace.sequencesModel.get(index)["sequenceId"]
             for index in range(controllers.workspace.sequencesModel.rowCount())
         }
-        controllers.timeline.undo()
+        controllers.timeline_structure.undo()
         assert archived_sequence_id in {
             controllers.workspace.sequencesModel.get(index)["sequenceId"]
             for index in range(controllers.workspace.sequencesModel.rowCount())
         }
-        controllers.timeline.redo()
+        controllers.timeline_structure.redo()
         assert archived_sequence_id not in {
             controllers.workspace.sequencesModel.get(index)["sequenceId"]
             for index in range(controllers.workspace.sequencesModel.rowCount())
         }
-        controllers.timeline.selectClip(first_clip["clipId"])
+        controllers.timeline_view.selectClip(first_clip["clipId"])
 
-        highlight = controllers.session.binding.current.add_manual_highlight(
+        highlight = controllers.session.state.binding.current.add_manual_highlight(
             asset_id,
             start_frame=2,
             end_frame=10,
@@ -2454,26 +2634,29 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 close_button,
             )
         )
+        assert all(
+            button.width() <= 40
+            and button.height() <= 38
+            and button.property("usesLucideIcon") is True
+            for button in (minimize_button, maximize_button, close_button)
+        )
         assert product_name is not None
         assert product_name.property("text") == "MediaFlow Pro"
         # The offscreen Qt platform has no window manager. Repeated native
         # minimize/maximize/fullscreen transitions can destroy its backing
         # surface on Windows, so this chain verifies the controls and exercises
         # workspace resizing without issuing unsupported native transitions.
-        versions_button = root.findChild(
-            QQuickItem, "openProjectVersionsButton")
+        versions_button = root.findChild(QQuickItem, "openProjectVersionsButton")
         versions_dialog = root.findChild(QObject, "projectVersionsDialog")
         assert versions_button is not None and versions_dialog is not None
-        selected_clip_count = controllers.timeline.clipsModel.rowCount()
+        selected_clip_count = controllers.timeline_view.clipsModel.rowCount()
         assert QMetaObject.invokeMethod(versions_button, "click")
-        assert _process_until(
-            lambda: root.property("projectVersionsVisible") is True)
+        assert _process_until(lambda: root.property("projectVersionsVisible") is True)
         QTest.keyClick(root_window, Qt.Key_Delete)
         QCoreApplication.processEvents()
-        assert controllers.timeline.clipsModel.rowCount() == selected_clip_count
+        assert controllers.timeline_view.clipsModel.rowCount() == selected_clip_count
         assert QMetaObject.invokeMethod(versions_dialog, "close")
-        assert _process_until(
-            lambda: root.property("projectVersionsVisible") is False)
+        assert _process_until(lambda: root.property("projectVersionsVisible") is False)
         page_loader = root.findChild(QQuickItem, "pageLoader")
         assert page_loader is not None
         workspace = page_loader.property("item")
@@ -2486,8 +2669,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         navigation = workspace.findChild(QQuickItem, "workspaceNavigation")
         tool_panel = workspace.findChild(QQuickItem, "toolPanelContainer")
         preview_viewport = workspace.findChild(QQuickItem, "previewViewport")
-        preview_controls_scroll = workspace.findChild(
-            QQuickItem, "previewControlsScroll")
+        preview_controls_scroll = workspace.findChild(QQuickItem, "previewControlsScroll")
         timeline_panel = workspace.findChild(QQuickItem, "timelinePanel")
         inspector_panel = workspace.findChild(QQuickItem, "inspectorPanel")
         assert inspector_panel is not None and inspector_panel.isVisible()
@@ -2496,15 +2678,11 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert workspace.findChild(QQuickItem, "compactInspectorButton") is None
         assert navigation is not None
         assert preview_controls_scroll is not None
-        assert float(preview_controls_scroll.property("contentWidth")) >= (
-            preview_controls_scroll.width()
-        )
-        if float(preview_controls_scroll.property("contentWidth")) > (
-            preview_controls_scroll.width()
-        ):
+        assert float(preview_controls_scroll.property("contentWidth")) >= (preview_controls_scroll.width())
+        if float(preview_controls_scroll.property("contentWidth")) > (preview_controls_scroll.width()):
             assert preview_controls_scroll.property("interactive") is True
         assert abs(navigation.width() - tool_panel.width()) <= 2
-        assert 66 <= navigation.height() <= 70
+        assert 56 <= navigation.height() <= 60
         assert tool_panel is not None and preview_viewport is not None and timeline_panel is not None
         workspace_gutter = float(workspace.property("workspaceGutter"))
         tool_panel_position = tool_panel.mapToItem(workspace, QPointF(0, 0))
@@ -2539,10 +2717,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             "inspector": geometry(inspector_panel),
             "timeline": geometry(timeline_panel),
         }
-        panel_names = {
-            mode.key: mode.panel_object_name
-            for mode in WORKSPACE_MODES
-        }
+        panel_names = {mode.key: mode.panel_object_name for mode in WORKSPACE_MODES}
         active_task_statuses = {
             TaskStatus.PENDING.value,
             TaskStatus.RUNNING.value,
@@ -2550,14 +2725,13 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         }
         assert _process_until(
             lambda: all(
-                controllers.tasks.tasksModel.get(index)["status"]
-                not in active_task_statuses
+                controllers.tasks.tasksModel.get(index)["status"] not in active_task_statuses
                 for index in range(controllers.tasks.tasksModel.rowCount())
             )
             and not controllers.session.projectors.timeline._preview_timer.isActive()
             and (
-                controllers.session.requests.preview_future is None
-                or controllers.session.requests.preview_future.done()
+                controllers.session.state.requests.preview_future is None
+                or controllers.session.state.requests.preview_future.done()
             ),
             timeout=60,
         ), [
@@ -2594,9 +2768,10 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 media_task_panel = workspace.findChild(QQuickItem, "mediaTaskPanel")
                 assert media_task_panel is not None
                 if media_task_panel.isVisible():
-                    assert controllers.tasks.latestMediaTask(
-                        controllers.media.selectedAssetId
-                    ).get("status") != "completed"
+                    assert (
+                        controllers.tasks.latestMediaTask(controllers.media.selectedAssetId).get("status")
+                        != "completed"
+                    )
             elif mode == "highlight":
                 highlight_toolbar = workspace.findChild(QQuickItem, "highlightToolbar")
                 source_document = workspace.findChild(QQuickItem, "highlightSourceDocument")
@@ -2678,8 +2853,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         preview.setProperty("volume", 0.35)
         assert abs(float(preview.property("volume")) - 0.35) < 0.001
         assert _process_until(
-            lambda: preview.property("duration") > 0
-            and not preview.property("errorString"),
+            lambda: preview.property("duration") > 0 and not preview.property("errorString"),
             timeout=30,
         )
         preview_viewport.seek(0)
@@ -2699,8 +2873,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         overlay.setProperty("draftY", 7.5)
         assert QMetaObject.invokeMethod(overlay, "commit")
         QCoreApplication.processEvents()
-        assert controllers.timeline.selectedClipData["x"] == 12.5
-        assert controllers.timeline.selectedClipData["y"] == 7.5
+        assert controllers.timeline_view.selectedClipData["x"] == 12.5
+        assert controllers.timeline_view.selectedClipData["y"] == 7.5
 
         edit_pos_x = workspace.findChild(QQuickItem, "editClipPosX")
         edit_pos_y = workspace.findChild(QQuickItem, "editClipPosY")
@@ -2711,8 +2885,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         edit_pos_y.setProperty("text", "9.5")
         assert QMetaObject.invokeMethod(apply_transform, "click")
         QCoreApplication.processEvents()
-        assert controllers.timeline.selectedClipData["x"] == 18.5
-        assert controllers.timeline.selectedClipData["y"] == 9.5
+        assert controllers.timeline_view.selectedClipData["x"] == 18.5
+        assert controllers.timeline_view.selectedClipData["y"] == 9.5
 
         assert QMetaObject.invokeMethod(navigation_items["navigationItem_audio"], "click")
         clip_gain = workspace.findChild(QQuickItem, "audioClipGain")
@@ -2724,21 +2898,17 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         clip_pan.setProperty("text", "0.2")
         assert QMetaObject.invokeMethod(apply_audio, "click")
         QCoreApplication.processEvents()
-        assert controllers.timeline.selectedClipData["gainDb"] == -3.5
-        assert controllers.timeline.selectedClipData["pan"] == 0.2
+        assert controllers.timeline_view.selectedClipData["gainDb"] == -3.5
+        assert controllers.timeline_view.selectedClipData["pan"] == 0.2
 
         preview_viewport.setProperty("viewportZoom", 2.0)
         preview_viewport.setProperty("viewportPanX", 30.0)
         assert QMetaObject.invokeMethod(workspace, "resetPreviewViewport")
         assert preview_viewport.property("viewportZoom") == 1.0
         assert preview_viewport.property("viewportPanX") == 0.0
-        controllers.settings.saveWorkspaceLayout(
-            "standard", 400, 360, 380, True, True, True
-        )
+        controllers.settings.saveWorkspaceLayout("standard", 400, 360, 380, True, True, True)
         controllers.settings.saveWindowState(1440, 900, False)
-        persisted_ui = DesktopSettingsRepository(
-            os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]
-        ).load().ui
+        persisted_ui = DesktopSettingsRepository(os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]).load().ui
         assert (
             persisted_ui.workspace_layouts.standard.left_panel_width,
             persisted_ui.workspace_layouts.standard.inspector_panel_width,
@@ -2824,8 +2994,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert blank_selection_area is not None
         assert track_controls_panel is not None
         assert _process_until(track_controls_panel.isVisible), {
-            "trackCount": controllers.timeline.tracksModel.rowCount(),
-            "clipCount": controllers.timeline.clipsModel.rowCount(),
+            "trackCount": controllers.timeline_view.tracksModel.rowCount(),
+            "clipCount": controllers.timeline_view.clipsModel.rowCount(),
             "timelineVisible": timeline.isVisible(),
             "activeMode": workspace.property("activeMode"),
             "activeSequenceId": controllers.workspace.activeSequenceId,
@@ -2835,11 +3005,11 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             for item in _visual_items(track_controls_panel)
             if item.objectName() == "trackControlsOverlay" and item.isVisible()
         ]
-        assert len(visible_track_headers) == controllers.timeline.tracksModel.rowCount()
+        assert len(visible_track_headers) == controllers.timeline_view.tracksModel.rowCount()
         dialogue_track = next(
-            controllers.timeline.tracksModel.get(index)
-            for index in range(controllers.timeline.tracksModel.rowCount())
-            if controllers.timeline.tracksModel.get(index)["kind"] == "audio"
+            controllers.timeline_view.tracksModel.get(index)
+            for index in range(controllers.timeline_view.tracksModel.rowCount())
+            if controllers.timeline_view.tracksModel.get(index)["kind"] == "audio"
         )
         assert dialogue_track["primaryDialogue"] is True
         dialogue_button = next(
@@ -2874,7 +3044,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert abs(timeline_origin.x() - workspace_gutter) <= 2
         assert abs(timeline.width() - workspace.width() + 2 * workspace_gutter) <= 2
         assert abs(timeline_origin.y() - tool_panel_bottom.y() - workspace_gutter) <= 2
-        first_clip_projection = controllers.timeline.clipsModel.get(0)
+        first_clip_projection = controllers.timeline_view.clipsModel.get(0)
         assert first_clip_projection["assetKind"] == "video"
         assert first_clip_projection["trackKind"] == "video"
         assert first_clip_projection["mediaKind"] == "linked_av"
@@ -2954,32 +3124,32 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert embedded_audio[0].y() > video_clips[0].y()
         assert abs(embedded_audio[0].x() - video_clips[0].x()) <= 1
         existing_clip_ids = {
-            controllers.timeline.clipsModel.get(index)["clipId"]
-            for index in range(controllers.timeline.clipsModel.rowCount())
+            controllers.timeline_view.clipsModel.get(index)["clipId"]
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
         }
         new_clip_start = controllers.workspace.timelineDurationFrames
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.dropAssets(
             [asset_id],
             "",
-            controllers.timeline.tracksModel.rowCount(),
+            controllers.timeline_view.tracksModel.rowCount(),
             new_clip_start,
             50.0,
             0,
             False,
             True,
         )
-        assert _process_until(lambda: controllers.timeline.clipsModel.rowCount() == 3)
+        assert _process_until(lambda: controllers.timeline_view.clipsModel.rowCount() == 3)
         new_clip_projection = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["clipId"] not in existing_clip_ids
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["clipId"] not in existing_clip_ids
         )
         assert new_clip_projection["trackKind"] == "video"
         assert new_clip_projection["trackPosition"] == 2
-        assert controllers.timeline.tracksModel.rowCount() == 4
+        assert controllers.timeline_view.tracksModel.rowCount() == 4
         assert [
-            controllers.timeline.tracksModel.get(index)["kind"]
-            for index in range(controllers.timeline.tracksModel.rowCount())
+            controllers.timeline_view.tracksModel.get(index)["kind"]
+            for index in range(controllers.timeline_view.tracksModel.rowCount())
         ] == ["video", "audio", "video", "audio"]
 
         new_video_item = next(
@@ -3016,16 +3186,16 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert _process_until(
             lambda: next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
             )["trackPosition"]
             == 0
         )
         moved_linked_clip = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
         )
         assert moved_linked_clip["audioTrackPosition"] == 1
 
@@ -3065,51 +3235,51 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert _process_until(
             lambda: next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
             )["trackPosition"]
             == 2
         ), {
             "clip": next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
             ),
             "draggingClipId": timeline.property("draggingClipId"),
             "draggingTrackPosition": timeline.property("draggingClipTrackPosition"),
             "draggingAudioTrackPosition": timeline.property("draggingClipAudioTrackPosition"),
-            "selectedClipIds": controllers.timeline.selectedClipIds,
+            "selectedClipIds": controllers.timeline_view.selectedClipIds,
         }
         moved_linked_clip = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["clipId"] == new_clip_projection["clipId"]
         )
         assert moved_linked_clip["audioTrackPosition"] == 3
         timeline_scroll.setProperty("contentX", 0)
         QCoreApplication.processEvents()
 
-        controllers.timeline.selectClip(first_clip_projection["clipId"])
+        controllers.timeline_view.selectClip(first_clip_projection["clipId"])
         assert timeline.property("multiSelectMode") is True
         detach_audio = workspace.findChild(QQuickItem, "detachClipAudioButton")
         assert detach_audio is not None and _process_until(detach_audio.isVisible)
         assert QMetaObject.invokeMethod(detach_audio, "click")
         detached_video = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["clipId"] == first_clip_projection["clipId"]
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["clipId"] == first_clip_projection["clipId"]
         )
         detached_audio = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["mediaKind"] == "audio_only"
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["mediaKind"] == "audio_only"
         )
         assert detached_video["mediaKind"] == "video_only"
         assert detached_audio["trackKind"] == "audio"
         assert detached_audio["assetId"] == detached_video["assetId"]
         assert timeline.property("multiSelectMode") is False
-        assert controllers.timeline.selectedClipIds == [detached_video["clipId"]]
+        assert controllers.timeline_view.selectedClipIds == [detached_video["clipId"]]
 
         detached_audio_start = detached_audio["startFrame"]
         detached_video_item = next(
@@ -3137,17 +3307,17 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert _process_until(
             lambda: next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == detached_video["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == detached_video["clipId"]
             )["trackPosition"]
             == 2
         )
         assert (
             next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == detached_audio["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == detached_audio["clipId"]
             )["startFrame"]
             == detached_audio_start
         )
@@ -3177,17 +3347,17 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert _process_until(
             lambda: next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == detached_audio["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == detached_audio["clipId"]
             )["trackPosition"]
             == 3
         )
         assert (
             next(
-                controllers.timeline.clipsModel.get(index)
-                for index in range(controllers.timeline.clipsModel.rowCount())
-                if controllers.timeline.clipsModel.get(index)["clipId"] == detached_video["clipId"]
+                controllers.timeline_view.clipsModel.get(index)
+                for index in range(controllers.timeline_view.clipsModel.rowCount())
+                if controllers.timeline_view.clipsModel.get(index)["clipId"] == detached_video["clipId"]
             )["trackPosition"]
             == 2
         )
@@ -3206,15 +3376,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             Qt.NoModifier,
             QPoint(round(blank_scene.x()), round(blank_scene.y())),
         )
-        assert _process_until(lambda: controllers.timeline.selectedClipIds == [])
+        assert _process_until(lambda: controllers.timeline_view.selectedClipIds == [])
         assert timeline.property("multiSelectMode") is False
 
-        controllers.timeline.undo()
+        controllers.timeline_structure.undo()
         QTest.keyClick(root_window, Qt.Key_Escape)
-        assert _process_until(lambda: controllers.timeline.selectedClipIds == [])
+        assert _process_until(lambda: controllers.timeline_view.selectedClipIds == [])
 
         independent_audio_start = controllers.workspace.timelineDurationFrames + 10
-        controllers.timeline.moveClip(
+        controllers.timeline_clips.moveClip(
             detached_audio["clipId"],
             independent_audio_start,
             detached_audio["trackId"],
@@ -3223,13 +3393,13 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             False,
         )
         moved_audio = next(
-            controllers.timeline.clipsModel.get(index)
-            for index in range(controllers.timeline.clipsModel.rowCount())
-            if controllers.timeline.clipsModel.get(index)["clipId"] == detached_audio["clipId"]
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["clipId"] == detached_audio["clipId"]
         )
         assert moved_audio["startFrame"] == independent_audio_start
         assert detached_video["startFrame"] == first_clip_projection["startFrame"]
-        controllers.timeline.selectClip(first_clip_projection["clipId"])
+        controllers.timeline_view.selectClip(first_clip_projection["clipId"])
         assert any(item.parentItem().width() > item.width() for item in waveforms)
         assert all(item.width() <= timeline.width() for item in waveforms)
 
@@ -3240,7 +3410,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         controllers.media.selectAsset(asset_id)
         controllers.media.importFiles([QUrl.fromLocalFile(str(subtitle_source))])
-        subtitle_documents = controllers.subtitles.subtitleDocumentsModel
+        subtitle_documents = controllers.subtitle_view.subtitleDocumentsModel
         assert _process_until(lambda: subtitle_documents.rowCount() == 1, timeout=20)
         subtitle_document_id = subtitle_documents.get(0)["documentId"]
 
@@ -3262,7 +3432,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 "fixture-model",
                 True,
             )
-            controllers.subtitles.translateDocument(
+            controllers.subtitle_translation.translateDocument(
                 subtitle_document_id,
                 "zh_CN",
                 "standard",
@@ -3274,7 +3444,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 if subtitle_documents.get(index)["sourceDocumentId"] == subtitle_document_id
             )
             assert (
-                controllers.session.binding.current.list_subtitle_segments(translated_document_id)[0].text
+                controllers.session.state.binding.current.list_subtitle_segments(translated_document_id)[
+                    0
+                ].text
                 == "叠加在音频波形上的字幕"
             )
         finally:
@@ -3282,20 +3454,16 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             translation_server.server_close()
             translation_server_thread.join(timeout=5)
 
-        controllers.subtitles.placeSubtitleDocument(subtitle_document_id)
-        assert _process_until(lambda: controllers.subtitles.subtitlePlacementsModel.rowCount() > 0)
-        subtitle_projection = controllers.subtitles.subtitlePlacementsModel.get(0)
+        controllers.subtitle_placement.placeSubtitleDocument(subtitle_document_id)
+        assert _process_until(lambda: controllers.subtitle_view.subtitlePlacementsModel.rowCount() > 0)
+        subtitle_projection = controllers.subtitle_view.subtitlePlacementsModel.get(0)
         assert subtitle_projection["clipId"]
         assert subtitle_projection["audioTrackPosition"] == 1
         preview_player.pause()
+        assert _process_until(lambda: preview_player.property("playing") is False)
+        controllers.subtitle_view.selectSubtitlePlacement(subtitle_projection["placementId"])
         assert _process_until(
-            lambda: preview_player.property("playing") is False
-        )
-        controllers.subtitles.selectSubtitlePlacement(
-            subtitle_projection["placementId"]
-        )
-        assert _process_until(
-            lambda: controllers.subtitles.selectedSubtitlePlacementId
+            lambda: controllers.subtitle_view.selectedSubtitlePlacementId
             == subtitle_projection["placementId"]
         )
         subtitle_overlays = [
@@ -3326,7 +3494,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         original_overlay_width = subtitle_overlay.width()
         original_start = subtitle_projection["startFrame"]
         original_end = subtitle_projection["endFrame"]
-        controllers.subtitles.moveSubtitlePlacement(
+        controllers.subtitle_placement.moveSubtitlePlacement(
             subtitle_projection["placementId"],
             original_start + 5,
             50.0,
@@ -3334,12 +3502,13 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             False,
         )
         assert _process_until(
-            lambda: controllers.subtitles.subtitlePlacementsModel.get(0)["startFrame"] == original_start + 5
+            lambda: controllers.subtitle_view.subtitlePlacementsModel.get(0)["startFrame"]
+            == original_start + 5
         )
-        moved_projection = controllers.subtitles.subtitlePlacementsModel.get(0)
+        moved_projection = controllers.subtitle_view.subtitlePlacementsModel.get(0)
         assert moved_projection["timingOverridden"] is True
         assert subtitle_overlay.x() > original_overlay_x
-        controllers.subtitles.resizeSubtitlePlacement(
+        controllers.subtitle_placement.resizeSubtitlePlacement(
             moved_projection["placementId"],
             moved_projection["startFrame"],
             original_end + 15,
@@ -3348,13 +3517,13 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             False,
         )
         assert _process_until(
-            lambda: controllers.subtitles.subtitlePlacementsModel.get(0)["endFrame"] == original_end + 15
+            lambda: controllers.subtitle_view.subtitlePlacementsModel.get(0)["endFrame"] == original_end + 15
         )
         assert subtitle_overlay.width() > original_overlay_width
-        controllers.subtitles.followSubtitleAtFrame(original_start + 6)
-        assert controllers.subtitles.selectedSubtitlePlacementId == moved_projection["placementId"]
-        assert controllers.subtitles.selectedSubtitleSegmentId == subtitle_projection["segmentId"]
-        persisted_placement = controllers.session.binding.current.get_subtitle_placement(
+        controllers.subtitle_view.followSubtitleAtFrame(original_start + 6)
+        assert controllers.subtitle_view.selectedSubtitlePlacementId == moved_projection["placementId"]
+        assert controllers.subtitle_view.selectedSubtitleSegmentId == subtitle_projection["segmentId"]
+        persisted_placement = controllers.session.state.binding.current.get_subtitle_placement(
             moved_projection["placementId"]
         )
         assert persisted_placement.timing_overridden is True
@@ -3376,7 +3545,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         timeline_overlay_path = tmp_path / "timeline-audio-subtitle-overlay.png"
         assert not timeline_overlay_render.isNull()
         assert timeline_overlay_render.save(str(timeline_overlay_path))
-        controllers.workspace.cancelWorkflow(workflow_run_id)
+        controllers.workspace_workflow.cancelWorkflow(workflow_run_id)
         assert controllers.workspace.workflowPending is False
         assert _process_until(lambda: not workflow_banner.isVisible())
         fixed_tool_panel_width = float(tool_panel.width())
@@ -3420,15 +3589,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert not settings_render.isNull()
         assert settings_render.save(str(tmp_path / "settings-dialog.png"))
         persisted_before = (
-            ServiceSettingsRepository(
-                os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
-            ).load().workflow.auto_continue
+            ServiceSettingsRepository(os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"])
+            .load()
+            .workflow.auto_continue
         )
         assert QMetaObject.invokeMethod(auto_continue_setting, "click")
         assert _process_until(
-            lambda: ServiceSettingsRepository(
-                os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"]
-            ).load().workflow.auto_continue
+            lambda: ServiceSettingsRepository(os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"])
+            .load()
+            .workflow.auto_continue
             is not persisted_before,
             timeout=3,
         )
@@ -3606,37 +3775,33 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert translation_save is not None
         assert QMetaObject.invokeMethod(translation_save, "click")
         assert _process_until(
-            lambda: controllers.session.binding.current.list_subtitle_segments(translated_document_id)[0].text
+            lambda: controllers.session.state.binding.current.list_subtitle_segments(translated_document_id)[
+                0
+            ].text
             == "用户校对后的译文"
         )
         assert (
-            controllers.session.binding.current.list_subtitle_segments(subtitle_document_id)[0].text
+            controllers.session.state.binding.current.list_subtitle_segments(subtitle_document_id)[0].text
             == "Subtitle over the audio waveform"
         )
         translation_render = root.grabWindow()
         assert not translation_render.isNull()
         assert translation_render.save(str(tmp_path / "translation-bilingual-review.png"))
         workspace.setProperty("activeMode", "highlight")
-        highlight_document = workspace.findChild(
-            QQuickItem, "highlightSourceDocument")
-        controllers.subtitles.selectSubtitleDocument(translated_document_id)
+        highlight_document = workspace.findChild(QQuickItem, "highlightSourceDocument")
+        controllers.subtitle_view.selectSubtitleDocument(translated_document_id)
         assert highlight_document is not None
-        assert _process_until(
-            lambda: highlight_document.property("currentValue")
-            == translated_document_id
-        )
-        controllers.subtitles.selectSubtitleDocument(subtitle_document_id)
-        assert _process_until(
-            lambda: highlight_document.property("currentValue")
-            == subtitle_document_id
-        )
+        assert _process_until(lambda: highlight_document.property("currentValue") == translated_document_id)
+        controllers.subtitle_view.selectSubtitleDocument(subtitle_document_id)
+        assert _process_until(lambda: highlight_document.property("currentValue") == subtitle_document_id)
         workspace.setProperty("activeMode", "media")
         media_task_panel = workspace.findChild(QQuickItem, "mediaTaskPanel")
         assert media_task_panel is not None
         if media_task_panel.isVisible():
-            assert controllers.tasks.latestMediaTask(
-                controllers.media.selectedAssetId
-            ).get("status") != "completed"
+            assert (
+                controllers.tasks.latestMediaTask(controllers.media.selectedAssetId).get("status")
+                != "completed"
+            )
 
         master_bus = next(
             controllers.audio.audioBusesModel.get(index)
@@ -3729,9 +3894,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         second_source = tmp_path / "ui-source-2.mp4"
         shutil.copyfile(source, second_source)
         asset_count_before_second_import = controllers.media.assetsModel.rowCount()
-        controllers.media.importFiles(
-            [QUrl.fromLocalFile(str(second_source))]
-        )
+        controllers.media.importFiles([QUrl.fromLocalFile(str(second_source))])
         assert _process_until(
             lambda: controllers.media.assetsModel.rowCount() == asset_count_before_second_import + 1
             and controllers.media.selectedAssetData.get("name") == second_source.name,
@@ -3740,10 +3903,10 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         second_asset_id = controllers.media.selectedAssetId
         controllers.media.selectAsset(asset_id, True)
         assert controllers.media.selectedAssetIds == [second_asset_id, asset_id]
-        clip_count = controllers.timeline.clipsModel.rowCount()
+        clip_count = controllers.timeline_view.clipsModel.rowCount()
         drop_errors: list[str] = []
-        controllers.timeline.errorOccurred.connect(drop_errors.append)
-        controllers.timeline.dropAssets(
+        controllers.timeline_clips.errorOccurred.connect(drop_errors.append)
+        controllers.timeline_clips.dropAssets(
             controllers.media.selectedAssetIds,
             "",
             -1,
@@ -3753,19 +3916,19 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             True,
             False,
         )
-        assert controllers.timeline.clipsModel.rowCount() == clip_count + 2, {
+        assert controllers.timeline_view.clipsModel.rowCount() == clip_count + 2, {
             "errors": drop_errors,
-            "pendingAssetIds": list(controllers.session.asset_state.pending_batch_ids),
-            "pendingProfileAssetId": controllers.session.asset_state.pending_profile_asset_id,
+            "pendingAssetIds": list(controllers.session.state.assets.pending_batch_ids),
+            "pendingProfileAssetId": controllers.session.state.assets.pending_profile_asset_id,
             "selectedAssetIds": controllers.media.selectedAssetIds,
         }
 
         video_track = next(
-            controllers.timeline.tracksModel.get(index)
-            for index in range(controllers.timeline.tracksModel.rowCount())
-            if controllers.timeline.tracksModel.get(index)["kind"] == "video"
+            controllers.timeline_view.tracksModel.get(index)
+            for index in range(controllers.timeline_view.tracksModel.rowCount())
+            if controllers.timeline_view.tracksModel.get(index)["kind"] == "video"
         )
-        controllers.timeline.updateTrack(
+        controllers.timeline_structure.updateTrack(
             video_track["trackId"],
             True,
             True,
@@ -3773,13 +3936,13 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             False,
             video_track["audioBusId"],
         )
-        controllers.timeline.moveTrack(video_track["trackId"], 1)
-        moved_track = controllers.timeline.tracksModel.get(1)
+        controllers.timeline_structure.moveTrack(video_track["trackId"], 1)
+        moved_track = controllers.timeline_view.tracksModel.get(1)
         assert moved_track["trackId"] == video_track["trackId"]
         assert moved_track["locked"] is True
 
         project_path = Path(controllers.workspace.projectPath)
-        current = controllers.session.binding.current
+        current = controllers.session.state.binding.current
         recent_artifact = project_path / "exports" / "recent-output.mp4"
         export_task = current.start_task(
             ExportSequenceCommand(
@@ -3797,7 +3960,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             )
         )
         assert current.wait_for_task(failed_task.id, timeout=30).status == TaskStatus.FAILED
-        controllers.workspace.closeProject()
+        controllers.workspace_project.closeProject()
         assert _process_until(
             lambda: controllers.workspace.homeSummary["failedTaskCount"] >= 1
             and controllers.workspace.homeSummary["recentArtifactCount"] >= 1
@@ -3857,6 +4020,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert 18 <= create_hero_title.property("font").pixelSize() <= 22
         assert open_existing_button is not None and open_existing_button.isVisible()
         assert download_url_field is not None and download_url_field.isVisible()
+        assert download_url_field.property("placeholderText") == "粘贴媒体或播放列表链接"
         assert paste_download_url_button is not None and paste_download_url_button.isVisible()
         assert quick_start_download_button is not None and quick_start_download_button.isVisible()
         assert quick_start_download_button.property("text") == "下载并新建项目"
@@ -3965,15 +4129,18 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             for item in _visual_items(home)
             if item.objectName() == "removeRecentProjectButton" and item.isVisible()
         )
-        assert recent_remove.property("text") == "从列表移除"
+        assert recent_remove.property("text") == ""
+        assert recent_remove.property("iconName") == "close"
+        assert recent_remove.property("toolTipText") == "移除"
+        assert recent_remove.width() == 28
         assert recent_remove.property("danger") is False
         removed_project_path = Path(recent_remove.property("projectPath"))
         assert QMetaObject.invokeMethod(recent_remove, "click")
         assert _process_until(lambda: controllers.workspace.recentProjectsModel.rowCount() == 9)
         persisted_recent_paths = (
-            DesktopSettingsRepository(
-                os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]
-            ).load().ui.recent_project_paths
+            DesktopSettingsRepository(os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"])
+            .load()
+            .ui.recent_project_paths
         )
         assert str(removed_project_path) not in persisted_recent_paths
         assert (removed_project_path / "project.mfp").is_file()

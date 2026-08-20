@@ -34,7 +34,7 @@ Flickable {
     }
 
     Connections {
-        target: timelineController
+        target: mediaflow.timelineViewController
         function onProjectStateChanged() { canvas.scheduleFilmstrip(); }
     }
 
@@ -42,7 +42,7 @@ Flickable {
         id: filmstripRequest
         interval: 120
         repeat: false
-        onTriggered: timelineController.requestFilmstrip(
+        onTriggered: mediaflow.timelineViewController.requestFilmstrip(
             canvas.contentX / Math.max(0.000001, canvas.view.pixelsPerFrame),
             (canvas.contentX + canvas.width) / Math.max(0.000001, canvas.view.pixelsPerFrame),
             canvas.view.pixelsPerFrame,
@@ -50,7 +50,7 @@ Flickable {
     }
 
     function dropTrackAt(dropY) {
-        const trackCount = timelineController.tracksModel.rowCount();
+        const trackCount = mediaflow.timelineViewController.tracksModel.rowCount();
         if (trackCount === 0)
             return {
                 "trackId": "",
@@ -84,7 +84,7 @@ Flickable {
                 "position": row + 1,
                 "forceNew": true
             };
-        const track = timelineController.tracksModel.get(row);
+        const track = mediaflow.timelineViewController.tracksModel.get(row);
         return {
             "trackId": String(track.trackId),
             "position": row,
@@ -214,18 +214,18 @@ Flickable {
         y: 28
         width: canvas.contentWidth
         height: tracksColumn.height
-        visible: workspaceController.hasSequenceInOut
+        visible: mediaflow.workspaceViewController.hasSequenceInOut
         z: 8
 
         Rectangle {
             x: 0
-            width: Math.max(0, workspaceController.sequenceInFrame * view.pixelsPerFrame)
+            width: Math.max(0, mediaflow.workspaceViewController.sequenceInFrame * view.pixelsPerFrame)
             height: parent.height
             color: Theme.timelineBackground
             opacity: 0.78
         }
         Rectangle {
-            x: workspaceController.sequenceOutFrame * view.pixelsPerFrame
+            x: mediaflow.workspaceViewController.sequenceOutFrame * view.pixelsPerFrame
             width: Math.max(0, parent.width - x)
             height: parent.height
             color: Theme.timelineBackground
@@ -235,10 +235,10 @@ Flickable {
             id: sequenceInHandle
             objectName: "sequenceInHandle"
             property real dragOffset: 0
-            x: workspaceController.sequenceInFrame * view.pixelsPerFrame - width / 2 + dragOffset
+            x: mediaflow.workspaceViewController.sequenceInFrame * view.pixelsPerFrame - width / 2 + dragOffset
             width: 12
             height: parent.height
-            Accessible.name: qsTr("序列入点 %1").arg(workspaceController.sequenceInFrame)
+            Accessible.name: qsTr("序列入点 %1").arg(mediaflow.workspaceViewController.sequenceInFrame)
             Accessible.role: Accessible.Slider
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -260,10 +260,10 @@ Flickable {
                 target: null
                 xAxis.enabled: true
                 yAxis.enabled: false
-                onTranslationChanged: sequenceInHandle.dragOffset = Math.max(-workspaceController.sequenceInFrame * view.pixelsPerFrame, Math.min((workspaceController.sequenceOutFrame - workspaceController.sequenceInFrame - 1) * view.pixelsPerFrame, translation.x))
+                onTranslationChanged: sequenceInHandle.dragOffset = Math.max(-mediaflow.workspaceViewController.sequenceInFrame * view.pixelsPerFrame, Math.min((mediaflow.workspaceViewController.sequenceOutFrame - mediaflow.workspaceViewController.sequenceInFrame - 1) * view.pixelsPerFrame, translation.x))
                 onActiveChanged: if (!active && sequenceInHandle.dragOffset !== 0) {
-                    const frame = workspaceController.sequenceInFrame + Math.round(sequenceInHandle.dragOffset / view.pixelsPerFrame);
-                    timelineController.setSequenceInOut(frame, workspaceController.sequenceOutFrame);
+                    const frame = mediaflow.workspaceViewController.sequenceInFrame + Math.round(sequenceInHandle.dragOffset / view.pixelsPerFrame);
+                    mediaflow.timelineStructureController.setSequenceInOut(frame, mediaflow.workspaceViewController.sequenceOutFrame);
                     sequenceInHandle.dragOffset = 0;
                 }
             }
@@ -272,10 +272,10 @@ Flickable {
             id: sequenceOutHandle
             objectName: "sequenceOutHandle"
             property real dragOffset: 0
-            x: workspaceController.sequenceOutFrame * view.pixelsPerFrame - width / 2 + dragOffset
+            x: mediaflow.workspaceViewController.sequenceOutFrame * view.pixelsPerFrame - width / 2 + dragOffset
             width: 12
             height: parent.height
-            Accessible.name: qsTr("序列出点 %1").arg(workspaceController.sequenceOutFrame)
+            Accessible.name: qsTr("序列出点 %1").arg(mediaflow.workspaceViewController.sequenceOutFrame)
             Accessible.role: Accessible.Slider
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -297,10 +297,10 @@ Flickable {
                 target: null
                 xAxis.enabled: true
                 yAxis.enabled: false
-                onTranslationChanged: sequenceOutHandle.dragOffset = Math.max((workspaceController.sequenceInFrame - workspaceController.sequenceOutFrame + 1) * view.pixelsPerFrame, Math.min((workspaceController.timelineDurationFrames - workspaceController.sequenceOutFrame) * view.pixelsPerFrame, translation.x))
+                onTranslationChanged: sequenceOutHandle.dragOffset = Math.max((mediaflow.workspaceViewController.sequenceInFrame - mediaflow.workspaceViewController.sequenceOutFrame + 1) * view.pixelsPerFrame, Math.min((mediaflow.workspaceViewController.timelineDurationFrames - mediaflow.workspaceViewController.sequenceOutFrame) * view.pixelsPerFrame, translation.x))
                 onActiveChanged: if (!active && sequenceOutHandle.dragOffset !== 0) {
-                    const frame = workspaceController.sequenceOutFrame + Math.round(sequenceOutHandle.dragOffset / view.pixelsPerFrame);
-                    timelineController.setSequenceInOut(workspaceController.sequenceInFrame, frame);
+                    const frame = mediaflow.workspaceViewController.sequenceOutFrame + Math.round(sequenceOutHandle.dragOffset / view.pixelsPerFrame);
+                    mediaflow.timelineStructureController.setSequenceInOut(mediaflow.workspaceViewController.sequenceInFrame, frame);
                     sequenceOutHandle.dragOffset = 0;
                 }
             }
@@ -315,7 +315,7 @@ Flickable {
         height: tracksColumn.height
         z: 1
         Repeater {
-            model: timelineController.timelineRangesModel
+            model: mediaflow.timelineViewController.timelineRangesModel
             delegate: Rectangle {
                 required property string rangeId
                 required property int startFrame
@@ -344,9 +344,9 @@ Flickable {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: function (mouse) {
                         if (mouse.button === Qt.RightButton && view.canEdit)
-                            timelineController.removeTimelineRange(rangeId);
+                            mediaflow.timelineStructureController.removeTimelineRange(rangeId);
                         else {
-                            timelineController.selectTimelineRange(rangeId);
+                            mediaflow.timelineViewController.selectTimelineRange(rangeId);
                             view.seekToFrame(startFrame);
                         }
                     }
@@ -362,7 +362,7 @@ Flickable {
         spacing: 1
         Repeater {
             id: tracksRepeater
-            model: timelineController.tracksModel
+            model: mediaflow.timelineViewController.tracksModel
             delegate: Rectangle {
                 id: trackRow
                 required property string trackId
@@ -413,12 +413,12 @@ Flickable {
             updateTarget(drop);
             const target = canvas.dropTrackAt(drop.y);
             if (drop.hasUrls) {
-                timelineController.importFilesToTimeline(drop.urls, target.trackId, target.position, targetFrame, view.pixelsPerFrame, view.playheadFrame, view.snapEnabled, target.forceNew);
+                mediaflow.timelineClipController.importFilesToTimeline(drop.urls, target.trackId, target.position, targetFrame, view.pixelsPerFrame, view.playheadFrame, view.snapEnabled, target.forceNew);
                 drop.acceptProposedAction();
                 return;
             }
             if (drop.source && drop.source.draggedAssetIds) {
-                timelineController.dropAssets(drop.source.draggedAssetIds, target.trackId, target.position, targetFrame, view.pixelsPerFrame, view.playheadFrame, view.snapEnabled, target.forceNew);
+                mediaflow.timelineClipController.dropAssets(drop.source.draggedAssetIds, target.trackId, target.position, targetFrame, view.pixelsPerFrame, view.playheadFrame, view.snapEnabled, target.forceNew);
                 drop.acceptProposedAction();
             }
         }

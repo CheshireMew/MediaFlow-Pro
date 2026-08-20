@@ -21,7 +21,6 @@ from mediaflow.domain.portable_timeline import (
     PortableSubtitleStyle,
     PortableTimelineDocument,
     PortableTimelineTrack,
-    load_portable_timeline,
 )
 from mediaflow.domain.project import Asset, ProjectProfile
 from mediaflow.domain.srt_time import format_srt_timestamp
@@ -51,14 +50,16 @@ class PortableTimelineImportService:
         assets: AssetService,
         subtitles: SubtitleAcquisitionService,
         timeline_provider: Callable[[str], TimelineEditor],
+        loader: Callable[[str | Path], LoadedPortableTimeline],
     ) -> None:
         self.repository = repository
         self.assets = assets
         self.subtitles = subtitles
         self.timeline_provider = timeline_provider
+        self.loader = loader
 
     def inspect(self, path: str | Path) -> LoadedPortableTimeline:
-        loaded = load_portable_timeline(path)
+        loaded = self.loader(path)
         self._project_profile(loaded.document)
         return loaded
 

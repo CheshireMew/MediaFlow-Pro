@@ -17,14 +17,14 @@ Rectangle {
         id: downloadUrlPersistenceTimer
         interval: 400
         repeat: false
-        onTriggered: settingsController.setLastDownloadUrl(downloadUrlField.text)
+        onTriggered: mediaflow.settingsController.setLastDownloadUrl(downloadUrlField.text)
     }
 
     function createProject() {
-        if (!workspaceController.actionCapabilities.canCreateProject)
+        if (!mediaflow.workspaceViewController.actionCapabilities.canCreateProject)
             return;
-        workspaceController.createProjectInDefaultDirectory(createProjectNameField.text.trim())
-        if (workspaceController.hasProject) {
+        mediaflow.workspaceProjectController.createProjectInDefaultDirectory(createProjectNameField.text.trim())
+        if (mediaflow.workspaceViewController.hasProject) {
             createProjectNameField.clear()
             createProjectDialog.close()
         }
@@ -33,13 +33,13 @@ Rectangle {
     Shortcut {
         sequences: [StandardKey.New]
         enabled: !root.modalOpen
-            && workspaceController.actionCapabilities.canCreateProject
+            && mediaflow.workspaceViewController.actionCapabilities.canCreateProject
         onActivated: createProjectDialog.open()
     }
     Shortcut {
         sequences: [StandardKey.Open]
         enabled: !root.modalOpen
-            && workspaceController.actionCapabilities.canOpenProject
+            && mediaflow.workspaceViewController.actionCapabilities.canOpenProject
         onActivated: openFolderDialog.open()
     }
 
@@ -47,7 +47,7 @@ Rectangle {
         id: openFolderDialog
         title: qsTr("选择包含 project.mfp 的项目目录")
         onAccepted: {
-            workspaceController.openProject(selectedFolder.toString())
+            mediaflow.workspaceProjectController.openProject(selectedFolder.toString())
         }
     }
     AppDialog {
@@ -86,7 +86,7 @@ Rectangle {
                     objectName: "confirmCreateProjectButton"
                     primary: true
                     text: qsTr("创建项目")
-                    enabled: workspaceController.actionCapabilities.canCreateProject
+                    enabled: mediaflow.workspaceViewController.actionCapabilities.canCreateProject
                     onClicked: root.createProject()
                 }
             }
@@ -114,19 +114,19 @@ Rectangle {
                 objectName: "projectClosingPanel"
                 Layout.fillWidth: true
                 Layout.preferredHeight: visible ? 72 : 0
-                visible: workspaceController.projectReleasePending
+                visible: mediaflow.workspaceViewController.projectReleasePending
                 level: 1
                 RowLayout {
                     anchors.fill: parent
                     anchors.margins: 12
                     AppBusyIndicator {
-                        running: workspaceController.projectClosing
+                        running: mediaflow.workspaceViewController.projectClosing
                         visible: running
                         Layout.preferredWidth: 24
                         Layout.preferredHeight: 24
                     }
                     AppIcon {
-                        visible: workspaceController.projectCloseFailed
+                        visible: mediaflow.workspaceViewController.projectCloseFailed
                         Layout.preferredWidth: 24
                         Layout.preferredHeight: 24
                         iconName: "warning"
@@ -134,26 +134,26 @@ Rectangle {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: workspaceController.projectCloseFailed
+                        text: mediaflow.workspaceViewController.projectCloseFailed
                             ? qsTr("上一个项目的资源未完全释放，文件仍保持占用。请等待任务停稳后重试关闭。")
                             : qsTr("正在关闭上一个项目并释放文件，完成后即可重新打开项目。")
                         color: Theme.text
                         font.pixelSize: Theme.fontSizeBodySmall
                         wrapMode: Text.WordWrap
                         ToolTip.visible: closingPathHover.hovered
-                            && workspaceController.closingProjectPath.length > 0
-                        ToolTip.text: workspaceController.projectCloseError.length > 0
-                            ? workspaceController.closingProjectPath + "\n"
-                                + workspaceController.projectCloseError
-                            : workspaceController.closingProjectPath
+                            && mediaflow.workspaceViewController.closingProjectPath.length > 0
+                        ToolTip.text: mediaflow.workspaceViewController.projectCloseError.length > 0
+                            ? mediaflow.workspaceViewController.closingProjectPath + "\n"
+                                + mediaflow.workspaceViewController.projectCloseError
+                            : mediaflow.workspaceViewController.closingProjectPath
                         HoverHandler { id: closingPathHover }
                     }
                     AppButton {
                         objectName: "retryProjectCloseButton"
                         text: qsTr("重试关闭")
-                        visible: workspaceController.actionCapabilities.canRetryProjectClose
+                        visible: mediaflow.workspaceViewController.actionCapabilities.canRetryProjectClose
                         enabled: visible
-                        onClicked: workspaceController.retryProjectClose()
+                        onClicked: mediaflow.workspaceProjectController.retryProjectClose()
                     }
                 }
             }
@@ -172,7 +172,7 @@ Rectangle {
                     focusPolicy: Qt.StrongFocus
                     Accessible.name: qsTr("新建项目")
                     Accessible.description: qsTr("创建空白项目后，可以导入本地媒体，或把文件直接拖入时间线。")
-                    enabled: workspaceController.actionCapabilities.canCreateProject
+                    enabled: mediaflow.workspaceViewController.actionCapabilities.canCreateProject
                     onClicked: createProjectDialog.open()
 
                     HoverHandler {
@@ -281,17 +281,17 @@ Rectangle {
                                     id: downloadUrlField
                                     objectName: "downloadUrlField"
                                     Layout.fillWidth: true
-                                    placeholderText: qsTr("粘贴视频或播放列表链接")
+                                    placeholderText: qsTr("粘贴媒体或播放列表链接")
                                     Component.onCompleted: text = String(
-                                        settingsController.settingsData.lastDownloadUrl || "")
+                                        mediaflow.settingsController.settingsData.lastDownloadUrl || "")
                                     onTextEdited: downloadUrlPersistenceTimer.restart()
                                     onAccepted: {
                                         downloadUrlPersistenceTimer.stop()
-                                        settingsController.setLastDownloadUrl(text)
+                                        mediaflow.settingsController.setLastDownloadUrl(text)
                                         if (text.trim().length > 0
-                                                && !taskController.downloadAnalysisBusy
-                                                && workspaceController.actionCapabilities.canCreateProject)
-                                            taskController.analyzeDownloadUrl(text.trim())
+                                                && !mediaflow.taskController.downloadAnalysisBusy
+                                                && mediaflow.workspaceViewController.actionCapabilities.canCreateProject)
+                                            mediaflow.taskController.analyzeDownloadUrl(text.trim())
                                     }
                                 }
                                 AppButton {
@@ -307,16 +307,16 @@ Rectangle {
                                 AppButton {
                                     objectName: "quickStartDownloadButton"
                                     primary: true
-                                    text: taskController.downloadAnalysisBusy
-                                          ? qsTr("正在读取视频信息…")
+                                    text: mediaflow.taskController.downloadAnalysisBusy
+                                          ? qsTr("正在读取媒体信息…")
                                           : qsTr("下载并新建项目")
                                     enabled: downloadUrlField.text.trim().length > 0
-                                             && !taskController.downloadAnalysisBusy
-                                             && workspaceController.actionCapabilities.canCreateProject
+                                             && !mediaflow.taskController.downloadAnalysisBusy
+                                             && mediaflow.workspaceViewController.actionCapabilities.canCreateProject
                                     onClicked: {
                                         downloadUrlPersistenceTimer.stop()
-                                        settingsController.setLastDownloadUrl(downloadUrlField.text)
-                                        taskController.analyzeDownloadUrl(downloadUrlField.text.trim())
+                                        mediaflow.settingsController.setLastDownloadUrl(downloadUrlField.text)
+                                        mediaflow.taskController.analyzeDownloadUrl(downloadUrlField.text.trim())
                                     }
                                 }
                             }
@@ -352,14 +352,14 @@ Rectangle {
                                     objectName: "createSampleProjectButton"
                                     Layout.fillWidth: true
                                     text: qsTr("体验示例")
-                                    enabled: workspaceController.actionCapabilities.canCreateProject
-                                    onClicked: workspaceController.createSampleProject()
+                                    enabled: mediaflow.workspaceViewController.actionCapabilities.canCreateProject
+                                    onClicked: mediaflow.workspaceProjectController.createSampleProject()
                                 }
                                 AppButton {
                                     objectName: "openExistingProjectButton"
                                     Layout.fillWidth: true
                                     text: qsTr("打开项目")
-                                    enabled: workspaceController.actionCapabilities.canOpenProject
+                                    enabled: mediaflow.workspaceViewController.actionCapabilities.canOpenProject
                                     onClicked: openFolderDialog.open()
                                 }
                             }
@@ -423,14 +423,14 @@ Rectangle {
                     id: projectHealth
                     Layout.fillWidth: true
                     Layout.preferredHeight: 36
-                    visible: workspaceController.homeSummary.runningTaskCount > 0
-                        || workspaceController.homeSummary.failedTaskCount > 0
-                        || workspaceController.homeSummary.offlineAssetCount > 0
-                        || workspaceController.homeSummary.pendingWorkflowCount > 0
+                    visible: mediaflow.workspaceViewController.homeSummary.runningTaskCount > 0
+                        || mediaflow.workspaceViewController.homeSummary.failedTaskCount > 0
+                        || mediaflow.workspaceViewController.homeSummary.offlineAssetCount > 0
+                        || mediaflow.workspaceViewController.homeSummary.pendingWorkflowCount > 0
                     radius: Theme.radius
                     color: Theme.surface
-                    border.color: workspaceController.homeSummary.failedTaskCount > 0
-                        || workspaceController.homeSummary.offlineAssetCount > 0
+                    border.color: mediaflow.workspaceViewController.homeSummary.failedTaskCount > 0
+                        || mediaflow.workspaceViewController.homeSummary.offlineAssetCount > 0
                         ? Theme.warning : Theme.borderSubtle
                     RowLayout {
                         anchors.fill: parent
@@ -441,15 +441,15 @@ Rectangle {
                             width: 6
                             height: 6
                             radius: 3
-                            color: workspaceController.homeSummary.failedTaskCount > 0
-                                || workspaceController.homeSummary.offlineAssetCount > 0
+                            color: mediaflow.workspaceViewController.homeSummary.failedTaskCount > 0
+                                || mediaflow.workspaceViewController.homeSummary.offlineAssetCount > 0
                                 ? Theme.warning : Theme.accentHover
                         }
                         Text { text: qsTr("任务与提醒"); color: Theme.text; font.pixelSize: Theme.fontSizeBodySmall; font.weight: Font.DemiBold }
-                        Text { text: qsTr("运行 %1").arg(workspaceController.homeSummary.runningTaskCount); color: Theme.accentHover }
-                        Text { text: qsTr("失败 %1").arg(workspaceController.homeSummary.failedTaskCount); color: workspaceController.homeSummary.failedTaskCount > 0 ? Theme.danger : Theme.textMuted }
-                        Text { text: qsTr("离线素材 %1").arg(workspaceController.homeSummary.offlineAssetCount); color: workspaceController.homeSummary.offlineAssetCount > 0 ? Theme.warning : Theme.textMuted }
-                        Text { text: qsTr("待确认 %1").arg(workspaceController.homeSummary.pendingWorkflowCount); color: Theme.textMuted }
+                        Text { text: qsTr("运行 %1").arg(mediaflow.workspaceViewController.homeSummary.runningTaskCount); color: Theme.accentHover }
+                        Text { text: qsTr("失败 %1").arg(mediaflow.workspaceViewController.homeSummary.failedTaskCount); color: mediaflow.workspaceViewController.homeSummary.failedTaskCount > 0 ? Theme.danger : Theme.textMuted }
+                        Text { text: qsTr("离线素材 %1").arg(mediaflow.workspaceViewController.homeSummary.offlineAssetCount); color: mediaflow.workspaceViewController.homeSummary.offlineAssetCount > 0 ? Theme.warning : Theme.textMuted }
+                        Text { text: qsTr("待确认 %1").arg(mediaflow.workspaceViewController.homeSummary.pendingWorkflowCount); color: Theme.textMuted }
                         Item { Layout.fillWidth: true }
                     }
                 }
@@ -467,7 +467,7 @@ Rectangle {
                     interactive: contentHeight > height
                     boundsBehavior: Flickable.StopAtBounds
                     reuseItems: true
-                    model: workspaceController.recentProjectsModel
+                    model: mediaflow.workspaceViewController.recentProjectsModel
                     ScrollBar.vertical: AppScrollBar { policy: ScrollBar.AsNeeded }
                     delegate: Rectangle {
                         objectName: "recentProjectCard"
@@ -510,23 +510,23 @@ Rectangle {
                         scale: recentMouse.containsMouse && available ? 1.008 : 1.0
                         z: recentMouse.containsMouse ? 2 : 0
                         activeFocusOnTab: available
-                            && workspaceController.actionCapabilities.canOpenProject
+                            && mediaflow.workspaceViewController.actionCapabilities.canOpenProject
                         Accessible.name: qsTr("项目 %1").arg(name)
                         Accessible.role: Accessible.Button
                         Keys.onReturnPressed: if (available
-                                && workspaceController.actionCapabilities.canOpenProject)
-                            workspaceController.openProject(path)
+                                && mediaflow.workspaceViewController.actionCapabilities.canOpenProject)
+                            mediaflow.workspaceProjectController.openProject(path)
                         Keys.onSpacePressed: if (available
-                                && workspaceController.actionCapabilities.canOpenProject)
-                            workspaceController.openProject(path)
+                                && mediaflow.workspaceViewController.actionCapabilities.canOpenProject)
+                            mediaflow.workspaceProjectController.openProject(path)
                         MouseArea {
                             id: recentMouse
                             anchors.fill: parent
                             enabled: available
-                                && workspaceController.actionCapabilities.canOpenProject
+                                && mediaflow.workspaceViewController.actionCapabilities.canOpenProject
                             hoverEnabled: true
                             cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: workspaceController.openProject(path)
+                            onClicked: mediaflow.workspaceProjectController.openProject(path)
                         }
 
                         Behavior on scale {
@@ -703,18 +703,16 @@ Rectangle {
                                     leftPadding: 8
                                     rightPadding: 8
                                     font.pixelSize: Theme.fontSizeCaption
-                                    onClicked: taskController.openArtifact(recentArtifact)
+                                    onClicked: mediaflow.taskController.openArtifact(recentArtifact)
                                 }
-                                AppButton {
+                                AppIconButton {
                                     objectName: "removeRecentProjectButton"
                                     property string projectPath: path
-                                    text: qsTr("从列表移除")
-                                    Accessible.name: text + " " + name
-                                    implicitHeight: 28
-                                    leftPadding: 8
-                                    rightPadding: 8
-                                    font.pixelSize: Theme.fontSizeCaption
-                                    onClicked: workspaceController.removeRecentProject(path)
+                                    iconName: "close"
+                                    compact: true
+                                    toolTipText: qsTr("移除")
+                                    Accessible.name: qsTr("移除") + " " + name
+                                    onClicked: mediaflow.workspaceProjectController.removeRecentProject(path)
                                 }
                             }
                         }

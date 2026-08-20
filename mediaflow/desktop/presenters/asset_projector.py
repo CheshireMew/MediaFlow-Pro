@@ -12,23 +12,26 @@ from .base import Projector
 
 class AssetProjector(Projector):
     def refresh_assets(self) -> None:
-        if not self._session.binding.current:
+        if not self._session.state.binding.current:
             self._session.models.assets.set_items([])
             self._session.models.asset_bins.set_items([])
             self._session.models.asset_moments.set_items([])
             return
-        assets = self._session.binding.current.list_assets()
-        bins = self._session.binding.current.list_asset_bins()
+        assets = self._session.state.binding.require_current().list_assets()
+        bins = self._session.state.binding.require_current().list_asset_bins()
         available_ids = {asset.id for asset in assets}
-        self._session.asset_state.thumbnail_paths = {
+        self._session.state.assets.thumbnail_paths = {
             asset_id: path
-            for asset_id, path in self._session.asset_state.thumbnail_paths.items()
+            for asset_id, path in self._session.state.assets.thumbnail_paths.items()
             if asset_id in available_ids
         }
         transcript_terms: dict[str, list[str]] = {}
-        for document in self._session.binding.current.list_subtitle_documents():
+        for document in self._session.state.binding.require_current().list_subtitle_documents():
             text = " ".join(
-                segment.text for segment in self._session.binding.current.list_subtitle_segments(document.id)
+                segment.text
+                for segment in self._session.state.binding.require_current().list_subtitle_segments(
+                    document.id
+                )
             )
             for asset_id in {document.asset_id, document.media_asset_id} - {None}:
                 transcript_terms.setdefault(asset_id, []).append(text)
@@ -45,8 +48,8 @@ class AssetProjector(Projector):
                 "width": asset.metadata.width or 0,
                 "height": asset.metadata.height or 0,
                 "previewUrl": (
-                    QUrl.fromLocalFile(self._session.asset_state.thumbnail_paths[asset.id]).toString()
-                    if asset.id in self._session.asset_state.thumbnail_paths
+                    QUrl.fromLocalFile(self._session.state.assets.thumbnail_paths[asset.id]).toString()
+                    if asset.id in self._session.state.assets.thumbnail_paths
                     else ""
                 ),
                 "proxyReady": bool(asset.proxy_path),
@@ -89,8 +92,8 @@ class AssetProjector(Projector):
         self._session.projectors.timeline.refresh_timeline()
         for asset in assets:
             self.request_waveform_data(asset.id, asset.waveform_path)
-        self._session.selection.asset_ids = [
-            asset_id for asset_id in self._session.selection.asset_ids if asset_id in available_ids
+        self._session.state.selection.asset_ids = [
+            asset_id for asset_id in self._session.state.selection.asset_ids if asset_id in available_ids
         ]
         self.request_asset_thumbnails(assets)
 
@@ -111,21 +114,21 @@ class AssetProjector(Projector):
         return " ".join(term for term in terms if term).casefold()
 
     def request_asset_thumbnails(self, assets) -> None:
-        if not self._session.binding.current or not any(
+        if not self._session.state.binding.current or not any(
             asset.status.value == "online" and asset.kind.value in {"video", "image"} for asset in assets
         ):
             return
-        if self._session.asset_state.thumbnail_pending_request is not None:
-            self._session.asset_state.thumbnail_refresh_requested = True
+        if self._session.state.assets.thumbnail_pending_request is not None:
+            self._session.state.assets.thumbnail_refresh_requested = True
             return
-        self._session.asset_state.thumbnail_request_id += 1
+        self._session.state.assets.thumbnail_request_id += 1
         request_id = (
-            self._session.binding.generation,
-            self._session.asset_state.thumbnail_request_id,
-            str(self._session.binding.current.project_dir),
+            self._session.state.binding.generation,
+            self._session.state.assets.thumbnail_request_id,
+            str(self._session.state.binding.require_current().project_dir),
         )
-        project_dir = self._session.binding.current.project_dir
-        self._session.asset_state.thumbnail_pending_request = request_id
+        project_dir = self._session.state.binding.require_current().project_dir
+        self._session.state.assets.thumbnail_pending_request = request_id
         self._session.background.submit(
             "asset_thumbnails",
             request_id,
@@ -133,10 +136,10 @@ class AssetProjector(Projector):
         )
 
     def apply_asset_thumbnails(self, paths: dict[str, str]) -> None:
-        self._session.asset_state.thumbnail_paths = dict(paths)
-        if not self._session.binding.current:
+        self._session.state.assets.thumbnail_paths = dict(paths)
+        if not self._session.state.binding.current:
             return
-        assets = self._session.binding.current.list_assets()
+        assets = self._session.state.binding.require_current().list_assets()
         rows = []
         for asset in assets:
             current = self._session.models.assets.get(
@@ -145,8 +148,8 @@ class AssetProjector(Projector):
             if not current:
                 continue
             current["previewUrl"] = (
-                QUrl.fromLocalFile(self._session.asset_state.thumbnail_paths[asset.id]).toString()
-                if asset.id in self._session.asset_state.thumbnail_paths
+                QUrl.fromLocalFile(self._session.state.assets.thumbnail_paths[asset.id]).toString()
+                if asset.id in self._session.state.assets.thumbnail_paths
                 else ""
             )
             rows.append(current)
@@ -154,26 +157,27 @@ class AssetProjector(Projector):
         self.refresh_asset_moments(assets)
 
     def refresh_asset_moments(self, assets) -> None:
-        if not self._session.binding.current or not self._session.binding.timeline:
+        if not self._session.state.binding.current or not self._session.state.binding.timeline:
             self._session.models.asset_moments.set_items([])
             return
-        project = self._session.binding.current.get_project()
-        main_profile = self._session.binding.current.get_sequence(
-            project.main_sequence_id
-        ).profile
-        active_profile = self._session.binding.timeline.state.sequence.profile
+        project = self._session.state.binding.require_current().get_project()
+        main_profile = (
+            self._session.state.binding.require_current().get_sequence(project.main_sequence_id).profile
+        )
+        active_profile = self._session.state.binding.require_timeline().state.sequence.profile
         assets_by_id = {asset.id: asset for asset in assets}
         rows: list[dict] = []
-        for document in self._session.binding.current.list_subtitle_documents():
+        for document in self._session.state.binding.require_current().list_subtitle_documents():
             asset_id = document.media_asset_id or document.asset_id
             asset = assets_by_id.get(asset_id)
             if asset is None:
                 continue
             source_profile = (
-                self._session.binding.current.get_sequence(document.sequence_id).profile
-                if document.sequence_id else main_profile
+                self._session.state.binding.require_current().get_sequence(document.sequence_id).profile
+                if document.sequence_id
+                else main_profile
             )
-            for segment in self._session.binding.current.list_subtitle_segments(document.id):
+            for segment in self._session.state.binding.require_current().list_subtitle_segments(document.id):
                 start, end = reframe_interval(
                     segment.start_frame,
                     segment.end_frame,
@@ -194,13 +198,14 @@ class AssetProjector(Projector):
                         "searchText": f"{asset.name} {segment.text} spoken speech 口述 台词",
                     }
                 )
-        for highlight in self._session.binding.current.list_highlights():
+        for highlight in self._session.state.binding.require_current().list_highlights():
             asset = assets_by_id.get(highlight.asset_id)
             if asset is None:
                 continue
             source_profile = (
-                self._session.binding.current.get_sequence(highlight.sequence_id).profile
-                if highlight.sequence_id else main_profile
+                self._session.state.binding.require_current().get_sequence(highlight.sequence_id).profile
+                if highlight.sequence_id
+                else main_profile
             )
             start, end = reframe_interval(
                 highlight.start_frame,
@@ -220,8 +225,7 @@ class AssetProjector(Projector):
                     "endFrame": end,
                     "previewUrl": self._preview_url(asset.id),
                     "searchText": (
-                        f"{asset.name} {highlight.title} {highlight.reason} "
-                        "visual moment 画面 时刻"
+                        f"{asset.name} {highlight.title} {highlight.reason} visual moment 画面 时刻"
                     ),
                 }
             )
@@ -229,24 +233,24 @@ class AssetProjector(Projector):
         self._session.models.asset_moments.set_items(rows)
 
     def _preview_url(self, asset_id: str) -> str:
-        path = self._session.asset_state.thumbnail_paths.get(asset_id)
+        path = self._session.state.assets.thumbnail_paths.get(asset_id)
         return QUrl.fromLocalFile(path).toString() if path else ""
 
     def request_waveform_data(self, asset_id: str, waveform_path: str | None) -> None:
-        if not waveform_path or not self._session.binding.current:
-            self._session.asset_state.waveform_cache.pop(asset_id, None)
+        if not waveform_path or not self._session.state.binding.current:
+            self._session.state.assets.waveform_cache.pop(asset_id, None)
             return
         path = Path(waveform_path)
         if not path.is_absolute():
-            path = self._session.binding.current.project_dir / path
+            path = self._session.state.binding.require_current().project_dir / path
         path_value = str(path.resolve())
-        cached = self._session.asset_state.waveform_cache.get(asset_id)
+        cached = self._session.state.assets.waveform_cache.get(asset_id)
         if cached and cached[0] == path_value:
             return
-        request_id = (self._session.binding.generation, asset_id, path_value)
-        if request_id in self._session.asset_state.waveform_pending:
+        request_id = (self._session.state.binding.generation, asset_id, path_value)
+        if request_id in self._session.state.assets.waveform_pending:
             return
-        self._session.asset_state.waveform_pending.add(request_id)
+        self._session.state.assets.waveform_pending.add(request_id)
 
         def load() -> tuple[int, dict]:
             modified = path.stat().st_mtime_ns

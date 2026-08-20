@@ -114,7 +114,9 @@ def prepare_qt(
 
     download_root = qt_root / "downloads"
     download_root.mkdir(parents=True, exist_ok=True)
-    staging_root = qt_root / f"install-{uuid.uuid4().hex}"
+    # Qt archives contain long CMake package paths. Keep the unpublished
+    # staging segment short enough for Windows hosts without long-path support.
+    staging_root = qt_root / f"i-{uuid.uuid4().hex[:8]}"
     staging_install = staging_root / qt["install_directory"]
     staging_install.mkdir(parents=True)
     try:

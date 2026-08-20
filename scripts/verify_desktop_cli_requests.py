@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -22,6 +23,7 @@ from mediaflow.atomic_file import atomic_write_text
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers.controller_hub import EditorControllers
 from mediaflow.domain.enums import AssetKind, TaskStatus, TrackKind
+from mediaflow.environment import test_run_root
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.service.client import shutdown_sync_service
 from mediaflow.service.desktop_proxy import RemoteEditorProject
@@ -143,15 +145,15 @@ def _wait_cli_task(request_path: Path, copied: dict[str, Any], task_id: str) -> 
 
 
 def _close_project(controller: EditorControllers) -> None:
-    controller.workspace.closeProject()
+    controller.workspace_project.closeProject()
     _process_until(lambda: not controller.workspace.projectReleasePending, timeout=60)
     if controller.workspace.projectCloseFailed:
         raise RuntimeError(controller.workspace.projectCloseError)
 
 
 def _open_project(controller: EditorControllers, project_path: Path) -> None:
-    controller.workspace.openProject(QUrl.fromLocalFile(str(project_path)).toString())
-    _process_until(lambda: controller.session.binding.current is not None, timeout=60)
+    controller.workspace_project.openProject(QUrl.fromLocalFile(str(project_path)).toString())
+    _process_until(lambda: controller.session.state.binding.current is not None, timeout=60)
 
 
 def _wait_for_project_task_quiescence(
@@ -165,9 +167,7 @@ def _wait_for_project_task_quiescence(
     while time.monotonic() < deadline:
         QCoreApplication.processEvents()
         tasks = project.list_tasks()
-        signature = tuple(
-            sorted((task.id, task.status.value, task.revision) for task in tasks)
-        )
+        signature = tuple(sorted((task.id, task.status.value, task.revision) for task in tasks))
         if any(not task.status.is_settled for task in tasks) or signature != previous:
             stable_since = None
             previous = signature
@@ -184,7 +184,7 @@ def _copy_request(
     output: Path,
     action: Callable[[], None],
 ) -> dict[str, Any]:
-    project = controller.session.binding.current
+    project = controller.session.state.binding.current
     if project is None:
         raise RuntimeError("Project must be open before copying a request")
     _wait_for_project_task_quiescence(project)
@@ -221,8 +221,11 @@ def _execute_task_request(request_path: Path, copied: dict[str, Any]) -> dict[st
 
 def verify(run_root: Path) -> None:
     os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(run_root / "editor-service")
-    source = run_root / "spoken-source.mp4"
-    project_path = run_root / "Desktop CLI Requests"
+    workspace_key = hashlib.sha256(str(run_root).encode()).hexdigest()[:12]
+    workspace = test_run_root() / "v" / workspace_key
+    workspace.mkdir(parents=True, exist_ok=False)
+    source = workspace / "s.mp4"
+    project_path = workspace / "p"
     _create_spoken_video(source)
 
     application = EditorApplication()
@@ -257,7 +260,7 @@ def verify(run_root: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
     try:
         _open_project(controller, project_path)
-        controller.timeline.selectClip(web_clip_id)
+        controller.timeline_view.selectClip(web_clip_id)
         _process_until(lambda: bool(controller.web.parameterDescriptors))
         parameter = dict(controller.web.parameterDescriptors[0])
         definition = dict(parameter["descriptor"])
@@ -279,15 +282,13 @@ def verify(run_root: Path) -> None:
         _copy_request(
             controller,
             web_request_path,
-            lambda: controller.automation.copyWebFieldUpdateRequest(
-                "parameter", parameter_id, changed_value
-            ),
+            lambda: controller.automation.copyWebFieldUpdateRequest("parameter", parameter_id, changed_value),
         )
         _close_project(controller)
         _run_cli(web_request_path)
 
         _open_project(controller, project_path)
-        persisted = controller.session.binding.current.get_web_clip(web_clip_id)
+        persisted = controller.session.state.binding.current.get_web_clip(web_clip_id)
         if persisted.parameters[parameter_id] != changed_value:
             raise RuntimeError("CLI web edit did not reach the reopened desktop project")
         export_request_path = artifacts / "export-sequence.json"
@@ -307,9 +308,7 @@ def verify(run_root: Path) -> None:
         transcript_request = _copy_request(
             controller,
             transcript_request_path,
-            lambda: controller.automation.copyCurrentTranscriptionRequest(
-                "tiny.en", "cpu", "en", 1
-            ),
+            lambda: controller.automation.copyCurrentTranscriptionRequest("tiny.en", "cpu", "en", 1),
         )
         _close_project(controller)
         transcript_task = _execute_task_request(
@@ -318,7 +317,7 @@ def verify(run_root: Path) -> None:
         )
 
         _open_project(controller, project_path)
-        reopened = controller.session.binding.current
+        reopened = controller.session.state.binding.current
         documents = reopened.list_subtitle_documents(sequence_id=sequence_id)
         if not documents:
             raise RuntimeError("Copied transcription request produced no transcript document")

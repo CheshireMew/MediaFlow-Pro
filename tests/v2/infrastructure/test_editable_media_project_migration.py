@@ -14,18 +14,20 @@ import numpy as np
 from playwright.sync_api import sync_playwright
 
 from mediaflow.application.web_package_files import (
-    editable_media_source_hash,
     publication_receipt_json,
 )
 from mediaflow.automation.operation_registry import OPERATIONS
-from mediaflow.domain.editable_media_contract import (
-    validate_editable_media_document,
-)
-from mediaflow.domain.web_media import (
-    WebClipState,
+from mediaflow.domain.web_manifest import (
     editable_media_manifest_document,
     parse_editable_media_manifest,
+)
+from mediaflow.domain.web_state import (
+    WebClipState,
     web_runtime_state,
+)
+from mediaflow.infrastructure.editable_media_contract import (
+    editable_media_contract,
+    validate_editable_media_document,
 )
 from mediaflow.infrastructure.editable_media_project_migration import (
     V6_RUNTIME_PATH,
@@ -34,8 +36,10 @@ from mediaflow.infrastructure.editable_media_project_migration import (
 from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.web_browser import WebPackagePreviewServer
+from mediaflow.infrastructure.web_package_storage import editable_media_source_hash
 
 FIXTURE = Path("tests/fixtures/editable-media-v4-project").resolve()
+EDITABLE_MEDIA_CONTRACT = editable_media_contract()
 V6_STARTER = Path("tests/fixtures/editable-media-v6/editable-media.json").resolve()
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
@@ -91,9 +95,7 @@ def _request(
     definition = OPERATIONS[operation]
     if definition.project_access == "write":
         with sqlite3.connect(project / "project.mfp") as connection:
-            row = connection.execute(
-                "SELECT content_revision FROM project LIMIT 1"
-            ).fetchone()
+            row = connection.execute("SELECT content_revision FROM project LIMIT 1").fetchone()
         if row is None:
             raise RuntimeError("Project has no content revision")
         request["base_revision"] = int(row[0])
@@ -128,7 +130,7 @@ def _project_web_state(project: Path) -> dict[str, object]:
         manifest = (
             migrate_editable_media_manifest_to_v6(raw_manifest)
             if raw_manifest["version"] == 4
-            else parse_editable_media_manifest(raw_manifest)
+            else parse_editable_media_manifest(raw_manifest, EDITABLE_MEDIA_CONTRACT)
         )
         clip_state = WebClipState.model_validate(
             {
@@ -266,13 +268,13 @@ def test_v5_manifest_migration_restores_required_nullable_v6_fields() -> None:
                     for key, value in parameter["descriptor"]["constraints"].items()
                     if key != "choices"
                 },
-                    "choices": [
-                        choice["value"]
-                        for choice in parameter["descriptor"]["constraints"].get(
-                            "choices",
-                            [],
-                        )
-                    ],
+                "choices": [
+                    choice["value"]
+                    for choice in parameter["descriptor"]["constraints"].get(
+                        "choices",
+                        [],
+                    )
+                ],
             },
         }
         for parameter in source["parameters"]
@@ -426,12 +428,15 @@ def test_third_party_v4_runtime_requires_republication_without_project_writes(
     assert "Third-party editable-media v4 runtime" in json.dumps(result, ensure_ascii=False)
     assert "republish" in json.dumps(result, ensure_ascii=False)
     with sqlite3.connect(project / "project.mfp") as connection:
-        assert connection.execute(
-            "SELECT version FROM schema_info WHERE component='project'"
-        ).fetchone() == (35,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='editable_media_upgrade'"
-        ).fetchone() is None
+        assert connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone() == (
+            35,
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='editable_media_upgrade'"
+            ).fetchone()
+            is None
+        )
     assert editable_media_source_hash(package) == source_hash
     assert not list((project / "staging" / "web").glob("s-*"))
     assert not list((project / "archive" / "web").glob("f-*"))
@@ -522,15 +527,19 @@ def test_all_legacy_web_assets_are_preflighted_before_the_first_publication(
     assert code == 1
     assert "Third-party editable-media v4 runtime" in json.dumps(result, ensure_ascii=False)
     with sqlite3.connect(project / "project.mfp") as connection:
-        assert connection.execute(
-            "SELECT version FROM schema_info WHERE component='project'"
-        ).fetchone() == (35,)
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='editable_media_upgrade'"
-        ).fetchone() is None
-        assert [json.loads(row[0])["version"] for row in connection.execute(
-            "SELECT manifest_json FROM web_asset ORDER BY asset_id"
-        )] == [4, 4]
+        assert connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone() == (
+            35,
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='editable_media_upgrade'"
+            ).fetchone()
+            is None
+        )
+        assert [
+            json.loads(row[0])["version"]
+            for row in connection.execute("SELECT manifest_json FROM web_asset ORDER BY asset_id")
+        ] == [4, 4]
     assert len(list((project / "sources" / "web").glob("p-*"))) == 2
     assert not list((project / "staging" / "web").glob("s-*"))
     assert not list((project / "archive" / "web").glob("f-*"))
@@ -568,6 +577,12 @@ def test_real_v4_project_upgrades_once_and_reaches_visible_v6_output(
     )
     assert code == 0, json.dumps(upgrade, ensure_ascii=False, indent=2)
     assert upgrade["ok"] is True
+    event = upgrade["collaboration"]["event"]
+    assert event["operation"] == "project.upgrade"
+    assert event["write_set"]
+    assert all(change["action"] in {"create", "update", "delete"} for change in event["changes"])
+    assert any(path.startswith("/assets/") for path in event["write_set"])
+    assert any(path.startswith("/web/clips/") for path in event["write_set"])
 
     after = _project_web_state(project)
     assert after["schema_version"] == PROJECT_SCHEMA_VERSION

@@ -2,16 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from functools import lru_cache
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
-
-EDITABLE_MEDIA_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "resources"
-    / "contracts"
-    / "editable-media.v6.schema.json"
-)
 
 
 def _value_type(value: object) -> str:
@@ -175,22 +167,25 @@ def _validate_node(
                 )
 
 
-@lru_cache(maxsize=1)
-def read_editable_media_schema() -> dict[str, Any]:
-    return json.loads(EDITABLE_MEDIA_SCHEMA_PATH.read_text(encoding="utf-8"))
+@dataclass(frozen=True, slots=True)
+class EditableMediaContract:
+    """Pure editable-media schema validator initialized at an outer boundary."""
 
+    schema: dict[str, Any]
 
-def editable_media_schema_errors(document: object) -> list[str]:
-    schema = read_editable_media_schema()
-    errors: list[str] = []
-    _validate_node(document, schema, schema, "$", errors)
-    return errors
+    def __post_init__(self) -> None:
+        if not self.schema:
+            raise ValueError("editable-media v6 schema cannot be empty")
 
+    def errors(self, document: object) -> list[str]:
+        errors: list[str] = []
+        _validate_node(document, self.schema, self.schema, "$", errors)
+        return errors
 
-def validate_editable_media_document(document: object) -> None:
-    errors = editable_media_schema_errors(document)
-    if errors:
-        raise ValueError(
-            "editable-media v6 schema validation failed:\n- "
-            + "\n- ".join(errors)
-        )
+    def validate(self, document: object) -> None:
+        errors = self.errors(document)
+        if errors:
+            raise ValueError(
+                "editable-media v6 schema validation failed:\n- "
+                + "\n- ".join(errors)
+            )

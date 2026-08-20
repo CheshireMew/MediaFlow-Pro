@@ -3,13 +3,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from mediaflow.domain.collaboration import ProjectEditAction, ProjectEditCommand
+from mediaflow.domain.collaboration import (
+    ProjectChangeSet,
+    ProjectEditAction,
+    ProjectEditCommand,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectEditHistoryCheckpoint:
     undo: tuple[ProjectEditCommand, ...]
     redo: tuple[ProjectEditCommand, ...]
+    undo_changes: tuple[ProjectChangeSet, ...]
+    redo_changes: tuple[ProjectChangeSet, ...]
 
 
 class ProjectEditHistory:
@@ -26,6 +32,8 @@ class ProjectEditHistory:
     ) -> None:
         self._undo: list[ProjectEditCommand] = []
         self._redo: list[ProjectEditCommand] = []
+        self._undo_changes: list[ProjectChangeSet] = []
+        self._redo_changes: list[ProjectChangeSet] = []
         self._executor = executor
         self._handlers: dict[str, Callable[[ProjectEditAction], None]] = {}
 
@@ -47,9 +55,15 @@ class ProjectEditHistory:
     def can_redo(self) -> bool:
         return bool(self._redo)
 
-    def push(self, command: ProjectEditCommand) -> None:
+    def push(
+        self,
+        command: ProjectEditCommand,
+        changes: ProjectChangeSet,
+    ) -> None:
         self._undo.append(command)
+        self._undo_changes.append(changes)
         self._redo.clear()
+        self._redo_changes.clear()
 
     def commands_since(
         self,
@@ -71,22 +85,25 @@ class ProjectEditHistory:
             return None
         return ProjectEditCommand(
             label=(label or commands[-1].label).strip(),
-            undo_actions=[
-                action
-                for command in reversed(commands)
-                for action in command.undo_actions
-            ],
-            redo_actions=[
-                action
-                for command in commands
-                for action in command.redo_actions
-            ],
+            undo_actions=[action for command in reversed(commands) for action in command.undo_actions],
+            redo_actions=[action for command in commands for action in command.redo_actions],
         )
+
+    def change_set_since(
+        self,
+        checkpoint: ProjectEditHistoryCheckpoint,
+    ) -> ProjectChangeSet:
+        prefix_length = len(checkpoint.undo_changes)
+        if tuple(self._undo_changes[:prefix_length]) != checkpoint.undo_changes:
+            raise RuntimeError("Edit change history changed outside the active operation")
+        return ProjectChangeSet.combine(self._undo_changes[prefix_length:])
 
     def checkpoint(self) -> ProjectEditHistoryCheckpoint:
         return ProjectEditHistoryCheckpoint(
             undo=tuple(self._undo),
             redo=tuple(self._redo),
+            undo_changes=tuple(self._undo_changes),
+            redo_changes=tuple(self._redo_changes),
         )
 
     def restore(
@@ -95,6 +112,8 @@ class ProjectEditHistory:
     ) -> None:
         self._undo = list(checkpoint.undo)
         self._redo = list(checkpoint.redo)
+        self._undo_changes = list(checkpoint.undo_changes)
+        self._redo_changes = list(checkpoint.redo_changes)
 
     def squash_since(
         self,
@@ -106,25 +125,34 @@ class ProjectEditHistory:
         command = self.combined_since(checkpoint, label=label)
         if command is None:
             return
+        changes = self.change_set_since(checkpoint)
         self._undo[prefix_length:] = [command]
+        self._undo_changes[prefix_length:] = [changes]
         self._redo.clear()
+        self._redo_changes.clear()
 
     def undo(self) -> str:
         if not self._undo:
             raise RuntimeError("Nothing to undo")
         command = self._undo[-1]
+        changes = self._undo_changes[-1]
         self.apply_actions(command.undo_actions)
         self._undo.pop()
+        self._undo_changes.pop()
         self._redo.append(command)
+        self._redo_changes.append(changes)
         return command.label
 
     def redo(self) -> str:
         if not self._redo:
             raise RuntimeError("Nothing to redo")
         command = self._redo[-1]
+        changes = self._redo_changes[-1]
         self.apply_actions(command.redo_actions)
         self._redo.pop()
+        self._redo_changes.pop()
         self._undo.append(command)
+        self._undo_changes.append(changes)
         return command.label
 
     def apply_actions(self, actions: list[ProjectEditAction]) -> None:
@@ -135,10 +163,10 @@ class ProjectEditHistory:
             elif self._executor is not None:
                 self._executor(action)
             else:
-                raise RuntimeError(
-                    f"No active domain owner can apply edit action {action.kind!r}"
-                )
+                raise RuntimeError(f"No active domain owner can apply edit action {action.kind!r}")
 
     def clear(self) -> None:
         self._undo.clear()
         self._redo.clear()
+        self._undo_changes.clear()
+        self._redo_changes.clear()
