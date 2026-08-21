@@ -18,6 +18,7 @@ class TimelineEffectsController(ControllerFacet[TimelinePresentationScope]):
         return [
             {"label": definition.label, "value": kind.value}
             for kind, definition in VISUAL_EFFECT_DEFINITIONS.items()
+            if definition.resource_asset_kind is None
         ]
 
     @Property(list, notify=selectionChanged)

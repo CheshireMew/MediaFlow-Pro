@@ -62,6 +62,7 @@ class ApplicationRuntimeOperations:
             "discover_encoder_policy_options",
             "installed_asr_models",
             "recent_projects",
+            "search_media_resources",
             "cancel_runtime_tool",
             "runtime_tool_status",
             "run_runtime_tool",

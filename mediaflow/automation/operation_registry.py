@@ -54,6 +54,7 @@ dubbing = _LazyOperationModule("mediaflow.automation.dubbing_operations")
 language_audio = _LazyOperationModule("mediaflow.automation.language_audio_operations")
 media_quality = _LazyOperationModule("mediaflow.automation.media_quality_operations")
 project = _LazyOperationModule("mediaflow.automation.project_operations")
+resources = _LazyOperationModule("mediaflow.automation.resource_operations")
 runtime = _LazyOperationModule("mediaflow.automation.runtime_operations")
 speech = _LazyOperationModule("mediaflow.automation.speech_operations")
 tasks = _LazyOperationModule("mediaflow.automation.task_operations")
@@ -170,6 +171,13 @@ WEB = ("project-editing", "editable-web-media")
 
 
 OPERATIONS: dict[str, OperationDefinition] = {
+    "resource.catalog.search": _operation(
+        models.MediaResourceSearchArguments,
+        models.MediaResourceSearchResult,
+        "none",
+        resources.search_catalog,
+        capabilities=(),
+    ),
     "runtime.inspect": _operation(
         models.EmptyArguments,
         models.RuntimeInspectionResult,
@@ -239,6 +247,12 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.ProjectHandoffInspectArguments,
         models.ProjectHandoffInspectResult,
         project.inspect_handoff,
+        capabilities=("project-editing", "asynchronous-project-handoff"),
+    ),
+    "project.context.inspect": _read(
+        models.ProjectContextInspectArguments,
+        models.ProjectContextInspectResult,
+        project.inspect_context,
         capabilities=("project-editing", "asynchronous-project-handoff"),
     ),
     "diagnostics.bundle.create": _write(
@@ -490,6 +504,47 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.TranscriptResult,
         language_audio.get_transcript,
     ),
+    "script.inspect": _read(
+        models.TranscriptGetArguments,
+        models.ScriptInspectResult,
+        language_audio.inspect_script,
+        capabilities=("project-editing", "transcript-edit-plans"),
+    ),
+    "script.segment.update": _write(
+        models.ScriptSegmentUpdateArguments,
+        models.SubtitleSegmentResult,
+        language_audio.update_script_segment,
+        reversible=True,
+        capabilities=("project-editing", "transcript-edit-plans"),
+    ),
+    "script.segment.split": _write(
+        models.ScriptSegmentSplitArguments,
+        models.ScriptSegmentSplitResult,
+        language_audio.split_script_segment,
+        reversible=True,
+        capabilities=("project-editing", "transcript-edit-plans"),
+    ),
+    "script.segment.merge": _write(
+        models.ScriptSegmentMergeArguments,
+        models.SubtitleSegmentResult,
+        language_audio.merge_script_segments,
+        reversible=True,
+        capabilities=("project-editing", "transcript-edit-plans"),
+    ),
+    "script.segment.move": _write(
+        models.ScriptSegmentMoveArguments,
+        models.ScriptTimelineEditResult,
+        language_audio.move_script_segment,
+        reversible=True,
+        capabilities=("project-editing", "transcript-edit-plans"),
+    ),
+    "script.gap.close": _write(
+        models.ScriptGapCloseArguments,
+        models.ScriptTimelineEditResult,
+        language_audio.close_script_gap,
+        reversible=True,
+        capabilities=("project-editing", "transcript-edit-plans"),
+    ),
     "transcript.sequence.transcribe": _write(
         models.TranscriptSequenceTranscribeArguments,
         models.TaskReceiptResult,
@@ -534,6 +589,11 @@ OPERATIONS: dict[str, OperationDefinition] = {
         models.PreviewRenderArguments,
         models.PreviewRenderResult,
         timeline.render_preview,
+    ),
+    "preview.frames.render": _read(
+        models.PreviewFramesRenderArguments,
+        models.PreviewFramesRenderResult,
+        timeline.render_preview_frames,
     ),
     "export.sequence": _write(
         models.ExportSequenceArguments,

@@ -58,6 +58,17 @@ Rectangle {
     readonly property bool timelineShown: maximizedPanel.length > 0
         ? maximizedPanel === "timeline" : timelinePanelVisible
 
+    Connections {
+        target: mediaflow.workspacePlaybackController
+        function onRemoteModeRequested(mode) {
+            const requested = String(mode);
+            const available = mediaflow.workspaceViewController.workspaceModes.some(
+                function (item) { return String(item.key) === requested; });
+            if (available)
+                root.activeMode = requested;
+        }
+    }
+
     function layoutData(preset) {
         const layouts = mediaflow.settingsController.settingsData.workspaceLayouts || {};
         return layouts[String(preset)] || {};
@@ -274,6 +285,17 @@ Rectangle {
                                     onSourceRequested: function (assetId, frame) {
                                         root.openSourceMonitor(assetId, frame);
                                     }
+                                }
+                            }
+                            Loader {
+                                id: resourceLibraryPanelLoader
+                                property string panelObjectName: "resourceLibraryPanel"
+                                active: root.activeMode === "resources"
+                                    || status === Loader.Ready
+                                sourceComponent: ResourceLibraryPanel {
+                                    playheadFrame: timeline.visiblePlayheadFrame
+                                    pixelsPerFrame: timeline.pixelsPerFrame
+                                    snapEnabled: timeline.snapEnabled
                                 }
                             }
                             Loader {

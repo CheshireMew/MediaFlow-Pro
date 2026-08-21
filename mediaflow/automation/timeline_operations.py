@@ -220,6 +220,11 @@ def add_clip_visual_effect(context: OperationContext) -> dict:
     editor.add_clip_visual_effect(
         clip_id,
         VisualEffectKind(str(context.required("kind"))),
+        resource_asset_id=(
+            str(context.arguments["resource_asset_id"])
+            if context.arguments.get("resource_asset_id") is not None
+            else None
+        ),
     )
     return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
 
@@ -267,6 +272,32 @@ def render_preview(context: OperationContext) -> dict:
         prefer_sdr_preview_proxy=True,
     )
     return {"preview_graph": str(path)}
+
+
+def render_preview_frames(context: OperationContext) -> dict:
+    state = context.project.timeline(context.sequence_id()).state
+    frames = [int(frame) for frame in context.required("frames")]
+    if state.duration_frames <= 0:
+        raise ValueError("Cannot render proof frames from an empty timeline")
+    outside = [frame for frame in frames if frame >= state.duration_frames]
+    if outside:
+        raise ValueError(
+            "Proof frames must be inside the timeline duration; invalid frames: "
+            + ", ".join(str(frame) for frame in outside)
+        )
+    context.project.prepare_web_sequence(state)
+    graph, rendered = context.application.render_preview_frames(
+        context.project.project_dir,
+        state,
+        frames,
+        use_proxies=bool(context.arguments.get("use_proxies", True)),
+        prefer_sdr_preview_proxy=True,
+    )
+    return {
+        "content_revision": context.project.known_content_revision,
+        "preview_graph": str(graph),
+        "frames": rendered,
+    }
 
 
 def export_sequence(context: OperationContext) -> dict:

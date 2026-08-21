@@ -20,6 +20,8 @@ from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
 from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timebase import seconds_to_frames
 
+_UNSET = object()
+
 
 def recorded_subtitle_edit(label: str):
     def decorate(method):
@@ -167,6 +169,7 @@ class SubtitleEditingService:
         start_frame: int,
         end_frame: int,
         text: str,
+        speaker: str | None | object = _UNSET,
     ) -> SubtitleSegment:
         value = text.strip()
         if not value:
@@ -176,16 +179,54 @@ class SubtitleEditingService:
             index = next(index for index, item in enumerate(segments) if item.id == segment_id)
         except StopIteration as error:
             raise KeyError(segment_id) from error
-        updated = segments[index].model_copy(
-            update={
+        previous = segments[index]
+        changes: dict[str, object] = {
                 "start_frame": int(start_frame),
                 "end_frame": int(end_frame),
                 "text": value,
-            }
-        )
+        }
+        if speaker is not _UNSET:
+            changes["speaker"] = (
+                " ".join(str(speaker).split()) if speaker is not None else None
+            ) or None
+        updated = previous.model_copy(update=changes)
         segments[index] = updated
-        self._save_segments(document_id, segments)
+        words = self.repository.subtitles.list_subtitle_words(document_id)
+        if (
+            previous.start_frame == updated.start_frame
+            and previous.end_frame == updated.end_frame
+            and previous.text == updated.text
+        ):
+            updated_words = words
+        else:
+            updated_words = [word for word in words if word.segment_id != segment_id]
+            updated_words.extend(self._estimated_words(updated))
+        self._save_segments(document_id, segments, words=updated_words)
         return updated
+
+    def update_script_segment(
+        self,
+        document_id: str,
+        segment_id: str,
+        *,
+        text: str | None = None,
+        speaker: str | None | object = _UNSET,
+    ) -> SubtitleSegment:
+        segments = self.repository.subtitles.list_subtitle_segments(document_id)
+        try:
+            segment = next(item for item in segments if item.id == segment_id)
+        except StopIteration as error:
+            raise KeyError(segment_id) from error
+        if text is None and speaker is _UNSET:
+            raise ValueError("Script segment update must change text or speaker")
+        return self.update_segment(
+            document_id,
+            segment_id,
+            start_frame=segment.start_frame,
+            end_frame=segment.end_frame,
+            text=segment.text if text is None else text,
+            speaker=speaker,
+        )
 
     @recorded_subtitle_edit("添加字幕")
     def add_segment(
@@ -542,6 +583,30 @@ class SubtitleEditingService:
             )
 
         self.publication.commit_document_change(document_id, save)
+
+    @staticmethod
+    def _estimated_words(segment: SubtitleSegment) -> list[SubtitleWord]:
+        tokens = re.findall(
+            r"[\u3400-\u9fff]|[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|[^\s]",
+            segment.text,
+        )
+        if not tokens:
+            return []
+        duration = segment.end_frame - segment.start_frame
+        return [
+            SubtitleWord(
+                segment_id=segment.id,
+                position=position,
+                start_frame=segment.start_frame + duration * position // len(tokens),
+                end_frame=max(
+                    segment.start_frame + duration * position // len(tokens) + 1,
+                    segment.start_frame + duration * (position + 1) // len(tokens),
+                ),
+                text=token,
+                timing_source="estimated",
+            )
+            for position, token in enumerate(tokens)
+        ]
 
     def _restore_document_state(
         self,

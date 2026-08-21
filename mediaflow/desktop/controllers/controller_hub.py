@@ -27,6 +27,7 @@ from .export_controller import ExportController
 from .highlight_controller import HighlightController
 from .media_controller import MediaController
 from .project_controller import ProjectSession
+from .resource_library_controller import ResourceLibraryController
 from .settings_controller import SettingsController
 from .subtitle_editing_controller import SubtitleEditingController
 from .subtitle_placement_controller import SubtitlePlacementController
@@ -76,6 +77,7 @@ class EditorControllers(QObject):
         self.workspace_playback = WorkspacePlaybackController(workspace_playback_scope(self.session))
         self.settings = SettingsController(settings)
         self.media = MediaController(media)
+        self.resources = ResourceLibraryController(media)
         self.timeline_view = TimelineViewController(timeline)
         self.timeline_clips = TimelineClipController(timeline)
         self.timeline_structure = TimelineStructureController(timeline)
@@ -109,6 +111,7 @@ class EditorControllers(QObject):
             "workspacePlayback": self.workspace_playback,
             "settings": self.settings,
             "media": self.media,
+            "resources": self.resources,
             "timelineView": self.timeline_view,
             "timelineClips": self.timeline_clips,
             "timelineStructure": self.timeline_structure,
@@ -137,6 +140,7 @@ class EditorControllers(QObject):
     workspacePlaybackController = Property(QObject, lambda self: self.workspace_playback, constant=True)
     settingsController = Property(QObject, lambda self: self.settings, constant=True)
     mediaController = Property(QObject, lambda self: self.media, constant=True)
+    resourceLibraryController = Property(QObject, lambda self: self.resources, constant=True)
     timelineViewController = Property(QObject, lambda self: self.timeline_view, constant=True)
     timelineClipController = Property(QObject, lambda self: self.timeline_clips, constant=True)
     timelineStructureController = Property(QObject, lambda self: self.timeline_structure, constant=True)

@@ -95,6 +95,9 @@ def _change_scopes(
         return [root, f"{document_root}/words"]
     if operation == "transcript.edit.apply":
         return [sequence_root, "/subtitles"]
+    if operation.startswith("script.segment.") or operation == "script.gap.close":
+        scopes = [f"/subtitles/documents/{_path(arguments.get('document_id'))}"]
+        return ([sequence_root] if operation in {"script.segment.move", "script.gap.close"} else []) + scopes
     if operation == "transcript.sequence.transcribe":
         return [f"/tasks/transcript-sequence:{sequence}"]
     if operation == "diagnostics.bundle.create":

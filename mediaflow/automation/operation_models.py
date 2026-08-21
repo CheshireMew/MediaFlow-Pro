@@ -9,12 +9,17 @@ from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.collaboration import ProjectChangeEvent
 from mediaflow.domain.dubbing import DubbingSession, DubbingSettings
 from mediaflow.domain.enums import (
+    ColorMode,
     ExportFormat,
     TrackKind,
     TransitionKind,
     VisualEffectKind,
 )
 from mediaflow.domain.exports import ExportPreset, SubtitleStyle
+from mediaflow.domain.media_resources import (
+    MediaResourceCatalogItem,
+    MediaResourceCategory,
+)
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.portable_timeline import PortableTimelineProfile
 from mediaflow.domain.project import Asset, Project, ProjectProfile, Sequence
@@ -25,7 +30,7 @@ from mediaflow.domain.reference_comparison import (
 )
 from mediaflow.domain.runtime_capabilities import RuntimeInspection
 from mediaflow.domain.settings import AsrSettings
-from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
+from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.domain.task_commands import SequenceBuildUnit, TaskCommand
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import (
@@ -75,6 +80,15 @@ class EmptyArguments(DomainModel):
     pass
 
 
+class MediaResourceSearchArguments(DomainModel):
+    color_mode: ColorMode = ColorMode.SDR_BT709
+    catalog_paths: list[str] | None = None
+    category: MediaResourceCategory | None = None
+    query: str = ""
+    tags: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+
+
 class ReferenceComparisonArguments(DomainModel):
     reference_path: str = Field(min_length=1)
     candidate_path: str = Field(min_length=1)
@@ -114,6 +128,11 @@ class ProjectChangesListArguments(DomainModel):
 class ProjectHandoffInspectArguments(DomainModel):
     version_id: str | None = None
     sequence_id: str | None = None
+
+
+class ProjectContextInspectArguments(ProjectHandoffInspectArguments):
+    document_id: str | None = None
+    include_transcript: bool = True
 
 
 class AssetImportArguments(DomainModel):
@@ -262,6 +281,7 @@ class TimelineClipReplaceSourceArguments(SequenceArguments):
 class TimelineClipVisualEffectAddArguments(SequenceArguments):
     clip_id: str = Field(min_length=1)
     kind: VisualEffectKind
+    resource_asset_id: str | None = Field(default=None, min_length=1)
 
 
 class TimelineClipVisualEffectUpdateArguments(SequenceArguments):
@@ -298,6 +318,65 @@ class SubtitleSegmentUpdateArguments(DomainModel):
 
 class TranscriptGetArguments(SequenceArguments):
     document_id: str | None = None
+
+
+class ScriptSegmentUpdateArguments(DomainModel):
+    document_id: str = Field(min_length=1)
+    segment_id: str = Field(min_length=1)
+    text: str | None = None
+    speaker: str | None = None
+
+    @model_validator(mode="after")
+    def has_change(self) -> ScriptSegmentUpdateArguments:
+        if not ({"text", "speaker"} & self.model_fields_set):
+            raise ValueError("Script segment update must change text or speaker")
+        if "text" in self.model_fields_set:
+            if self.text is None or not self.text.strip():
+                raise ValueError("Script segment text cannot be empty")
+            object.__setattr__(self, "text", " ".join(self.text.split()))
+        return self
+
+
+class ScriptSegmentSplitArguments(DomainModel):
+    document_id: str = Field(min_length=1)
+    segment_id: str = Field(min_length=1)
+    split_frame: int | None = Field(default=None, ge=0)
+    split_index: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def one_split_point(self) -> ScriptSegmentSplitArguments:
+        if (self.split_frame is None) == (self.split_index is None):
+            raise ValueError("Specify exactly one of split_frame or split_index")
+        return self
+
+
+class ScriptSegmentMergeArguments(DomainModel):
+    document_id: str = Field(min_length=1)
+    segment_ids: list[str] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def unique_segments(self) -> ScriptSegmentMergeArguments:
+        object.__setattr__(
+            self,
+            "segment_ids",
+            list(dict.fromkeys(value.strip() for value in self.segment_ids if value.strip())),
+        )
+        if len(self.segment_ids) < 2:
+            raise ValueError("At least two distinct script segments are required")
+        return self
+
+
+class ScriptSegmentMoveArguments(SequenceArguments):
+    document_id: str = Field(min_length=1)
+    segment_id: str = Field(min_length=1)
+    position: int = Field(ge=0)
+    expected_content_revision: int = Field(ge=0)
+
+
+class ScriptGapCloseArguments(SequenceArguments):
+    document_id: str = Field(min_length=1)
+    segment_id: str = Field(min_length=1)
+    expected_content_revision: int = Field(ge=0)
 
 
 class TranscriptEditPreviewArguments(DomainModel):
@@ -388,6 +467,18 @@ class AudioEffectRemoveArguments(DomainModel):
 
 class PreviewRenderArguments(SequenceArguments):
     use_proxies: bool | None = None
+
+
+class PreviewFramesRenderArguments(PreviewRenderArguments):
+    frames: list[int] = Field(min_length=1, max_length=24)
+
+    @model_validator(mode="after")
+    def valid_frames(self) -> PreviewFramesRenderArguments:
+        if any(type(frame) is not int or frame < 0 for frame in self.frames):
+            raise ValueError("frames must contain non-negative integers")
+        if len(set(self.frames)) != len(self.frames):
+            raise ValueError("frames must not contain duplicates")
+        return self
 
 
 class ExportSequenceArguments(SequenceArguments):
@@ -661,6 +752,44 @@ class ProjectHandoffInspectResult(ProjectChangesListResult):
     ready_for_handoff: bool
 
 
+class ProjectContextInspectResult(DomainModel):
+    content_revision: int = Field(ge=0)
+    project: Project
+    path: str
+    read_only: bool
+    sequence: Sequence
+    timeline: TimelineState
+    transcript: TranscriptSnapshot | None
+    transcript_error: str | None
+    handoff: ProjectHandoffInspectResult
+
+
+class MediaResourceCatalogSourceResult(DomainModel):
+    catalog_id: str | None
+    catalog_version: str | None
+    catalog_path: str | None
+    item_count: int = Field(ge=0)
+    error: str | None
+
+
+class MediaResourceEntryResult(MediaResourceCatalogItem):
+    resource_key: str
+    catalog_id: str
+    catalog_version: str
+    catalog_path: str | None
+    preview_path: str
+    adoption_path: str
+
+
+class MediaResourceSearchResult(DomainModel):
+    sources: list[MediaResourceCatalogSourceResult]
+    categories: list[MediaResourceCategory]
+    tags: list[str]
+    featured_count: int = Field(ge=0)
+    result_count: int = Field(ge=0)
+    items: list[MediaResourceEntryResult]
+
+
 class AssetListResult(DomainModel):
     assets: list[Asset]
 
@@ -740,6 +869,48 @@ class TranscriptResult(DomainModel):
     transcript: TranscriptSnapshot
 
 
+class ScriptParagraph(DomainModel):
+    position: int = Field(ge=0)
+    segment: SubtitleSegment
+    words: list[SubtitleWord]
+    timeline_start_frame: int = Field(ge=0)
+    timeline_end_frame: int = Field(gt=0)
+    gap_before_frames: int = Field(ge=0)
+    overlap_with_previous_frames: int = Field(ge=0)
+    timing_precision: Literal[
+        "recognized_words",
+        "mixed_words",
+        "estimated_words",
+        "segment_only",
+    ]
+
+
+class ScriptInspectResult(DomainModel):
+    content_revision: int = Field(ge=0)
+    sequence_id: str
+    timeline_duration_frames: int = Field(ge=0)
+    document: SubtitleDocument
+    paragraphs: list[ScriptParagraph]
+    recognized_word_count: int = Field(ge=0)
+    estimated_word_count: int = Field(ge=0)
+    deletion_workflow: Literal["transcript.edit.preview -> transcript.edit.apply"] = (
+        "transcript.edit.preview -> transcript.edit.apply"
+    )
+
+
+class ScriptSegmentSplitResult(DomainModel):
+    segments: list[SubtitleSegment] = Field(min_length=2, max_length=2)
+
+
+class ScriptTimelineEditResult(DomainModel):
+    segment: SubtitleSegment
+    recovery_version: ProjectVersionRecord
+    content_revision: int = Field(ge=0)
+    before_duration_frames: int = Field(ge=0)
+    after_duration_frames: int = Field(ge=0)
+    changed_timeline_frames: int = Field(ge=1)
+
+
 class TranscriptEditPlanResult(DomainModel):
     plan: TranscriptEditPlan
 
@@ -770,6 +941,21 @@ class RemovedResult(DomainModel):
 
 class PreviewRenderResult(DomainModel):
     preview_graph: str
+
+
+class PreviewProofFrame(DomainModel):
+    frame: int = Field(ge=0)
+    path: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    byte_count: int = Field(gt=0)
+
+
+class PreviewFramesRenderResult(DomainModel):
+    content_revision: int = Field(ge=0)
+    preview_graph: str
+    frames: list[PreviewProofFrame]
 
 
 class FcpxmlExportResult(DomainModel):

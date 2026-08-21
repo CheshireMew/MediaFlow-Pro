@@ -299,10 +299,33 @@ def register_follow_events_tool(server: MCPServer[McpState]) -> None:
 
 def register_workspace_tool(server: MCPServer[McpState]) -> None:
     @server.tool(
+        name="mediaflow_workspace_list",
+        description="List connected MediaFlow desktop workspaces for visible editor handoff.",
+        annotations=_annotations(
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+        ),
+    )
+    async def workspace_list(
+        ctx: Context[McpState, Any],
+        project: str | None = None,
+        connected_only: bool = True,
+    ) -> dict[str, Any]:
+        result = await ctx.request_context.lifespan_context.call(
+            "workspace.list",
+            {"project": project, "connected_only": connected_only},
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("Editor Service returned an invalid workspace list")
+        return result
+
+    @server.tool(
         name="mediaflow_workspace_command",
         description=(
-            "Control the playhead or playback of one explicitly connected desktop "
-            "workspace session. The desktop supplies the workspace_session_id."
+            "Control the playhead, playback, active workspace mode, or timeline "
+            "selection of one explicitly connected desktop workspace session. "
+            "Discover workspace_session_id values with mediaflow_workspace_list."
         ),
         annotations=_annotations(
             read_only=False,

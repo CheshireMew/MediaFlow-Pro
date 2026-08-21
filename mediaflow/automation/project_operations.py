@@ -24,6 +24,11 @@ _OPERATION_LABELS = {
     "timeline.marker.remove": "删除语义标记",
     "subtitle.track.style.update": "调整字幕轨样式",
     "subtitle.segment.update": "调整字幕",
+    "script.segment.update": "修改脚本文字或说话人",
+    "script.segment.split": "拆分脚本段落",
+    "script.segment.merge": "合并脚本段落",
+    "script.segment.move": "重排脚本段落",
+    "script.gap.close": "收起脚本静音间隙",
     "transcript.edit.apply": "按文字修改时间线",
     "web.clip.update": "调整网页片段",
     "web.clip.data.update": "调整网页内容",
@@ -144,6 +149,40 @@ def inspect_handoff(context: OperationContext) -> dict:
         "latest_export": latest_export,
         "export_matches_current_revision": export_matches,
         "ready_for_handoff": (anchor is not None and not offline_asset_ids and export_matches),
+    }
+
+
+def inspect_context(context: OperationContext) -> dict:
+    project = context.project.get_project()
+    sequence_id = str(
+        context.arguments.get("sequence_id") or project.main_sequence_id
+    )
+    sequence = context.project.get_sequence(sequence_id)
+    timeline = context.project.timeline(sequence_id).state
+    transcript = None
+    transcript_error = None
+    if bool(context.arguments.get("include_transcript", True)):
+        try:
+            transcript = context.project.inspect_transcript(
+                sequence_id,
+                document_id=(
+                    str(context.arguments["document_id"])
+                    if context.arguments.get("document_id")
+                    else None
+                ),
+            )
+        except (KeyError, RuntimeError, ValueError) as error:
+            transcript_error = str(error)
+    return {
+        "content_revision": context.project.known_content_revision,
+        "project": project,
+        "path": str(context.project.project_dir),
+        "read_only": context.project.read_only,
+        "sequence": sequence,
+        "timeline": timeline,
+        "transcript": transcript,
+        "transcript_error": transcript_error,
+        "handoff": inspect_handoff(context),
     }
 
 

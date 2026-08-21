@@ -48,6 +48,7 @@ async def test_installed_mcp_stdio_entrypoint_starts_and_uses_the_editor_service
                 "mediaflow_execute",
                 "mediaflow_execute_batch",
                 "mediaflow_follow_events",
+                "mediaflow_workspace_list",
                 "mediaflow_workspace_command",
             }
             execute_schema = next(
@@ -97,6 +98,7 @@ async def test_mcp_protocol_calls_the_real_resident_editor_service(
                 "mediaflow_execute",
                 "mediaflow_execute_batch",
                 "mediaflow_follow_events",
+                "mediaflow_workspace_list",
                 "mediaflow_workspace_command",
             }
             described = await client.call_tool("mediaflow_describe")
@@ -223,6 +225,15 @@ async def test_mcp_protocol_calls_the_real_resident_editor_service(
                         }
                     )
                     assert (await websocket.receive_json())["type"] == "project.subscribed"
+                    workspace_list_call = await client.call_tool(
+                        "mediaflow_workspace_list",
+                        {"project": str(project)},
+                    )
+                    listed_workspaces = workspace_list_call.structured_content["workspaces"]
+                    assert [item["workspace_session_id"] for item in listed_workspaces] == [
+                        workspace_id
+                    ]
+                    assert listed_workspaces[0]["connected"] is True
                     workspace_call = await client.call_tool(
                         "mediaflow_workspace_command",
                         {

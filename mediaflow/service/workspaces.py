@@ -13,6 +13,8 @@ WorkspaceCommand = Literal[
     "playback.play",
     "playback.pause",
     "playback.stop",
+    "workspace.mode.activate",
+    "timeline.selection.set",
 ]
 
 
@@ -101,6 +103,8 @@ class WorkspaceRegistry:
             "playback.play",
             "playback.pause",
             "playback.stop",
+            "workspace.mode.activate",
+            "timeline.selection.set",
         }
         if command not in allowed:
             raise ValueError(f"Unknown workspace command: {command}")
@@ -110,6 +114,35 @@ class WorkspaceRegistry:
             if type(frame) is not int or frame < 0:
                 raise ValueError(f"{command} requires a non-negative integer frame")
             normalized_arguments = {"frame": frame}
+        elif command == "workspace.mode.activate":
+            mode = str(normalized_arguments.get("mode") or "")
+            if mode not in {
+                "media",
+                "resources",
+                "transcript",
+                "highlight",
+                "audio",
+                "tasks",
+            }:
+                raise ValueError(f"Unknown workspace mode: {mode}")
+            normalized_arguments = {"mode": mode}
+        elif command == "timeline.selection.set":
+            clip_ids = normalized_arguments.get("clip_ids", [])
+            if not isinstance(clip_ids, list) or any(
+                not isinstance(value, str) or not value.strip() for value in clip_ids
+            ):
+                raise ValueError("timeline.selection.set clip_ids must be an array of ids")
+            transition_id = normalized_arguments.get("transition_id")
+            if transition_id is not None and (
+                not isinstance(transition_id, str) or not transition_id.strip()
+            ):
+                raise ValueError("timeline.selection.set transition_id must be null or an id")
+            if clip_ids and transition_id:
+                raise ValueError("Timeline selection cannot contain clips and a transition")
+            normalized_arguments = {
+                "clip_ids": list(dict.fromkeys(value.strip() for value in clip_ids)),
+                "transition_id": transition_id.strip() if transition_id else None,
+            }
         elif normalized_arguments:
             raise ValueError(f"{command} does not accept arguments")
         with self._lock:
@@ -135,6 +168,25 @@ class WorkspaceRegistry:
                     f"Workspace session is unavailable: {workspace_session_id}"
                 )
             return session.snapshot()
+
+    def list(
+        self,
+        *,
+        project: str | None = None,
+        connected_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        normalized_project = (
+            str(Path(project).expanduser().resolve()) if project else None
+        )
+        with self._lock:
+            sessions = [
+                session
+                for session in self._sessions.values()
+                if (not connected_only or session.connections > 0)
+                and (normalized_project is None or session.project == normalized_project)
+            ]
+            sessions.sort(key=lambda session: (session.attached_at, session.id))
+            return [session.snapshot() for session in sessions]
 
     def close(self) -> None:
         with self._lock:

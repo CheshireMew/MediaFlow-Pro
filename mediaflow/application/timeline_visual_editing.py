@@ -11,7 +11,11 @@ from mediaflow.domain.timeline import (
     TimelineMergeConflict,
     TimelineState,
 )
-from mediaflow.domain.visual_effects import ClipVisualEffect, new_visual_effect
+from mediaflow.domain.visual_effects import (
+    VISUAL_EFFECT_DEFINITIONS,
+    ClipVisualEffect,
+    new_visual_effect,
+)
 
 TimelineMutation = Callable[[TimelineState], None]
 TimelineCommit = Callable[[str, TimelineMutation], None]
@@ -38,12 +42,31 @@ class TimelineVisualEditing:
         self.apply_change("调整画面", mutate)
         return self._clip(clip_id)
 
-    def add_effect(self, clip_id: str, kind: VisualEffectKind) -> ClipVisualEffect:
+    def add_effect(
+        self,
+        clip_id: str,
+        kind: VisualEffectKind,
+        *,
+        resource_asset_id: str | None = None,
+    ) -> ClipVisualEffect:
         clip = self._clip(clip_id)
         asset = self.repository.assets.get_asset(clip.asset_id)
         if asset.kind not in {AssetKind.VIDEO, AssetKind.IMAGE}:
             raise ValueError("只有视频和图片片段可以添加视觉效果")
-        effect = new_visual_effect(kind, len(clip.visual_effects))
+        definition = VISUAL_EFFECT_DEFINITIONS[kind]
+        if definition.resource_asset_kind is not None:
+            if not resource_asset_id:
+                raise ValueError("这个视觉效果需要先选择资源文件")
+            resource_asset = self.repository.assets.get_asset(resource_asset_id)
+            if resource_asset.kind != definition.resource_asset_kind:
+                raise ValueError("视觉效果资源类型不匹配")
+        elif resource_asset_id is not None:
+            raise ValueError("这个视觉效果不接受资源文件")
+        effect = new_visual_effect(
+            kind,
+            len(clip.visual_effects),
+            resource_asset_id=resource_asset_id,
+        )
 
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)

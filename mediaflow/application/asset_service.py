@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,8 +8,10 @@ from pathlib import Path
 from mediaflow.application.ports import AssetServiceDocuments, FingerprintFile, MediaProbePort
 from mediaflow.application.timeline_clock import reframe_timeline_clock
 from mediaflow.application.timeline_validator import TimelineValidator
+from mediaflow.atomic_file import atomic_write_bytes
 from mediaflow.domain.enums import AssetKind, AssetOrigin, AssetStatus
-from mediaflow.domain.project import Asset, ProjectProfile
+from mediaflow.domain.lut import validate_cube_lut
+from mediaflow.domain.project import Asset, MediaMetadata, ProjectProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +52,47 @@ class AssetService:
             check_cancelled()
         with self.repository.transaction():
             return self.commit_prepared(prepared)
+
+    def import_lut(self, path: str | Path) -> Asset:
+        source = self.repository.assets.resolve_existing_file(path)
+        if source.suffix.casefold() != ".cube":
+            raise ValueError("LUT 资源必须是 .cube 文件")
+        content = source.read_bytes()
+        try:
+            decoded = content.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise ValueError("LUT 文件必须使用 UTF-8 文本编码") from error
+        validate_cube_lut(decoded)
+        digest = hashlib.sha256(content).hexdigest()
+        destination = (
+            self.repository.project_dir / "resources" / "luts" / f"{digest}.cube"
+        ).resolve()
+        if destination.is_file():
+            if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                raise RuntimeError("项目中的同名 LUT 内容与目录哈希不一致")
+        else:
+            atomic_write_bytes(destination, content)
+        for asset in self.repository.assets.list_assets():
+            if (
+                asset.kind == AssetKind.LUT
+                and self.repository.assets.resolve_asset_path(asset).resolve() == destination
+            ):
+                return asset
+        if self.fingerprint_file is None:
+            raise RuntimeError("LUT 导入需要文件指纹服务")
+        project = self.repository.projects.get_project()
+        return self.repository.assets.add_asset(
+            Asset(
+                project_id=project.id,
+                name=source.name,
+                kind=AssetKind.LUT,
+                origin=AssetOrigin.EXTERNAL,
+                path=str(destination),
+                managed=True,
+                fingerprint=self.fingerprint_file(destination),
+                metadata=MediaMetadata(),
+            )
+        )
 
     def prepare_external(
         self,
@@ -128,7 +172,7 @@ class AssetService:
         for asset in self.repository.assets.list_assets():
             current = self.repository.assets.refresh_asset_status(asset.id)
             source = self.repository.assets.resolve_asset_path(current)
-            if self.repository.assets.is_regular_file(source) and (
+            if current.kind != AssetKind.LUT and self.repository.assets.is_regular_file(source) and (
                 current.metadata.duration_frames == 0
                 or (current.kind == AssetKind.VIDEO and not current.metadata.width)
             ):

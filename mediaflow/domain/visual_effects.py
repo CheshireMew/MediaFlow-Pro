@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import Field, model_validator
 
 from .editor_fields import EditorFieldConstraints, EditorFieldDescriptor
-from .enums import VisualEffectKind
+from .enums import AssetKind, VisualEffectKind
 from .model_base import DomainModel, new_id
 
 
@@ -11,6 +11,7 @@ class VisualEffectDefinition(DomainModel):
     label: str
     service: str
     descriptors: tuple[EditorFieldDescriptor, ...]
+    resource_asset_kind: AssetKind | None = None
 
     @model_validator(mode="after")
     def unique_fields(self) -> VisualEffectDefinition:
@@ -72,6 +73,12 @@ VISUAL_EFFECT_DEFINITIONS: dict[VisualEffectKind, VisualEffectDefinition] = {
             _number_field("angle", "范围", 0.5, 0.05, 1.5),
         ),
     ),
+    VisualEffectKind.LUT_3D: VisualEffectDefinition(
+        label="3D LUT",
+        service="avfilter.lut3d",
+        descriptors=(),
+        resource_asset_kind=AssetKind.LUT,
+    ),
 }
 
 
@@ -88,6 +95,7 @@ class ClipVisualEffect(DomainModel):
     position: int = Field(ge=0)
     enabled: bool = True
     parameters: dict[str, float]
+    resource_asset_id: str | None = None
 
     @model_validator(mode="after")
     def validate_parameters(self) -> ClipVisualEffect:
@@ -100,19 +108,39 @@ class ClipVisualEffect(DomainModel):
             )
         for field_id, descriptor in descriptors.items():
             descriptor.validate_value(self.parameters[field_id])
+        required_resource = VISUAL_EFFECT_DEFINITIONS[self.kind].resource_asset_kind
+        if required_resource is None and self.resource_asset_id is not None:
+            raise ValueError(f"{self.kind.value} visual effect cannot reference a resource asset")
+        if required_resource is not None and not self.resource_asset_id:
+            raise ValueError(f"{self.kind.value} visual effect requires a resource asset")
         return self
 
 
-def new_visual_effect(kind: VisualEffectKind, position: int) -> ClipVisualEffect:
+def new_visual_effect(
+    kind: VisualEffectKind,
+    position: int,
+    *,
+    resource_asset_id: str | None = None,
+) -> ClipVisualEffect:
     return ClipVisualEffect(
         kind=kind,
         position=position,
         parameters=visual_effect_defaults(kind),
+        resource_asset_id=resource_asset_id,
     )
 
 
-def visual_effect_mlt(effect: ClipVisualEffect) -> tuple[str, dict[str, float]]:
+def visual_effect_mlt(
+    effect: ClipVisualEffect,
+    *,
+    resource_path: str | None = None,
+) -> tuple[str, dict[str, float | str]]:
     definition = VISUAL_EFFECT_DEFINITIONS[effect.kind]
-    return definition.service, {
+    properties: dict[str, float | str] = {
         f"av.{key}": value for key, value in effect.parameters.items()
     }
+    if definition.resource_asset_kind is not None:
+        if not resource_path:
+            raise ValueError(f"{effect.kind.value} visual effect resource path is missing")
+        properties.update({"av.file": resource_path, "av.interp": "tetrahedral"})
+    return definition.service, properties

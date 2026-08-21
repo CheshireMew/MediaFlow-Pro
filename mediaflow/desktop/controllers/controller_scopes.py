@@ -81,6 +81,7 @@ class WorkspaceWorkflowScope(ControllerScope):
 @dataclass(frozen=True, slots=True)
 class WorkspacePlaybackScope(ControllerScope):
     events: SessionEvents
+    state: DesktopSessionState
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +102,7 @@ class MediaControllerScope(ControllerScope):
     models: SessionModels
     projectors: PresentationProjectors
     timeline_assets: TimelineAssetOperations
+    settings_persistence: SettingsPersistence
     _api: DesktopEditorApplication
     _local_path: Callable[[str], Path]
     _require_writable: Callable[[], None]
@@ -259,6 +261,7 @@ def workspace_playback_scope(session: ProjectSession) -> WorkspacePlaybackScope:
     return WorkspacePlaybackScope(
         **_support(session),
         events=session.events,
+        state=session.state,
     )
 
 
@@ -283,6 +286,7 @@ def media_scope(session: ProjectSession) -> MediaControllerScope:
         models=session.models,
         projectors=session.projectors,
         timeline_assets=session.timeline_assets,
+        settings_persistence=session.settings_persistence,
         _api=session._api,
         _local_path=session._local_path,
         _require_writable=session._require_writable,

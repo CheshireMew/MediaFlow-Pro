@@ -19,6 +19,7 @@ AppScrollView {
         automaticProxy.checked = data.automaticProxy
         previewQuality.currentIndex = settingsDialog.indexOfValue(previewQuality.model, data.previewQuality)
         hdrPreview.checked = data.hdrPreview
+        resourceCatalogPaths.text = data.resourceCatalogPaths
         loudnessTarget.value = Math.round(data.loudnessTarget * 10)
         truePeak.value = Math.round(data.truePeak * 10)
         audioLayout.currentIndex = settingsDialog.indexOfValue(audioLayout.model, data.audioLayout)
@@ -200,6 +201,24 @@ AppScrollView {
             id: hdrPreview
             text: qsTr("在设备支持时启用 HDR 预览")
             onToggled: page.settingsDialog.updateDraft("hdrPreview", hdrPreview.checked)
+        }
+        Text { text: qsTr("编辑器资源目录"); color: Theme.text; font.pixelSize: Theme.fontSizeBodyLarge; font.weight: Font.DemiBold }
+        Text {
+            Layout.fillWidth: true
+            text: qsTr("每行填写一个 media-resource-catalog.json 的绝对路径。目录会校验素材哈希、许可声明与采用方式后出现在资源库。")
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontSizeCaption
+            wrapMode: Text.WordWrap
+        }
+        AppTextArea {
+            id: resourceCatalogPaths
+            objectName: "resourceCatalogPathsField"
+            Layout.fillWidth: true
+            Layout.preferredHeight: 92
+            placeholderText: qsTr("例如 D:\\MediaResources\\catalog.json")
+            wrapMode: TextEdit.WrapAnywhere
+            onActiveFocusChanged: if (!activeFocus)
+                page.settingsDialog.updateDraft("resourceCatalogPaths", text)
         }
         Text { text: qsTr("音频默认值"); color: Theme.text; font.pixelSize: Theme.fontSizeBodyLarge; font.weight: Font.DemiBold }
         RowLayout {
