@@ -530,8 +530,14 @@ class TimelineEditor(
         self,
         clip_id: str,
         kind: VisualEffectKind,
+        *,
+        resource_asset_id: str | None = None,
     ) -> ClipVisualEffect:
-        return self._visual_editing.add_effect(clip_id, kind)
+        return self._visual_editing.add_effect(
+            clip_id,
+            kind,
+            resource_asset_id=resource_asset_id,
+        )
 
     def update_clip_visual_effect(
         self,

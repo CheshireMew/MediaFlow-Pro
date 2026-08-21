@@ -16,6 +16,7 @@ from mediaflow.application.external_capabilities import (
     SpeechCapability,
 )
 from mediaflow.application.highlight_service import HighlightService
+from mediaflow.application.media_resource_service import MediaResourceService
 from mediaflow.application.portable_timeline_import import PortableTimelineImportService
 from mediaflow.application.ports import MediaProbePort
 from mediaflow.application.project_command_queue import ProjectCommandQueue
@@ -38,14 +39,14 @@ from mediaflow.domain.collaboration import (
     ProjectUndoGroup,
 )
 from mediaflow.domain.downloads import DownloadPlan
-from mediaflow.domain.enums import (
-    TaskStatus,
-)
+from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import LlmProviderSettings, ServiceSettings
 from mediaflow.domain.tasks import ImportedAssetTaskOutcome, Task
-from mediaflow.domain.timeline import TimelineState
+from mediaflow.editor_application_presentation_commands import (
+    EditorApplicationPresentationCommands,
+)
 from mediaflow.editor_project_delivery_commands import (
     EditorProjectDeliveryCommands,
 )
@@ -53,6 +54,9 @@ from mediaflow.editor_project_document_commands import (
     EditorProjectDocumentCommands,
 )
 from mediaflow.editor_project_media_commands import EditorProjectMediaCommands
+from mediaflow.editor_project_script_timeline_commands import (
+    EditorProjectScriptTimelineCommands,
+)
 from mediaflow.editor_project_task_commands import (
     EditorProjectTaskWorkflowCommands,
 )
@@ -65,6 +69,7 @@ from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.media_probe import MediaProbe
+from mediaflow.infrastructure.media_resource_catalog import load_media_resource_catalog
 from mediaflow.infrastructure.portable_timeline_loader import load_portable_timeline
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.reference_video_comparison import ReferenceVideoComparisonService
@@ -82,6 +87,7 @@ from mediaflow.infrastructure.subtitle_publication_storage import (
 )
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import InfrastructureTaskRuntimes
+from mediaflow.infrastructure.timeline_proof_frames import TimelineProofFrameService
 from mediaflow.infrastructure.translation_cache import TranslationCache
 from mediaflow.infrastructure.web_browser import (
     BrowserWebPackageValidator,
@@ -103,6 +109,7 @@ from mediaflow.project_task_settlement import (
 class EditorProject(
     EditorProjectDocumentCommands,
     EditorProjectMediaCommands,
+    EditorProjectScriptTimelineCommands,
     EditorProjectTaskWorkflowCommands,
     EditorProjectWebCommands,
     EditorProjectDeliveryCommands,
@@ -492,7 +499,7 @@ class EditorProject(
             raise RuntimeError("请先在设置中配置并启用一个 LLM 提供商") from error
 
 
-class EditorApplication:
+class EditorApplication(EditorApplicationPresentationCommands):
     """Single composition root shared by desktop and headless entry points."""
 
     def __init__(self, runtime: RuntimeContext | None = None):
@@ -505,6 +512,7 @@ class EditorApplication:
         self.cookies = CookieStore(self._paths.runtime_dir / "cookies")
         self._encoder_discovery = EncoderDiscoveryService(self._paths)
         self._presentation = ProjectPresentationService(self._paths)
+        self._proof_frames = TimelineProofFrameService(self._paths)
         self.reference_comparison: ReferenceComparisonCapability = ReferenceVideoComparisonService(
             self._paths
         )
@@ -515,6 +523,10 @@ class EditorApplication:
         self.speech: SpeechCapability = InfrastructureSpeechService(
             lambda: self.service_settings,
             self._paths,
+        )
+        self.media_resources = MediaResourceService(
+            load_media_resource_catalog,
+            lambda: self.service_settings.resource_library.catalog_paths,
         )
 
     @property
@@ -629,33 +641,6 @@ class EditorApplication:
                 )
             )
         raise ValueError(f"Unknown runtime tool operation: {operation}")
-
-    def write_preview_snapshot(
-        self,
-        project_dir: str | Path,
-        state: TimelineState,
-        *,
-        use_proxies: bool,
-        prefer_sdr_preview_proxy: bool,
-    ) -> Path:
-        return self._presentation.write_preview_snapshot(
-            project_dir,
-            state,
-            use_proxies=use_proxies,
-            prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
-        )
-
-    def write_asset_preview_snapshot(
-        self,
-        project_dir: str | Path,
-        sequence_id: str,
-        asset_id: str,
-    ) -> Path:
-        return self._presentation.write_asset_preview_snapshot(
-            project_dir,
-            sequence_id,
-            asset_id,
-        )
 
     def create_project(
         self,

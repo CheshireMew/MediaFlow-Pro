@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -36,7 +37,7 @@ from mediaflow.desktop.presentation_catalogs import (
     WORKSPACE_MODES,
     WORKSPACE_NAVIGATION_MODE_KEYS,
 )
-from mediaflow.domain.enums import TaskKind, TaskStatus, TrackKind
+from mediaflow.domain.enums import AssetKind, TaskKind, TaskStatus, TrackKind
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import (
@@ -140,6 +141,78 @@ def _process_until(predicate, *, timeout: float = 10.0) -> bool:
     return bool(predicate())
 
 
+def _write_test_lut_catalog(root: Path) -> Path:
+    cube = root / "ui-invert.cube"
+    cube.write_text(
+        """TITLE "UI invert"
+LUT_3D_SIZE 2
+1 1 1
+0 1 1
+1 0 1
+0 0 1
+1 1 0
+0 1 0
+1 0 0
+0 0 0
+""",
+        encoding="utf-8",
+    )
+    payload = cube.read_bytes()
+    catalog = root / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "protocol": "visual-multimedia-media-resource-catalog",
+                "version": 1,
+                "catalog_id": "qml-lut-fixture",
+                "catalog_version": "1.0.0",
+                "name": "QML LUT fixture",
+                "description": "Real desktop resource adoption fixture.",
+                "items": [
+                    {
+                        "id": "ui-invert",
+                        "resource_version": "1.0.0",
+                        "category": "lut",
+                        "name": "UI 反相 LUT",
+                        "description": "用于证明资源面板到片段效果链的真实采用。",
+                        "provider": "MediaFlow tests",
+                        "tags": ["ui", "invert"],
+                        "capabilities": ["clip-effect", "cube-lut"],
+                        "featured_rank": 0,
+                        "preview": {"type": "none", "path": "", "mime_type": ""},
+                        "rights": {
+                            "status": "not-required",
+                            "license": "test fixture",
+                            "attribution": "",
+                            "terms_url": "",
+                        },
+                        "origin": {
+                            "type": "builtin",
+                            "library_id": None,
+                            "library_version": None,
+                            "item_id": None,
+                            "content_sha256": None,
+                        },
+                        "adoption": {
+                            "type": "media-file",
+                            "file": cube.name,
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                            "bytes": len(payload),
+                            "mime_type": "application/x-cube-lut",
+                            "media_type": "lut",
+                            "placement": "clip-effect",
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return catalog
+
+
 @pytest.mark.integration
 def test_service_backed_preview_request_reaches_qml_projection(
     tmp_path: Path,
@@ -190,8 +263,329 @@ def test_service_backed_preview_request_reaches_qml_projection(
         QCoreApplication.processEvents()
 
 
+def test_resource_library_panel_adopts_a_real_lut_into_the_selected_clip(
+    tmp_path: Path,
+) -> None:
+    catalog = _write_test_lut_catalog(tmp_path)
+    settings_repository = ServiceSettingsRepository()
+    settings = settings_repository.load()
+    settings.resource_library.catalog_paths = [str(catalog)]
+    settings_repository.save(settings)
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(EditorApplication()),
+    )
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Resource adoption",
+        )
+        source = tmp_path / "resource-source.mp4"
+        generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        asset = project.import_external_asset(source)
+        project.adopt_main_profile_from_video(asset.id)
+        track = timeline.add_track(TrackKind.VIDEO)
+        clip = timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=20,
+        )
+        controllers.session.projectors.assets.refresh_assets()
+        controllers.session.projectors.timeline.refresh_timeline()
+        controllers.timeline_view.selectClip(clip.id)
+
+        window = engine.rootObjects()[0]
+        page_loader = window.findChild(QQuickItem, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        workspace.setProperty("activeMode", "resources")
+        assert _process_until(
+            lambda: workspace.findChild(QQuickItem, "resourceLibraryPanel") is not None
+            and workspace.findChild(QQuickItem, "resourceLibraryPanel").isVisible()
+        )
+
+        controllers.resources.refresh("lut", "")
+        assert controllers.resources.sourceErrors == []
+        assert controllers.resources.resultCount == 1
+        row = controllers.resources.resourcesModel.get(0)
+        assert row["name"] == "UI 反相 LUT"
+        assert row["canAdopt"] is True
+        controllers.resources.adoptResource(row["resourceKey"], 0, 3.0, True)
+
+        stored_clip = next(item for item in timeline.state.clips if item.id == clip.id)
+        assert len(stored_clip.visual_effects) == 1
+        effect = stored_clip.visual_effects[0]
+        assert effect.kind.value == "lut_3d"
+        assert effect.resource_asset_id
+        lut_asset = project.get_asset(effect.resource_asset_id)
+        assert lut_asset.kind == AssetKind.LUT
+        assert lut_asset.managed is True
+        assert _process_until(
+            lambda: controllers.workspace.statusMessage == "LUT 已从资源库添加"
+        )
+        resource_list = workspace.findChild(QQuickItem, "resourceLibraryList")
+        assert resource_list is not None and resource_list.property("count") == 1
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_resource_library_panel_adopts_the_synced_motion_graphic(
+    tmp_path: Path,
+) -> None:
+    catalog = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "media-resource-catalog-v1-production"
+        / "media-resource-catalog.json"
+    )
+    settings_repository = ServiceSettingsRepository()
+    settings = settings_repository.load()
+    settings.resource_library.catalog_paths = [str(catalog)]
+    settings_repository.save(settings)
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(EditorApplication()),
+    )
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Motion graphic adoption",
+        )
+        controllers.resources.refresh("motion-graphic", "进度栏")
+
+        assert controllers.resources.sourceErrors == []
+        assert controllers.resources.resultCount == 1
+        row = controllers.resources.resourcesModel.get(0)
+        assert row["name"] == "分段视频进度栏"
+        assert row["canAdopt"] is True
+        controllers.resources.adoptResource(row["resourceKey"], 24, 3.0, True)
+
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        web_assets = [asset for asset in project.list_assets() if asset.kind == AssetKind.WEB]
+        assert len(web_assets) == 1
+        assert len(timeline.state.clips) == 1
+        clip = timeline.state.clips[0]
+        assert clip.timeline_start == 0
+        assert clip.duration == 1800
+        assert clip.asset_id == web_assets[0].id
+        assert controllers.session.state.selection.clip_ids == [clip.id]
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
 @pytest.mark.integration
-def test_connected_workspace_command_reaches_real_qml_preview(
+def test_resource_library_resources_survive_reopen_and_real_export(
+    tmp_path: Path,
+) -> None:
+    catalog = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "media-resource-catalog-v1-production"
+        / "media-resource-catalog.json"
+    )
+    settings_repository = ServiceSettingsRepository()
+    settings = settings_repository.load()
+    settings.resource_library.catalog_paths = [str(catalog)]
+    settings_repository.save(settings)
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(app)
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Resource library full chain",
+        )
+        project_path = Path(controllers.workspace.projectPath)
+        source = tmp_path / "resource-chain-source.mp4"
+        generate_real_media(
+            source,
+            RuntimeContext.discover().paths,
+            width=320,
+            height=180,
+        )
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        asset = project.import_external_asset(source)
+        project.adopt_main_profile_from_video(asset.id)
+        track = timeline.add_track(TrackKind.VIDEO)
+        left = timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        right = timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=25,
+            source_in=0,
+            duration=25,
+        )
+        controllers.session.projectors.assets.refresh_assets()
+        controllers.session.projectors.timeline.refresh_timeline()
+
+        controllers.timeline_view.selectClip(left.id)
+        controllers.resources.refresh("transition", "")
+        transition_row = next(
+            controllers.resources.resourcesModel.get(index)
+            for index in range(controllers.resources.resultCount)
+            if controllers.resources.resourcesModel.get(index)["presetId"] == "dissolve"
+        )
+        controllers.resources.adoptResource(
+            transition_row["resourceKey"],
+            0,
+            3.0,
+            True,
+        )
+        assert len(timeline.state.transitions) == 1
+        transition_id = timeline.state.transitions[0].id
+
+        controllers.timeline_view.selectClip(left.id)
+        controllers.resources.refresh("lut", "柔和电影感")
+        lut_row = controllers.resources.resourcesModel.get(0)
+        assert lut_row["previewType"] == "image"
+        assert Path(QUrl(lut_row["previewUrl"]).toLocalFile()).is_file()
+        controllers.resources.adoptResource(lut_row["resourceKey"], 0, 3.0, True)
+        stored_left = next(item for item in timeline.state.clips if item.id == left.id)
+        assert any(effect.kind.value == "lut_3d" for effect in stored_left.visual_effects)
+
+        controllers.resources.refresh("motion-graphic", "确定性文字动效库")
+        motion_row = controllers.resources.resourcesModel.get(0)
+        assert motion_row["previewType"] == "image"
+        controllers.resources.adoptResource(motion_row["resourceKey"], 50, 3.0, True)
+        assert any(item.kind == AssetKind.WEB for item in project.list_assets())
+
+        collection_values = {
+            item["value"] for item in controllers.resources.collectionOptions
+        }
+        assert {"favorites", "featured", "tag:audio"}.issubset(collection_values)
+        assert any(
+            item["value"] == "audio-effect"
+            for item in controllers.resources.categoryOptions
+        )
+        controllers.resources.refresh("", "", "featured")
+        assert controllers.resources.resultCount > 0
+        assert all(
+            controllers.resources.resourcesModel.get(index)["featuredRank"] >= 0
+            for index in range(controllers.resources.resultCount)
+        )
+        controllers.resources.refresh("", "", "tag:audio")
+        assert controllers.resources.resultCount >= 3
+        assert all(
+            "audio" in controllers.resources.resourcesModel.get(index)["tags"]
+            for index in range(controllers.resources.resultCount)
+        )
+
+        controllers.resources.refresh("sound-effect", "柔和确认音")
+        sound_row = controllers.resources.resourcesModel.get(0)
+        assert sound_row["previewType"] == "audio"
+        assert Path(QUrl(sound_row["previewUrl"]).toLocalFile()).is_file()
+        controllers.resources.toggleFavorite(sound_row["resourceKey"])
+        controllers.resources.refresh("", "", "favorites")
+        assert controllers.resources.resultCount == 1
+        assert controllers.resources.resourcesModel.get(0)["resourceKey"] == sound_row[
+            "resourceKey"
+        ]
+        controllers.resources.refresh("sound-effect", "柔和确认音")
+        controllers.resources.adoptResource(
+            sound_row["resourceKey"],
+            10,
+            3.0,
+            True,
+        )
+        assert _process_until(
+            lambda: any(item.kind == AssetKind.AUDIO for item in project.list_assets()),
+            timeout=30,
+        )
+        assert _process_until(
+            lambda: any(
+                clip.track_id
+                in {
+                    item.id
+                    for item in timeline.state.tracks
+                    if item.kind == TrackKind.AUDIO
+                }
+                for clip in timeline.state.clips
+            ),
+            timeout=30,
+        )
+
+        controllers.resources.refresh("audio-effect", "参数均衡器")
+        audio_effect_row = controllers.resources.resourcesModel.get(0)
+        assert audio_effect_row["adoptionTarget"] == "audio-effect"
+        controllers.resources.adoptResource(
+            audio_effect_row["resourceKey"],
+            0,
+            3.0,
+            True,
+        )
+        audio_effect_id = controllers.session.state.selection.audio_effect_id
+        assert audio_effect_id
+
+        controllers.workspace_project.closeProject()
+        assert _process_until(
+            lambda: not controllers.workspace.hasProject
+            and not controllers.workspace.projectReleasePending,
+            timeout=30,
+        )
+        assert sound_row["resourceKey"] in DesktopSettingsRepository().load().ui.favorite_resource_keys
+        controllers.workspace_project.openProject(
+            QUrl.fromLocalFile(str(project_path)).toString()
+        )
+        assert _process_until(lambda: controllers.workspace.hasProject, timeout=20)
+
+        reopened = controllers.session.state.binding.require_current()
+        reopened_timeline = controllers.session.state.binding.require_timeline()
+        assert any(item.id == transition_id for item in reopened_timeline.state.transitions)
+        assert any(item.kind == AssetKind.WEB for item in reopened.list_assets())
+        assert any(item.kind == AssetKind.AUDIO for item in reopened.list_assets())
+        assert any(
+            effect.id == audio_effect_id
+            for bus in reopened.list_audio_buses(controllers.workspace.activeSequenceId)
+            for effect in reopened.list_audio_effects(bus.id)
+        )
+        reopened_left = next(item for item in reopened_timeline.state.clips if item.id == left.id)
+        assert any(effect.kind.value == "lut_3d" for effect in reopened_left.visual_effects)
+        assert any(item.id == right.id for item in reopened_timeline.state.clips)
+
+        output = project_path / "exports" / "resource-library-full-chain.mp4"
+        export_task = reopened.start_task(
+            ExportSequenceCommand(
+                sequence_id=controllers.workspace.activeSequenceId,
+                output_path=str(output),
+            )
+        )
+        assert reopened.wait_for_task(export_task.id, timeout=180).status == TaskStatus.COMPLETED
+        assert output.is_file() and output.stat().st_size > 0
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+@pytest.mark.integration
+def test_agent_desktop_agent_loop_reaches_qml_and_reads_back_human_edit(
     tmp_path: Path,
 ) -> None:
     app = QGuiApplication.instance() or QGuiApplication([])
@@ -202,6 +596,9 @@ def test_connected_workspace_command_reaches_real_qml_preview(
             QUrl.fromLocalFile(str(tmp_path)).toString(),
             "Workspace command chain",
         )
+        project = controllers.session.state.binding.require_current()
+        project_path = controllers.workspace.projectPath
+        sequence_id = controllers.workspace.activeSequenceId
         window = engine.rootObjects()[0]
         window.setWidth(1280)
         window.setHeight(800)
@@ -235,6 +632,87 @@ def test_connected_workspace_command_reaches_real_qml_preview(
             lambda: preview.property("scrubFrame") == 41,
             timeout=5,
         )
+        workspace = window.findChild(QQuickItem, "workspace")
+        assert workspace is not None
+        call_sync(
+            "workspace.command",
+            {
+                "workspace_session_id": workspace_session_id,
+                "command": "workspace.mode.activate",
+                "arguments": {"mode": "transcript"},
+            },
+        )
+        assert _process_until(
+            lambda: workspace.property("activeMode") == "transcript",
+            timeout=5,
+        )
+
+        agent_write = call_sync(
+            "operation.execute",
+            {
+                "request": {
+                    "protocol": "mediaflow-editor",
+                    "version": 4,
+                    "operation": "timeline.track.add",
+                    "project": project_path,
+                    "arguments": {
+                        "sequence_id": sequence_id,
+                        "kind": "video",
+                        "name": "Agent result track",
+                    },
+                    "request_id": "qml-agent-track",
+                    "base_revision": project.content_revision(),
+                    "actor": {
+                        "kind": "agent",
+                        "id": "qml-loop-agent",
+                        "name": "QML Loop Agent",
+                    },
+                    "client_id": "qml-loop-agent",
+                }
+            },
+        )
+        agent_track_id = agent_write["result"]["track"]["id"]
+        assert _process_until(
+            lambda: any(
+                controllers.timeline_view.tracksModel.get(index)["trackId"]
+                == agent_track_id
+                for index in range(controllers.timeline_view.tracksModel.rowCount())
+            ),
+            timeout=10,
+        )
+
+        revision_after_agent = agent_write["project_revision"]
+        controllers.timeline_structure.addTrack("audio")
+        assert _process_until(
+            lambda: project.content_revision() > revision_after_agent,
+            timeout=10,
+        )
+        context = call_sync(
+            "operation.execute",
+            {
+                "request": {
+                    "protocol": "mediaflow-editor",
+                    "version": 4,
+                    "operation": "project.context.inspect",
+                    "project": project_path,
+                    "arguments": {
+                        "sequence_id": sequence_id,
+                        "include_transcript": False,
+                    },
+                    "request_id": None,
+                    "base_revision": None,
+                    "actor": {
+                        "kind": "agent",
+                        "id": "qml-loop-agent",
+                        "name": "QML Loop Agent",
+                    },
+                    "client_id": "qml-loop-agent",
+                }
+            },
+        )["result"]
+        assert context["content_revision"] > revision_after_agent
+        assert any(item["id"] == agent_track_id for item in context["timeline"]["tracks"])
+        assert any(item["kind"] == "audio" for item in context["timeline"]["tracks"])
     finally:
         controllers.shutdown()
         engine.deleteLater()

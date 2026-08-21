@@ -6,6 +6,7 @@ from mediaflow.domain.audio import AudioEffect
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
+from mediaflow.domain.timebase import reframe_interval
 from mediaflow.domain.transcript_edits import (
     TranscriptEditPlan,
     TranscriptEditRequest,
@@ -53,6 +54,137 @@ def get_transcript(context: OperationContext) -> dict:
         ),
     )
     return {"transcript": snapshot}
+
+
+def inspect_script(context: OperationContext) -> dict:
+    sequence_id = context.sequence_id()
+    snapshot = context.project.inspect_transcript(
+        sequence_id,
+        document_id=(
+            str(context.arguments["document_id"])
+            if context.arguments.get("document_id")
+            else None
+        ),
+    )
+    project = context.project.get_project()
+    main_profile = context.project.get_sequence(project.main_sequence_id).profile
+    state = context.project.timeline(sequence_id).state
+    paragraphs = []
+    previous_end = 0
+    for position, item in enumerate(snapshot.segments):
+        start_frame, end_frame = reframe_interval(
+            item.segment.start_frame,
+            item.segment.end_frame,
+            main_profile,
+            state.sequence.profile,
+        )
+        word_timing = {word.timing_source for word in item.words}
+        timing_precision = (
+            "segment_only"
+            if not item.words
+            else "recognized_words"
+            if word_timing == {"recognized"}
+            else "estimated_words"
+            if word_timing == {"estimated"}
+            else "mixed_words"
+        )
+        paragraphs.append(
+            {
+                "position": position,
+                "segment": item.segment,
+                "words": item.words,
+                "timeline_start_frame": start_frame,
+                "timeline_end_frame": end_frame,
+                "gap_before_frames": max(0, start_frame - previous_end),
+                "overlap_with_previous_frames": max(0, previous_end - start_frame),
+                "timing_precision": timing_precision,
+            }
+        )
+        previous_end = max(previous_end, end_frame)
+    return {
+        "content_revision": snapshot.content_revision,
+        "sequence_id": sequence_id,
+        "timeline_duration_frames": state.duration_frames,
+        "document": snapshot.document,
+        "paragraphs": paragraphs,
+        "recognized_word_count": snapshot.recognized_word_count,
+        "estimated_word_count": snapshot.estimated_word_count,
+    }
+
+
+def update_script_segment(context: OperationContext) -> dict:
+    changes = {}
+    if "text" in context.arguments:
+        changes["text"] = context.arguments["text"]
+    if "speaker" in context.arguments:
+        changes["speaker"] = context.arguments["speaker"]
+    segment = context.project.update_script_segment(
+        str(context.required("document_id")),
+        str(context.required("segment_id")),
+        **changes,
+    )
+    return {"segment": segment}
+
+
+def split_script_segment(context: OperationContext) -> dict:
+    first, second = context.project.split_subtitle_segment(
+        str(context.required("document_id")),
+        str(context.required("segment_id")),
+        split_frame=(
+            int(context.arguments["split_frame"])
+            if context.arguments.get("split_frame") is not None
+            else None
+        ),
+        split_index=(
+            int(context.arguments["split_index"])
+            if context.arguments.get("split_index") is not None
+            else None
+        ),
+    )
+    return {"segments": [first, second]}
+
+
+def merge_script_segments(context: OperationContext) -> dict:
+    segment = context.project.merge_subtitle_segments(
+        str(context.required("document_id")),
+        [str(value) for value in context.required("segment_ids")],
+    )
+    return {"segment": segment}
+
+
+def move_script_segment(context: OperationContext) -> dict:
+    outcome = context.project.move_script_segment(
+        context.sequence_id(),
+        str(context.required("document_id")),
+        str(context.required("segment_id")),
+        position=int(context.required("position")),
+        expected_content_revision=int(context.required("expected_content_revision")),
+    )
+    return {
+        "segment": outcome.segment,
+        "recovery_version": outcome.recovery_version,
+        "content_revision": outcome.content_revision,
+        "before_duration_frames": outcome.before_duration_frames,
+        "after_duration_frames": outcome.after_duration_frames,
+        "changed_timeline_frames": outcome.changed_timeline_frames,
+    }
+
+
+def close_script_gap(context: OperationContext) -> dict:
+    outcome = context.project.close_script_gap(
+        context.sequence_id(),
+        str(context.required("document_id")),
+        str(context.required("segment_id")),
+        expected_content_revision=int(context.required("expected_content_revision")),
+    )
+    return {
+        "segment": outcome.segment,
+        "recovery_version": outcome.recovery_version,
+        "content_revision": outcome.content_revision,
+        "before_duration_frames": outcome.before_duration_frames,
+        "after_duration_frames": outcome.after_duration_frames,
+        "changed_timeline_frames": outcome.changed_timeline_frames,
+    }
 
 
 def transcribe_sequence(context: OperationContext) -> dict:

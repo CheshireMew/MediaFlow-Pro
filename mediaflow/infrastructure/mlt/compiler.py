@@ -151,6 +151,28 @@ class TimelineCompiler:
                 raise FileNotFoundError(source)
             source_paths.append(source)
             clip_sources[clip.id] = source
+            visual_effect_resources: dict[str, Path] = {}
+            for effect in clip.visual_effects:
+                if effect.resource_asset_id is None:
+                    continue
+                resource_asset = assets.get(effect.resource_asset_id)
+                if resource_asset is None:
+                    raise ValueError(
+                        f"Visual effect references unknown asset: {effect.resource_asset_id}"
+                    )
+                if resource_asset.kind != AssetKind.LUT:
+                    raise ValueError("Visual effect resource asset must be a LUT")
+                effect_source = require_windows_interop_path(
+                    MltGraph.source_path(
+                        self.repository,
+                        resource_asset,
+                        use_proxies=False,
+                    )
+                )
+                if not effect_source.is_file():
+                    raise FileNotFoundError(effect_source)
+                source_paths.append(effect_source)
+                visual_effect_resources[effect.id] = effect_source
             self._clip_graph.append_producer(
                 root,
                 clip,
@@ -163,6 +185,7 @@ class TimelineCompiler:
                     else 0
                 ),
                 native_preview=native_preview,
+                visual_effect_resources=visual_effect_resources,
             )
 
         clips = {clip.id: clip for clip in state.clips}

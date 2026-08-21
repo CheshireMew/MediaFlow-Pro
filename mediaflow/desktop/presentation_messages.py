@@ -196,6 +196,15 @@ def status_message(source: str, *arguments: object) -> str:
         "素材文件夹已更新": QCoreApplication.translate("StatusMessageCatalog", "素材文件夹已更新"),
         "视觉效果已更新": QCoreApplication.translate("StatusMessageCatalog", "视觉效果已更新"),
         "视觉效果已添加": QCoreApplication.translate("StatusMessageCatalog", "视觉效果已添加"),
+        "视觉效果已从资源库添加": QCoreApplication.translate(
+            "StatusMessageCatalog", "视觉效果已从资源库添加"
+        ),
+        "LUT 已从资源库添加": QCoreApplication.translate("StatusMessageCatalog", "LUT 已从资源库添加"),
+        "音频效果已从资源库添加": QCoreApplication.translate(
+            "StatusMessageCatalog", "音频效果已从资源库添加"
+        ),
+        "已收藏资源": QCoreApplication.translate("StatusMessageCatalog", "已收藏资源"),
+        "已取消收藏资源": QCoreApplication.translate("StatusMessageCatalog", "已取消收藏资源"),
         "视觉效果已移除": QCoreApplication.translate("StatusMessageCatalog", "视觉效果已移除"),
         "视觉效果顺序已更新": QCoreApplication.translate("StatusMessageCatalog", "视觉效果顺序已更新"),
         "设置已保存；界面语言将在下次启动时生效": QCoreApplication.translate(
@@ -212,6 +221,7 @@ def status_message(source: str, *arguments: object) -> str:
             "StatusMessageCatalog", "该高光区间已经位于主序列中"
         ),
         "转场已添加": QCoreApplication.translate("StatusMessageCatalog", "转场已添加"),
+        "转场已从资源库添加": QCoreApplication.translate("StatusMessageCatalog", "转场已从资源库添加"),
         "转录设置已更新": QCoreApplication.translate("StatusMessageCatalog", "转录设置已更新"),
         "运行时工具操作已取消": QCoreApplication.translate("StatusMessageCatalog", "运行时工具操作已取消"),
         "运行时工具操作已完成": QCoreApplication.translate("StatusMessageCatalog", "运行时工具操作已完成"),

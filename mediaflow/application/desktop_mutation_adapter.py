@@ -15,11 +15,13 @@ DesktopMutationTarget = Literal["project", "timeline"]
 
 _OPERATION_ALIASES: dict[tuple[DesktopMutationTarget, str], str] = {
     ("project", "apply_transcript_edit"): "transcript.edit.apply",
+    ("project", "close_script_gap"): "script.gap.close",
     ("project", "commit_web_asset_rebind"): "web.asset.rebind.commit",
     ("project", "create_short_sequence"): "sequence.short.create",
     ("project", "create_version"): "project.version.create",
     ("project", "create_web_variants"): "web.batch.create",
     ("project", "import_web_package"): "web.import",
+    ("project", "move_script_segment"): "script.segment.move",
     ("project", "remove_audio_effect"): "audio.effect.remove",
     ("project", "remove_web_keyframe"): "web.clip.keyframe.remove",
     ("project", "remove_web_parameter_keyframe"): "web.clip.parameter.keyframe.remove",
@@ -151,6 +153,8 @@ def _desktop_arguments(
     names = _WEB_ARGUMENTS.get(command)
     if names is not None:
         _bind_positional(names, args, arguments)
+    if command in {"close_script_gap", "move_script_segment"}:
+        _bind_positional(("sequence_id", "document_id", "segment_id"), args, arguments)
     arguments.setdefault("sequence_id", sequence_id)
     if command == "commit_web_asset_rebind":
         _bind_positional(("asset_id", "source", "plan_digest", "resolutions"), args, arguments)

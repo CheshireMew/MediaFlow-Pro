@@ -17,6 +17,7 @@ class AssetKind(DomainEnum):
     IMAGE = "image"
     WEB = "web"
     SUBTITLE = "subtitle"
+    LUT = "lut"
 
 
 class AssetOrigin(DomainEnum):
@@ -64,6 +65,7 @@ class VisualEffectKind(DomainEnum):
     COLOR_ADJUSTMENT = "color_adjustment"
     GAUSSIAN_BLUR = "gaussian_blur"
     VIGNETTE = "vignette"
+    LUT_3D = "lut_3d"
 
 
 class AudioEffectKind(DomainEnum):

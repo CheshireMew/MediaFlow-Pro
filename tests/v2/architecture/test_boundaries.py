@@ -1314,7 +1314,7 @@ def test_qml_floating_controls_use_the_shared_dark_theme_boundary() -> None:
 
 
 def test_workspace_modes_have_one_presentation_catalog() -> None:
-    assert len(WORKSPACE_MODES) == 6
+    assert len(WORKSPACE_MODES) == 7
     assert len({mode.key for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
     assert len({mode.panel_object_name for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
     assert "edit" not in {mode.key for mode in WORKSPACE_MODES}
@@ -1322,6 +1322,7 @@ def test_workspace_modes_have_one_presentation_catalog() -> None:
     mode_labels = {mode.key: mode.label_source for mode in WORKSPACE_MODES}
     assert mode_labels["transcript"] == "字幕"
     assert mode_labels["highlight"] == "高光"
+    assert mode_labels["resources"] == "资源"
 
     qml_root = ROOT / "mediaflow" / "desktop" / "qml"
     navigation = (qml_root / "components" / "WorkspaceNavigation.qml").read_text(encoding="utf-8")

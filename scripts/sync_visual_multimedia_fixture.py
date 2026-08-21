@@ -44,6 +44,8 @@ MEDIA_BUILD_CASE_SOURCES = (
 )
 SCHEMA_SOURCE = "schemas/editable-media.v6.schema.json"
 TIMELINE_SCHEMA_SOURCE = "schemas/media-timeline.v1.schema.json"
+RESOURCE_CATALOG_SCHEMA_SOURCE = "schemas/media-resource-catalog.v1.schema.json"
+RESOURCE_CATALOG_SOURCE = "media-resource-catalog.json"
 RUNTIME_SOURCE = "assets/web-media-starter/editable-media-runtime.js"
 PORTABLE_TIMELINE_TEST_SCRIPT = "scripts/self-test-media-timeline.mjs"
 
@@ -58,6 +60,23 @@ def package_files(source: Path) -> tuple[Path, ...]:
     if any(path.is_symlink() for path in source.rglob("*")):
         raise ValueError(f"Producer fixture cannot contain symbolic links: {source}")
     return files
+
+
+def _destination_matches_hashes(destination: Path, hashes: dict[str, str]) -> bool:
+    if not destination.is_dir() or destination.is_symlink():
+        return False
+    try:
+        files = {
+            path.relative_to(destination).as_posix(): path
+            for path in package_files(destination)
+            if path.name != "fixture-origin.json"
+        }
+    except (OSError, ValueError):
+        return False
+    return set(files) == set(hashes) and all(
+        sha256_file(files[relative]) == expected
+        for relative, expected in hashes.items()
+    )
 
 
 def _publish_package(staging: Path, destination: Path) -> None:
@@ -113,14 +132,16 @@ def _sync_package_files(
             **origin_fields,
             "files": hashes,
         }
-        (staging / "fixture-origin.json").write_text(
-            f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
-            encoding="utf-8",
-        )
+        origin_bytes = f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n".encode()
+        (staging / "fixture-origin.json").write_bytes(origin_bytes)
         existing_origin = destination / "fixture-origin.json"
         if existing_origin.is_file():
             current = json.loads(existing_origin.read_text(encoding="utf-8"))
-            if current == origin:
+            if (
+                current == origin
+                and existing_origin.read_bytes() == origin_bytes
+                and _destination_matches_hashes(destination, hashes)
+            ):
                 shutil.rmtree(staging)
                 return origin
         _publish_package(staging, destination)
@@ -284,12 +305,67 @@ def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
         timeline_schema_source,
         "media-timeline.v1.schema.json",
     )
+    resource_catalog_schema_source = skill_root / RESOURCE_CATALOG_SCHEMA_SOURCE
+    resource_catalog_schema_destination = sync_schema(
+        resource_catalog_schema_source,
+        destination / "media-resource-catalog-v1-contract",
+    )
+    resource_catalog_runtime_contract = sync_runtime_contract(
+        resource_catalog_schema_source,
+        "media-resource-catalog.v1.schema.json",
+    )
     return {
         "schema_sha256": sha256_file(schema_destination),
         "runtime_contract_sha256": sha256_file(runtime_contract),
         "runtime_script_sha256": sha256_file(runtime_script),
         "timeline_schema_sha256": sha256_file(timeline_schema_destination),
         "timeline_runtime_contract_sha256": sha256_file(timeline_runtime_contract),
+        "resource_catalog_schema_sha256": sha256_file(resource_catalog_schema_destination),
+        "resource_catalog_runtime_contract_sha256": sha256_file(
+            resource_catalog_runtime_contract
+        ),
+    }
+
+
+def sync_resource_catalog(skill_root: Path, destination: Path) -> dict[str, object]:
+    catalog_path = (skill_root / RESOURCE_CATALOG_SOURCE).resolve(strict=True)
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if (
+        catalog.get("protocol") != "visual-multimedia-media-resource-catalog"
+        or catalog.get("version") != 1
+    ):
+        raise ValueError("The producer resource catalog must use protocol version 1")
+    files = {catalog_path}
+    for item in catalog.get("items", []):
+        preview = item.get("preview", {})
+        if preview.get("type") != "none":
+            files.add((skill_root / preview["path"]).resolve(strict=True))
+        adoption = item.get("adoption", {})
+        if adoption.get("type") == "media-file":
+            files.add((skill_root / adoption["file"]).resolve(strict=True))
+        elif adoption.get("type") == "editable-media-package":
+            package = (skill_root / adoption["package"]).resolve(strict=True)
+            files.update(package_files(package))
+    for source in files:
+        try:
+            source.relative_to(skill_root)
+        except ValueError as error:
+            raise ValueError(f"Resource catalog source escapes producer root: {source}") from error
+    origin = _sync_package_files(
+        skill_root,
+        destination,
+        files=tuple(sorted(files, key=lambda path: path.relative_to(skill_root).as_posix())),
+        origin_fields={
+            "producer": "visual-multimedia/media-resource-catalog.json",
+            "catalog_id": catalog["catalog_id"],
+            "catalog_version": catalog["catalog_version"],
+        },
+    )
+    return {
+        "catalog_path": str(destination / RESOURCE_CATALOG_SOURCE),
+        "catalog_sha256": sha256_file(destination / RESOURCE_CATALOG_SOURCE),
+        "item_count": len(catalog.get("items", [])),
+        "origin": origin,
     }
 
 
@@ -311,6 +387,10 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
             producer=f"visual-multimedia/{source_relative}",
         )
     contracts = sync_contracts(skill_root, destination)
+    resource_catalog = sync_resource_catalog(
+        skill_root,
+        destination / "media-resource-catalog-v1-production",
+    )
     portable_timeline = sync_portable_timeline_project(
         skill_root,
         destination / "media-timeline-v1-project",
@@ -321,6 +401,7 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
         **contracts,
         "packages": packages,
         "media_build_cases": media_build_cases,
+        "resource_catalog": resource_catalog,
         "portable_timeline": portable_timeline,
     }
 

@@ -48,6 +48,7 @@ class SettingsForm(BaseModel):
     automatic_proxy: bool = Field(alias="automaticProxy")
     preview_quality: Literal["auto", "source", "proxy"] = Field(alias="previewQuality")
     hdr_preview: bool = Field(alias="hdrPreview")
+    resource_catalog_paths: str = Field(alias="resourceCatalogPaths")
     loudness_target: float = Field(alias="loudnessTarget")
     true_peak: float = Field(alias="truePeak")
     audio_layout: Literal["mono", "stereo", "5.1"] = Field(alias="audioLayout")
@@ -94,6 +95,9 @@ class SettingsForm(BaseModel):
                 "automatic_proxy": service.preview.automatic_proxy,
                 "preview_quality": service.preview.preview_quality,
                 "hdr_preview": service.preview.hdr_preview,
+                "resource_catalog_paths": "\n".join(
+                    service.resource_library.catalog_paths
+                ),
                 "loudness_target": service.audio.loudness_target_lufs,
                 "true_peak": service.audio.true_peak_db,
                 "audio_layout": service.audio.default_layout,
@@ -159,6 +163,15 @@ class SettingsForm(BaseModel):
         service_candidate.preview.automatic_proxy = self.automatic_proxy
         service_candidate.preview.preview_quality = self.preview_quality
         service_candidate.preview.hdr_preview = self.hdr_preview
+        resource_catalog_paths = [
+            value.strip()
+            for value in self.resource_catalog_paths.splitlines()
+            if value.strip()
+        ]
+        service_candidate.resource_library.catalog_paths = [
+            str(Path(value).expanduser().resolve())
+            for value in dict.fromkeys(resource_catalog_paths)
+        ]
         service_candidate.audio.loudness_target_lufs = self.loudness_target
         service_candidate.audio.true_peak_db = self.true_peak
         service_candidate.audio.default_layout = self.audio_layout

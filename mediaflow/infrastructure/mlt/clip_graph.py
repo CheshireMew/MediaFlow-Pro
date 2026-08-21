@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from pathlib import Path
 
 from mediaflow.domain.clip_transform_projection import project_clip_transform_points
@@ -22,6 +23,7 @@ class MltClipGraph:
         *,
         transition_tail_frames: int,
         native_preview: bool,
+        visual_effect_resources: Mapping[str, Path],
     ) -> None:
         speed = clip.speed_numerator / clip.speed_denominator
         service = (
@@ -85,6 +87,7 @@ class MltClipGraph:
             asset,
             producer_start=producer_start,
             native_preview=native_preview,
+            visual_effect_resources=visual_effect_resources,
         )
 
     def append_color_pipeline(
@@ -160,12 +163,17 @@ class MltClipGraph:
         *,
         producer_start: int,
         native_preview: bool,
+        visual_effect_resources: Mapping[str, Path],
     ) -> None:
         transform = clip.transform
         for effect in clip.visual_effects:
             if not effect.enabled:
                 continue
-            service, properties = visual_effect_mlt(effect)
+            resource_path = visual_effect_resources.get(effect.id)
+            service, properties = visual_effect_mlt(
+                effect,
+                resource_path=str(resource_path) if resource_path is not None else None,
+            )
             filter_element = ET.SubElement(
                 producer,
                 "filter",
@@ -177,7 +185,8 @@ class MltClipGraph:
             )
             MltGraph.property(filter_element, "mlt_service", service)
             for name, value in properties.items():
-                MltGraph.property(filter_element, name, f"{value:g}")
+                rendered = f"{value:g}" if isinstance(value, (int, float)) else value
+                MltGraph.property(filter_element, name, rendered)
         if any(
             value > 0.0
             for value in (

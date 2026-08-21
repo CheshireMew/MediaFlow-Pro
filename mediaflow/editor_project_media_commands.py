@@ -26,13 +26,15 @@ class EditorProjectMediaCommands:
     _transcript_editing: TranscriptEditingService
     _highlights: HighlightService
     _sequences: SequenceService
-
     if TYPE_CHECKING:
-
         def _require_writable(self) -> None: ...
 
     def import_external_asset(self, source: str | Path, *, expected_kind=None):
         return self._assets.import_external(source, expected_kind=expected_kind)
+
+    def import_lut_asset(self, source: str | Path):
+        self._require_writable()
+        return self._assets.import_lut(source)
 
     def capture_asset_frame(self, asset_id: str, frame: int, sequence_id: str):
         self._require_writable()
@@ -76,6 +78,9 @@ class EditorProjectMediaCommands:
 
     def update_subtitle_segment(self, *args: Any, **kwargs: Any):
         return self._subtitle_editing.update_segment(*args, **kwargs)
+
+    def update_script_segment(self, *args: Any, **kwargs: Any):
+        return self._subtitle_editing.update_script_segment(*args, **kwargs)
 
     def add_subtitle_segment(self, *args: Any, **kwargs: Any):
         return self._subtitle_editing.add_segment(*args, **kwargs)

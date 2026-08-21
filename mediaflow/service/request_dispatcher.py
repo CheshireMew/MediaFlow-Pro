@@ -286,6 +286,17 @@ class ServiceRequestDispatcher:
                     else None
                 ),
             )
+        if method == "workspace.list":
+            return {
+                "workspaces": self._workspaces.list(
+                    project=(str(params["project"]) if params.get("project") else None),
+                    connected_only=bool(params.get("connected_only", True)),
+                )
+            }
+        if method == "workspace.status":
+            return self._workspaces.status(
+                str(params.get("workspace_session_id") or "")
+            )
         if method == "workspace.command":
             arguments = params.get("arguments", {})
             if not isinstance(arguments, dict):

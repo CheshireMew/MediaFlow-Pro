@@ -8,7 +8,10 @@ tests/fixtures/editable-media-v6-contract/** -text -diff
 tests/fixtures/media-timeline-v1-contract/** -text -diff
 tests/fixtures/media-timeline-v1-project/** -text -diff
 tests/fixtures/media-build-cases/** -text -diff
+tests/fixtures/media-resource-catalog-v1-contract/** -text -diff
+tests/fixtures/media-resource-catalog-v1-production/** -text -diff
 mediaflow/resources/contracts/editable-media.v6.schema.json -text -diff
 mediaflow/resources/contracts/editable-media-runtime.v6.js -text -diff
 mediaflow/resources/contracts/media-timeline.v1.schema.json -text -diff
+mediaflow/resources/contracts/media-resource-catalog.v1.schema.json -text -diff
 archive/editable-media-v4-20260731/** -text -diff

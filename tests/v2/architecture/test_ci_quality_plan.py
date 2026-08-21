@@ -142,6 +142,7 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
         "tests/v2/infrastructure/test_editable_media_v6_runtime.py::test_protocol",
         "tests/v2/application/test_portable_timeline_import.py::test_import",
         "tests/v2/desktop/test_qml_smoke.py::test_window",
+        "tests/v2/application/test_editor_api.py::test_preview_frame_render_returns_real_revision_bound_png_evidence",
     )
 
     lightweight = select_resource_profile(nodes, "lightweight")
@@ -153,6 +154,7 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
     assert requires_reviewed_runtime(nodes[3]) is True
     assert requires_reviewed_runtime(nodes[4]) is True
     assert requires_reviewed_runtime(nodes[5]) is True
+    assert requires_reviewed_runtime(nodes[-1]) is True
     assert requires_reviewed_runtime(nodes[0]) is False
 
 

@@ -44,6 +44,7 @@ from mediaflow.infrastructure.encoder_policy import (
     ResolvedVideoEncoder,
     VideoEncoderPolicyResolver,
 )
+from mediaflow.infrastructure.file_fingerprint import fingerprint_file
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.mlt import (
     MltExportService,
@@ -799,6 +800,80 @@ def test_visual_effect_stack_changes_real_exported_pixels(tmp_path: Path) -> Non
         filtered_spread = max(filtered_rgb) - min(filtered_rgb)
         assert baseline_spread > 5
         assert filtered_spread < baseline_spread * 0.35
+
+
+def test_lut_visual_effect_changes_real_exported_pixels(tmp_path: Path) -> None:
+    paths = RuntimeContext.discover().paths
+    assert paths.melt is not None
+    source = tmp_path / "source.mp4"
+    generate_real_media(source, paths, width=160, height=90)
+    cube = tmp_path / "invert.cube"
+    cube.write_text(
+        """TITLE "Invert"
+LUT_3D_SIZE 2
+1 1 1
+0 1 1
+1 0 1
+0 0 1
+1 1 0
+0 1 0
+1 0 0
+0 0 0
+""",
+        encoding="utf-8",
+    )
+    with ProjectRepository.create(tmp_path / "LUT Render", "LUT Render") as repository:
+        assets = AssetService(
+            repository,
+            MediaProbe(paths),
+            fingerprint_file,
+        )
+        asset = assets.import_external(source)
+        asset = assets.adopt_main_profile_from_video(asset.id)
+        lut = assets.import_lut(cube)
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        preset = ExportPreset(
+            name="LUT pixels",
+            format=ExportFormat.H264,
+            container="mp4",
+            encoder_policy={"mode": "software"},
+            audio_codec="aac",
+            pixel_format="yuv420p",
+            quality_value=18,
+            preset="ultrafast",
+            gop_frames=25,
+        )
+        service = MltExportService(TimelineCompiler(repository, paths), paths)
+        baseline = service.export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "baseline.mp4",
+        )
+        editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.LUT_3D,
+            resource_asset_id=lut.id,
+        )
+        filtered = service.export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "inverted.mp4",
+        )
+
+        baseline_rgb = _frame_rgb_means(baseline.output_path, paths, [10])[0]
+        filtered_rgb = _frame_rgb_means(filtered.output_path, paths, [10])[0]
+        assert sum(
+            abs(left - right)
+            for left, right in zip(baseline_rgb, filtered_rgb, strict=True)
+        ) > 80
 
 
 def test_timeline_compiler_rejects_active_native_source_beyond_shared_budget(

@@ -249,6 +249,28 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
         "edit"
     ]
     assert operations["runtime.inspect"]["project_access"] == "none"
+    assert operations["resource.catalog.search"]["project_access"] == "none"
+    assert operations["resource.catalog.search"]["arguments_schema"]["properties"][
+        "category"
+    ]["anyOf"][0]["enum"] == [
+        "motion-graphic",
+        "sound-effect",
+        "audio-effect",
+        "transition",
+        "visual-effect",
+        "zoom",
+        "lut",
+    ]
+    assert operations["preview.frames.render"]["project_access"] == "read"
+    assert operations["preview.frames.render"]["arguments_schema"]["properties"][
+        "frames"
+    ]["maxItems"] == 24
+    assert operations["script.inspect"]["project_access"] == "read"
+    assert operations["script.segment.update"]["history_mode"] == "reversible"
+    assert operations["script.segment.split"]["history_mode"] == "reversible"
+    assert operations["script.segment.merge"]["history_mode"] == "reversible"
+    assert operations["script.segment.move"]["history_mode"] == "reversible"
+    assert operations["script.gap.close"]["history_mode"] == "reversible"
     assert operations["speech.transcribe"]["project_access"] == "none"
     assert operations["speech.transcribe"]["required_capabilities"] == [
         "faster-whisper-xxl"
@@ -428,6 +450,114 @@ def test_runtime_inspection_is_projectless_and_reports_every_runtime_capability(
         item["status"] in {"ready", "unavailable", "unverified"}
         for item in inspected["capabilities"]
     )
+
+
+def test_resource_catalog_search_exposes_current_builtin_editor_resources() -> None:
+    result = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "resource.catalog.search",
+            "arguments": {"category": "transition"},
+        }
+    )
+
+    assert result["result_count"] == 7
+    assert result["categories"] == [
+        "audio-effect",
+        "transition",
+        "visual-effect",
+        "zoom",
+    ]
+    assert result["featured_count"] >= 2
+    assert "audio" in result["tags"]
+    assert {item["id"] for item in result["items"]} == {
+        "dissolve",
+        "fade",
+        "fade_black",
+        "wipe_left",
+        "wipe_right",
+        "slide_left",
+        "slide_right",
+    }
+    assert all(item["catalog_id"] == "mediaflow-builtins" for item in result["items"])
+
+
+def test_project_context_inspection_returns_one_revision_bound_editing_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path))
+    created = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "project.create",
+            "arguments": {
+                "name": "Agent context",
+                "directory_name": "agent-context",
+                "profile": ProjectProfile().model_dump(
+                    mode="json", exclude_computed_fields=True
+                ),
+            },
+        }
+    )
+    project = Path(created["path"])
+    sequence_id = created["project"]["main_sequence_id"]
+
+    context = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "project.context.inspect",
+            "project": str(project),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+
+    assert context["content_revision"] == context["handoff"]["current_revision"] == 0
+    assert context["project"]["id"] == created["project"]["id"]
+    assert context["sequence"]["id"] == sequence_id
+    assert context["timeline"]["sequence"]["id"] == sequence_id
+    assert context["transcript"] is None
+    assert context["transcript_error"]
+    assert context["handoff"]["project_path"] == str(project)
+
+
+def test_preview_frame_render_returns_real_revision_bound_png_evidence(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Proof Frames"
+    application = EditorApplication()
+    project = application.create_project(project_path, "Proof Frames")
+    try:
+        project.populate_sample_project()
+        sequence_id = project.get_project().main_sequence_id
+    finally:
+        project.close()
+
+    result = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "preview.frames.render",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "frames": [15, 150, 270],
+                "use_proxies": False,
+            },
+        }
+    )
+
+    assert Path(result["preview_graph"]).is_file()
+    assert [item["frame"] for item in result["frames"]] == [15, 150, 270]
+    assert len({item["sha256"] for item in result["frames"]}) == 3
+    for item in result["frames"]:
+        frame_path = Path(item["path"])
+        assert frame_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+        assert (item["width"], item["height"]) == (1920, 1080)
+        assert item["byte_count"] == frame_path.stat().st_size
 
 
 def test_fcpxml_export_runs_through_the_public_cli_contract(
@@ -834,6 +964,290 @@ def test_cli_request_id_replays_persisted_result_without_repeating_edit(
     }
     with pytest.raises(EditorServiceRpcError, match="request_id was reused"):
         execute_request(conflicting, application=application)
+
+
+def test_script_operations_expose_and_edit_real_transcript_paragraphs(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Script Editing Project"
+    source = tmp_path / "script-source.mp4"
+    source.write_bytes(b"timeline-source")
+    with ProjectRepository.create(project_path, "Script Editing Project") as repository:
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=120,
+        )
+        document = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            sequence_id=project.main_sequence_id,
+            language="en",
+            purpose="sequence_transcript",
+        )
+        segments = [
+            SubtitleSegment(
+                document_id=document.id,
+                start_frame=0,
+                end_frame=45,
+                text="opening line",
+            ),
+            SubtitleSegment(
+                document_id=document.id,
+                start_frame=60,
+                end_frame=120,
+                text="second paragraph",
+            ),
+        ]
+        words = [
+            SubtitleWord(
+                segment_id=segment.id,
+                position=position,
+                start_frame=segment.start_frame + position * (segment.end_frame - segment.start_frame) // 2,
+                end_frame=segment.start_frame
+                + (position + 1) * (segment.end_frame - segment.start_frame) // 2,
+                text=text,
+            )
+            for segment in segments
+            for position, text in enumerate(segment.text.split())
+        ]
+        repository.subtitles.create_subtitle_document(document, segments, words)
+        sequence_id = project.main_sequence_id
+
+    inspected = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert [item["gap_before_frames"] for item in inspected["paragraphs"]] == [0, 15]
+    assert inspected["recognized_word_count"] == 4
+    assert inspected["paragraphs"][0]["timing_precision"] == "recognized_words"
+    first_id, second_id = [item["segment"]["id"] for item in inspected["paragraphs"]]
+
+    assert _SERVICE_API is not None
+    speaker_update = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.segment.update",
+            "project": str(project_path),
+            "request_id": "script-speaker-update",
+            "base_revision": _SERVICE_API.revision(project_path),
+            "arguments": {
+                "document_id": document.id,
+                "segment_id": first_id,
+                "speaker": "Host",
+            },
+        }
+    )
+    assert speaker_update["segment"]["speaker"] == "Host"
+    after_speaker = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert after_speaker["recognized_word_count"] == 4
+
+    text_update = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.segment.update",
+            "project": str(project_path),
+            "request_id": "script-text-update",
+            "base_revision": _SERVICE_API.revision(project_path),
+            "arguments": {
+                "document_id": document.id,
+                "segment_id": first_id,
+                "text": "rewritten opening",
+            },
+        }
+    )
+    assert text_update["segment"]["text"] == "rewritten opening"
+    after_text = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert after_text["recognized_word_count"] == 2
+    assert after_text["estimated_word_count"] == 2
+    assert after_text["paragraphs"][0]["timing_precision"] == "estimated_words"
+
+    split = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.segment.split",
+            "project": str(project_path),
+            "request_id": "script-split",
+            "base_revision": _SERVICE_API.revision(project_path),
+            "arguments": {
+                "document_id": document.id,
+                "segment_id": second_id,
+                "split_index": 6,
+            },
+        }
+    )
+    split_ids = [item["id"] for item in split["segments"]]
+    assert [item["text"] for item in split["segments"]] == ["second", "paragraph"]
+
+    merged = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.segment.merge",
+            "project": str(project_path),
+            "request_id": "script-merge",
+            "base_revision": _SERVICE_API.revision(project_path),
+            "arguments": {
+                "document_id": document.id,
+                "segment_ids": split_ids,
+            },
+        }
+    )
+    assert merged["segment"]["text"] == "second paragraph"
+
+    before_gap_close = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    closed = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.gap.close",
+            "project": str(project_path),
+            "request_id": "script-gap-close",
+            "base_revision": _SERVICE_API.revision(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "document_id": document.id,
+                "segment_id": second_id,
+                "expected_content_revision": before_gap_close["content_revision"],
+            },
+        }
+    )
+    assert closed["changed_timeline_frames"] == 15
+    assert (closed["before_duration_frames"], closed["after_duration_frames"]) == (120, 105)
+    after_gap_close = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert [item["gap_before_frames"] for item in after_gap_close["paragraphs"]] == [0, 0]
+
+    _SERVICE_API.history("undo", project_path)
+    after_close_undo = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert after_close_undo["timeline_duration_frames"] == 120
+    assert [item["gap_before_frames"] for item in after_close_undo["paragraphs"]] == [0, 15]
+    _SERVICE_API.history("redo", project_path)
+    after_gap_redo = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert after_gap_redo["timeline_duration_frames"] == 105
+    assert [item["gap_before_frames"] for item in after_gap_redo["paragraphs"]] == [0, 0]
+
+    moved = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.segment.move",
+            "project": str(project_path),
+            "request_id": "script-move",
+            "base_revision": _SERVICE_API.revision(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "document_id": document.id,
+                "segment_id": second_id,
+                "position": 0,
+                "expected_content_revision": after_gap_redo["content_revision"],
+            },
+        }
+    )
+    assert moved["before_duration_frames"] == moved["after_duration_frames"] == 105
+    after_move = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert [item["segment"]["text"] for item in after_move["paragraphs"]] == [
+        "second paragraph",
+        "rewritten opening",
+    ]
+    timeline_after_move = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.get",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )["timeline"]
+    assert max(
+        clip["timeline_start"] + clip["duration"]
+        for clip in timeline_after_move["clips"]
+    ) == 105
+    assert sorted(clip["source_in"] for clip in timeline_after_move["clips"]) == [0, 60]
+
+    _SERVICE_API.history("undo", project_path)
+    after_move_undo = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "script.inspect",
+            "project": str(project_path),
+            "arguments": {"sequence_id": sequence_id},
+        }
+    )
+    assert [item["segment"]["text"] for item in after_move_undo["paragraphs"]] == [
+        "rewritten opening",
+        "second paragraph",
+    ]
 
 
 def test_ai_transcript_edit_plan_runs_through_real_cli_and_can_restore(

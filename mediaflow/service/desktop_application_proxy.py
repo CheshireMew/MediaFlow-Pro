@@ -123,6 +123,12 @@ class DesktopEditorApplication:
     def discover_encoder_policy_options(self) -> list[dict]:
         return self._application_call("discover_encoder_policy_options")
 
+    def search_media_resources(self, **kwargs: Any) -> dict[str, Any]:
+        value = self._application_call("search_media_resources", **kwargs)
+        if not isinstance(value, dict):
+            raise RuntimeError("Editor Service returned an invalid media resource catalog")
+        return value
+
     @property
     def default_media_directory(self) -> str:
         return self._application_call("default_media_directory")

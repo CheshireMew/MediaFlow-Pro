@@ -120,6 +120,18 @@ class PreviewSettings(DomainModel):
     dropped_frame_proxy_threshold: int = 3
 
 
+class ResourceLibrarySettings(DomainModel):
+    catalog_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("catalog_paths")
+    @classmethod
+    def normalized_unique_paths(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Resource catalog paths must be unique")
+        return normalized
+
+
 class AudioSettings(DomainModel):
     sample_rate: int = 48_000
     default_layout: Literal["mono", "stereo", "5.1"] = "stereo"
@@ -205,6 +217,7 @@ class UiSettings(DomainModel):
     workspace_tour_completed: bool = False
     default_import_directory: str | None = None
     recent_project_paths: list[str] = Field(default_factory=list)
+    favorite_resource_keys: list[str] = Field(default_factory=list)
 
     @field_validator(
         "window_width",
@@ -215,6 +228,14 @@ class UiSettings(DomainModel):
         if value <= 0:
             raise ValueError("UI dimensions must be positive")
         return value
+
+    @field_validator("favorite_resource_keys")
+    @classmethod
+    def normalized_unique_resource_keys(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Favorite media resource keys must be unique")
+        return normalized
 
 
 class SettingsDocument(DomainModel):
@@ -232,6 +253,7 @@ class ServiceSettings(SettingsDocument):
     )
     translation: TranslationSettings = Field(default_factory=TranslationSettings)
     preview: PreviewSettings = Field(default_factory=PreviewSettings)
+    resource_library: ResourceLibrarySettings = Field(default_factory=ResourceLibrarySettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
     subtitle_style_presets: list[SubtitleStylePresetSettings] = Field(default_factory=list)
     llm_providers: list[LlmProviderSettings] = Field(default_factory=list)

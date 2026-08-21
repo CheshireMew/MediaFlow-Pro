@@ -221,6 +221,34 @@ class AssetListModel(DictListModel):
         )
 
 
+class MediaResourceListModel(DictListModel):
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(
+            [
+                "resourceKey",
+                "category",
+                "name",
+                "description",
+                "provider",
+                "tags",
+                "capabilities",
+                "previewType",
+                "previewUrl",
+                "license",
+                "adoptionType",
+                "adoptionTarget",
+                "presetId",
+                "parameters",
+                "defaultDurationFrames",
+                "adoptionPath",
+                "featuredRank",
+                "isFavorite",
+                "canAdopt",
+            ],
+            parent,
+        )
+
+
 class AssetFilterModel(QSortFilterProxyModel):
     _CONCEPTS = (
         {"night", "nighttime", "夜", "夜晚", "夜景", "黑夜"},

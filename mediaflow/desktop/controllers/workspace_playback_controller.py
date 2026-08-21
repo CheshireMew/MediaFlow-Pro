@@ -4,6 +4,7 @@ from PySide6.QtCore import Signal, Slot
 
 from .controller_facet import ControllerFacet
 from .controller_scopes import WorkspacePlaybackScope
+from .remote_workspace_selection import apply_remote_timeline_selection
 
 
 class WorkspacePlaybackController(ControllerFacet[WorkspacePlaybackScope]):
@@ -11,6 +12,7 @@ class WorkspacePlaybackController(ControllerFacet[WorkspacePlaybackScope]):
     remotePlayRequested = Signal(int)
     remotePauseRequested = Signal()
     remoteStopRequested = Signal()
+    remoteModeRequested = Signal(str)
 
     def __init__(self, session: WorkspacePlaybackScope):
         super().__init__(session)
@@ -31,3 +33,7 @@ class WorkspacePlaybackController(ControllerFacet[WorkspacePlaybackScope]):
             self.remotePauseRequested.emit()
         elif command == "playback.stop":
             self.remoteStopRequested.emit()
+        elif command == "workspace.mode.activate":
+            self.remoteModeRequested.emit(str(values["mode"]))
+        elif command == "timeline.selection.set":
+            apply_remote_timeline_selection(self._session, values)

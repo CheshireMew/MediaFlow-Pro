@@ -22,6 +22,12 @@ WORKSPACE_MODES = (
         "media",
     ),
     WorkspaceModeDefinition(
+        "resources",
+        str(QT_TRANSLATE_NOOP("WorkspaceNavigation", "资源")),
+        "resourceLibraryPanel",
+        "edit",
+    ),
+    WorkspaceModeDefinition(
         "transcript",
         str(QT_TRANSLATE_NOOP("WorkspaceNavigation", "字幕")),
         "transcriptWorkspace",
