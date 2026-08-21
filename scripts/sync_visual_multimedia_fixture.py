@@ -62,6 +62,23 @@ def package_files(source: Path) -> tuple[Path, ...]:
     return files
 
 
+def _destination_matches_hashes(destination: Path, hashes: dict[str, str]) -> bool:
+    if not destination.is_dir() or destination.is_symlink():
+        return False
+    try:
+        files = {
+            path.relative_to(destination).as_posix(): path
+            for path in package_files(destination)
+            if path.name != "fixture-origin.json"
+        }
+    except (OSError, ValueError):
+        return False
+    return set(files) == set(hashes) and all(
+        sha256_file(files[relative]) == expected
+        for relative, expected in hashes.items()
+    )
+
+
 def _publish_package(staging: Path, destination: Path) -> None:
     archived: Path | None = None
     if destination.exists():
@@ -115,14 +132,16 @@ def _sync_package_files(
             **origin_fields,
             "files": hashes,
         }
-        (staging / "fixture-origin.json").write_text(
-            f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n",
-            encoding="utf-8",
-        )
+        origin_bytes = f"{json.dumps(origin, ensure_ascii=False, indent=2)}\n".encode()
+        (staging / "fixture-origin.json").write_bytes(origin_bytes)
         existing_origin = destination / "fixture-origin.json"
         if existing_origin.is_file():
             current = json.loads(existing_origin.read_text(encoding="utf-8"))
-            if current == origin:
+            if (
+                current == origin
+                and existing_origin.read_bytes() == origin_bytes
+                and _destination_matches_hashes(destination, hashes)
+            ):
                 shutil.rmtree(staging)
                 return origin
         _publish_package(staging, destination)

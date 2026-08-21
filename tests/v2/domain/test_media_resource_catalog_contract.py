@@ -93,11 +93,15 @@ def test_mediaflow_consumes_the_synced_production_resource_catalog() -> None:
     )
 
 
-def test_resource_catalog_loads_builtin_presets_and_real_files(tmp_path: Path) -> None:
+def test_resource_catalog_loads_builtin_presets_and_real_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sound = tmp_path / "resources" / "click.wav"
     sound.parent.mkdir(parents=True)
     sound.write_bytes(b"RIFF-real-catalog-fixture")
-    sound_mime = mimetypes.guess_type(sound.name)[0] or "application/octet-stream"
+    sound_mime = "audio/wav"
+    monkeypatch.setattr(mimetypes, "guess_type", lambda _name: ("audio/x-wav", None))
     items = [
         {
             "id": "dissolve",

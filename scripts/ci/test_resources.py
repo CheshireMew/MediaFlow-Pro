@@ -26,6 +26,7 @@ RUNTIME_TEST_PREFIXES = ("tests/v2/desktop/", "tests/v2/integration/")
 RUNTIME_TEST_NODE_PREFIXES = (
     "tests/v2/application/test_editor_api.py::test_cli_and_desktop_composition_api_share_real_persisted_task_chain",
     "tests/v2/application/test_editor_api.py::test_fcpxml_export_runs_through_the_public_cli_contract",
+    "tests/v2/application/test_editor_api.py::test_preview_frame_render_returns_real_revision_bound_png_evidence",
     "tests/v2/application/test_editor_api.py::test_preview_snapshots_are_content_addressed_and_never_overwrite_active_graph",
     "tests/v2/application/test_editor_api.py::test_public_batch_clip_add_is_atomic_and_idempotent",
     "tests/v2/application/test_editor_service.py::test_async_task_receipt_recovers_after_scheduling_persistence_fault",

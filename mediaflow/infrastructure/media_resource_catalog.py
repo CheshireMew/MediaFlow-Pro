@@ -32,6 +32,11 @@ MEDIA_RESOURCE_CATALOG_SCHEMA_PATH = (
 )
 CATALOG_FILE_NAME = "catalog.json"
 EDITABLE_MEDIA_FILE_NAME = "editable-media.json"
+STABLE_MIME_TYPES = {
+    ".cube": "application/x-cube-lut",
+    ".svg": "image/svg+xml",
+    ".wav": "audio/wav",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,8 +80,9 @@ def _regular_file(path: Path, label: str) -> Path:
 
 
 def _mime_type(path: Path) -> str:
-    if path.suffix.lower() == ".cube":
-        return "application/x-cube-lut"
+    stable = STABLE_MIME_TYPES.get(path.suffix.lower())
+    if stable is not None:
+        return stable
     value, _encoding = mimetypes.guess_type(path.name)
     return value or "application/octet-stream"
 
