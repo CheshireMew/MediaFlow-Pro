@@ -310,7 +310,10 @@ def test_maintenance_yaml_dependency_is_derived_from_the_reviewed_lock() -> None
 
 def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    triggers = workflow.split("permissions:", 1)[0]
 
+    assert "push:\n    branches:\n      - main\n    tags:\n      - \"v*\"" in triggers
+    assert "pull_request:\n    branches:\n      - main" in triggers
     assert "python scripts/ci/quality_plan.py" in workflow
     assert "needs.plan.outputs.run_core == 'true'" in workflow
     assert "needs.plan.outputs.run_full == 'true'" in workflow
