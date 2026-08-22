@@ -125,6 +125,7 @@ private:
         int position = 0;
         int duration = 0;
         quint64 requestId = 0;
+        bool trackDrops = false;
     };
 
     quint64 beginRequest(bool preservePosition);
@@ -162,6 +163,7 @@ private:
     bool m_openScheduled = false;
     std::atomic<quint64> m_requestId{0};
     std::atomic<bool> m_queuePlaybackFrames{false};
+    std::atomic<bool> m_trackPlaybackDrops{false};
     std::atomic<int> m_pendingDroppedFrames{0};
     QMutex m_frameMutex;
     QThread m_workerThread;
