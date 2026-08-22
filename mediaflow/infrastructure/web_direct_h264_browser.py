@@ -23,13 +23,13 @@ from .web_direct_h264_attestation import EncoderTraceAttestation
 from .web_direct_h264_codec import (
     ENCODE_CURRENT_CANVAS,
     FINISH_ENCODER,
-    H264_CODEC,
     INITIALIZE_ENCODER,
     MAX_ENCODE_QUEUE_SIZE,
     MAX_PENDING_WRITES,
     BoundedChunkSink,
     encoder_bitrate,
     round_microseconds,
+    select_h264_codec,
 )
 from .web_direct_h264_models import (
     BrowserEncodeResult,
@@ -249,7 +249,12 @@ def encode_browser_stream(
             {"width": target.width, "height": target.height},
         )
         requested_config: dict[str, object] = {
-            "codec": H264_CODEC,
+            "codec": select_h264_codec(
+                target.width,
+                target.height,
+                target.fps_numerator,
+                target.fps_denominator,
+            ),
             "width": target.width,
             "height": target.height,
             "bitrate": encoder_bitrate(target),
