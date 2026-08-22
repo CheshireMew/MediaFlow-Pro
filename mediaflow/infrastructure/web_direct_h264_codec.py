@@ -87,11 +87,26 @@ class BoundedChunkSink:
 
 
 INITIALIZE_ENCODER = """
-async ({config, maximumEncodeQueueSize, maximumPendingWrites}) => {
+async ({config, maximumEncodeQueueSize, maximumPendingWrites, operationTimeoutMs}) => {
     if (typeof VideoEncoder !== "function" || typeof VideoFrame !== "function") {
         return {supported: false, reason: "WebCodecs video encoding is unavailable"};
     }
-    const support = await VideoEncoder.isConfigSupported(config);
+    const waitFor = (promise, label) => {
+        let timeoutId;
+        const timeout = new Promise((_, reject) => {
+            timeoutId = setTimeout(
+                () => reject(new Error(
+                    `WebCodecs direct H.264 ${label} timed out after ${operationTimeoutMs} ms`,
+                )),
+                operationTimeoutMs,
+            );
+        });
+        return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+    };
+    const support = await waitFor(
+        VideoEncoder.isConfigSupported(config),
+        "configuration",
+    );
     if (!support.supported) {
         return {
             supported: false,
@@ -109,6 +124,7 @@ async ({config, maximumEncodeQueueSize, maximumPendingWrites}) => {
         maximumObservedEncodeQueueSize: 0,
         maximumObservedPendingWrites: 0,
         writeChain: Promise.resolve(),
+        waitFor,
     };
     const toBase64 = bytes => {
         let binary = "";
@@ -208,10 +224,10 @@ async ({timestamp, duration, keyFrame, width, height}) => {
         state.encoder.encodeQueueSize,
     );
     if (state.encoder.encodeQueueSize >= state.maximumEncodeQueueSize) {
-        await state.encoder.flush();
+        await state.waitFor(state.encoder.flush(), "encode queue flush");
     }
     if (state.pendingWrites >= state.maximumPendingWrites) {
-        await state.writeChain;
+        await state.waitFor(state.writeChain, "encoded chunk write");
     }
     if (state.errors.length) throw new Error(state.errors.join("; "));
     return {
@@ -227,8 +243,8 @@ FINISH_ENCODER = """
 async () => {
     const state = window.__mediaflowDirectH264;
     if (!state?.encoder) throw new Error("WebCodecs direct H.264 encoder is missing");
-    await state.encoder.flush();
-    await state.writeChain;
+    await state.waitFor(state.encoder.flush(), "final encoder flush");
+    await state.waitFor(state.writeChain, "final encoded chunk write");
     state.encoder.close();
     if (state.errors.length) throw new Error(state.errors.join("; "));
     return {

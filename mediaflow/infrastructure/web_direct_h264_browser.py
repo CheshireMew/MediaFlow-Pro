@@ -39,6 +39,7 @@ from .web_direct_h264_models import (
 from .web_render_target import WebRenderTarget
 
 TRACE_ATTESTATION_FRAMES = 8
+ENCODER_OPERATION_TIMEOUT_MS = 15_000
 
 
 def collect_gpu_evidence(browser) -> dict[str, object] | None:
@@ -272,6 +273,7 @@ def encode_browser_stream(
                     "config": requested_config,
                     "maximumEncodeQueueSize": MAX_ENCODE_QUEUE_SIZE,
                     "maximumPendingWrites": MAX_PENDING_WRITES,
+                    "operationTimeoutMs": ENCODER_OPERATION_TIMEOUT_MS,
                 },
             )
             if support.get("supported") is not True:
