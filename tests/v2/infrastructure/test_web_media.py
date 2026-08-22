@@ -438,6 +438,20 @@ def _enable_short_non_4k_direct_h264(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _require_windows_hardware_direct_h264(capture: dict[str, object]) -> None:
+    if capture.get("actual_backend") == "webcodecs-h264":
+        return
+    reason = str(capture.get("fallback_reason") or "")
+    unavailable_reasons = (
+        "Chromium rejected the requested encoder config",
+        "Chromium trace did not identify one platform encoder backend",
+        "Chromium did not prove a Windows Media Foundation hardware encoder",
+    )
+    if any(value in reason for value in unavailable_reasons):
+        pytest.skip(f"Windows runner has no usable hardware H.264 encoder: {reason}")
+    pytest.fail(f"Direct H.264 unexpectedly fell back: {reason or capture}")
+
+
 def test_direct_h264_selects_the_lowest_sufficient_encoder_level() -> None:
     select = web_direct_h264_codec_module.select_h264_codec
 
@@ -606,6 +620,7 @@ def test_opaque_long_web_render_uses_bounded_direct_h264(
         cache = renderer.render_clip(timeline, clip.id)
         manifest = json.loads(target.manifest_path.read_text(encoding="utf-8"))
         capture = manifest["capture"]
+        _require_windows_hardware_direct_h264(capture)
         encoder = capture["encoder"]
 
         assert cache == target.path and cache.is_file()
@@ -1563,6 +1578,7 @@ def test_direct_h264_muxes_the_existing_continuous_native_audio_plan(
         manifest = json.loads(target.manifest_path.read_text(encoding="utf-8"))
 
         assert cache.is_file()
+        _require_windows_hardware_direct_h264(manifest["capture"])
         assert manifest["capture"]["actual_backend"] == "webcodecs-h264", manifest[
             "capture"
         ]["fallback_reason"]
