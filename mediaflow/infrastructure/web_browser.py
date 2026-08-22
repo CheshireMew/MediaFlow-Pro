@@ -19,6 +19,7 @@ from mediaflow.domain.web_media_sources import WebMediaSourcesManifest
 
 logger = logging.getLogger(__name__)
 BROWSER_VALIDATION_ATTEMPTS = 2
+WEB_RUNTIME_READY_TIMEOUT_MS = 15_000
 
 SEEK_WEB_FRAME_SCRIPT = """
 async seconds => {
@@ -210,7 +211,7 @@ def _validate_runtime_manifests(
             && typeof window.__hf.resolveFrame === 'function'
             && typeof window.__hf.rejectFrame === 'function'
             && window.__hf.duration > 0""",
-        timeout=5000,
+        timeout=WEB_RUNTIME_READY_TIMEOUT_MS,
     )
     page.evaluate("() => window.editableMedia.ready")
     page.evaluate(
