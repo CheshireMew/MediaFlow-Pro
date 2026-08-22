@@ -431,16 +431,18 @@ void MltPreviewItem::deliverPendingFrame()
     if (pending.requestId != m_requestId.load(std::memory_order_acquire))
         return;
     if (m_playing && qFuzzyCompare(qAbs(m_playbackRate), 1.0)) {
-        int observedDropped = pending.image.isNull() ? 1 : 0;
+        const int queuedDropped = m_pendingDroppedFrames.exchange(
+            0,
+            std::memory_order_acq_rel);
+        int dropped = 0;
         if (m_lastPlaybackFrame >= 0) {
+            int observedDropped = pending.image.isNull() ? 1 : 0;
             const int direction = m_playbackRate < 0.0 ? -1 : 1;
             const int advance = (pending.position - m_lastPlaybackFrame) * direction;
             if (advance > 1)
                 observedDropped = qMax(observedDropped, advance - 1);
+            dropped = qMax(observedDropped, queuedDropped);
         }
-        const int dropped = qMax(
-            observedDropped,
-            m_pendingDroppedFrames.exchange(0, std::memory_order_acq_rel));
         m_lastPlaybackFrame = pending.position;
         if (dropped > 0) {
             m_droppedFrames += dropped;
