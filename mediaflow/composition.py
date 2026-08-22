@@ -31,7 +31,7 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcript_editing import TranscriptEditingService
 from mediaflow.application.translation_service import TranslationService
 from mediaflow.application.web_media_service import WebMediaServices
-from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
+from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.domain.collaboration import (
     ActorIdentity,
     ProjectChangeEvent,

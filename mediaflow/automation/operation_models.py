@@ -56,6 +56,7 @@ from mediaflow.domain.web_manifest import (
     web_asset_spec_document,
 )
 from mediaflow.domain.web_manifest_primitives import WebEditableField
+from mediaflow.domain.web_rendering import WebRenderPlan
 from mediaflow.domain.web_state import (
     WebClipState,
     WebEasing,
@@ -661,6 +662,11 @@ class WebClipRenderArguments(DomainModel):
     timeout: float | None = Field(default=None, gt=0)
 
 
+class WebClipRenderInspectArguments(DomainModel):
+    sequence_id: str = Field(min_length=1)
+    clip_id: str = Field(min_length=1)
+
+
 class WebClipExportArguments(DomainModel):
     sequence_id: str = Field(min_length=1)
     clip_id: str = Field(min_length=1)
@@ -986,6 +992,10 @@ class WebInspectResult(DomainModel):
 
 class WebClipStateResult(DomainModel):
     web_clip_state: WebClipState
+
+
+class WebClipRenderInspectionResult(DomainModel):
+    render_plan: WebRenderPlan
 
 
 class WebEditDocumentResult(DomainModel):

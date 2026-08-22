@@ -57,6 +57,8 @@ def test_generated_packages_match_origins_and_v6_contract(name: str) -> None:
     package = PACKAGES[name]
     origin = json.loads((package / "fixture-origin.json").read_text(encoding="utf-8"))
     assert origin["producer"] == PRODUCERS[name]
+    assert len(origin["producer_revision"]) == 40
+    int(origin["producer_revision"], 16)
     assert origin["editable_media_version"] == 6
     assert {path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()} == set(
         origin["files"]

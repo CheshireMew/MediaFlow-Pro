@@ -9,6 +9,7 @@ from mediaflow.application.web_clip_editing_service import WebClipEditingService
 from mediaflow.application.web_package_service import WebPackageService
 from mediaflow.application.web_rebind_service import WebRebindService
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.domain.web_rendering import WebRenderPlan
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_render_service import WebRenderService
@@ -117,6 +118,17 @@ class EditorProjectWebCommands:
 
     def prepare_web_sequence(self, state: TimelineState) -> None:
         WebRenderService(self._repository, self._paths).ensure_sequence(state)
+
+    def inspect_web_clip_render(
+        self,
+        sequence_id: str,
+        clip_id: str,
+    ) -> WebRenderPlan:
+        state = self._repository.timeline.load_timeline(sequence_id)
+        return WebRenderService(self._repository, self._paths).inspect_clip_render(
+            state,
+            clip_id,
+        )
 
     def export_web_clip(self, *args: Any, **kwargs: Any):
         return WebRenderService(self._repository, self._paths).export_clip(*args, **kwargs)

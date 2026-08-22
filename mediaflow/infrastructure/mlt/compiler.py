@@ -17,7 +17,6 @@ from mediaflow.domain.sequence_audio import (
     output_audio_clips_for_track,
     select_audible_sequence_audio,
 )
-from mediaflow.domain.storage_names import require_windows_interop_path
 from mediaflow.domain.timeline import (
     TimelineState,
 )
@@ -27,6 +26,7 @@ from mediaflow.infrastructure.web_render_target import WebRenderCache
 from .audio_graph import MltAudioGraph
 from .clip_graph import MltClipGraph
 from .graph import MltGraph
+from .source_registry import MltSourceRegistry
 from .transition_graph import MltTransitionGraph
 from .video_graph import MltVideoGraph
 
@@ -122,8 +122,13 @@ class TimelineCompiler:
             if item.left_clip_id in active_clip_ids and item.right_clip_id in active_clip_ids
         ]
         outgoing_transitions = {item.left_clip_id: item for item in active_transitions}
-        source_paths: list[Path] = []
         clip_sources: dict[str, Path] = {}
+        sources = MltSourceRegistry(
+            self.repository,
+            use_proxies=use_proxies,
+            prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+        )
+
         for clip in state.clips:
             if clip.id not in active_clip_ids:
                 continue
@@ -132,24 +137,17 @@ class TimelineCompiler:
                 raise ValueError(f"Timeline references unknown asset: {clip.asset_id}")
             clip.validate_source_range(asset.kind, asset.metadata.duration_frames)
             source = (
-                WebRenderCache(
-                    self.repository,
-                    self.paths,
+                sources.require_source(
+                    WebRenderCache(
+                        self.repository,
+                        self.paths,
+                    )
+                    .target(state, clip, asset)
+                    .path,
                 )
-                .target(state, clip, asset)
-                .path
                 if asset.kind == AssetKind.WEB
-                else MltGraph.source_path(
-                    self.repository,
-                    asset,
-                    use_proxies=use_proxies,
-                    prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
-                )
+                else sources.asset_source(asset)
             )
-            source = require_windows_interop_path(source)
-            if not source.is_file():
-                raise FileNotFoundError(source)
-            source_paths.append(source)
             clip_sources[clip.id] = source
             visual_effect_resources: dict[str, Path] = {}
             for effect in clip.visual_effects:
@@ -162,16 +160,7 @@ class TimelineCompiler:
                     )
                 if resource_asset.kind != AssetKind.LUT:
                     raise ValueError("Visual effect resource asset must be a LUT")
-                effect_source = require_windows_interop_path(
-                    MltGraph.source_path(
-                        self.repository,
-                        resource_asset,
-                        use_proxies=False,
-                    )
-                )
-                if not effect_source.is_file():
-                    raise FileNotFoundError(effect_source)
-                source_paths.append(effect_source)
+                effect_source = sources.asset_source(resource_asset, use_proxies=False)
                 visual_effect_resources[effect.id] = effect_source
             self._clip_graph.append_producer(
                 root,
@@ -208,7 +197,7 @@ class TimelineCompiler:
             duration,
         )
         if watermark_track is not None:
-            source_paths.append(require_windows_interop_path(watermark_track[2]))
+            sources.require_source(watermark_track[2])
 
         audio_root_id = self._audio_graph.append_audio_graph(
             root,
@@ -264,7 +253,7 @@ class TimelineCompiler:
 
         ET.indent(root, space="  ")
         xml = ET.tostring(root, encoding="unicode", xml_declaration=True)
-        return MltDocument(xml=xml, duration_frames=duration, source_paths=tuple(dict.fromkeys(source_paths)))
+        return MltDocument(xml=xml, duration_frames=duration, source_paths=sources.paths)
 
     def write(
         self,

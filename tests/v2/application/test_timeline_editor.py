@@ -43,6 +43,19 @@ def editor_fixture(tmp_path: Path):
         repository.close()
 
 
+def test_duration_frames_matches_the_cached_timeline_state(editor_fixture) -> None:
+    _repository, editor, asset, video_track = editor_fixture
+    editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=25,
+        source_in=0,
+        duration=75,
+    )
+
+    assert editor.duration_frames == editor.state.duration_frames == 100
+
+
 def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
     repository, editor, asset, video_track = editor_fixture
     clip = editor.add_clip(

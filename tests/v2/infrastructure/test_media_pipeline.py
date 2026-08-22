@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import threading
@@ -11,6 +10,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtGui import QImage
 
+import mediaflow.infrastructure.waveform_service as waveform_service_module
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
@@ -41,6 +41,10 @@ from mediaflow.infrastructure.visual_analysis import (
 )
 from mediaflow.infrastructure.waveform_service import WaveformService
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
+from mediaflow.waveform_cache import (
+    inspect_waveform_cache,
+    read_waveform_peaks,
+)
 from tests.v2.real_media import generate_real_media
 
 
@@ -177,6 +181,53 @@ def test_media_probe_rejects_deep_source_before_starting_ffprobe(
     assert subprocess_started is False
 
 
+def test_waveform_storage_budget_blocks_before_cache_or_decoder_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = RuntimeContext.discover().paths
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"not-decoded")
+
+    with ProjectRepository.create(tmp_path / "Waveform Budget", "Waveform Budget") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.AUDIO)
+        cache_root = paths.project_cache_dir(repository.project_dir)
+        decoder_started = False
+
+        def block_storage(*_args, **kwargs) -> None:
+            assert kwargs["expected_new_bytes"] == WaveformService._estimated_peak_bytes(1)
+            assert not cache_root.exists()
+            raise RuntimeError("storage preflight blocked")
+
+        def fail_if_decoder_starts(*_args, **_kwargs):
+            nonlocal decoder_started
+            decoder_started = True
+            raise AssertionError("waveform decoder started before storage preflight")
+
+        monkeypatch.setattr(
+            waveform_service_module,
+            "reserve_project_cache",
+            block_storage,
+        )
+        monkeypatch.setattr(
+            waveform_service_module.FfmpegRunner,
+            "open_output_pipe",
+            fail_if_decoder_starts,
+        )
+
+        with pytest.raises(RuntimeError, match="storage preflight blocked"):
+            WaveformService(repository, paths).prepare(asset, duration_seconds=1)
+
+        assert decoder_started is False
+        assert not cache_root.exists()
+
+
+def test_waveform_storage_peak_requires_known_duration() -> None:
+    assert WaveformService._estimated_peak_bytes(1) > 0
+    with pytest.raises(ValueError, match="known positive media duration"):
+        WaveformService._estimated_peak_bytes(0)
+
+
 def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
     tmp_path: Path,
     max_project_path: Path,
@@ -238,10 +289,17 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
             progress=waveform_progress.append,
         )
         waveform_path = repository.project_dir / waveform_asset.waveform_path
-        payload = json.loads(waveform_path.read_text(encoding="utf-8"))
-        assert payload["sample_rate"] == 8000
-        assert payload["sample_count"] > 7000
-        assert len(payload["levels"]["128"]) > 0
+        header = inspect_waveform_cache(waveform_path)
+        assert header.sample_rate == 8000
+        assert header.sample_count > 7000
+        assert header.levels[0].count > 0
+        assert read_waveform_peaks(
+            waveform_path,
+            offset=header.levels[0].offset,
+            count=header.levels[0].count,
+            first=0,
+            last=1,
+        )
         calculating = [
             item for item in waveform_progress if item.message_code == "waveform_calculating"
         ]
@@ -282,7 +340,7 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
         updated_asset = repository.assets.get_asset(asset.id)
         assert updated_asset.waveform_path
         waveform_path = repository.project_dir / updated_asset.waveform_path
-        waveform_payload = json.loads(waveform_path.read_text(encoding="utf-8"))
+        waveform_header = inspect_waveform_cache(waveform_path)
 
         decoding = [
             item for item in progress_events if item.message_code == "waveform_decoding"
@@ -314,8 +372,8 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
             artifact.resolve(repository.project_dir)
             for artifact in completed.artifacts
         ] == [expected_waveform]
-        assert waveform_payload["sample_count"] > 0
-        assert waveform_payload["levels"]["128"]
+        assert waveform_header.sample_count > 0
+        assert waveform_header.levels[0].count > 0
     finally:
         project.close()
 

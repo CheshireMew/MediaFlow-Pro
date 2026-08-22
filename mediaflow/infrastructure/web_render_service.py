@@ -1,40 +1,30 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import time
-from dataclasses import replace
 from pathlib import Path
 
 from mediaflow.application.ports import TimelineCompilationDocuments
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.project import AssetFingerprint
 from mediaflow.domain.timeline import TimelineState
-from mediaflow.domain.web_exports import (
-    WebClipExportResult,
-    WebExportFormat,
-)
+from mediaflow.domain.web_exports import WebClipExportResult, WebExportFormat
+from mediaflow.domain.web_rendering import WebRenderActualCapture, WebRenderPlan
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
-from mediaflow.infrastructure.file_fingerprint import fingerprint_matches
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.storage_budget import (
-    estimate_video_cache_bytes,
-    reserve_project_cache,
-)
 from mediaflow.infrastructure.web_browser_cache_renderer import WebBrowserCacheRenderer
+from mediaflow.infrastructure.web_capture_prewarm import prewarm_web_capture_engine
 from mediaflow.infrastructure.web_clip_export_writer import WebClipExportWriter
-from mediaflow.infrastructure.web_native_media import slice_web_native_media_plan_for_frame
-from mediaflow.infrastructure.web_render_target import (
-    WEB_CACHE_MANIFEST_SCHEMA,
-    WEB_RENDERER_VERSION,
-    WebRenderCache,
-    WebRenderTarget,
-)
+from mediaflow.infrastructure.web_filmstrip_renderer import WebFilmstripRenderer
+from mediaflow.infrastructure.web_render_cache_lifecycle import WebRenderCacheLifecycle
+from mediaflow.infrastructure.web_render_preflight import build_web_render_plan
+from mediaflow.infrastructure.web_render_segments import WebRenderSegments
+from mediaflow.infrastructure.web_render_target import WebRenderCache, WebRenderTarget
 
 
 class WebRenderService:
+    _SEGMENT_SECONDS = 10
+
     def __init__(
         self,
         documents: TimelineCompilationDocuments,
@@ -44,13 +34,29 @@ class WebRenderService:
         self.paths = paths
         self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
         self.cache = WebRenderCache(documents, self.paths)
+        self.cache_lifecycle = WebRenderCacheLifecycle(documents, self.paths)
         self.browser_renderer = WebBrowserCacheRenderer(self.paths, self.ffmpeg)
+        self.segments = WebRenderSegments(documents, self.paths, self.browser_renderer)
+        self.filmstrip = WebFilmstripRenderer(
+            documents,
+            paths,
+            self.cache,
+            self.cache_lifecycle,
+            self.browser_renderer,
+        )
         self.export_writer = WebClipExportWriter(
             self.paths,
             self.ffmpeg,
             self.cache,
             self.render_clip,
         )
+        chromium = self.paths.chromium
+        if (
+            chromium is not None
+            and chromium.is_file()
+            and any(asset.kind == AssetKind.WEB for asset in documents.assets.list_assets())
+        ):
+            prewarm_web_capture_engine(chromium)
 
     def ensure_sequence(
         self,
@@ -122,7 +128,19 @@ class WebRenderService:
             raise KeyError(clip_id) from error
         asset = self.documents.assets.get_asset(clip.asset_id)
         target = self.cache.target(state, clip, asset)
-        if self._cache_is_ready(target):
+        spec = self.documents.web.get_web_asset_spec(asset.id)
+        clip_state = state.web_states[clip.id]
+        entry = self.documents.assets.resolve_asset_path(asset)
+        if not entry.is_file():
+            raise FileNotFoundError(entry)
+        render_plan = build_web_render_plan(
+            entry=entry,
+            spec=spec,
+            clip_state=clip_state,
+            state=state,
+            target=target,
+        )
+        if self._cache_is_ready(target, render_plan):
             if progress:
                 progress(
                     OperationProgress.determinate(
@@ -141,28 +159,42 @@ class WebRenderService:
         cache_lock = self._acquire_cache_lock(
             lock_path,
             target,
+            render_plan,
             check_cancelled=check_cancelled,
         )
         if cache_lock is None:
             return target.path
         try:
-            if self._cache_is_ready(target):
+            if self._cache_is_ready(target, render_plan):
                 return target.path
-            spec = self.documents.web.get_web_asset_spec(asset.id)
-            clip_state = state.web_states[clip.id]
-            entry = self.documents.assets.resolve_asset_path(asset)
-            if not entry.is_file():
-                raise FileNotFoundError(entry)
-            self.browser_renderer.render(
-                entry,
-                spec,
-                clip_state,
-                state,
+            if self.segments.can_render(
                 target,
-                progress=progress,
-                check_cancelled=check_cancelled,
-            )
-            if not self._cache_is_ready(target):
+                render_plan,
+                segment_seconds=self._SEGMENT_SECONDS,
+            ):
+                self.segments.render(
+                    entry,
+                    spec,
+                    clip_state,
+                    state,
+                    target,
+                    render_plan,
+                    segment_seconds=self._SEGMENT_SECONDS,
+                    progress=progress,
+                    check_cancelled=check_cancelled,
+                )
+            else:
+                self.browser_renderer.render(
+                    entry,
+                    spec,
+                    clip_state,
+                    state,
+                    target,
+                    render_plan,
+                    progress=progress,
+                    check_cancelled=check_cancelled,
+                )
+            if not self._cache_is_ready(target, render_plan):
                 raise RuntimeError("Editable web media renderer did not produce a cache file")
             return target.path
         finally:
@@ -176,163 +208,114 @@ class WebRenderService:
         *,
         check_cancelled=None,
     ) -> Path:
-        """Capture and composite exactly one requested web source frame."""
+        return self.filmstrip.render(
+            state,
+            clip_id,
+            source_frame,
+            check_cancelled=check_cancelled,
+        )
 
+    @classmethod
+    def _can_render_segments(
+        cls,
+        target: WebRenderTarget,
+        render_plan: WebRenderPlan,
+    ) -> bool:
+        return WebRenderSegments.can_render(
+            target,
+            render_plan,
+            segment_seconds=cls._SEGMENT_SECONDS,
+        )
+
+    @classmethod
+    def _segment_frame_count(cls, target: WebRenderTarget) -> int:
+        return WebRenderSegments.frame_count(
+            target,
+            segment_seconds=cls._SEGMENT_SECONDS,
+        )
+
+    def _segment_targets(
+        self,
+        target: WebRenderTarget,
+    ) -> list[tuple[int, WebRenderTarget]]:
+        return self.segments.targets(
+            target,
+            segment_seconds=self._SEGMENT_SECONDS,
+        )
+
+    def inspect_clip_render(
+        self,
+        state: TimelineState,
+        clip_id: str,
+    ) -> WebRenderPlan:
         try:
             clip = next(item for item in state.clips if item.id == clip_id)
         except StopIteration as error:
             raise KeyError(clip_id) from error
         asset = self.documents.assets.get_asset(clip.asset_id)
         target = self.cache.target(state, clip, asset)
-        if not 0 <= source_frame < target.frame_count:
-            raise ValueError(
-                f"Editable media filmstrip frame {source_frame} is outside "
-                f"the rendered source range 0..{target.frame_count - 1}"
-            )
-        source_key = hashlib.sha256(
-            f"{target.key}:{source_frame}:{WEB_RENDERER_VERSION}:filmstrip-frame-v1".encode()
-        ).hexdigest()
-        source_path = (
-            self.paths.project_cache_dir(self.documents.project_dir)
-            / "filmstrip"
-            / "sources"
-            / source_key[:2]
-            / f"{source_key}.mkv"
+        spec = self.documents.web.get_web_asset_spec(asset.id)
+        clip_state = state.web_states[clip.id]
+        entry = self.documents.assets.resolve_asset_path(asset)
+        if not entry.is_file():
+            raise FileNotFoundError(entry)
+        plan = build_web_render_plan(
+            entry=entry,
+            spec=spec,
+            clip_state=clip_state,
+            state=state,
+            target=target,
         )
-        one_frame_target = replace(
-            target,
-            key=source_key,
-            path=source_path,
-            animated=True,
-            frame_count=1,
-            has_audio=False,
-            native_media_plan=slice_web_native_media_plan_for_frame(
-                target.native_media_plan,
-                source_frame=source_frame,
-                fps_numerator=target.fps_numerator,
-                fps_denominator=target.fps_denominator,
-            ),
-        )
-        if self._cache_is_ready(one_frame_target):
-            return one_frame_target.path
-        self._reserve_cache(
-            one_frame_target,
-            label="MediaFlow editable web filmstrip cache",
-        )
-        one_frame_target.path.parent.mkdir(parents=True, exist_ok=True)
-        cache_lock = self._acquire_cache_lock(
-            one_frame_target.path.with_name(f"{one_frame_target.path.name}.lock"),
-            one_frame_target,
-            check_cancelled=check_cancelled,
-        )
-        if cache_lock is None:
-            return one_frame_target.path
-        try:
-            if self._cache_is_ready(one_frame_target):
-                return one_frame_target.path
-            spec = self.documents.web.get_web_asset_spec(asset.id)
-            clip_state = state.web_states[clip.id]
-            entry = self.documents.assets.resolve_asset_path(asset)
-            if not entry.is_file():
-                raise FileNotFoundError(entry)
-            self.browser_renderer.render(
-                entry,
-                spec,
-                clip_state,
-                state,
-                one_frame_target,
-                check_cancelled=check_cancelled,
-                capture_start_frame=source_frame,
-            )
-            if not self._cache_is_ready(one_frame_target):
-                raise RuntimeError("Editable web filmstrip renderer did not produce a cache file")
-            return one_frame_target.path
-        finally:
-            cache_lock.release()
-
-    @staticmethod
-    def _cache_is_ready(target: WebRenderTarget) -> bool:
-        if not target.path.is_file() or not target.manifest_path.is_file():
-            return False
+        if not self._cache_is_ready(target, plan):
+            return plan
         try:
             payload = json.loads(target.manifest_path.read_text(encoding="utf-8"))
-            fingerprint_payload = payload["fingerprint"]
-            fingerprint = AssetFingerprint.model_validate(fingerprint_payload)
-        except (KeyError, OSError, ValueError, TypeError, json.JSONDecodeError):
-            return False
-        expected = {
-            "schema": WEB_CACHE_MANIFEST_SCHEMA,
-            "renderer_version": WEB_RENDERER_VERSION,
-            "key": target.key,
-            "animated": target.animated,
-            "frame_count": target.frame_count,
-            "width": target.width,
-            "height": target.height,
-            "fps_numerator": target.fps_numerator,
-            "fps_denominator": target.fps_denominator,
-            "has_audio": target.has_audio,
-            "audio_sample_rate": target.audio_sample_rate,
-            "audio_channels": target.audio_channels,
-        }
-        if any(payload.get(key) != value for key, value in expected.items()):
-            return False
-        probe = payload.get("probe")
-        if not isinstance(probe, dict):
-            return False
-        expected_probe = {
-            "codec_name": "ffv1" if target.animated else "png",
-            "width": target.width,
-            "height": target.height,
-            "frame_count": target.frame_count if target.animated else 1,
-            "has_audio": target.has_audio,
-            "audio_codec_name": "flac" if target.has_audio else None,
-            "audio_sample_rate": (target.audio_sample_rate if target.has_audio else None),
-            "audio_channels": target.audio_channels if target.has_audio else None,
-        }
-        if any(probe.get(key) != value for key, value in expected_probe.items()):
-            return False
-        if target.animated and (
-            probe.get("pixel_format") != "bgra"
-            or probe.get("fps_numerator") != target.fps_numerator
-            or probe.get("fps_denominator") != target.fps_denominator
-        ):
-            return False
-        return fingerprint_matches(target.path, fingerprint)
+            capture = payload["capture"]
+            if capture.get("plan_digest") != plan.plan_digest:
+                return plan
+            actual_capture = WebRenderActualCapture(
+                backend=capture["actual_backend"],
+                reason=capture["actual_reason"],
+                fallback_reason=capture.get("fallback_reason"),
+                worker_count=capture["worker_count"],
+                captured_frames=capture["captured_frames"],
+                elapsed_seconds=capture["elapsed_seconds"],
+                encoder=capture.get("encoder"),
+            )
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return plan
+        return plan.model_copy(
+            update={
+                "cache_status": "ready",
+                "actual_capture": actual_capture,
+            }
+        )
+
+    @staticmethod
+    def _cache_is_ready(
+        target: WebRenderTarget,
+        render_plan: WebRenderPlan | None = None,
+    ) -> bool:
+        return WebRenderCacheLifecycle.cache_is_ready(target, render_plan)
 
     def _reserve_cache(self, target: WebRenderTarget, *, label: str) -> None:
-        cache_root = self.paths.project_cache_dir(self.documents.project_dir)
-        reserve_project_cache(
-            cache_root,
-            self.documents.project_dir,
-            expected_new_bytes=estimate_video_cache_bytes(
-                target.width,
-                target.height,
-                target.frame_count,
-            ),
-            label=label,
-            case_sensitive_paths=self.paths.target.case_sensitive_paths,
-        )
+        self.cache_lifecycle.reserve(target, label=label)
 
     @classmethod
     def _acquire_cache_lock(
         cls,
         lock_path: Path,
         target: WebRenderTarget,
+        render_plan: WebRenderPlan,
         *,
         check_cancelled=None,
     ) -> ProcessFileLock | None:
-        deadline = time.monotonic() + 900
-        lock = ProcessFileLock(lock_path)
-        while True:
-            if cls._cache_is_ready(target):
-                return None
-            if lock.acquire():
-                return lock
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for editable media cache: {target.path}") from None
-            if check_cancelled is not None:
-                check_cancelled()
-            time.sleep(0.1)
+        return WebRenderCacheLifecycle.acquire_lock(
+            lock_path,
+            target,
+            render_plan,
+            check_cancelled=check_cancelled,
+        )
 
     def export_clip(
         self,

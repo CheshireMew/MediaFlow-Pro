@@ -145,21 +145,29 @@ jobs:
         run: >-
           python -m ruff check
           mediaflow
+          packaging/windows/portable_entrypoint.py
           tests/v2
           scripts/ci
           scripts/update_qm_translations.py
           scripts/prepare_ci_qt.py
+          scripts/archive_windows_portable.py
+          scripts/build_windows_portable.py
+          scripts/generate_runtime_license_bundle.py
           scripts/verify_display_capabilities.py
           scripts/verify_development_runtime.py
           scripts/verify_desktop_cli_requests.py
           scripts/verify_license_inventory.py
           scripts/verify_performance.py
           scripts/verify_preview_performance.py
+          scripts/verify_portable_distribution.py
           scripts/verify_reference_comparison_chain.py
           scripts/verify_real_user_chain.py
           scripts/verify_release_runtime.py
           scripts/verify_ui_matrix.py
+          scripts/verify_waveform_performance.py
+          scripts/verify_webcodecs_direct_encode.py
           scripts/verify_web_render_performance.py
+          scripts/verify_windows_portable.py
       - name: Type-check core application and persistence boundaries
         run: python -m mypy
       - name: Run CI, environment, path, and CLI contract tests first
@@ -884,6 +892,7 @@ jobs:
 
     steps:
       - name: Require every selected boundary to pass
+        id: selected-boundaries
         shell: pwsh
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
@@ -928,3 +937,27 @@ jobs:
             throw "Selected quality boundaries failed: $($failures -join ', ')"
           }
           "Selected quality boundaries passed." | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - name: Write the exact quality-gate receipt
+        shell: pwsh
+        env:
+          QUALITY_SCOPE: ${{ needs.plan.outputs.scope }}
+        run: |
+          $receiptRoot = Join-Path $env:RUNNER_TEMP "quality-gate-receipt"
+          New-Item -ItemType Directory -Path $receiptRoot -ErrorAction Stop | Out-Null
+          $receipt = [ordered]@{
+            schema = "mediaflow-quality-gate/v1"
+            sha = $env:GITHUB_SHA
+            git_ref = $env:GITHUB_REF
+            workflow_run_id = $env:GITHUB_RUN_ID
+            workflow_run_attempt = [int]$env:GITHUB_RUN_ATTEMPT
+            scope = $env:QUALITY_SCOPE
+            passed = $true
+          }
+          $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $receiptRoot "quality-gate.json") -Encoding utf8
+      - name: Upload the exact quality-gate receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-gate-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 30
+          path: ${{ runner.temp }}/quality-gate-receipt/quality-gate.json

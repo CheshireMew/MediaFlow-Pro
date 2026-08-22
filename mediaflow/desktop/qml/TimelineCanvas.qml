@@ -22,6 +22,7 @@ Flickable {
 
     function scheduleFilmstrip() {
         filmstripRequest.restart();
+        viewportRequest.restart();
     }
 
     onContentXChanged: scheduleFilmstrip()
@@ -36,6 +37,16 @@ Flickable {
     Connections {
         target: mediaflow.timelineViewController
         function onProjectStateChanged() { canvas.scheduleFilmstrip(); }
+    }
+
+    Timer {
+        id: viewportRequest
+        interval: 0
+        repeat: false
+        onTriggered: mediaflow.timelineViewportController.setClipViewport(
+            canvas.contentX / Math.max(0.000001, canvas.view.pixelsPerFrame),
+            (canvas.contentX + canvas.width) / Math.max(0.000001, canvas.view.pixelsPerFrame),
+            canvas.view.pixelsPerFrame)
     }
 
     Timer {

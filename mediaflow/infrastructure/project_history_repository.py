@@ -16,6 +16,9 @@ from mediaflow.domain.model_base import now_ms
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
 
+ACTIVE_HISTORY_RETENTION_GROUPS = 500
+DISCARDED_HISTORY_RETENTION_GROUPS = 50
+
 
 class ProjectHistoryRepository(ProjectRepositoryComponent):
     """Durable undo groups owned by the project transaction boundary."""
@@ -59,6 +62,7 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
                 timestamp,
             ),
         )
+        self._prune_retention(project_id)
         return ProjectUndoGroup(
             id=group_id,
             project_id=project_id,
@@ -71,6 +75,36 @@ class ProjectHistoryRepository(ProjectRepositoryComponent):
             state="applied",
             created_at=timestamp,
             updated_at=timestamp,
+        )
+
+    def _prune_retention(self, project_id: str) -> None:
+        self._connection.execute(
+            """DELETE FROM undo_group
+               WHERE project_id=? AND state IN ('applied', 'undone') AND rowid NOT IN (
+                   SELECT rowid FROM undo_group
+                   WHERE project_id=? AND state IN ('applied', 'undone')
+                   ORDER BY state_revision DESC, updated_at DESC, id DESC
+                   LIMIT ?
+               )""",
+            (
+                project_id,
+                project_id,
+                ACTIVE_HISTORY_RETENTION_GROUPS,
+            ),
+        )
+        self._connection.execute(
+            """DELETE FROM undo_group
+               WHERE project_id=? AND state='discarded' AND rowid NOT IN (
+                   SELECT rowid FROM undo_group
+                   WHERE project_id=? AND state='discarded'
+                   ORDER BY updated_at DESC, id DESC
+                   LIMIT ?
+               )""",
+            (
+                project_id,
+                project_id,
+                DISCARDED_HISTORY_RETENTION_GROUPS,
+            ),
         )
 
     def discard_redo(self) -> None:

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 from mediaflow.application.ports import ProjectWorkflowDocuments
 from mediaflow.application.timeline_clock import project_frame_profile
 from mediaflow.application.workflow_coordinator import WorkflowCoordinator
+from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.domain.enums import AssetKind, AssetOrigin, WorkflowStage
 from mediaflow.domain.project import Sequence
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
@@ -28,20 +29,6 @@ WorkflowTaskSpec = tuple[TaskCommand, list[str]]
 class ProxyDecision(Protocol):
     required: bool
     reasons: tuple[str, ...]
-
-
-@dataclass(slots=True)
-class WorkflowUpdate:
-    selected_asset_ids: list[str] = field(default_factory=list)
-    status_source: str = ""
-    status_arguments: tuple[str, ...] = ()
-
-    def merge(self, other: WorkflowUpdate) -> WorkflowUpdate:
-        return WorkflowUpdate(
-            selected_asset_ids=other.selected_asset_ids or self.selected_asset_ids,
-            status_source=other.status_source or self.status_source,
-            status_arguments=(other.status_arguments if other.status_source else self.status_arguments),
-        )
 
 
 @dataclass(frozen=True, slots=True)

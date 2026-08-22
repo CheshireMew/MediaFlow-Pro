@@ -123,6 +123,7 @@ class TimelinePresentationScope(ControllerScope):
     _finish_sequence_in_out_edit: Operation
     _require_writable: Callable[[], None]
     _set_status: Operation
+    _snap_timeline_frame: Operation
     _snap_tolerance_frames: Operation
     _timeline_snap_targets: Operation
     _updated_selection: Operation
@@ -309,8 +310,9 @@ def timeline_scope(session: ProjectSession) -> TimelinePresentationScope:
         _finish_sequence_in_out_edit=session._finish_sequence_in_out_edit,
         _require_writable=session._require_writable,
         _set_status=session._set_status,
+        _snap_timeline_frame=session._timeline_snapping.snap,
         _snap_tolerance_frames=session._snap_tolerance_frames,
-        _timeline_snap_targets=session._timeline_snap_targets,
+        _timeline_snap_targets=session._timeline_snapping.targets,
         _updated_selection=session._updated_selection,
     )
 
@@ -330,7 +332,7 @@ def subtitle_scope(session: ProjectSession) -> SubtitlePresentationScope:
         _require_writable=session._require_writable,
         _set_status=session._set_status,
         _snap_tolerance_frames=session._snap_tolerance_frames,
-        _timeline_snap_targets=session._timeline_snap_targets,
+        _timeline_snap_targets=session._timeline_snapping.targets,
         _updated_selection=session._updated_selection,
     )
 

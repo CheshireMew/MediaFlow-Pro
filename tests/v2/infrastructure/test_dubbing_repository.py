@@ -16,6 +16,7 @@ from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.project_schema_definition import PROJECT_SCHEMA_VERSION
 
 
 def _session(repository: ProjectRepository, root: Path) -> DubbingSession:
@@ -182,7 +183,7 @@ def test_v47_migration_adds_dubbing_documents(tmp_path: Path) -> None:
     with ProjectRepository.open(root, writable=True) as migrated:
         assert migrated._fetchone(
             "SELECT version FROM schema_info WHERE component='project'"
-        )["version"] == 47
+        )["version"] == PROJECT_SCHEMA_VERSION
         tables = {
             row["name"]
             for row in migrated._fetchall(
@@ -216,6 +217,6 @@ def test_v47_migration_adds_dubbing_documents(tmp_path: Path) -> None:
             row[1]
             for row in snapshot.execute("PRAGMA table_info(dubbing_session)")
         }
-    assert snapshot_version == 47
+    assert snapshot_version == PROJECT_SCHEMA_VERSION
     assert "dubbing_session" in snapshot_tables
     assert "diarization_model" in snapshot_session_columns

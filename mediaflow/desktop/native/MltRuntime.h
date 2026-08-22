@@ -49,6 +49,7 @@ signals:
     void durationChanged(int duration, quint64 requestId);
     void playingChanged(bool playing, quint64 requestId);
     void bufferStateChanged(bool buffering, int bufferedFrames, quint64 requestId);
+    void framesDropped(int count, quint64 requestId);
     void errorOccurred(const QString &message, quint64 requestId);
 
 private:

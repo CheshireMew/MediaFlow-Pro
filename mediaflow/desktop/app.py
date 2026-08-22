@@ -11,7 +11,7 @@ from typing import Any, cast
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
-from PySide6.QtCore import QCoreApplication, QSettings, QTranslator, QUrl
+from PySide6.QtCore import QCoreApplication, QSettings, QTimer, QTranslator, QUrl
 from PySide6.QtGui import QColorSpace, QFontDatabase, QGuiApplication, QIcon, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWebEngineQuick import QtWebEngineQuick
@@ -45,7 +45,7 @@ from mediaflow.service.desktop_application_proxy import (
 )
 
 STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
-STARTUP_READY_SCHEMA_VERSION = 1
+STARTUP_READY_SCHEMA_VERSION = 2
 
 
 def configure_application_identity() -> None:
@@ -92,6 +92,8 @@ def _qml_dll_search_path():
 def create_engine(
     app: QGuiApplication,
     application: DesktopEditorApplication | None = None,
+    *,
+    startup_phases: dict[str, int] | None = None,
 ) -> tuple[QQmlApplicationEngine, EditorControllers]:
     engine = QQmlApplicationEngine(app)
     qml_errors: list[str] = []
@@ -101,6 +103,8 @@ def create_engine(
         raise RuntimeError(f"{PRODUCT_NAME} native preview is not built. Run scripts/build_native.ps1 first.")
     engine.addImportPath(str(api.native_qml_root))
     controllers = EditorControllers(engine, application=api)
+    if startup_phases is not None:
+        startup_phases["controllers_ready_at_ns"] = time.time_ns()
     engine.rootContext().setContextProperty(
         "applicationMonospaceFontFamily",
         _monospace_font_family(),
@@ -119,16 +123,21 @@ def create_engine(
     qml_path = Path(__file__).resolve().parent / "qml" / "Main.qml"
     with _qml_dll_search_path():
         engine.load(QUrl.fromLocalFile(str(qml_path)))
+    if startup_phases is not None:
+        startup_phases["qml_loaded_at_ns"] = time.time_ns()
     if not engine.rootObjects():
         details = "\n".join(qml_errors)
         raise RuntimeError(
             f"Failed to load QML application: {qml_path}" + (f"\n{details}" if details else "")
         )
+    QTimer.singleShot(250, controllers.session.begin_home_requests)
     return engine, controllers
 
 
 def publish_startup_ready(
     engine: QQmlApplicationEngine,
+    *,
+    startup_phases: dict[str, int] | None = None,
 ) -> Path | None:
     """Publish opt-in evidence that the real QML root processed initial events."""
 
@@ -139,6 +148,7 @@ def publish_startup_ready(
     if not roots:
         raise RuntimeError("Cannot publish startup readiness without a QML root")
     QCoreApplication.processEvents()
+    ready_at_ns = time.time_ns()
     ready_path = Path(configured).expanduser().resolve()
     atomic_write_text(
         ready_path,
@@ -146,9 +156,13 @@ def publish_startup_ready(
             {
                 "schema_version": STARTUP_READY_SCHEMA_VERSION,
                 "pid": os.getpid(),
-                "ready_at_ns": time.time_ns(),
+                "ready_at_ns": ready_at_ns,
                 "root_object_count": len(roots),
                 "event_loop_processed": True,
+                "startup_phases": {
+                    **(startup_phases or {}),
+                    "qml_ready_at_ns": ready_at_ns,
+                },
             },
             separators=(",", ":"),
         ),
@@ -268,6 +282,7 @@ def ensure_runtime_directory() -> bool:
 
 
 def main() -> int:
+    main_started_at_ns = time.time_ns()
     multiprocessing.freeze_support()
     configure_application_identity()
     settings_path = startup_settings_path()
@@ -283,6 +298,7 @@ def main() -> int:
     app = create_desktop_application()
     if not ensure_runtime_directory():
         return 2
+    runtime_ready_at_ns = time.time_ns()
     configure_application_logging(runtime_directory())
     try:
         show_startup_settings_recovery(startup_settings)
@@ -290,11 +306,25 @@ def main() -> int:
         # keeps machines without D: usable instead of failing before the chooser can
         # be shown.
         api = create_desktop_editor_application()
+        service_ready_at_ns = time.time_ns()
         configure_application_font(app)
         configure_application_icon(app)
         app.setDesktopFileName(PRODUCT_NAME)
-        engine, controllers = create_engine(app, api)
-        publish_startup_ready(engine)
+        startup_phases = {
+            "main_started_at_ns": main_started_at_ns,
+            "runtime_ready_at_ns": runtime_ready_at_ns,
+            "service_ready_at_ns": service_ready_at_ns,
+            "surface_ready_at_ns": time.time_ns(),
+        }
+        engine, controllers = create_engine(
+            app,
+            api,
+            startup_phases=startup_phases,
+        )
+        publish_startup_ready(
+            engine,
+            startup_phases=startup_phases,
+        )
         app.aboutToQuit.connect(controllers.shutdown)
         if len(sys.argv) > 1:
             controllers.workspace_project.openProject(QUrl.fromLocalFile(sys.argv[1]).toString())

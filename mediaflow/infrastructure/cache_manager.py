@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import stat
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ from pathlib import Path
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.storage_names import canonical_resolved_path
 from mediaflow.infrastructure.process_liveness import process_is_alive
+
+_SIZE_PRUNE_LOCK = threading.Lock()
+_LAST_SIZE_PRUNE: dict[str, float] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +178,36 @@ class CacheManager:
             except OSError:
                 continue
             total -= size
+
+    def prune_directory_to_size_throttled(
+        self,
+        relative_directory: str | Path,
+        *,
+        maximum_bytes: int,
+        minimum_interval_seconds: float = 60.0,
+    ) -> bool:
+        """Amortize expensive recursive cache scans across frequent requests."""
+
+        directory = (self.root / relative_directory).resolve()
+        self._require_managed(directory)
+        now = time.monotonic()
+        key = os.path.normcase(str(directory))
+        with _SIZE_PRUNE_LOCK:
+            previous = _LAST_SIZE_PRUNE.get(key)
+            if previous is not None and now - previous < minimum_interval_seconds:
+                return False
+            _LAST_SIZE_PRUNE[key] = now
+        try:
+            self.prune_directory_to_size(
+                relative_directory,
+                maximum_bytes=maximum_bytes,
+            )
+        except BaseException:
+            with _SIZE_PRUNE_LOCK:
+                if _LAST_SIZE_PRUNE.get(key) == now:
+                    _LAST_SIZE_PRUNE.pop(key, None)
+            raise
+        return True
 
     def _require_managed(self, path: Path) -> None:
         root = _comparable_resolved_path(self.root)

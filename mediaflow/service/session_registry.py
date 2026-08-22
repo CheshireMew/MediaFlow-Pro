@@ -6,12 +6,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mediaflow.application.project_command_queue import ProjectCommandQueue
 from mediaflow.application.project_revision_policy import resolve_project_revision
 from mediaflow.automation.contracts import AutomationRequest
-from mediaflow.composition import EditorApplication, EditorProject
 from mediaflow.domain.collaboration import ProjectChangeEvent
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.storage_names import (
@@ -26,14 +25,8 @@ from mediaflow.infrastructure.storage_paths import default_project_root
 from .codec import decode_transport
 from .events import EventHub, ServiceEvent
 
-
-def project_path(value: str | None) -> Path:
-    text = str(value or "").strip()
-    if not text:
-        raise ValueError("project is required")
-    path = Path(text).expanduser().resolve()
-    return path.parent if path.name == "project.mfp" else path
-
+if TYPE_CHECKING:
+    from mediaflow.composition import EditorApplication, EditorProject
 
 @dataclass(slots=True)
 class ProjectSession:

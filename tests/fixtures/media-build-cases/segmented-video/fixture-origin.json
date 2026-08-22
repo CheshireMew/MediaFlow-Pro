@@ -2,6 +2,7 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/assets/media-build-cases/segmented-video",
+  "producer_revision": "752315c54042ee8317205b856dd3d91bbe5c1073",
   "media_build_plan_version": 1,
   "files": {
     "inputs/avatar-1.json": "f2fc190f3ba659c75edcf46693872187c551e7010e05057942a9b00912247f87",

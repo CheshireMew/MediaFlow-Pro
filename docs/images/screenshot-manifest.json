@@ -1,23 +1,40 @@
 {
   "schema": "mediaflow-documentation-screenshots/v1",
   "generator": "scripts/update_documentation_screenshots.py",
-  "ui_source_digest": "73fa235d6e94f9ce0325361a0a15c2ed0ff9456e807e49f11be64f7f9912e4bc",
+  "ui_source_digest": "194bb694a6ce53481ef22c30f1dce82bc3f5e775be00ab9063362ad2ca0f32ee",
   "images": [
     {
       "path": "docs/images/mediaflow-home-zh-cn.png",
       "scenario": "empty-home-zh-cn",
-      "width": 1600,
-      "height": 900,
-      "sha256": "8207df1e8e8dc4afe53235f978e881413f7c3a40b56374337342137cd91d419f",
+      "width": 3200,
+      "height": 1800,
+      "sha256": "c120cba6a2e00e793cfd51666f560dd9a6658f59f465a331e104e99e6740767e",
       "local_paths_exposed": false
     },
     {
       "path": "docs/images/mediaflow-workspace-zh-cn.png",
       "scenario": "sample-workspace-zh-cn",
-      "width": 1920,
-      "height": 1080,
-      "sha256": "1b3da21970c72b5b8de88abe68d563f2383305e1cebe8bf5c03bbe087e1c1b4f",
-      "local_paths_exposed": false
+      "width": 3840,
+      "height": 2160,
+      "sha256": "06474c76cc1be1025ec54ea3061f6fcde821b22ccc2b9b1eec15135969b0afc2",
+      "local_paths_exposed": false,
+      "visual_assertions": {
+        "program_monitor": {
+          "region": {
+            "x": 1160,
+            "y": 302,
+            "width": 1760,
+            "height": 983
+          },
+          "sample_step": 4,
+          "sample_count": 108240,
+          "distinct_color_count": 175,
+          "non_dark_ratio": 1.0,
+          "luminance_range": 91,
+          "ready": true,
+          "frame": 60
+        }
+      }
     }
   ]
 }

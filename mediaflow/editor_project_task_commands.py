@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
 from mediaflow.application.task_service import TaskService
-from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
+from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.domain.tasks import Task
 
 

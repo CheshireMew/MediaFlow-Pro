@@ -160,7 +160,10 @@ class RemoteEditorProject(_ProjectCommandSurface):
     def _refresh_history_state(self) -> None:
         response = call_sync(
             "history.list",
-            {"project": str(self.project_dir)},
+            {
+                "project": str(self.project_dir),
+                "include_items": False,
+            },
         )
         if not isinstance(response, dict):
             raise RuntimeError("Editor Service returned an invalid history state")
@@ -383,6 +386,15 @@ class RemoteEditorProject(_ProjectCommandSurface):
             raise
         if not isinstance(response, dict):
             raise RuntimeError("Editor Service returned an invalid desktop command response")
+        event_ack = response.get("event_ack")
+        if definition.access == "write" and isinstance(event_ack, dict):
+            cursor = event_ack.get("cursor")
+            project_revision = event_ack.get("project_revision")
+            if isinstance(cursor, int) and isinstance(project_revision, int):
+                self._events.acknowledge_project_event(
+                    cursor=cursor,
+                    project_revision=project_revision,
+                )
         self._known_content_revision = max(
             self._known_content_revision,
             int(response.get("project_revision", self._known_content_revision)),

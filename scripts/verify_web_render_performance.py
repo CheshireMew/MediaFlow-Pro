@@ -33,6 +33,8 @@ MAX_BALANCED_BASELINE_REGRESSION = 0.10
 class RenderResult(TypedDict):
     cache: str
     seconds: float
+    capture_elapsed_seconds: float
+    non_capture_seconds: float
     throughput_fps: float
     worker_count: int
     captured_frames: int
@@ -210,6 +212,8 @@ def _render_case(run_dir: Path, workers: int, frame_count: int) -> RenderResult:
         return {
             "cache": str(cache),
             "seconds": elapsed,
+            "capture_elapsed_seconds": metrics.elapsed_seconds,
+            "non_capture_seconds": max(0.0, elapsed - metrics.elapsed_seconds),
             "throughput_fps": frame_count / elapsed,
             "worker_count": metrics.worker_count,
             "captured_frames": metrics.captured_frames,
@@ -334,6 +338,8 @@ def _child_result(
     if (
         not isinstance(payload.get("cache"), str)
         or not isinstance(payload.get("seconds"), (int, float))
+        or not isinstance(payload.get("capture_elapsed_seconds"), (int, float))
+        or not isinstance(payload.get("non_capture_seconds"), (int, float))
         or not isinstance(payload.get("throughput_fps"), (int, float))
         or not isinstance(payload.get("worker_count"), int)
         or not isinstance(payload.get("captured_frames"), int)
@@ -387,11 +393,8 @@ def _balanced_baseline_comparison(
     baseline = payload.get("parallel")
     if not isinstance(baseline, dict):
         raise ValueError("Web render baseline has no parallel result")
-    if (
-        baseline.get("worker_count") != current["worker_count"]
-        or baseline.get("capture_backend") != current["capture_backend"]
-    ):
-        raise ValueError("Web render baseline must use the same worker count and backend")
+    if baseline.get("capture_backend") != current["capture_backend"]:
+        raise ValueError("Web render baseline must use the same capture backend")
     baseline_seconds = float(baseline["seconds"])
     baseline_p95_ms = float(baseline["frame_time_p95_ms"])
     total_ratio = float(current["seconds"]) / baseline_seconds
@@ -401,6 +404,9 @@ def _balanced_baseline_comparison(
         "baseline_seconds": baseline_seconds,
         "current_seconds": float(current["seconds"]),
         "total_ratio": total_ratio,
+        "total_improvement": 1 - total_ratio,
+        "baseline_worker_count": int(baseline["worker_count"]),
+        "current_worker_count": int(current["worker_count"]),
         "baseline_p95_ms": baseline_p95_ms,
         "current_p95_ms": float(current["frame_time_p95_ms"]),
         "p95_ratio": p95_ratio,

@@ -1,3 +1,3 @@
-from mediaflow.desktop.app import main
+from mediaflow.desktop.bootstrap import main
 
 raise SystemExit(main())

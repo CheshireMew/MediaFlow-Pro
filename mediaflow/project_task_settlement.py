@@ -8,7 +8,7 @@ from mediaflow.application.edit_history import ProjectEditHistory
 from mediaflow.application.project_command_queue import ProjectCommandQueue
 from mediaflow.application.task_service import TaskSettlementPersistence
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
+from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import TaskStatus

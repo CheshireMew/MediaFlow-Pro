@@ -183,7 +183,7 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
     def timelineDurationFrames(self) -> int:
         if not self._session.state.binding.timeline:
             return 0
-        return self._session.state.binding.require_timeline().state.duration_frames
+        return self._session.state.binding.require_timeline().duration_frames
 
     @Property(bool, notify=historyChanged)
     def hasSequenceInOut(self) -> bool:
@@ -207,7 +207,7 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
             not self._session.state.binding.timeline
             or self._session.state.binding.require_timeline().state.sequence.in_out is None
         ):
-            return self._session.state.binding.require_timeline().state.duration_frames
+            return self._session.state.binding.require_timeline().duration_frames
         return self._session.state.binding.require_timeline().state.sequence.in_out.out_frame
 
     @Property(bool, notify=projectStateChanged)

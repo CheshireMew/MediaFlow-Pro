@@ -282,6 +282,20 @@ class InfrastructureExportTaskRuntime:
             mlt_requests,
             overwrite=overwrite,
         )
+        if len(requests) == 1:
+            request = requests[0]
+            segmented = SegmentedExportService(self._documents, self._paths)
+            if segmented.can_build_automatically(request.state, request.preset):
+                return (
+                    segmented.build_automatic(
+                        request.state,
+                        request.preset,
+                        request.output_path,
+                        overwrite=overwrite,
+                        progress=progress,
+                        check_cancelled=check_cancelled,
+                    ).export,
+                )
         for request in requests:
             check_cancelled()
             self._web.ensure_sequence(

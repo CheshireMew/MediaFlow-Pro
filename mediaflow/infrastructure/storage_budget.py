@@ -207,40 +207,66 @@ def directory_inventory(root: str | Path) -> dict[str, Any]:
     categories: dict[str, dict[str, int]] = {}
     linked_paths: list[str] = []
     terminal_roots: dict[str, str] = {}
+    directory_bytes = {"": 0}
+    directory_files = {"": 0}
     total_bytes = 0
     total_files = 0
     if selected.is_dir():
-        stack = [selected]
+        stack = [(str(selected), "")]
         while stack:
-            current = stack.pop()
+            current, current_relative = stack.pop()
             try:
                 entries = list(os.scandir(current))
             except OSError:
                 continue
+            if current_relative:
+                for entry in entries:
+                    try:
+                        is_terminal_manifest = (
+                            entry.name == "run-result.json"
+                            and not entry.is_symlink()
+                            and entry.is_file(follow_symlinks=False)
+                        )
+                    except OSError:
+                        continue
+                    if is_terminal_manifest:
+                        status = _terminal_manifest(Path(current))
+                        if status is not None:
+                            terminal_roots[current_relative] = status
+                        break
             for entry in entries:
-                path = Path(entry.path)
-                try:
-                    relative = path.relative_to(selected).as_posix()
-                except ValueError:
-                    continue
+                relative = (
+                    f"{current_relative}/{entry.name}"
+                    if current_relative
+                    else entry.name
+                )
                 top = relative.split("/", 1)[0]
                 try:
                     if entry.is_symlink():
                         linked_paths.append(relative)
                     elif entry.is_dir(follow_symlinks=False):
-                        status = _terminal_manifest(path)
-                        if status is not None:
-                            terminal_roots[relative] = status
-                        stack.append(path)
+                        directory_bytes[relative] = 0
+                        directory_files[relative] = 0
+                        stack.append((entry.path, relative))
                     elif entry.is_file(follow_symlinks=False):
                         size = entry.stat(follow_symlinks=False).st_size
                         total_bytes += size
                         total_files += 1
+                        directory_bytes[current_relative] += size
+                        directory_files[current_relative] += 1
                         category = categories.setdefault(top, {"bytes": 0, "files": 0})
                         category["bytes"] += size
                         category["files"] += 1
                 except OSError:
                     continue
+    for relative in sorted(
+        (item for item in directory_bytes if item),
+        key=lambda item: item.count("/"),
+        reverse=True,
+    ):
+        parent = relative.rpartition("/")[0]
+        directory_bytes[parent] += directory_bytes[relative]
+        directory_files[parent] += directory_files[relative]
     selected_terminal_roots: list[tuple[str, str]] = []
     for relative, status in sorted(
         terminal_roots.items(),
@@ -256,7 +282,7 @@ def directory_inventory(root: str | Path) -> dict[str, Any]:
         {
             "path": relative,
             "status": status,
-            "bytes": directory_inventory(selected / relative)["bytes"],
+            "bytes": directory_bytes[relative],
             "reason": "terminal managed run; review before cleanup",
         }
         for relative, status in selected_terminal_roots
@@ -406,6 +432,27 @@ def require_storage_budget(
     selected = Path(root).expanduser().resolve()
     inventory = directory_inventory(selected)
     usage = shutil.disk_usage(_existing_volume_path(selected))
+    return _require_storage_budget_from_inventory(
+        selected,
+        inventory=inventory,
+        usage=usage,
+        expected_new_bytes=expected_new_bytes,
+        maximum_managed_bytes=maximum_managed_bytes,
+        minimum_free_bytes=minimum_free_bytes,
+        label=label,
+    )
+
+
+def _require_storage_budget_from_inventory(
+    selected: Path,
+    *,
+    inventory: dict[str, Any],
+    usage: Any,
+    expected_new_bytes: int,
+    maximum_managed_bytes: int,
+    minimum_free_bytes: int,
+    label: str,
+) -> dict[str, Any]:
     projected_managed = int(inventory["bytes"]) + expected_new_bytes
     projected_free = usage.free - expected_new_bytes
     report = {
@@ -715,18 +762,46 @@ def require_project_cache_budget(
     expected_new_bytes: int | None,
     label: str,
 ) -> dict[str, Any]:
+    if expected_new_bytes is None:
+        raise RuntimeError(f"{label} storage preflight blocked: peak estimate is unknown")
+    if type(expected_new_bytes) is not int or expected_new_bytes < 0:
+        raise ValueError("Storage budgets require non-negative estimates and positive limits")
     policy = load_storage_policy()
     selected = Path(root).expanduser().resolve()
+    projects_root = selected.parent
+    all_projects_inventory = directory_inventory(projects_root)
+    project_category = all_projects_inventory["categories"].get(
+        selected.name,
+        {"bytes": 0, "files": 0},
+    )
+    cleanup_prefix = f"{selected.name}/"
+    project_inventory = {
+        "bytes": project_category["bytes"],
+        "files": project_category["files"],
+        "cleanup_candidates": [
+            {
+                **candidate,
+                "path": str(candidate["path"])[len(cleanup_prefix) :],
+            }
+            for candidate in all_projects_inventory["cleanup_candidates"]
+            if str(candidate["path"]).startswith(cleanup_prefix)
+        ],
+    }
+    usage = shutil.disk_usage(_existing_volume_path(projects_root))
     return {
-        "project": require_storage_budget(
+        "project": _require_storage_budget_from_inventory(
             selected,
+            inventory=project_inventory,
+            usage=usage,
             expected_new_bytes=expected_new_bytes,
             maximum_managed_bytes=policy.project_cache_max_bytes,
             minimum_free_bytes=policy.minimum_free_bytes,
             label=label,
         ),
-        "all_projects": require_storage_budget(
-            selected.parent,
+        "all_projects": _require_storage_budget_from_inventory(
+            projects_root,
+            inventory=all_projects_inventory,
+            usage=usage,
             expected_new_bytes=expected_new_bytes,
             maximum_managed_bytes=policy.project_caches_max_bytes,
             minimum_free_bytes=policy.minimum_free_bytes,

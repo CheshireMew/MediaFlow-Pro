@@ -69,6 +69,13 @@ def test_mediaflow_consumes_the_synced_resource_catalog_schema() -> None:
 
 
 def test_mediaflow_consumes_the_synced_production_resource_catalog() -> None:
+    origin = json.loads(
+        (SYNCED_PRODUCTION_CATALOG.parent / "fixture-origin.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(origin["producer_revision"]) == 40
+    int(origin["producer_revision"], 16)
     loaded = load_media_resource_catalog(SYNCED_PRODUCTION_CATALOG)
 
     assert loaded.catalog.catalog_id == "visual-multimedia-core-resources"

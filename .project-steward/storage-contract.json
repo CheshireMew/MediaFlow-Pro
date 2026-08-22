@@ -111,7 +111,7 @@
         "evidence"
       ],
       "peak_estimate": {
-        "source": "video dimensions, frame count and concurrent partial/final copies",
+        "source": "video dimensions and frame count, or audio duration and waveform pyramid levels, including concurrent partial/final copies",
         "unknown_behavior": "block"
       },
       "budget": {
@@ -123,7 +123,7 @@
         "identity": "project path identity plus content-addressed render or sequence build key"
       },
       "lifecycle": {
-        "preflight": "web render and segmented export check the project cache before the first large write",
+        "preflight": "web render, segmented export and waveform generation check the project cache before the first large write",
         "finalization": "content-addressed manifests identify reusable completed outputs",
         "interruption": "partial and failed outputs remain owned evidence or explicit review candidates"
       },
@@ -131,11 +131,13 @@
         "mediaflow/infrastructure/runtime_paths.py",
         "mediaflow/infrastructure/segmented_export_service.py",
         "mediaflow/infrastructure/storage_budget.py",
+        "mediaflow/infrastructure/waveform_service.py",
         "mediaflow/infrastructure/web_render_service.py",
         "scripts/report_storage.py"
       ],
       "test_files": [
         "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_media_pipeline.py",
         "tests/v2/infrastructure/test_web_media.py"
       ],
       "enforcement": {

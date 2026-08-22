@@ -567,7 +567,11 @@ bool MltRuntime::startPlaybackConsumer()
 
     const int bufferFrames = qBound(24, qRound(m_fps), 60);
     MltProperties previewProperties = m_api.consumerProperties(m_previewConsumer);
-    m_api.propertiesSetInt(previewProperties, "real_time", 0);
+    // One negative worker keeps MLT's read-ahead active without allowing its
+    // real-time consumer to discard video frames.  A zero value disables the
+    // Windows read-ahead path entirely and makes long playback drift behind
+    // the audio device as decoding work accumulates.
+    m_api.propertiesSetInt(previewProperties, "real_time", -1);
     m_api.propertiesSetInt(previewProperties, "buffer", bufferFrames);
     m_api.propertiesSetInt(previewProperties, "prefill", qMin(4, bufferFrames));
     m_api.propertiesSetInt(previewProperties, "video_off", 0);
@@ -849,6 +853,7 @@ void MltRuntime::presentNextFrame()
     const int allowedLeadFrames = qMax(1, qCeil(qAbs(m_rate)));
     RenderedFrame rendered;
     bool frameReady = false;
+    int skippedFrames = 0;
 
     {
         const QMutexLocker locker(&m_renderedFramesMutex);
@@ -907,6 +912,8 @@ void MltRuntime::presentNextFrame()
                     audioPosition - m_expectedPresentationPosition) * direction;
                 if (m_missingFrameDeadline.hasExpired() && audioAdvance > 0) {
                     candidate = future;
+                    skippedFrames = qAbs(
+                        candidate.key() - m_expectedPresentationPosition);
                     m_expectedPresentationPosition = candidate.key();
                 }
             }
@@ -934,6 +941,12 @@ void MltRuntime::presentNextFrame()
     }
 
     setBufferState(false, 0);
+
+    if (skippedFrames > 0) {
+        emit framesDropped(
+            skippedFrames,
+            m_requestId.load(std::memory_order_acquire));
+    }
 
     m_lastPresentationPosition = rendered.position;
     if (unitStep)

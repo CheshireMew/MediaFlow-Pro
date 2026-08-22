@@ -72,6 +72,12 @@ class TimelineEditor(
         return self._changes.snapshot
 
     @property
+    def duration_frames(self) -> int:
+        """Expose the cached timeline duration through the shared editor surface."""
+
+        return self._changes.snapshot.duration_frames
+
+    @property
     def can_undo(self) -> bool:
         return self._changes.history.can_undo
 
@@ -320,7 +326,7 @@ class TimelineEditor(
                 track_id=track_id,
             )
 
-        self._commit(label, mutate)
+        self._changes.commit_clip_change(label, set(selected_ids), mutate)
         return [self._clip(clip_id) for clip_id in selected_ids]
 
     def _move_clips_in_state(
@@ -367,7 +373,7 @@ class TimelineEditor(
             destination_id = updates[clip.id][0]
             if clip.media_kind == ClipMediaKind.LINKED_AV:
                 self._ensure_linked_audio_track(state, destination_id)
-        state.clips = [
+        state.clips[:] = [
             clip.model_copy(
                 update={
                     "track_id": updates[clip.id][0],
@@ -378,10 +384,13 @@ class TimelineEditor(
             else clip
             for clip in state.clips
         ]
-        moved_clips = {item.id: item for item in state.clips}
-        state.transitions = [
-            item for item in state.transitions if TimelineRules.transition_is_valid(item, moved_clips)
-        ]
+        if state.transitions:
+            moved_clips = {item.id: item for item in state.clips}
+            state.transitions[:] = [
+                item
+                for item in state.transitions
+                if TimelineRules.transition_is_valid(item, moved_clips)
+            ]
 
     def copy_clip(
         self,

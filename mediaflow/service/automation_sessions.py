@@ -9,7 +9,8 @@ from mediaflow.automation.operation_context import OperationContext
 from mediaflow.automation.operation_registry import OPERATIONS, OperationDefinition
 from mediaflow.project_collaboration import AutomationBatchCommand
 
-from .session_registry import ProjectSession, ProjectSessionRegistry, project_path
+from .project_paths import project_path
+from .session_registry import ProjectSession, ProjectSessionRegistry
 
 
 class ProjectAutomationOperations:

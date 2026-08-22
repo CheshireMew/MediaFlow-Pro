@@ -29,6 +29,16 @@ This source repository does not contain a generated portable runtime. When a por
 | PyAV | 18.0.0 | BSD-3-Clause | https://github.com/PyAV-Org/PyAV |
 | huggingface-hub | 1.23.0 | Apache-2.0 | https://github.com/huggingface/huggingface_hub |
 
+## Release build tooling
+
+Windows portable builds use PyInstaller 6.22.2 under GPL-2.0-or-later with
+the PyInstaller bootloader exception. The bootloader exception permits
+distribution of the generated executable under MediaFlow Pro's GPL-3.0-only
+license. PyInstaller is a build-time dependency; its bootloader is represented
+in the exact portable-directory inventory generated for every release.
+
+Upstream: https://pyinstaller.org/en/stable/license.html
+
 ## On-demand speaker identification runtime
 
 The following components are downloaded only when the user chooses “Install Local Model”; they are stored under the configured MediaFlow runtime directory and are not part of the source repository or default application install.

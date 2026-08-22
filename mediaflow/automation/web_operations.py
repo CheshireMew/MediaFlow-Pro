@@ -207,6 +207,14 @@ def update_locks(context: OperationContext) -> dict:
     return {"web_clip_state": state}
 
 
+def inspect_web_clip_render(context: OperationContext) -> dict:
+    plan = context.project.inspect_web_clip_render(
+        str(context.required("sequence_id")),
+        str(context.required("clip_id")),
+    )
+    return {"render_plan": plan}
+
+
 def render_web_clip(context: OperationContext) -> dict:
     command = RenderWebClipCommand(
         sequence_id=str(context.required("sequence_id")),

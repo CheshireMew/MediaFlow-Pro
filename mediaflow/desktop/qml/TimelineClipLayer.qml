@@ -16,17 +16,110 @@ Item {
     width: timelineCanvas.contentWidth
     height: Math.max(tracksHeight, timelineCanvas.height - 28)
     z: 2
+    property var clipRows: []
+
+    function refreshOverview() {
+        clipRows = mediaflow.timelineViewportController.visibleClipsModel.overview();
+        clipOverview.requestPaint();
+    }
+
+    function clipAt(contentX, contentY) {
+        const frame = contentX / Math.max(0.000001, view.pixelsPerFrame);
+        const trackPosition = Math.floor((contentY - 12) / view.trackPitch);
+        for (let index = clipRows.length - 1; index >= 0; --index) {
+            const row = clipRows[index];
+            if (String(row.compoundId || "").length > 0)
+                continue;
+            if (Number(row.trackPosition) === trackPosition
+                    && frame >= Number(row.startFrame)
+                    && frame < Number(row.endFrame))
+                return row;
+        }
+        return null;
+    }
+
+    Component.onCompleted: refreshOverview()
+
+    Connections {
+        target: mediaflow.timelineViewController.clipsModel
+        function onModelReset() { clipLayer.refreshOverview(); }
+        function onRowsInserted() { clipLayer.refreshOverview(); }
+        function onRowsRemoved() { clipLayer.refreshOverview(); }
+        function onDataChanged() { clipLayer.refreshOverview(); }
+    }
+
+    Connections {
+        target: mediaflow.timelineViewController
+        function onSelectionChanged() { clipOverview.requestPaint(); }
+    }
+
+    Canvas {
+        id: clipOverview
+        objectName: "timelineClipOverview"
+        x: timelineCanvas.contentX
+        width: timelineCanvas.width
+        height: clipLayer.height
+        z: -1
+        antialiasing: false
+        property real scrollX: timelineCanvas.contentX
+        property real pixelsScale: view.pixelsPerFrame
+        onScrollXChanged: requestPaint()
+        onPixelsScaleChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+        onPaint: {
+            const context = getContext("2d");
+            context.clearRect(0, 0, width, height);
+            const firstFrame = scrollX / Math.max(0.000001, pixelsScale);
+            const lastFrame = (scrollX + width) / Math.max(0.000001, pixelsScale);
+            const selectedIds = mediaflow.timelineViewController.selectedClipIds;
+            const selectedLookup = {};
+            for (let selectedIndex = 0; selectedIndex < selectedIds.length; ++selectedIndex)
+                selectedLookup[String(selectedIds[selectedIndex])] = true;
+            for (let index = 0; index < clipLayer.clipRows.length; ++index) {
+                const row = clipLayer.clipRows[index];
+                if (String(row.compoundId || "").length > 0
+                        || Number(row.endFrame) < firstFrame
+                        || Number(row.startFrame) > lastFrame)
+                    continue;
+                const selected = selectedLookup[String(row.clipId)] === true;
+                const kind = String(row.trackKind);
+                const assetKind = String(row.assetKind);
+                context.fillStyle = selected
+                    ? Theme.selectionSoft
+                    : kind === "audio"
+                        ? Theme.audioSoft
+                        : assetKind === "image"
+                            ? Theme.imageSoft
+                            : assetKind === "web" ? Theme.webSoft : Theme.videoSoft;
+                const x = Math.max(0, Number(row.startFrame) * pixelsScale - scrollX);
+                const right = Math.min(width, Number(row.endFrame) * pixelsScale - scrollX);
+                context.fillRect(
+                    x,
+                    Number(row.trackPosition) * view.trackPitch + 12,
+                    Math.max(1, right - x),
+                    46);
+            }
+        }
+    }
+
     MouseArea {
         objectName: "timelineBlankSelectionArea"
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
         onPressed: function (mouse) {
+            const hit = clipLayer.clipAt(mouse.x, mouse.y);
+            if (hit) {
+                mediaflow.timelineViewController.selectClip(String(hit.clipId), false);
+                view.seekToFrame(mouse.x / view.pixelsPerFrame);
+                return;
+            }
             view.clearTimelineSelection();
             view.seekToFrame(mouse.x / view.pixelsPerFrame);
         }
     }
     Repeater {
-        model: mediaflow.timelineViewController.clipsModel
+        model: mediaflow.timelineViewportController.visibleClipsModel
         delegate: Rectangle {
             id: clipDelegate
             objectName: "timelineClip"

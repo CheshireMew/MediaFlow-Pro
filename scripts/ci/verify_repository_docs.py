@@ -19,6 +19,7 @@ from scripts.documentation_screenshot_contract import (
     documentation_ui_digest,
     file_sha256,
     png_dimensions,
+    png_region_metrics,
 )
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
@@ -98,6 +99,46 @@ def verify_repository_contract() -> list[str]:
     return failures
 
 
+def verify_readme_fact_parity() -> list[str]:
+    failures: list[str] = []
+    shared_facts = (
+        "3D-Speaker CAM++",
+        "dubbing.speaker.update",
+        "web.clip.render.inspect",
+        "MediaFoundationVideoEncodeAccelerator",
+        "zero_copy_verified=false",
+        "mediaflow-cli describe --summary",
+        "scripts\\update_documentation_screenshots.py",
+    )
+    localized_facts = {
+        "README.md": ("多级二进制波形", "标签触发的完整质量门"),
+        "README.en.md": ("multilevel binary waveforms", "tag-triggered full quality gate"),
+        "README.ja.md": ("多段バイナリ波形", "タグ起動の完全品質ゲート"),
+    }
+    for relative, localized in localized_facts.items():
+        document = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")
+        missing = [fact for fact in (*shared_facts, *localized) if fact not in document]
+        if missing:
+            failures.append(
+                f"{relative}: shared product facts drifted or are missing: {missing}"
+            )
+
+    schema_source = (
+        REPOSITORY_ROOT / "mediaflow/infrastructure/project_schema_definition.py"
+    ).read_text(encoding="utf-8")
+    version_match = re.search(r"^PROJECT_SCHEMA_VERSION\s*=\s*(\d+)\s*$", schema_source, re.MULTILINE)
+    if version_match is None:
+        failures.append("project schema source does not expose PROJECT_SCHEMA_VERSION")
+    else:
+        architecture = (REPOSITORY_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        expected = f"当前 schema 版本为 {version_match.group(1)}。"
+        if expected not in architecture:
+            failures.append(
+                "ARCHITECTURE.md does not name the current project schema version"
+            )
+    return failures
+
+
 def verify_documentation_screenshots() -> list[str]:
     if not MANIFEST_PATH.is_file():
         return ["documentation screenshot manifest is missing"]
@@ -142,12 +183,55 @@ def verify_documentation_screenshots() -> list[str]:
             failures.append(f"documentation screenshot dimensions drifted: {relative_path}")
         if record.get("local_paths_exposed") is not False:
             failures.append(f"documentation screenshot path-hygiene proof is missing: {relative_path}")
+        if relative_path == "docs/images/mediaflow-workspace-zh-cn.png":
+            assertions = record.get("visual_assertions")
+            program_monitor = (
+                assertions.get("program_monitor") if isinstance(assertions, dict) else None
+            )
+            if not isinstance(program_monitor, dict):
+                failures.append("workspace screenshot has no program-monitor visual proof")
+                continue
+            region = program_monitor.get("region")
+            if not isinstance(region, dict):
+                failures.append("workspace screenshot program-monitor region is missing")
+                continue
+            try:
+                actual_metrics = png_region_metrics(
+                    image,
+                    x=int(region["x"]),
+                    y=int(region["y"]),
+                    width=int(region["width"]),
+                    height=int(region["height"]),
+                    sample_step=int(program_monitor.get("sample_step") or 0),
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                failures.append(f"workspace screenshot visual proof is invalid: {error}")
+                continue
+            compared_fields = (
+                "region",
+                "sample_step",
+                "sample_count",
+                "distinct_color_count",
+                "non_dark_ratio",
+                "luminance_range",
+            )
+            if any(program_monitor.get(field) != actual_metrics[field] for field in compared_fields):
+                failures.append("workspace screenshot program-monitor pixels drifted from its proof")
+            if program_monitor.get("ready") is not True or int(program_monitor.get("frame") or 0) <= 0:
+                failures.append("workspace screenshot was not captured from a ready, sought preview")
+            if (
+                int(actual_metrics["distinct_color_count"]) < 24
+                or float(actual_metrics["non_dark_ratio"]) < 0.55
+                or int(actual_metrics["luminance_range"]) < 40
+            ):
+                failures.append("workspace screenshot program monitor is blank or visually trivial")
     return failures
 
 
 def main() -> int:
     failures = [
         *verify_repository_contract(),
+        *verify_readme_fact_parity(),
         *verify_documentation_screenshots(),
         *verify_links(),
     ]

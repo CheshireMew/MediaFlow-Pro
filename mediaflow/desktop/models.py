@@ -31,6 +31,11 @@ class DictListModel(QAbstractListModel):
         self._key_rows: dict[str, int] = {}
         self._deferred_role_changes: dict[int, set[int]] = {}
         self._deferred_change_scheduled = False
+        self._revision = 0
+
+    @property
+    def revision(self) -> int:
+        return self._revision
 
     def roleNames(self) -> dict[int, QByteArray]:
         return {number: QByteArray(name.encode("utf-8")) for number, name in self._role_numbers.items()}
@@ -55,6 +60,7 @@ class DictListModel(QAbstractListModel):
         self._validate_items(items)
         self._deferred_role_changes.clear()
         self._set_items(items)
+        self._revision += 1
 
     def set_items_deferred(self, items: list[dict[str, Any]]) -> None:
         """Publish stable-row value changes on the next Qt event turn."""
@@ -79,6 +85,54 @@ class DictListModel(QAbstractListModel):
         if self._deferred_role_changes and not self._deferred_change_scheduled:
             self._deferred_change_scheduled = True
             QTimer.singleShot(0, self._publish_deferred_changes)
+        if self._deferred_role_changes:
+            self._revision += 1
+
+    def update_items_by_key(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        deferred: bool = False,
+    ) -> bool:
+        """Update existing rows without scanning or rebuilding the complete model.
+
+        Returns ``False`` when a key is not already present so callers can fall
+        back to a structural refresh. This path is intended for ordinary clip
+        property edits where row membership and ordering do not change.
+        """
+
+        self._validate_items(items)
+        key_role = self._roles[0]
+        role_by_name = {name: number for number, name in self._role_numbers.items()}
+        keyed_rows: list[tuple[int, dict[str, Any]]] = []
+        for item in items:
+            key = item.get(key_role)
+            row = self._key_rows.get(str(key), -1)
+            if key is None or row < 0:
+                return False
+            keyed_rows.append((row, item))
+
+        updated = False
+        for row, after in keyed_rows:
+            before = self._items[row]
+            changed_roles = {
+                role_by_name[name] for name in self._roles if before.get(name) != after.get(name)
+            }
+            if not changed_roles:
+                continue
+            updated = True
+            self._items[row] = after
+            if deferred:
+                self._deferred_role_changes.setdefault(row, set()).update(changed_roles)
+            else:
+                index = self.index(row, 0)
+                self.dataChanged.emit(index, index, sorted(changed_roles))
+        if deferred and self._deferred_role_changes and not self._deferred_change_scheduled:
+            self._deferred_change_scheduled = True
+            QTimer.singleShot(0, self._publish_deferred_changes)
+        if updated:
+            self._revision += 1
+        return True
 
     def _validate_items(self, items: list[dict[str, Any]]) -> None:
         expected = set(self._roles)
@@ -273,6 +327,7 @@ class AssetFilterModel(QSortFilterProxyModel):
         self._search_text = ""
         self._bin_id = ""
         self._bin_ids: set[str] = set()
+        self._extra_search_text: dict[str, str] = {}
         self.setDynamicSortFilter(True)
         self.setSourceModel(source_model)
 
@@ -294,6 +349,14 @@ class AssetFilterModel(QSortFilterProxyModel):
         self._bin_ids = set(bin_ids)
         self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
+    def set_extra_search_text(self, values: dict[str, str]) -> None:
+        normalized = {str(key): value.casefold() for key, value in values.items()}
+        if normalized == self._extra_search_text:
+            return
+        self.beginFilterChange()
+        self._extra_search_text = normalized
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
     def filterAcceptsRow(
         self,
         source_row: int,
@@ -309,7 +372,12 @@ class AssetFilterModel(QSortFilterProxyModel):
             return False
         if not self._search_text:
             return True
-        corpus = str(row.get("searchText") or row.get("name") or "")
+        corpus = " ".join(
+            (
+                str(row.get("searchText") or row.get("name") or ""),
+                self._extra_search_text.get(str(row.get("assetId") or ""), ""),
+            )
+        )
         return self.matches_text(self._search_text, corpus)
 
     @classmethod
@@ -512,6 +580,178 @@ class ClipListModel(DictListModel):
             ],
             parent,
         )
+
+
+class TimelineClipViewportModel(ClipListModel):
+    """Bounded interactive projection of the clips around the visible viewport.
+
+    The complete clip model remains the authoritative desktop projection. This
+    model only controls how many heavyweight QML delegates are instantiated.
+    At low zoom levels it keeps one representative per visual bucket while the
+    QML overview canvas paints every clip.
+    """
+
+    _MIN_INTERACTIVE_WIDTH = 12.0
+    _BUCKET_WIDTH = 18.0
+    _MAX_INTERACTIVE_ROWS = 640
+
+    def __init__(self, parent: QObject | None = None):
+        super().__init__(parent)
+        self._source_items: list[dict[str, Any]] = []
+        self._source_indexes: dict[str, int] = {}
+        self._selected_ids: set[str] = set()
+        self._primary_selected_id = ""
+        self._visible_start = 0.0
+        self._visible_end = 1.0
+        self._pixels_per_frame = 1.0
+
+    def set_source_items(self, items: list[dict[str, Any]]) -> None:
+        self._source_items = items
+        self._source_indexes = {
+            str(item["clipId"]): index for index, item in enumerate(items)
+        }
+        self._refresh()
+
+    def update_source_items(self, items: list[dict[str, Any]]) -> bool:
+        source_rows = {str(item["clipId"]): item for item in items}
+        if any(key not in self._source_indexes for key in source_rows):
+            return False
+        membership_changed = False
+        for key, item in source_rows.items():
+            source_index = self._source_indexes[key]
+            before = self._source_items[source_index]
+            if (
+                key not in self._selected_ids
+                and self._interactive_membership_key(before)
+                != self._interactive_membership_key(item)
+            ):
+                membership_changed = True
+            self._source_items[source_index] = item
+        visible_items = [
+            item for key, item in source_rows.items() if key in self._key_rows
+        ]
+        if membership_changed:
+            self._refresh()
+        elif visible_items:
+            self.update_items_by_key(visible_items, deferred=True)
+        return True
+
+    def _interactive_membership_key(self, item: dict[str, Any]) -> tuple[object, ...] | None:
+        overscan = max(1.0, (self._visible_end - self._visible_start) * 0.2)
+        if (
+            float(item["endFrame"]) < max(0.0, self._visible_start - overscan)
+            or float(item["startFrame"]) > self._visible_end + overscan
+        ):
+            return None
+        duration = int(item["durationFrames"])
+        if duration * self._pixels_per_frame >= self._MIN_INTERACTIVE_WIDTH:
+            return ("clip", str(item["clipId"]))
+        bucket = int(
+            (float(item["startFrame"]) - self._visible_start)
+            * self._pixels_per_frame
+            / self._BUCKET_WIDTH
+        )
+        return ("bucket", int(item["trackPosition"]), bucket, duration)
+
+    def set_selected_ids(self, clip_ids: list[str]) -> None:
+        selected = set(clip_ids)
+        primary = clip_ids[-1] if clip_ids else ""
+        if selected == self._selected_ids and primary == self._primary_selected_id:
+            return
+        self._selected_ids = selected
+        self._primary_selected_id = primary
+        self._refresh()
+
+    def set_viewport(self, start_frame: float, end_frame: float, pixels_per_frame: float) -> None:
+        start = max(0.0, float(start_frame))
+        end = max(start + 1.0, float(end_frame))
+        scale = max(0.000001, float(pixels_per_frame))
+        if (
+            abs(start - self._visible_start) < 0.5
+            and abs(end - self._visible_end) < 0.5
+            and abs(scale - self._pixels_per_frame) < max(0.000001, scale * 0.001)
+        ):
+            return
+        self._visible_start = start
+        self._visible_end = end
+        self._pixels_per_frame = scale
+        self._refresh()
+
+    def _refresh(self) -> None:
+        if not self._source_items:
+            self.set_items([])
+            return
+        overscan = max(1.0, (self._visible_end - self._visible_start) * 0.2)
+        visible_start = max(0.0, self._visible_start - overscan)
+        visible_end = self._visible_end + overscan
+        visible = [
+            item
+            for item in self._source_items
+            if (
+                float(item["endFrame"]) >= visible_start
+                and float(item["startFrame"]) <= visible_end
+            )
+            or str(item["clipId"]) in self._selected_ids
+        ]
+        if len(visible) <= self._MAX_INTERACTIVE_ROWS:
+            self.set_items(visible)
+            return
+
+        chosen: dict[str, dict[str, Any]] = {}
+        buckets: dict[tuple[int, int], dict[str, Any]] = {}
+        for item in visible:
+            clip_id = str(item["clipId"])
+            width = float(item["durationFrames"]) * self._pixels_per_frame
+            if clip_id in self._selected_ids or width >= self._MIN_INTERACTIVE_WIDTH:
+                chosen[clip_id] = item
+                continue
+            bucket = int(
+                (float(item["startFrame"]) - self._visible_start)
+                * self._pixels_per_frame
+                / self._BUCKET_WIDTH
+            )
+            key = (int(item["trackPosition"]), bucket)
+            existing = buckets.get(key)
+            if existing is None or int(item["durationFrames"]) > int(existing["durationFrames"]):
+                buckets[key] = item
+        for item in buckets.values():
+            chosen.setdefault(str(item["clipId"]), item)
+
+        selected = [item for item in visible if str(item["clipId"]) in self._selected_ids]
+        selected_ids = {str(item["clipId"]) for item in selected}
+        remaining = [item for item in visible if str(item["clipId"]) in chosen]
+        remaining.sort(
+            key=lambda item: (
+                str(item["clipId"]) != self._primary_selected_id,
+                str(item["clipId"]) not in selected_ids,
+                int(item["trackPosition"]),
+                int(item["startFrame"]),
+                str(item["clipId"]),
+            )
+        )
+        kept_ids = {
+            str(item["clipId"])
+            for item in remaining[: self._MAX_INTERACTIVE_ROWS]
+        }
+        self.set_items([item for item in visible if str(item["clipId"]) in kept_ids])
+
+    @Slot(result="QVariantList")
+    def overview(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "clipId": item["clipId"],
+                "trackPosition": item["trackPosition"],
+                "audioTrackPosition": item["audioTrackPosition"],
+                "startFrame": item["startFrame"],
+                "endFrame": item["endFrame"],
+                "assetKind": item["assetKind"],
+                "trackKind": item["trackKind"],
+                "mediaKind": item["mediaKind"],
+                "hasAudio": item["hasAudio"],
+                "compoundId": item["compoundId"],
+            }
+            for item in self._source_items
+        ]
 
 
 class CompoundClipListModel(DictListModel):

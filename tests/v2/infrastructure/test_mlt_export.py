@@ -743,6 +743,48 @@ def test_visual_effect_stack_compiles_in_persisted_order_for_preview_and_export(
         assert "avfilter.gblur" in document.xml
 
 
+def test_timeline_compiler_resolves_one_shared_asset_source_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "shared-source.mp4"
+    source.write_bytes(b"shared-source")
+    with ProjectRepository.create(tmp_path / "Shared Source", "Shared Source") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        project = repository.projects.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=10,
+        )
+        editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=10,
+            source_in=0,
+            duration=10,
+        )
+        original = repository.assets.resolve_asset_path
+        calls: list[str] = []
+
+        def resolve_asset_path(current) -> Path:
+            calls.append(current.id)
+            return original(current)
+
+        monkeypatch.setattr(repository.assets, "resolve_asset_path", resolve_asset_path)
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(
+            editor.state,
+            native_preview=True,
+        )
+
+        assert calls == [asset.id]
+        assert document.source_paths == (source.resolve(),)
+
+
 def test_visual_effect_stack_changes_real_exported_pixels(tmp_path: Path) -> None:
     paths = RuntimeContext.discover().paths
     assert paths.melt is not None

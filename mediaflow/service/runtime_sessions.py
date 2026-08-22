@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import ServiceSettings
 
 from .codec import decode_transport, encode_transport
-from .events import ServiceEvent
-from .session_registry import ProjectSessionRegistry
+from .events import EventHub, ServiceEvent
 
 
 class ApplicationRuntimeOperations:
-    def __init__(self, registry: ProjectSessionRegistry):
-        self.registry = registry
+    def __init__(
+        self,
+        application,
+        events: EventHub,
+        *,
+        update_project_settings: Callable[[], None],
+    ):
+        self.application = application
+        self.events = events
+        self._update_project_settings = update_project_settings
         self._operation_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._cancel = threading.Event()
@@ -26,18 +34,31 @@ class ApplicationRuntimeOperations:
             return self._operation
 
     def application_settings(self) -> Any:
-        return encode_transport(self.registry.application.service_settings)
+        return encode_transport(self.application.service_settings)
 
     def desktop_runtime_descriptor(self) -> Any:
-        return self.registry.application.runtime.desktop_descriptor().model_dump(mode="json")
+        return self.application.runtime.desktop_descriptor().model_dump(mode="json")
+
+    def desktop_bootstrap(self) -> dict[str, Any]:
+        bootstrap_status = getattr(self.application, "bootstrap_runtime_tool_status", None)
+        runtime_status = (
+            bootstrap_status()
+            if callable(bootstrap_status)
+            else self.application.runtime_tool_status()
+        )
+        return {
+            "runtime_descriptor": self.desktop_runtime_descriptor(),
+            "settings": self.application_settings(),
+            "runtime_tool_status": encode_transport(runtime_status),
+        }
 
     def replace_application_settings(self, value: Any) -> Any:
         settings = decode_transport(value)
         if not isinstance(settings, ServiceSettings):
             raise ValueError("settings must be ServiceSettings")
-        self.registry.application.replace_service_settings(settings)
-        self.registry.update_project_settings()
-        return encode_transport(self.registry.application.service_settings)
+        self.application.replace_service_settings(settings)
+        self._update_project_settings()
+        return encode_transport(self.application.service_settings)
 
     def cookie_command(self, command: str, args_value: Any) -> Any:
         if command not in {"status", "save", "clear"}:
@@ -45,7 +66,7 @@ class ApplicationRuntimeOperations:
         args = decode_transport(args_value)
         if not isinstance(args, list):
             raise ValueError("Managed-cookie args must decode to an array")
-        return encode_transport(getattr(self.registry.application.cookies, command)(*args))
+        return encode_transport(getattr(self.application.cookies, command)(*args))
 
     def execute_application_command(
         self,
@@ -79,14 +100,14 @@ class ApplicationRuntimeOperations:
         if command == "default_media_directory":
             if args or kwargs:
                 raise ValueError("default_media_directory does not accept arguments")
-            return encode_transport(self.registry.application.default_media_directory)
+            return encode_transport(self.application.default_media_directory)
         if command == "cancel_runtime_tool":
             if args or kwargs:
                 raise ValueError("cancel_runtime_tool does not accept arguments")
             return encode_transport(self.cancel_runtime_tool())
         if command == "run_runtime_tool":
             return encode_transport(self._run_runtime_tool(args, kwargs))
-        return encode_transport(getattr(self.registry.application, command)(*args, **kwargs))
+        return encode_transport(getattr(self.application, command)(*args, **kwargs))
 
     def _run_runtime_tool(self, args: list[Any], kwargs: dict[str, Any]) -> object:
         if len(args) != 1 or not isinstance(args[0], str) or not args[0].strip():
@@ -126,7 +147,7 @@ class ApplicationRuntimeOperations:
             self._publish_runtime_event(operation, "running", progress=payload)
 
         try:
-            result = self.registry.application.run_runtime_tool(
+            result = self.application.run_runtime_tool(
                 operation,
                 arguments=arguments,
                 progress=report,
@@ -176,4 +197,4 @@ class ApplicationRuntimeOperations:
             payload["result"] = result
         if error:
             payload["error"] = error
-        self.registry.events.publish_from_worker(ServiceEvent("runtime.changed", payload))
+        self.events.publish_from_worker(ServiceEvent("runtime.changed", payload))

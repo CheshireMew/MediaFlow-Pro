@@ -40,6 +40,7 @@ from .timeline_clip_controller import TimelineClipController
 from .timeline_effects_controller import TimelineEffectsController
 from .timeline_structure_controller import TimelineStructureController
 from .timeline_view_controller import TimelineViewController
+from .timeline_viewport_controller import TimelineViewportController
 from .web_controller import WebController
 from .web_delivery_controller import WebDeliveryController
 from .web_timeline_controller import WebTimelineController
@@ -79,6 +80,7 @@ class EditorControllers(QObject):
         self.media = MediaController(media)
         self.resources = ResourceLibraryController(media)
         self.timeline_view = TimelineViewController(timeline)
+        self.timeline_viewport = TimelineViewportController(timeline)
         self.timeline_clips = TimelineClipController(timeline)
         self.timeline_structure = TimelineStructureController(timeline)
         self.timeline_effects = TimelineEffectsController(timeline)
@@ -113,6 +115,7 @@ class EditorControllers(QObject):
             "media": self.media,
             "resources": self.resources,
             "timelineView": self.timeline_view,
+            "timelineViewport": self.timeline_viewport,
             "timelineClips": self.timeline_clips,
             "timelineStructure": self.timeline_structure,
             "timelineEffects": self.timeline_effects,
@@ -142,6 +145,7 @@ class EditorControllers(QObject):
     mediaController = Property(QObject, lambda self: self.media, constant=True)
     resourceLibraryController = Property(QObject, lambda self: self.resources, constant=True)
     timelineViewController = Property(QObject, lambda self: self.timeline_view, constant=True)
+    timelineViewportController = Property(QObject, lambda self: self.timeline_viewport, constant=True)
     timelineClipController = Property(QObject, lambda self: self.timeline_clips, constant=True)
     timelineStructureController = Property(QObject, lambda self: self.timeline_structure, constant=True)
     timelineEffectsController = Property(QObject, lambda self: self.timeline_effects, constant=True)

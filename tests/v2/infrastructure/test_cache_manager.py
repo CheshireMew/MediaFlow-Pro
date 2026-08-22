@@ -254,3 +254,26 @@ def test_managed_path_accepts_the_same_root_with_windows_extended_prefix(
     outside = Path("\\\\?\\" + str(tmp_path.parent / "outside"))
     with pytest.raises(ValueError, match="outside the managed root"):
         manager._require_managed(outside)
+
+
+def test_size_pruning_is_throttled_across_frequent_cache_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = CacheManager(tmp_path / "cache")
+    scans: list[tuple[Path, int]] = []
+
+    def capture_scan(relative_directory: Path, *, maximum_bytes: int) -> None:
+        scans.append((relative_directory, maximum_bytes))
+
+    monkeypatch.setattr(manager, "prune_directory_to_size", capture_scan)
+
+    assert manager.prune_directory_to_size_throttled(
+        Path("filmstrips"),
+        maximum_bytes=1024,
+    )
+    assert not manager.prune_directory_to_size_throttled(
+        Path("filmstrips"),
+        maximum_bytes=1024,
+    )
+    assert scans == [(Path("filmstrips"), 1024)]

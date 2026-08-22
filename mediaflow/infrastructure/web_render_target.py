@@ -23,13 +23,14 @@ from mediaflow.infrastructure.web_package_storage import read_publication_receip
 
 from .web_native_media import WebNativeMediaPlan, build_web_native_media_plan
 
-WEB_RENDERER_VERSION = "5"
-WEB_CACHE_MANIFEST_SCHEMA = "mediaflow-web-render-cache/v2"
+WEB_RENDERER_VERSION = "8"
+WEB_CACHE_MANIFEST_SCHEMA = "mediaflow-web-render-cache/v5"
 
 
 @dataclass(frozen=True, slots=True)
 class WebRenderTarget:
     key: str
+    segment_namespace: str
     path: Path
     animated: bool
     frame_count: int
@@ -118,12 +119,33 @@ class WebRenderCache:
         )
         render_state = web_runtime_state(clip_state, spec.manifest)
         render_state.pop("revision", None)
-        payload = {
+        common_payload = {
             "renderer_version": WEB_RENDERER_VERSION,
             "render_runtime": self.render_identity.model_dump(mode="json"),
             "source_hash": source_hash,
             "state": render_state,
             "sequence": state.sequence.profile.model_dump(mode="json"),
+            "variant": {
+                "id": variant.id,
+                "width": variant.canvas.width,
+                "height": variant.canvas.height,
+            },
+            "audio": {
+                "enabled": asset.metadata.has_audio,
+                "sample_rate": state.sequence.profile.audio_sample_rate,
+                "channels": state.sequence.profile.audio_channels,
+            },
+        }
+        segment_namespace = hashlib.sha256(
+            json.dumps(
+                common_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        payload = {
+            **common_payload,
             "clip_range": {
                 "source_in": clip.source_in,
                 "duration": clip.duration,
@@ -132,11 +154,6 @@ class WebRenderCache:
             },
             "frame_count": frame_count,
             "native_media": native_media_plan.cache_payload(),
-            "audio": {
-                "enabled": asset.metadata.has_audio,
-                "sample_rate": state.sequence.profile.audio_sample_rate,
-                "channels": state.sequence.profile.audio_channels,
-            },
         }
         digest = hashlib.sha256(
             json.dumps(
@@ -149,6 +166,7 @@ class WebRenderCache:
         suffix = ".mkv" if animated else ".png"
         return WebRenderTarget(
             key=digest,
+            segment_namespace=segment_namespace,
             path=self.paths.project_cache_dir(self.documents.project_dir) / "web" / f"{digest[:32]}{suffix}",
             animated=animated,
             frame_count=frame_count,

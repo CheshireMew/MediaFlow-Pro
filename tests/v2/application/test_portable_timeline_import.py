@@ -14,6 +14,8 @@ def _synced_visual_timeline() -> Path:
     origin = json.loads((FIXTURE / "fixture-origin.json").read_text(encoding="utf-8"))
     assert origin["protocol"] == "mediaflow-generated-test-fixture"
     assert origin["producer"] == "visual-multimedia/scripts/self-test-media-timeline.mjs"
+    assert len(origin["producer_revision"]) == 40
+    int(origin["producer_revision"], 16)
     assert origin["media_timeline_version"] == 1
     assert set(origin["files"]) | {"fixture-origin.json"} == {
         path.relative_to(FIXTURE).as_posix()

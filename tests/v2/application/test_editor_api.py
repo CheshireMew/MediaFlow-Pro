@@ -265,6 +265,14 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
     assert operations["preview.frames.render"]["arguments_schema"]["properties"][
         "frames"
     ]["maxItems"] == 24
+    assert operations["web.clip.render.inspect"]["project_access"] == "read"
+    assert operations["web.clip.render.inspect"]["execution_mode"] == "atomic"
+    assert set(
+        operations["web.clip.render.inspect"]["arguments_schema"]["required"]
+    ) == {"sequence_id", "clip_id"}
+    assert operations["web.clip.render.inspect"]["result_schema"]["required"] == [
+        "render_plan"
+    ]
     assert operations["script.inspect"]["project_access"] == "read"
     assert operations["script.segment.update"]["history_mode"] == "reversible"
     assert operations["script.segment.split"]["history_mode"] == "reversible"

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from mediaflow.automation.contracts import AutomationRequest
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.automation.operation_registry import OPERATIONS
-from mediaflow.composition import EditorApplication, EditorProject
 from mediaflow.domain.collaboration import ProjectChangeEvent
+
+if TYPE_CHECKING:
+    from mediaflow.composition import EditorApplication, EditorProject
 
 _UNSET_REQUEST_BASE = object()
 

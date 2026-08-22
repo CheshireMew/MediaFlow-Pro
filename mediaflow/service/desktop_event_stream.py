@@ -95,6 +95,13 @@ class _ProjectEventStream:
             self._task_handlers.pop(token, None)
             self._workspace_handlers.pop(token, None)
 
+    def acknowledge_project_event(self, *, cursor: int, project_revision: int) -> None:
+        """Advance the durable cursor for an event already returned by a write."""
+
+        with self._lock:
+            self.project_cursor = max(self.project_cursor, cursor)
+            self.project_revision = max(self.project_revision, project_revision)
+
     def close(self) -> None:
         self._stop.set()
         self._ready.set()
