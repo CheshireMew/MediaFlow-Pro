@@ -46,8 +46,8 @@ def _start_service_warmup() -> tuple[subprocess.Popen[bytes] | None, Path]:
         # to its parent, and a separate process group keeps normal desktop
         # shutdown signals from reaching the resident service.
         creationflags = (
-            subprocess.CREATE_NO_WINDOW
-            | subprocess.CREATE_NEW_PROCESS_GROUP
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         )
     else:
         start_new_session = True
