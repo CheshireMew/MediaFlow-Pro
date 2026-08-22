@@ -4,13 +4,12 @@ import logging
 import sys
 import time
 import uuid
-from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QUrl, Slot
 
-from mediaflow.application.workflow_stage_handlers import WorkflowUpdate
+from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.desktop.coordinators import (
     BackgroundRequests,
     ProjectLifecycle,
@@ -44,6 +43,7 @@ from .session_helpers import (
     snap_tolerance_frames,
     updated_selection,
 )
+from .timeline_snap_coordinator import TimelineSnappingCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,19 @@ class ProjectSession(QObject):
     ):
         super().__init__(parent)
         self._api = application or create_desktop_editor_application()
+        initial_runtime_status = getattr(
+            self._api,
+            "initial_runtime_tool_status",
+            None,
+        )
+        if initial_runtime_status is None:
+            initial_runtime_status = self._api.runtime_tool_status()
         self.state = DesktopSessionState(
             service_settings=self._api.service_settings,
             desktop_settings=self._api.desktop_settings,
             runtime_state=RuntimeToolState(
                 status={
-                    **self._api.runtime_tool_status(),
+                    **initial_runtime_status,
                     "busy": False,
                     "progressMode": "indeterminate",
                     "progressValue": 0.0,
@@ -72,6 +79,7 @@ class ProjectSession(QObject):
             ),
         )
         self.models = SessionModels.create(self)
+        self._timeline_snapping = TimelineSnappingCoordinator(self)
         self.events = SessionEvents(self)
         self.updates = SessionUpdates(self.events, self)
         self.background = BackgroundRequests(self)
@@ -82,10 +90,21 @@ class ProjectSession(QObject):
         self.projectors = PresentationProjectors.create(self)
         self.lifecycle = ProjectLifecycle(self)
         self._controller_notifiers_attached = False
+        self._home_requests_started = False
         self.events.errorOccurred.connect(self._log_ui_error)
         self.projectors.workspace.refresh_settings_models()
+
+    def begin_home_requests(self) -> None:
+        if self._home_requests_started or self.state.requests.shutting_down:
+            return
+        self._home_requests_started = True
         self.projectors.workspace.refresh_recent_projects()
         self.projectors.workspace.discover_encoder_policies()
+        self.background.submit(
+            "runtime_status",
+            1,
+            self._api.runtime_tool_status,
+        )
 
     def _attach_controllers(self, controllers: dict[str, QObject]) -> None:
         if self._controller_notifiers_attached:
@@ -193,34 +212,6 @@ class ProjectSession(QObject):
     def _set_status(self, source: str, *arguments: object) -> None:
         self.state.presentation.status_message = status_message(source, *arguments)
         self.updates.commit(status=True)
-
-    def _timeline_snap_targets(
-        self,
-        excluded_clip_ids: Iterable[str],
-        playhead_frame: int,
-        *,
-        excluded_subtitle_placement_ids: Iterable[str] = (),
-    ) -> list[int]:
-        targets = [0, max(0, playhead_frame)]
-        if not self.state.binding.timeline:
-            return targets
-        excluded = set(excluded_clip_ids)
-        excluded_placements = set(excluded_subtitle_placement_ids)
-        state = self.state.binding.require_timeline().state
-        for clip in state.clips:
-            if clip.id not in excluded:
-                targets.extend([clip.timeline_start, clip.timeline_end])
-        subtitle_track_ids = {track.id for track in state.tracks if track.kind == TrackKind.SUBTITLE}
-        for placement in self.models.subtitle_placements.snapshot():
-            if (
-                placement["trackId"] in subtitle_track_ids
-                and placement["placementId"] not in excluded_placements
-            ):
-                targets.extend((int(placement["startFrame"]), int(placement["endFrame"])))
-        targets.extend(marker.frame for marker in state.markers)
-        for item in state.ranges:
-            targets.extend([item.start_frame, item.end_frame])
-        return targets
 
     def _start_download_workflow(
         self,

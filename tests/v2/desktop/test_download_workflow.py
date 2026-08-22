@@ -96,7 +96,9 @@ def test_shutdown_cancels_inflight_download_analysis_within_socket_bound(
     controllers = EditorControllers()
     try:
         controllers.tasks.analyzeDownloadUrl(f"http://127.0.0.1:{server.server_address[1]}/watch")
-        assert request_seen.wait(timeout=3)
+        # Runtime shards can concurrently start Chromium and FFmpeg. Waiting
+        # for request admission is not part of the shutdown latency contract.
+        assert request_seen.wait(timeout=10)
         started = time.monotonic()
         controllers.shutdown()
         assert time.monotonic() - started < 3.0

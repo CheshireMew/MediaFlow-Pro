@@ -145,11 +145,13 @@ On all three platforms, pass a project directory as the first argument to open i
 
 Download and optional runtime availability depends on the current source site and local environment. Remote authenticated pages are outside the `editable-media` import boundary: a web package must be local, verifiable, and deterministically seekable.
 
+Large projects do not repeatedly send the full timeline, waveform, or event history to the desktop. Clip moves use incremental changes, event streams advance through acknowledged cursors, and long audio uses multilevel binary waveforms that can be read by range. Native preview drives picture from the same audio clock, with bounded queues and explicit dropped-frame counts. Service startup, project assembly, and home-page requests also run independently so that one does not block first paint for the others.
+
 ## Multi-speaker cross-language dubbing
 
-The Text and Subtitles workspace can turn non-overlapping English dialogue into Chinese speech. After placing audio on the primary dialogue track, the dubbing panel can start the canonical transcription task itself when English subtitles do not yet exist, without switching workspaces. It diarizes the designated dialogue track with pyannote.audio Community-1 and uses real word timestamps to extract multiple 3.0–9.8 second references whose audio and transcript match exactly. A clipped long subtitle without word timing is explicitly marked for transcript review. The workflow preserves one-to-one subtitle translations, keeps one GPT-SoVITS v2Pro server alive for the batch, and provides speaker, reference, translation, and review controls before committing one replaceable master track. Timing first borrows following silence and then applies bounded speed-up; speech that still runs long is preserved in full and marked for review rather than truncated.
+The Text and Subtitles workspace can turn non-overlapping English dialogue into Chinese speech. After placing audio on the primary dialogue track, the dubbing panel can start the canonical transcription task itself when English subtitles do not yet exist, without switching workspaces. By default, the English transcript segments are treated as known speech intervals and the local bilingual 3D-Speaker CAM++ model extracts speaker embeddings and clusters them; this path needs no Hugging Face account, model acceptance, or access token. Community-1 is only needed for overlapping speech and can be selected in Settings. Real word timing is then used to extract multiple 3.0–9.8 second references per speaker whose audio and transcript match exactly. Imported subtitles without word timing are explicitly marked for transcript review when a long sentence must be clipped. The workflow preserves one-to-one subtitle translations and uses the same GPT-SoVITS v2Pro service for sentence-level synthesis. Speaker assignment, primary reference audio, reference transcript, translation, and review state remain editable. Timing first borrows following silence and then applies bounded speed-up; speech that still runs long is preserved in full and marked for review rather than truncated. The final master is committed as one replaceable audio track.
 
-Keep pyannote in a separate Python environment, accept the [Community-1 model terms](https://huggingface.co/pyannote/speaker-diarization-community-1), and select that Python, its Hugging Face token, and the GPT-SoVITS v2Pro installation in Settings. Hugging Face, model, and Torch caches stay under that environment's `cache` directory; after one successful authorized diarization, the token can be removed for offline runs. The public operations are `dubbing.prepare`, the three review update operations, `dubbing.synthesize`, and `dubbing.commit`; inspect their exact current contracts with `mediaflow-cli describe --operation <name>`.
+Local speaker clustering lives in a separate Python environment so that speech-model dependencies do not affect the main MediaFlow environment. On Windows, click **Install local model** in Settings or run `.\scripts\setup_speaker_diarization.ps1` in a development checkout. The installer creates an isolated environment under `MEDIAFLOW_RUNTIME_DIR\tools`, pins `sherpa-onnx` and NumPy, downloads the roughly 28 MB CAM++ model, and verifies its SHA-256 without using the system drive. For overlapping speech, run `.\scripts\setup_speaker_diarization.ps1 -Backend community_1 -Device auto` to install Community-1 in a separate PyTorch environment, then add the Hugging Face token in Settings. Public operations are `dubbing.prepare`, `dubbing.speaker.update`, `dubbing.reference.update`, `dubbing.utterance.update`, `dubbing.synthesize`, and `dubbing.commit`; inspect exact parameters with `mediaflow-cli describe --operation <name>`.
 
 ## `editable-media` web packages
 
@@ -160,6 +162,13 @@ MediaFlow Pro formally consumes generic local `editable-media` v6 packages. It d
 - A package explicitly declares whether media is browser-rendered, a native video underlay, or native audio. MediaFlow Pro does not infer this from file extensions.
 - The source package is never written back. Clip state, replacement history, and project references live in `project.mfp`; published project copies are immutable.
 - Browser imagery, native video, and native audio enter one cache and FFmpeg encoding pipeline consumed by preview, timeline, and export.
+- Pure web animations that do not use direct H.264 keep lossless cache segments in fixed 10-second ranges. With the same package, complete state, canvas, and frame rate, retries, extensions, and repeat exports render only missing segments. Packages with native video or native audio continue through the complete composition path, without mixing segment formats. Opening an existing web project prewarms one Chromium worker with an idle timeout.
+- The web cache first produces an inspectable render plan. The current automatic fast path is deliberately limited to sufficiently large, opaque SDR animations at UHD 3840×2160 (or portrait 2160×3840) and 30/29.97 fps. 1080p, 720p, 4K24, 4K60, transparent canvases, native-video underlays, short clips, and static compatibility blockers continue through the transparency-preserving FFV1/PNG frame pipeline.
+- Direct H.264 creates `VideoFrame` objects from Chromium's HTML-in-Canvas `drawElementImage` result instead of producing a PNG per frame. Chrome screenshots first verify representative frames and random seeking; bounded encoding and write queues, rational-rate PTS/DTS reconstruction, continuous native-audio composition, and frame-count, decode, BT.709, packet-clock, and A/V-error checks follow. Chromium traces for the final eight frames must also prove that the same encoder instance entered Windows `MediaFoundationVideoEncodeAccelerator`; otherwise the whole attempt is discarded and rerun through the complete frame pipeline.
+- `web.clip.render.inspect` reports the planned backend, actual backend, fallback reason, actual encoder, hardware proof, and pixel-transfer evidence separately. Chromium's current Canvas `VideoFrame` reads D3D pixels back to memory before hardware encoding, so it reports `hardware_acceleration_verified=true` and `zero_copy_verified=false` rather than conflating hardware encoding with zero-copy. Dynamic `<video>` inside a page does not enter this fast path; formal video sources remain in the native-video pipeline and share the timeline frame clock.
+- On NVIDIA systems, the fast path reads current GPU utilization and VRAM usage before it starts. Either reaching 90% records an immediate fallback and uses the GPU-disabled frame pipeline, so model inference or image generation cannot turn a speculative acceleration attempt into a slower render. Full 4K comparisons showed that software OpenH264 does not clear the net-speedup threshold under the same load, so it is not an automatic substitute.
+
+An ordinary single-sequence video export with no local in/out range and a duration longer than one 10-second segment automatically uses the same stable segment cache. Picture is encoded by segment, audio is generated once as a continuous stream, and duration and stream specifications are checked before atomic publication. Repeat exports and local picture edits reuse unaffected picture segments; audio-only changes do not invalidate all picture segments. Atomic multi-target exports, audio exports, and ranged exports continue through the complete export path.
 
 Standard v4/v5 web assets in older projects migrate directly to v6 in one transactional project upgrade. Old packages move to project-local `archive/web` for manual inspection and no longer participate in a second runtime path. A third-party runtime that cannot be proven safe to convert stops the upgrade and must be republished.
 
@@ -167,11 +176,15 @@ Standard v4/v5 web assets in older projects migrate directly to v6 in one transa
 
 `mediaflow-cli` is a structured client for the resident Editor Service. The first call starts the service on demand; later invocations only send requests. The CLI does not open `project.mfp` directly or bypass the project write lock.
 
-First inspect the operations, parameters, and runtime requirements exposed by the current machine:
+First inspect the capabilities and operation summaries actually exposed by the current machine, then request the exact input and result contract only for the selected operation. Large field catalogs are also addressed by name:
 
 ```powershell
-mediaflow-cli describe
+mediaflow-cli describe --summary
+mediaflow-cli describe --operation timeline.get
+mediaflow-cli describe --catalog visual_effects
 ```
+
+The argument-free `mediaflow-cli describe` still returns the complete contract for diagnostics, archival, and contract-consistency checks; it is not the default discovery call for every Agent turn. Summary, per-operation, catalog, and complete views are all generated live from the Editor Service's one operation registry.
 
 Then send `mediaflow-editor` v4 JSON through a file or standard input:
 
@@ -184,7 +197,7 @@ Write requests use a stable `request_id`, the latest read `base_revision`, an `a
 
 Export, transcription, web-field and keyframe editing, package replacement, project handoff, and diagnostics screens can preview and copy the same executable request without starting a task or changing the project revision. `diagnostics.bundle.create` is a persistent task that produces a size-bounded diagnostic ZIP while excluding raw media and credentials.
 
-MCP-capable hosts can configure `mediaflow-mcp` as a stdio server. It shares the same Editor Service with the desktop and CLI and contains no second editing implementation. The live output of `mediaflow-cli describe` remains the source of truth for operations and parameters.
+MCP-capable hosts can configure `mediaflow-mcp` as a stdio server. It shares the same Editor Service with the desktop and CLI and contains no second editing implementation. The live output of `mediaflow-cli describe --summary` and the selected operation's `--operation` view remains the source of truth for operations and parameters.
 
 ## Project and architecture boundaries
 
@@ -219,13 +232,15 @@ Load the local environment and run the tests that directly cover your change fir
 
 Do not run the unbounded `pytest tests/v2` suite directly. The local entry point and CI both consume [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py), with cross-platform source builds separated from project interchange. Documentation-only changes do not trigger unrelated desktop or end-to-end runs. Use `.\scripts\run_quality.ps1 --dry-run` to preview the exact commands.
 
+Public interface screenshots are generated in an isolated project with `& $env:MEDIAFLOW_PYTHON scripts\update_documentation_screenshots.py`. The generator updates the image hashes, dimensions, UI source digest, and program-monitor pixel evidence together. Documentation verification rejects manual replacements, visible local paths, stale QML captures, and blank preview imagery.
+
 Desktop logs live at `logs/mediaflow.log` under the runtime directory, rotate at 5 MiB, and keep five backups. The short code at the end of an error dialog is written to the log unchanged; include it when reporting an issue through [GitHub Issues](https://github.com/CheshireMew/MediaFlow-Pro/issues).
 
 ## License and distribution
 
 MediaFlow Pro source is released under the [GNU GPL v3](LICENSE). Qt, MLT, FFmpeg, yt-dlp, Python packages, and other third-party components keep their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-This repository maintains source, build scripts, and dependency manifests. It does not produce a portable bundle or installer unless the project owner explicitly starts a release plan.
+This repository maintains source, build scripts, and dependency manifests. It does not produce a portable bundle or installer unless the project owner explicitly starts a release plan. A Windows release must be built from a clean tag whose exact commit has passed the tag-triggered full quality gate. The pristine portable directory is inventoried before and after acceptance, its copy completes the offline desktop/import/edit/preview/export/reopen chain, and the archive records exact file hashes plus bundled Python, Chromium, MLT, FFmpeg, and Qt license evidence before a new release can be published.
 
 ## Star History
 

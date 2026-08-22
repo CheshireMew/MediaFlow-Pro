@@ -153,11 +153,9 @@ ApplicationWindow {
             objectName: "pageLoader"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            sourceComponent: mediaflow.workspaceViewController.hasProject ? workspaceComponent : homeComponent
+            source: mediaflow.workspaceViewController.hasProject ? "Workspace.qml" : "HomeView.qml"
         }
     }
-    Component { id: homeComponent; HomeView {} }
-    Component { id: workspaceComponent; Workspace {} }
 
     WorkspaceTour {
         id: workspaceTour

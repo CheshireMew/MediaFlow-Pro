@@ -2,6 +2,7 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/assets/react-media-starter/dist",
+  "producer_revision": "752315c54042ee8317205b856dd3d91bbe5c1073",
   "editable_media_version": 6,
   "files": {
     "THIRD_PARTY_NOTICES.md": "8100f2bc102be6206dad3e5fde0facd4c0096fc9535130c9271c6fda483165b6",

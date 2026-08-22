@@ -117,6 +117,8 @@ def _diff_entity_mapping(
             )
         )
     for entity_id in sorted(before_ids & after_ids):
+        if before[entity_id] == after[entity_id]:
+            continue
         _diff_value(
             _join(root, entity_id),
             _model_document(before[entity_id]),

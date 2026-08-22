@@ -755,6 +755,12 @@ OPERATIONS: dict[str, OperationDefinition] = {
         web.update_locks,
         capabilities=(*WEB, "web-field-locks"),
     ),
+    "web.clip.render.inspect": _read(
+        models.WebClipRenderInspectArguments,
+        models.WebClipRenderInspectionResult,
+        web.inspect_web_clip_render,
+        capabilities=WEB,
+    ),
     "web.clip.render": _write(
         models.WebClipRenderArguments,
         models.TaskReceiptResult,

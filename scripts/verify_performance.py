@@ -10,13 +10,15 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickWindow
 from shiboken6 import getCppPointer, wrapInstance
@@ -36,11 +38,13 @@ from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.service.client import shutdown_sync_service
 from scripts.run_artifacts import verification_run, verification_workspace_root
 
-CLIP_COUNT = 500
+CLIP_COUNT = 5_000
 SUBTITLE_COUNT = 5_000
-OPEN_LIMIT_SECONDS = 3.0
-VISIBLE_LIMIT_SECONDS = 4.0
-EDIT_LIMIT_SECONDS = 0.1
+OPEN_LIMIT_SECONDS = 6.0
+VISIBLE_LIMIT_SECONDS = 8.0
+EDIT_LIMIT_SECONDS = 0.08
+INTERACTIVE_CLIP_LIMIT = 640
+MEMORY_DELTA_LIMIT_BYTES = 512 * 1024 * 1024
 MAX_PERFORMANCE_ATTEMPTS = 2
 
 
@@ -111,7 +115,7 @@ def create_fixture(root: Path) -> Path:
                 track_id=video_track.id,
                 asset_id=asset.id,
                 timeline_start=index * 10,
-                source_in=index * 10,
+                source_in=0,
                 duration=10,
                 media_kind=ClipMediaKind.VIDEO_ONLY,
             )
@@ -136,7 +140,7 @@ def create_fixture(root: Path) -> Path:
         placements = repository.subtitles.place_subtitle_document(
             document.id,
             subtitle_track.id,
-            follow_clips=True,
+            follow_clips=False,
         )
         if len(placements) != SUBTITLE_COUNT:
             raise RuntimeError(f"Expected {SUBTITLE_COUNT} placements, got {len(placements)}")
@@ -144,7 +148,10 @@ def create_fixture(root: Path) -> Path:
 
 
 def _performance_passed(report: dict[str, object]) -> bool:
-    return all(report[key] is True for key in ("open_passed", "visible_passed", "edit_passed"))
+    return all(
+        report[key] is True
+        for key in ("open_passed", "visible_passed", "edit_passed", "memory_passed")
+    )
 
 
 def verify(
@@ -161,12 +168,16 @@ def verify(
     configure_application_font(app)
     engine, controllers = create_engine(app)
     try:
+        process = psutil.Process()
+        memory_before_open = process.memory_info().rss
         started = time.perf_counter()
         controllers.workspace_project.openProject(QUrl.fromLocalFile(str(project_dir)).toString())
         open_seconds = time.perf_counter() - started
         for _ in range(12):
             QCoreApplication.processEvents()
         visible_seconds = time.perf_counter() - started
+        memory_after_open = process.memory_info().rss
+        memory_delta_bytes = max(0, memory_after_open - memory_before_open)
         if not controllers.workspace.hasProject:
             raise RuntimeError("The large project did not open")
         if controllers.timeline_view.clipsModel.rowCount() != CLIP_COUNT:
@@ -175,13 +186,30 @@ def verify(
             )
         if controllers.subtitle_view.subtitleTextAtFrame(SUBTITLE_COUNT - 1) != f"字幕 {SUBTITLE_COUNT}":
             raise RuntimeError("The final subtitle did not reach the preview consumer")
+        interactive_clip_count = len(
+            engine.rootObjects()[0].findChildren(QObject, "timelineClip")
+        )
+        if interactive_clip_count > INTERACTIVE_CLIP_LIMIT:
+            raise RuntimeError(
+                f"Timeline instantiated {interactive_clip_count} interactive clip delegates"
+            )
 
         last_clip_id = controllers.timeline_view.clipsModel.get(CLIP_COUNT - 1)["clipId"]
+        snap_probe_started = time.perf_counter()
+        controllers.session._timeline_snapping.snap(
+            CLIP_COUNT * 10,
+            controllers.session._snap_tolerance_frames(3.0),
+            [last_clip_id],
+            0,
+        )
+        snap_probe_seconds = time.perf_counter() - snap_probe_started
+        snap_target_count = controllers.session._timeline_snapping.target_count
         started = time.perf_counter()
-        controllers.timeline_clips.moveClip(last_clip_id, SUBTITLE_COUNT, "")
+        moved_start_frame = CLIP_COUNT * 10
+        controllers.timeline_clips.moveClip(last_clip_id, moved_start_frame, "")
         edit_seconds = time.perf_counter() - started
         projected = controllers.timeline_view.clipsModel.get(CLIP_COUNT - 1)
-        if projected["startFrame"] != SUBTITLE_COUNT:
+        if projected["startFrame"] != moved_start_frame:
             raise RuntimeError("The measured edit did not reach the QML model")
         sequence_id = controllers.workspace.activeSequenceId
         with ProjectRepository.open(
@@ -193,7 +221,7 @@ def verify(
             (clip for clip in persisted_state.clips if clip.id == last_clip_id),
             None,
         )
-        if persisted_clip is None or persisted_clip.timeline_start != SUBTITLE_COUNT:
+        if persisted_clip is None or persisted_clip.timeline_start != moved_start_frame:
             raise RuntimeError("The measured edit reached the model but not persistent storage")
 
         window = engine.rootObjects()[0]
@@ -210,10 +238,19 @@ def verify(
             "visible_limit_seconds": VISIBLE_LIMIT_SECONDS,
             "edit_seconds": edit_seconds,
             "edit_limit_seconds": EDIT_LIMIT_SECONDS,
+            "snap_probe_seconds": snap_probe_seconds,
+            "snap_target_count": snap_target_count,
+            "interactive_clip_count": interactive_clip_count,
+            "interactive_clip_limit": INTERACTIVE_CLIP_LIMIT,
+            "memory_before_open_bytes": memory_before_open,
+            "memory_after_open_bytes": memory_after_open,
+            "memory_delta_bytes": memory_delta_bytes,
+            "memory_delta_limit_bytes": MEMORY_DELTA_LIMIT_BYTES,
             "persisted_edit_start_frame": persisted_clip.timeline_start,
             "open_passed": open_seconds < OPEN_LIMIT_SECONDS,
             "visible_passed": visible_seconds < VISIBLE_LIMIT_SECONDS,
             "edit_passed": edit_seconds < EDIT_LIMIT_SECONDS,
+            "memory_passed": memory_delta_bytes < MEMORY_DELTA_LIMIT_BYTES,
             "screenshot": str(screenshot),
             "project": str(project_dir),
         }

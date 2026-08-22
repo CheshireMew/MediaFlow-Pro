@@ -199,8 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration-seconds", type=int, default=600)
     parser.add_argument("--playback-check-seconds", type=int, default=10)
+    parser.add_argument("--root", type=Path)
     arguments = parser.parse_args(argv)
-    with verification_run("preview-performance") as run_dir:
+    with verification_run(
+        "preview-performance",
+        explicit_root=arguments.root,
+    ) as run_dir:
         return verify(arguments, run_dir)
 
 
@@ -348,13 +352,16 @@ ApplicationWindow {
             "fixture": str(fixture),
             "resolution": "1920x1080",
             "fps": "30/1",
+            "nominal_frame_interval_seconds": 1 / PREVIEW_FPS,
             "source_video": "moving test pattern, H.264, 180-frame GOP",
             "source_audio": "silence, stereo Opus, 48 kHz",
             "duration_seconds": arguments.duration_seconds,
             "open_seconds": open_seconds,
             "open_limit_seconds": OPEN_LIMIT_SECONDS,
+            "open_headroom_seconds": OPEN_LIMIT_SECONDS - open_seconds,
             "startup_seconds": startup_seconds,
             "startup_limit_seconds": STARTUP_LIMIT_SECONDS,
+            "startup_headroom_seconds": STARTUP_LIMIT_SECONDS - startup_seconds,
             "playback_start_position": playback_start_position,
             "first_window_seconds": arguments.playback_check_seconds,
             "first_window_position": first_window_position,
@@ -371,8 +378,14 @@ ApplicationWindow {
             "final_dropped_frames": final_dropped,
             "presentation_p95_seconds": presentation_p95,
             "presentation_p95_limit_seconds": CADENCE_P95_LIMIT_SECONDS,
+            "presentation_p95_headroom_seconds": (
+                CADENCE_P95_LIMIT_SECONDS - presentation_p95
+            ),
             "presentation_max_seconds": presentation_max,
             "presentation_max_limit_seconds": CADENCE_MAX_LIMIT_SECONDS,
+            "presentation_max_headroom_seconds": (
+                CADENCE_MAX_LIMIT_SECONDS - presentation_max
+            ),
             "presentation_max_from_frame": maximum_from_frame,
             "presentation_max_to_frame": maximum_to_frame,
             "visible_p95_seconds": visible_p95,

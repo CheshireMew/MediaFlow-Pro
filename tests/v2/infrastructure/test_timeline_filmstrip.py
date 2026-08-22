@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import CancelledError
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -86,7 +87,13 @@ def test_filmstrip_samples_real_forward_reverse_and_freeze_source_frames(
         state.clips = [forward, reverse, freeze]
         repository.timeline.save_timeline(state)
         service = TimelineFilmstripService(repository, RuntimeContext.discover().paths)
-        monkeypatch.setattr(service, "_render_tile", lambda *_args, **_kwargs: tile)
+        monkeypatch.setattr(
+            service,
+            "_render_tiles",
+            lambda *_args, source_frames, **_kwargs: {
+                frame: tile for frame in source_frames
+            },
+        )
 
         rows = service.render_visible(
             project.main_sequence_id,
@@ -144,6 +151,82 @@ def test_filmstrip_memory_lru_evicts_old_identity_without_deleting_disk_cache(
     assert cache.get("first") is None
     assert cache.get("second") == second
     assert first.is_file() and second.is_file()
+
+
+def test_filmstrip_batch_falls_back_only_for_frames_ffmpeg_did_not_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    fallback_tile = tmp_path / "fallback.jpg"
+    fallback_tile.write_bytes(b"fallback")
+    with ProjectRepository.create(tmp_path / "project", "Batch fallback") as repository:
+        service = TimelineFilmstripService(repository, RuntimeContext.discover().paths)
+        fallback_frames: list[int] = []
+        monkeypatch.setattr(
+            service.ffmpeg,
+            "run",
+            lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stderr="fixture failure"),
+        )
+
+        def render_fallback(_source: Path, *, source_frame: int, **_kwargs) -> Path:
+            fallback_frames.append(source_frame)
+            return fallback_tile
+
+        monkeypatch.setattr(service, "_render_tile", render_fallback)
+
+        paths = service._render_tiles(
+            source,
+            source_identity="batch-fallback",
+            source_frames=[10, 20],
+            fps_numerator=30,
+            fps_denominator=1,
+            width=160,
+            height=90,
+        )
+
+    assert fallback_frames == [10, 20]
+    assert paths == {10: fallback_tile, 20: fallback_tile}
+
+
+def test_filmstrip_batch_does_not_mislabel_partial_ffmpeg_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    fallback_tile = tmp_path / "fallback.jpg"
+    fallback_tile.write_bytes(b"fallback")
+    with ProjectRepository.create(tmp_path / "project", "Partial batch") as repository:
+        service = TimelineFilmstripService(repository, RuntimeContext.discover().paths)
+        fallback_frames: list[int] = []
+
+        def partial_batch(arguments, **_kwargs):
+            pattern = Path(arguments[-1])
+            partial = pattern.parent / "000001.jpg"
+            partial.write_bytes(b"unknown-frame")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(service.ffmpeg, "run", partial_batch)
+
+        def render_fallback(_source: Path, *, source_frame: int, **_kwargs) -> Path:
+            fallback_frames.append(source_frame)
+            return fallback_tile
+
+        monkeypatch.setattr(service, "_render_tile", render_fallback)
+        paths = service._render_tiles(
+            source,
+            source_identity="partial-batch",
+            source_frames=[10, 20],
+            fps_numerator=30,
+            fps_denominator=1,
+            width=160,
+            height=90,
+        )
+
+    assert fallback_frames == [10, 20]
+    assert paths == {10: fallback_tile, 20: fallback_tile}
 
 
 def test_web_native_plan_slice_uses_requested_frame_and_frozen_tail(tmp_path: Path) -> None:

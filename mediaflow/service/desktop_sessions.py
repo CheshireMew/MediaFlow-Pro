@@ -143,7 +143,7 @@ class DesktopProjectOperations:
                     "project_revision": session.project.content_revision(),
                     "rebased_from": None,
                     "history": self._history_snapshot(session.project),
-                    "event": (event.model_dump(mode="json") if event is not None else None),
+                    "event_ack": self._event_ack(event),
                 }
             effective, rebased_from = self.registry.resolve_revision(
                 session.project,
@@ -171,7 +171,7 @@ class DesktopProjectOperations:
                 "project_revision": session.project.content_revision(),
                 "rebased_from": rebased_from,
                 "history": self._history_snapshot(session.project),
-                "event": event.model_dump(mode="json") if event is not None else None,
+                "event_ack": self._event_ack(event),
             }
 
     def project_events(self, path: Path, *, after_cursor: int = 0) -> list[dict[str, Any]]:
@@ -181,15 +181,24 @@ class DesktopProjectOperations:
                 for event in session.project.list_project_events(after_cursor=after_cursor)
             ]
 
-    def history_list(self, path: Path) -> dict[str, Any]:
+    def history_list(
+        self,
+        path: Path,
+        *,
+        include_items: bool = True,
+    ) -> dict[str, Any]:
         with self.registry.locked_session(path, require_writable=False) as session:
             project = session.project
             return {
                 "project_revision": project.content_revision(),
-                "items": [
-                    item.model_dump(mode="json", exclude_computed_fields=True)
-                    for item in project.list_history()
-                ],
+                "items": (
+                    [
+                        item.model_dump(mode="json", exclude_computed_fields=True)
+                        for item in project.list_history()
+                    ]
+                    if include_items
+                    else []
+                ),
                 "can_undo": project.can_undo,
                 "can_redo": project.can_redo,
             }
@@ -237,4 +246,13 @@ class DesktopProjectOperations:
         return {
             "can_undo": bool(receiver.can_undo),
             "can_redo": bool(receiver.can_redo),
+        }
+
+    @staticmethod
+    def _event_ack(event: Any) -> dict[str, int] | None:
+        if event is None:
+            return None
+        return {
+            "cursor": int(event.cursor),
+            "project_revision": int(event.project_revision),
         }

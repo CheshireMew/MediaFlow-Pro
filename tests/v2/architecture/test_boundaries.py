@@ -151,7 +151,7 @@ def test_runtime_status_messages_use_the_registered_translation_boundary() -> No
             "mediaflow/desktop/coordinators/settings_persistence.py",
             "remember_default_project_directory",
         ),
-        ("mediaflow/application/workflow_stage_handlers.py", "merge"),
+        ("mediaflow/application/workflow_models.py", "merge"),
     }
     assert used == registered
 

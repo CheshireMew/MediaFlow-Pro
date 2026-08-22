@@ -2,6 +2,7 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/assets/web-card-cases/text-card-glossary",
+  "producer_revision": "752315c54042ee8317205b856dd3d91bbe5c1073",
   "editable_media_version": 6,
   "files": {
     "editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",

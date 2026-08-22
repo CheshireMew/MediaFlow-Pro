@@ -11,7 +11,7 @@ from mediaflow.domain.collaboration import ActorIdentity
 from .commands import parse_desktop_target
 from .discovery import SERVICE_PROTOCOL, SERVICE_PROTOCOL_VERSION
 from .events import EventHub, ServiceEvent
-from .session_registry import project_path
+from .project_paths import project_path
 from .sessions import EditorServiceOperations
 from .workspaces import WorkspaceRegistry
 
@@ -31,8 +31,7 @@ class ServiceRequestDispatcher:
     ) -> None:
         self._operations = operations
         self._workspaces = workspaces
-        self._events = events
-        self._request_stop = request_stop
+        self._events, self._request_stop = events, request_stop
         self._groups: tuple[DispatchGroup, ...] = (
             self._dispatch_system,
             self._dispatch_automation,
@@ -152,6 +151,13 @@ class ServiceRequestDispatcher:
         )
 
     async def _dispatch_desktop(self, method: str, params: dict[str, Any]) -> Any:
+        if method == "desktop.bootstrap":
+            if self._workspaces is None:
+                raise RuntimeError("Workspace registry is not ready")
+            return {
+                **await asyncio.to_thread(self._operations.runtime.desktop_bootstrap),
+                "workspace": self._workspaces.attach(client_id=str(params.get("client_id") or "")),
+            }
         if method == "desktop.project.call":
             path = project_path(str(params.get("project") or ""))
             raw_actor = params.get("actor")
@@ -202,7 +208,14 @@ class ServiceRequestDispatcher:
     ) -> Any:
         if method == "history.list":
             path = project_path(str(params.get("project") or ""))
-            return await asyncio.to_thread(self._operations.desktop.history_list, path)
+            include_items = params.get("include_items", True)
+            if not isinstance(include_items, bool):
+                raise ValueError("include_items must be a boolean")
+            return await asyncio.to_thread(
+                self._operations.desktop.history_list,
+                path,
+                include_items=include_items,
+            )
         if method in {"history.undo", "history.redo"}:
             if params.get("base_revision") is None:
                 raise ValueError("base_revision is required")
@@ -294,9 +307,7 @@ class ServiceRequestDispatcher:
                 )
             }
         if method == "workspace.status":
-            return self._workspaces.status(
-                str(params.get("workspace_session_id") or "")
-            )
+            return self._workspaces.status(str(params.get("workspace_session_id") or ""))
         if method == "workspace.command":
             arguments = params.get("arguments", {})
             if not isinstance(arguments, dict):

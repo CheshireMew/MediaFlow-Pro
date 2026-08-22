@@ -116,6 +116,7 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             "subtitles": self._subtitles_document,
             "audio": self._audio_document,
             "web": self._web_document,
+            "dubbing": self._dubbing_document,
             "highlights": self._highlights_document,
             "tasks": self._tasks_document,
             "records": self._records_document,
@@ -135,6 +136,7 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             "subtitles": self._subtitles_document(),
             "audio": self._audio_document(),
             "web": self._web_document(),
+            "dubbing": self._dubbing_document(),
             "highlights": self._highlights_document(),
             "tasks": self._tasks_document(),
             "records": self._records_document(),
@@ -215,6 +217,9 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             for clip_id, state in self._relations.web.list_web_clip_states(sequence.id).items():
                 clips[clip_id] = self._model(state)
         return {"clips": clips}
+
+    def _dubbing_document(self) -> dict[str, Any]:
+        return self._entity_map(self._relations.dubbing.list_sessions())
 
     def _highlights_document(self) -> dict[str, Any]:
         return self._entity_map(self._relations.highlights.list_highlights())

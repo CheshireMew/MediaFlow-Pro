@@ -18,8 +18,75 @@ Item {
     height: tracksHeight
     z: 3
 
+    property var clipRows: []
+
+    function refreshOverview() {
+        clipRows = mediaflow.timelineViewportController.visibleClipsModel.overview();
+        embeddedAudioOverview.requestPaint();
+    }
+
+    Component.onCompleted: refreshOverview()
+
+    Connections {
+        target: mediaflow.timelineViewController.clipsModel
+        function onModelReset() { embeddedAudioLayer.refreshOverview(); }
+        function onRowsInserted() { embeddedAudioLayer.refreshOverview(); }
+        function onRowsRemoved() { embeddedAudioLayer.refreshOverview(); }
+        function onDataChanged() { embeddedAudioLayer.refreshOverview(); }
+    }
+
+    Connections {
+        target: mediaflow.timelineViewController
+        function onSelectionChanged() { embeddedAudioOverview.requestPaint(); }
+    }
+
+    Canvas {
+        id: embeddedAudioOverview
+        x: timelineCanvas.contentX
+        width: timelineCanvas.width
+        height: embeddedAudioLayer.height
+        z: -1
+        antialiasing: false
+        property real scrollX: timelineCanvas.contentX
+        property real pixelsScale: view.pixelsPerFrame
+        onScrollXChanged: requestPaint()
+        onPixelsScaleChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+        onPaint: {
+            const context = getContext("2d");
+            context.clearRect(0, 0, width, height);
+            const firstFrame = scrollX / Math.max(0.000001, pixelsScale);
+            const lastFrame = (scrollX + width) / Math.max(0.000001, pixelsScale);
+            const selectedIds = mediaflow.timelineViewController.selectedClipIds;
+            const selectedLookup = {};
+            for (let selectedIndex = 0; selectedIndex < selectedIds.length; ++selectedIndex)
+                selectedLookup[String(selectedIds[selectedIndex])] = true;
+            for (let index = 0; index < embeddedAudioLayer.clipRows.length; ++index) {
+                const row = embeddedAudioLayer.clipRows[index];
+                if (String(row.compoundId || "").length > 0
+                        || String(row.mediaKind) !== "linked_av"
+                        || String(row.assetKind) !== "video"
+                        || !Boolean(row.hasAudio)
+                        || Number(row.audioTrackPosition) < 0
+                        || Number(row.endFrame) < firstFrame
+                        || Number(row.startFrame) > lastFrame)
+                    continue;
+                context.fillStyle = selectedLookup[String(row.clipId)] === true
+                    ? Theme.selectionSoft : Theme.audioSoft;
+                const x = Math.max(0, Number(row.startFrame) * pixelsScale - scrollX);
+                const right = Math.min(width, Number(row.endFrame) * pixelsScale - scrollX);
+                context.fillRect(
+                    x,
+                    Number(row.audioTrackPosition) * view.trackPitch + 10,
+                    Math.max(1, right - x),
+                    50);
+            }
+        }
+    }
+
     Repeater {
-        model: mediaflow.timelineViewController.clipsModel
+        model: mediaflow.timelineViewportController.visibleClipsModel
         delegate: Rectangle {
             id: embeddedAudioDelegate
             required property string clipId

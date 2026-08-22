@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import Literal
 
@@ -40,6 +41,7 @@ from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.infrastructure.web_render_target import WEB_RENDERER_VERSION
 
 BUILD_PROTOCOL_VERSION = 3
+AUTO_SEGMENT_SECONDS = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +139,63 @@ class SegmentedExportService:
             unit_results,
             audio_result,
             total_frames,
+        )
+
+    @staticmethod
+    def automatic_units(state: TimelineState) -> list[SequenceBuildUnit]:
+        """Create stable fixed-time units for ordinary repeated exports."""
+
+        profile = state.sequence.profile
+        unit_frames = max(
+            1,
+            ceil(
+                AUTO_SEGMENT_SECONDS
+                * profile.fps_numerator
+                / profile.fps_denominator
+            ),
+        )
+        return [
+            SequenceBuildUnit(
+                id=f"auto-{start_frame:012d}-{end_frame:012d}",
+                start_frame=start_frame,
+                end_frame=end_frame,
+            )
+            for start_frame in range(0, state.duration_frames, unit_frames)
+            for end_frame in (min(state.duration_frames, start_frame + unit_frames),)
+        ]
+
+    @classmethod
+    def can_build_automatically(
+        cls,
+        state: TimelineState,
+        preset: ExportPreset,
+    ) -> bool:
+        return (
+            preset.format != ExportFormat.AUDIO
+            and state.sequence.in_out is None
+            and len(cls.automatic_units(state)) >= 2
+        )
+
+    def build_automatic(
+        self,
+        state: TimelineState,
+        preset: ExportPreset,
+        output_path: str | Path,
+        *,
+        overwrite: bool,
+        progress=None,
+        check_cancelled=None,
+    ) -> SequenceBuildResult:
+        if not self.can_build_automatically(state, preset):
+            raise ValueError("Sequence is not eligible for automatic segmented export")
+        return self.build(
+            state,
+            preset,
+            self.automatic_units(state),
+            output_path,
+            overwrite=overwrite,
+            progress=progress,
+            check_cancelled=check_cancelled,
         )
 
     def _prepare_build(
@@ -596,8 +655,6 @@ class SegmentedExportService:
             and clip.timeline_end > selection_start
             and next(track for track in state.tracks if track.id == clip.track_id).kind == TrackKind.VIDEO
         ]
-        if not selected_clips or max(clip.timeline_end for clip in selected_clips) < unit.end_frame:
-            raise ValueError(f"Build unit {unit.id} has no complete visual coverage")
         clip_ids = {clip.id for clip in selected_clips}
         subtitle_track_id = preset.burn_subtitle_track_id
         tracks = [

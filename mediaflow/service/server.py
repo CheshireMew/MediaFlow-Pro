@@ -16,10 +16,10 @@ import psutil
 from aiohttp import WSCloseCode, WSMsgType, web
 from pydantic import ValidationError
 
-from mediaflow.composition import EditorApplication
 from mediaflow.domain.collaboration import ProjectRevisionConflict
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 
+from .deferred_application import DeferredEditorApplication
 from .discovery import (
     SERVICE_PROTOCOL,
     SERVICE_PROTOCOL_VERSION,
@@ -27,8 +27,8 @@ from .discovery import (
     ServicePaths,
 )
 from .events import EVENT_STREAM_OVERFLOW, EventHub, ServiceEvent
+from .project_paths import project_path
 from .request_dispatcher import ServiceRequestDispatcher
-from .session_registry import project_path
 from .sessions import EditorServiceOperations
 from .workspaces import WorkspaceRegistry
 
@@ -73,7 +73,7 @@ class EditorServiceServer:
         self,
         *,
         paths: ServicePaths | None = None,
-        application_factory: Callable[[], EditorApplication] = EditorApplication,
+        application_factory: Callable[[], Any] = DeferredEditorApplication,
     ):
         self.paths = paths or ServicePaths.discover()
         self._application_factory = application_factory
@@ -414,6 +414,7 @@ class EditorServiceServer:
                     task_cursor = int(value.get("task_cursor", 0))
                     subscription_ready.clear()
                     workspace_session_id = str(value.get("workspace_session_id") or "")
+                    project_client_id = str(value.get("client_id") or "")
                     identity = await asyncio.to_thread(
                         operations.desktop.project_identity,
                         path,
@@ -427,9 +428,16 @@ class EditorServiceServer:
                         project_id: str = selected_project_id,
                         project_path_value: Path = selected_project_path,
                         workspace_id: str = workspace_session_id,
+                        client_id: str = project_client_id,
                     ) -> bool:
                         if event.type in {"project.changed", "project.conflict"}:
-                            return str(event.payload.get("project_id") or "") == project_id
+                            if str(event.payload.get("project_id") or "") != project_id:
+                                return False
+                            if event.type == "project.changed" and client_id:
+                                actor = event.payload.get("actor")
+                                if isinstance(actor, dict) and str(actor.get("id") or "") == client_id:
+                                    return False
+                            return True
                         if event.type == "task.changed":
                             event_project = str(event.payload.get("project_path") or "")
                             return (
@@ -454,7 +462,7 @@ class EditorServiceServer:
                         await websocket.send_json(ServiceEvent("project.changed", event).as_dict())
                     for event in snapshot["task_events"]:
                         await websocket.send_json(ServiceEvent("task.changed", event).as_dict())
-                    workspace_client_id = str(value.get("client_id") or "")
+                    workspace_client_id = project_client_id
                     if workspace_session_id:
                         workspaces = self._workspaces
                         if workspaces is None:

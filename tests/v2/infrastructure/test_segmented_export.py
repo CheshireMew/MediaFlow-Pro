@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
@@ -20,6 +22,7 @@ from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.segmented_export_service import SegmentedExportService
+from mediaflow.infrastructure.task_runtime import InfrastructureExportTaskRuntime
 from tests.v2.editor_service_api import EditorServiceApi
 
 FIXTURE = (
@@ -111,13 +114,18 @@ def _generate_avatar_clip(
     assert result.returncode == 0, result.stderr.decode(errors="replace")
 
 
-def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: Path) -> None:
+def test_segmented_export_reuses_unchanged_units_and_continuous_audio(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     paths = RuntimeContext.discover().paths
     assert paths.melt is not None
     origin = json.loads((FIXTURE / "fixture-origin.json").read_text(encoding="utf-8"))
     assert origin["producer"] == (
         "visual-multimedia/assets/media-build-cases/segmented-video"
     )
+    assert len(origin["producer_revision"]) == 40
+    int(origin["producer_revision"], 16)
     for relative, expected in origin["files"].items():
         assert _sha256(FIXTURE / relative) == expected
     plan = json.loads((FIXTURE / "media-build-plan.json").read_text(encoding="utf-8"))
@@ -225,6 +233,42 @@ def test_segmented_export_reuses_unchanged_units_and_continuous_audio(tmp_path: 
         assert [item.status for item in second.units] == ["reused"] * 3
         assert second.audio.status == "reused"
         assert second.assembly_status == "reused"
+
+        monkeypatch.setattr(
+            "mediaflow.infrastructure.segmented_export_service.AUTO_SEGMENT_SECONDS",
+            1,
+        )
+        runtime = InfrastructureExportTaskRuntime(repository, paths)
+        auto_first = runtime.export_sequence(
+            editor.state,
+            preset,
+            project_root / "exports" / "automatic-first.mp4",
+            overwrite=False,
+            progress=lambda _progress: None,
+            check_cancelled=lambda: None,
+        )
+        automatic_manifests = sorted(service.cache_root.glob("visual/*.json"))
+        automatic_manifest_times = {
+            path: path.stat().st_mtime_ns for path in automatic_manifests
+        }
+        auto_second = runtime.export_sequence(
+            editor.state,
+            preset,
+            project_root / "exports" / "automatic-second.mp4",
+            overwrite=False,
+            progress=lambda _progress: None,
+            check_cancelled=lambda: None,
+        )
+        assert auto_first.output_path.is_file()
+        assert auto_second.output_path.is_file()
+        assert SegmentedExportService.automatic_units(editor.state) == [
+            SequenceBuildUnit(id="auto-000000000000-000000000025", start_frame=0, end_frame=25),
+            SequenceBuildUnit(id="auto-000000000025-000000000050", start_frame=25, end_frame=50),
+            SequenceBuildUnit(id="auto-000000000050-000000000075", start_frame=50, end_frame=75),
+        ]
+        assert {
+            path: path.stat().st_mtime_ns for path in automatic_manifests
+        } == automatic_manifest_times
 
         editor.set_clip_transform(
             avatar_clips[1].id,

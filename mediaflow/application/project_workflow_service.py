@@ -5,11 +5,11 @@ from collections.abc import Callable
 from mediaflow.application.ports import ProjectWorkflowDocuments
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.workflow_coordinator import WorkflowCoordinator
+from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.application.workflow_stage_handlers import (
     ProxyDecision,
     WorkflowStageContext,
     WorkflowTaskSpec,
-    WorkflowUpdate,
     workflow_stage_handlers,
 )
 from mediaflow.domain.downloads import DownloadRequest

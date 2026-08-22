@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import mediaflow.infrastructure.web_capture_engine as web_capture_module
+import mediaflow.infrastructure.web_capture_prewarm as web_capture_prewarm_module
 import mediaflow.infrastructure.web_capture_scheduler as web_capture_scheduler_module
 from mediaflow.application.task_service import TaskStopped
 from mediaflow.domain.enums import TaskStatus
@@ -60,14 +61,119 @@ def _png_header(width: int, height: int) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + struct.pack(">I4sII", 13, b"IHDR", width, height)
 
 
+def test_shared_capture_engine_retires_after_idle_reuse_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_capture_module.shutdown_web_capture_engines()
+    closed = threading.Event()
+    created: list[object] = []
+
+    class FakeEngine:
+        def __init__(self, executable: Path):
+            self.executable = executable
+            created.append(self)
+
+        def diagnostics(self):
+            return web_capture_module.WebCaptureDiagnostics(
+                browser_launches=2,
+                render_count=1,
+                failed_render_count=0,
+                last_metrics=None,
+                last_failure=None,
+            )
+
+        def close(self) -> None:
+            closed.set()
+
+    monkeypatch.setattr(web_capture_module, "WebCaptureEngine", FakeEngine)
+    monkeypatch.setattr(web_capture_module, "_ENGINE_IDLE_SECONDS", 0.01)
+    executable = tmp_path / "chromium.exe"
+
+    engine = web_capture_module.get_web_capture_engine(executable)
+    assert web_capture_module.web_capture_diagnostics(executable).render_count == 1
+    web_capture_module.release_web_capture_engine(executable, engine)
+
+    assert closed.wait(timeout=1)
+    assert web_capture_module.web_capture_diagnostics(executable).render_count == 0
+    assert len(created) == 1
+
+
+def test_shared_capture_engine_waits_for_every_active_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_capture_module.shutdown_web_capture_engines()
+    closed = threading.Event()
+
+    class FakeEngine:
+        def __init__(self, _executable: Path):
+            pass
+
+        def close(self) -> None:
+            closed.set()
+
+    monkeypatch.setattr(web_capture_module, "WebCaptureEngine", FakeEngine)
+    monkeypatch.setattr(web_capture_module, "_ENGINE_IDLE_SECONDS", 0.01)
+    executable = tmp_path / "chromium.exe"
+    first = web_capture_module.get_web_capture_engine(executable)
+    second = web_capture_module.get_web_capture_engine(executable)
+    assert first is second
+
+    web_capture_module.release_web_capture_engine(executable, first)
+    assert not closed.wait(timeout=0.05)
+    web_capture_module.release_web_capture_engine(executable, second)
+    assert closed.wait(timeout=1)
+
+
+def test_background_capture_prewarm_is_deduplicated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_capture_module.shutdown_web_capture_engines()
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[int] = []
+
+    class FakeEngine:
+        def __init__(self, _executable: Path):
+            pass
+
+        def prewarm(self, *, worker_count: int) -> None:
+            calls.append(worker_count)
+            entered.set()
+            assert release.wait(timeout=1)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(web_capture_module, "WebCaptureEngine", FakeEngine)
+    monkeypatch.setattr(web_capture_module, "_ENGINE_IDLE_SECONDS", 0.01)
+    executable = tmp_path / "chromium.exe"
+
+    assert web_capture_prewarm_module.prewarm_web_capture_engine(executable)
+    assert entered.wait(timeout=1)
+    assert not web_capture_prewarm_module.prewarm_web_capture_engine(executable)
+    release.set()
+    deadline = time.monotonic() + 1
+    while executable.resolve() in web_capture_prewarm_module._PREWARMING:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+    assert calls == [1]
+
+
 def _write_capture_page(path: Path, *, fail_fast_capture: bool) -> None:
     failure_script = (
         """
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 HTMLCanvasElement.prototype.toDataURL = function (...arguments_) {
   if (this.id === "__mediaflow_capture_canvas") {
-    window.__fastCaptureCalls = (window.__fastCaptureCalls || 0) + 1;
-    if (window.__fastCaptureCalls === 8) {
+    if (window.__mediaflowFastCapturePhase === "production") {
+      window.__fastCaptureProductionCalls =
+        (window.__fastCaptureProductionCalls || 0) + 1;
+    }
+    if (window.__fastCaptureProductionCalls === 1) {
       throw new Error("intentional drawElement production failure");
     }
   }
@@ -236,6 +342,27 @@ def test_worker_sizing_reports_memory_as_the_real_limit(
     assert sizing.bound_by == "memory"
     assert sizing.memory_limit == 1
     assert sizing.estimated_worker_bytes > 256 * 1024**2
+
+
+def test_worker_sizing_uses_three_workers_for_the_cold_180_frame_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        web_capture_scheduler_module,
+        "available_physical_memory_bytes",
+        lambda: 16 * 1024**3,
+    )
+
+    sizing = _resolve_worker_count(
+        frame_count=180,
+        width=1080,
+        height=1080,
+        limit=4,
+    )
+
+    assert sizing.workers == 3
+    assert sizing.bound_by == "work"
+    assert sizing.work_limit == 3
 
 
 def test_png_validation_rejects_wrong_dimensions_and_non_png_payloads() -> None:
@@ -425,8 +552,6 @@ def test_real_draw_element_failure_requires_clean_screenshot_retry(
                     **capture_arguments,
                     on_frame=first_attempt.append,
                 )
-            assert first_attempt
-
             screenshot_frames: list[bytes] = []
             metrics = engine.render_frames(
                 **capture_arguments,

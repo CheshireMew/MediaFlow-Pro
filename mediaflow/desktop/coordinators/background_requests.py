@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from mediaflow.application.presentation_models import RecentProjectSnapshot
 from mediaflow.domain.downloads import DownloadPlan
-from mediaflow.project_presentation import RecentProjectSnapshot
 
 from .base import SessionCoordinator
 
@@ -246,6 +246,15 @@ class BackgroundRequests(SessionCoordinator):
                 )
                 self._session.updates.commit(settings=True)
             return
+        if kind == "runtime_status":
+            if error:
+                logger.warning("Failed to read runtime status: %s", error)
+            else:
+                self._session.projectors.workspace.apply_runtime_tool_status(
+                    _require_object_map(result, "Runtime-status"),
+                    preserve_cuda=False,
+                )
+            return
         if kind == "download_plan":
             if request_id != self._session.state.download.request_id:
                 return
@@ -348,8 +357,16 @@ class BackgroundRequests(SessionCoordinator):
             grouped: dict[str, list[dict]] = {}
             for item in _require_dict_rows(result, "Timeline-filmstrip"):
                 grouped.setdefault(str(item["clipId"]), []).append(dict(item))
+            changed_clip_ids = set(
+                self._session.state.presentation.filmstrip_frames
+            ).union(grouped)
             self._session.state.presentation.filmstrip_frames = grouped
-            self._session.projectors.timeline.refresh_timeline(defer_clip_updates=True)
+            self._session.projectors.timeline.refresh_clip_rows(
+                list(changed_clip_ids),
+                defer_updates=True,
+                refresh_relations=False,
+                schedule_preview=False,
+            )
             return
         if kind == "project_close":
             close_id, project_path = _require_int_str_request(

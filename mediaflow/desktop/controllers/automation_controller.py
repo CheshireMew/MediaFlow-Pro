@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import Property, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
-from mediaflow.automation.request_factory import AutomationRequestFactory
 from mediaflow.desktop.editor_planning import (
     current_transcription_plan,
     export_preset_for_options,
@@ -19,6 +18,9 @@ from mediaflow.domain.task_commands import DiagnosticsBundleCommand
 from .controller_facet import ControllerFacet, report_ui_errors
 from .controller_scopes import AutomationControllerScope
 from .web_editor_context import coerce_web_descriptor_value, find_web_descriptor
+
+if TYPE_CHECKING:
+    from mediaflow.automation.request_factory import AutomationRequestFactory
 
 
 class AutomationController(ControllerFacet[AutomationControllerScope]):
@@ -34,7 +36,7 @@ class AutomationController(ControllerFacet[AutomationControllerScope]):
     ):
         super().__init__(session)
         self.setObjectName("automationController")
-        self._factory = AutomationRequestFactory()
+        self._factory: AutomationRequestFactory | None = None
         self._web = web
         self._request_preview = ""
         self._request_title = ""
@@ -60,6 +62,10 @@ class AutomationController(ControllerFacet[AutomationControllerScope]):
         return str(current.project_dir / "exports" / f"diagnostics-{stamp}.zip")
 
     def _copy(self, title: str, operation: str, arguments: dict) -> None:
+        if self._factory is None:
+            from mediaflow.automation.request_factory import AutomationRequestFactory
+
+            self._factory = AutomationRequestFactory()
         current = self._session.state.binding.current
         if current is None:
             raise RuntimeError("请先打开一个项目")

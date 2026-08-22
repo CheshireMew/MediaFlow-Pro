@@ -23,6 +23,7 @@ from mediaflow.infrastructure.web_capture_models import (
     _CapturedFrame,
     _WorkerMetrics,
 )
+from mediaflow.infrastructure.web_capture_pool import IdleResourcePool
 from mediaflow.infrastructure.web_capture_quality import (
     _compare_fast_capture,
     _fast_capture_sample_indices,
@@ -59,6 +60,7 @@ __all__ = (
     "_resolve_worker_count",
     "_validate_png",
     "get_web_capture_engine",
+    "release_web_capture_engine",
     "shutdown_web_capture_engines",
     "web_capture_diagnostics",
 )
@@ -173,6 +175,14 @@ class WebCaptureEngine:
             worker_metrics,
             fallback_reason=fallback_reason,
         )
+
+    def prewarm(self, *, worker_count: int = 1) -> None:
+        """Start a bounded number of Chromium workers before the first capture."""
+
+        bounded_count = max(1, min(worker_count, len(self._workers)))
+        futures = [worker.prewarm() for worker in self._workers[:bounded_count]]
+        for future in futures:
+            future.result(timeout=30)
 
     @staticmethod
     def _validate_request(
@@ -449,28 +459,30 @@ class WebCaptureEngine:
                     raise RuntimeError("Editable media capture was cancelled") from None
 
 
-_ENGINES: dict[Path, WebCaptureEngine] = {}
-_ENGINES_LOCK = threading.Lock()
+_ENGINE_POOL = IdleResourcePool[WebCaptureEngine]()
+_ENGINE_IDLE_SECONDS = 150.0
 
 
 def get_web_capture_engine(executable: Path) -> WebCaptureEngine:
     resolved = executable.resolve()
-    with _ENGINES_LOCK:
-        engine = _ENGINES.get(resolved)
-        if engine is None:
-            engine = WebCaptureEngine(resolved)
-            _ENGINES[resolved] = engine
-        return engine
+    return _ENGINE_POOL.acquire(resolved, lambda: WebCaptureEngine(resolved))
+
+
+def release_web_capture_engine(executable: Path, engine: WebCaptureEngine) -> None:
+    """Retire idle Chromium workers after a short reuse window."""
+    resolved = executable.resolve()
+    _ENGINE_POOL.release(resolved, engine, idle_seconds=_ENGINE_IDLE_SECONDS)
 
 
 def web_capture_diagnostics(executable: Path) -> WebCaptureDiagnostics:
-    return get_web_capture_engine(executable).diagnostics()
+    engine = _ENGINE_POOL.peek(executable.resolve())
+    return (
+        WebCaptureDiagnostics(0, 0, 0, None, None)
+        if engine is None
+        else engine.diagnostics()
+    )
 
 
 @atexit.register
 def shutdown_web_capture_engines() -> None:
-    with _ENGINES_LOCK:
-        engines = list(_ENGINES.values())
-        _ENGINES.clear()
-    for engine in engines:
-        engine.close()
+    _ENGINE_POOL.close_all()

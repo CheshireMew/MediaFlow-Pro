@@ -40,7 +40,7 @@ class PresentationProjectors:
         )
 
     def refresh_project(self) -> None:
-        self.assets.refresh_assets()
+        self.assets.refresh_assets(refresh_timeline=False)
         self.timeline.refresh_sequences()
         self.tasks.refresh_tasks()
         self.refresh_active_sequence(refresh_sequences=False)
@@ -50,11 +50,17 @@ class PresentationProjectors:
     def refresh_active_sequence(self, *, refresh_sequences: bool = False) -> None:
         if refresh_sequences:
             self.timeline.refresh_sequences()
-        self.timeline.refresh_timeline()
+        # Project opening performs several synchronous projections after the
+        # timeline rows are ready. Start the native-graph idle window only when
+        # all of them are complete so a large graph cannot become overdue while
+        # the UI thread is still constructing the workspace.
+        self.timeline.refresh_timeline(schedule_preview=False)
         self.subtitles.refresh_documents()
         self.highlights.refresh_highlights()
         self.audio.refresh_audio_buses()
         self.audio.refresh_audio_metrics()
         self.timeline.refresh_preview_subtitles()
+        self.session._timeline_snapping.rebuild()
         self.session.updates.commit(project=True)
         self.session.updates.commit(history=True)
+        self.timeline.schedule_preview_graph()

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from mediaflow.desktop.session_state import TimelinePlacement
 from mediaflow.domain.enums import AssetKind
+from mediaflow.waveform_cache import read_waveform_peaks
 
 from .controller_facet import ControllerFacet, report_ui_errors
 from .controller_scopes import MediaControllerScope
@@ -431,10 +434,19 @@ class MediaController(ControllerFacet[MediaControllerScope]):
             block_sizes = sorted(int(value) for value in payload["levels"])
             required_block = max(1, (end_sample - start_sample) // target_blocks)
             block = min(block_sizes, key=lambda value: abs(value - required_block))
-            peaks = payload["levels"][str(block)]
+            level = payload["levels"][str(block)]
+            if not isinstance(level, dict):
+                return []
+            level_count = int(level["count"])
             first = max(0, start_sample // block)
-            last = min(len(peaks), (end_sample + block - 1) // block)
-            visible = peaks[first:last]
+            last = min(level_count, (end_sample + block - 1) // block)
+            visible = read_waveform_peaks(
+                Path(str(payload["path"])),
+                offset=int(level["offset"]),
+                count=level_count,
+                first=first,
+                last=last,
+            )
             if not visible:
                 return []
             if speed < 0:

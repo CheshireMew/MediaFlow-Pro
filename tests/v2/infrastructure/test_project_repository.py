@@ -5,9 +5,15 @@ from pathlib import Path
 
 import pytest
 
+import mediaflow.infrastructure.project_history_repository as project_history_module
 import mediaflow.infrastructure.project_records_repository as project_records_module
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.domain.collaboration import (
+    ActorIdentity,
+    ProjectEditAction,
+    ProjectEditCommand,
+)
 from mediaflow.domain.enums import (
     AssetKind,
     ClipMediaKind,
@@ -59,6 +65,85 @@ def _open_writable(root: Path, **options) -> ProjectRepository:
         writable=True,
         **options,
     )
+
+
+def test_undo_history_retention_bounds_active_and_discarded_groups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_history_module, "ACTIVE_HISTORY_RETENTION_GROUPS", 3)
+    monkeypatch.setattr(project_history_module, "DISCARDED_HISTORY_RETENTION_GROUPS", 2)
+    actor = ActorIdentity(kind="human", id="history-retention")
+    command = ProjectEditCommand(
+        label="History retention",
+        undo_actions=[ProjectEditAction(kind="noop")],
+        redo_actions=[ProjectEditAction(kind="noop")],
+    )
+    with ProjectRepository.create(
+        tmp_path / "History Retention",
+        "History Retention",
+    ) as repository:
+        for revision in range(1, 6):
+            with repository.transaction():
+                repository.history.record_group(
+                    group_id=f"group-{revision}",
+                    source_revision=revision,
+                    label=command.label,
+                    actor=actor,
+                    write_set=["/project/name"],
+                    command=command,
+                )
+
+        assert [group.id for group in repository.history.list_groups()] == [
+            "group-3",
+            "group-4",
+            "group-5",
+        ]
+
+        for revision in range(6, 9):
+            latest = repository.history.latest_applied()
+            assert latest is not None
+            with repository.transaction():
+                repository.history.transition(
+                    latest.id,
+                    expected="applied",
+                    state="undone",
+                    state_revision=revision,
+                )
+                repository.history.record_group(
+                    group_id=f"group-{revision}",
+                    source_revision=revision,
+                    label=command.label,
+                    actor=actor,
+                    write_set=["/project/name"],
+                    command=command,
+                )
+
+        groups = repository.history.list_groups(include_discarded=True)
+        assert sum(group.state == "applied" for group in groups) == 3
+        assert sum(group.state == "discarded" for group in groups) == 2
+        assert {group.id for group in groups if group.state == "discarded"} == {
+            "group-6",
+            "group-7",
+        }
+
+
+def test_subtitle_segment_listing_uses_document_time_index(tmp_path: Path) -> None:
+    with ProjectRepository.create(
+        tmp_path / "Subtitle Index",
+        "Subtitle Index",
+    ) as repository:
+        query_plan = repository._fetchall(
+            """EXPLAIN QUERY PLAN
+               SELECT * FROM subtitle_segment
+               WHERE document_id=? ORDER BY start_frame, id""",
+            ("document-id",),
+        )
+
+        assert any(
+            "idx_subtitle_segment_document_time" in str(row["detail"])
+            for row in query_plan
+        )
 
 
 def test_project_repository_owns_the_project_root_path_boundary(
@@ -1996,6 +2081,26 @@ def test_changed_source_invalidates_derived_media(tmp_path: Path) -> None:
         assert refreshed.waveform_path is None
         assert refreshed.fingerprint is not None
         assert refreshed.fingerprint.edge_sha256 != asset.fingerprint.edge_sha256
+
+
+def test_current_source_invalidates_legacy_waveform_without_deleting_it(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"unchanged-source")
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        legacy_waveform = repository.project_dir / "cache" / "waveforms" / "legacy.json"
+        legacy_waveform.parent.mkdir(parents=True)
+        legacy_waveform.write_text('{"version": 2, "levels": {}}', encoding="utf-8")
+        asset = repository.assets.set_asset_waveform_path(
+            asset.id,
+            expected_fingerprint=asset.fingerprint,
+            waveform_path=legacy_waveform,
+        )
+
+        refreshed = repository.assets.refresh_asset_status(asset.id)
+
+        assert refreshed.waveform_path is None
+        assert legacy_waveform.is_file()
 
 
 def test_derived_media_updates_merge_and_reject_stale_source_results(tmp_path: Path) -> None:

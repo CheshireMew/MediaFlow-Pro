@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import json
 from fractions import Fraction
 from functools import partial as bind_arguments
 from pathlib import Path
 
+from mediaflow.application.task_execution_types import TaskLeaseLost, TaskStopped
 from mediaflow.application.web_package_files import web_package_root
-from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
+from mediaflow.atomic_file import unique_temporary_sibling
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.domain.web_manifest import WebAssetSpec
+from mediaflow.domain.web_rendering import WebRenderActualCapture, WebRenderPlan
 from mediaflow.domain.web_state import (
     WebClipState,
     web_runtime_state,
@@ -17,20 +18,24 @@ from mediaflow.domain.web_state import (
 
 from .ffmpeg_runner import FfmpegRunner
 from .ffprobe_runner import FfprobeRunner
-from .file_fingerprint import fingerprint_file
 from .runtime_paths import RuntimePaths
 from .web_browser import WebPackagePreviewServer
 from .web_capture_engine import (
     FastCaptureFallbackRequired,
+    WebCaptureMetrics,
     WebCaptureMode,
     get_web_capture_engine,
+    release_web_capture_engine,
+)
+from .web_direct_h264 import (
+    DirectH264FallbackRequired,
+    render_webcodecs_h264,
 )
 from .web_render_ffmpeg import build_web_render_ffmpeg_command
-from .web_render_target import (
-    WEB_CACHE_MANIFEST_SCHEMA,
-    WEB_RENDERER_VERSION,
-    WebRenderTarget,
-)
+from .web_render_manifest import publish_web_render_manifest
+from .web_render_probe import WebRenderProbe
+from .web_render_target import WebRenderTarget
+from .web_segment_assembler import WebSegmentAssembler
 
 
 class WebBrowserCacheRenderer:
@@ -38,6 +43,8 @@ class WebBrowserCacheRenderer:
         self.paths = paths
         self.ffmpeg = ffmpeg
         self.ffprobe = FfprobeRunner(self.paths.ffprobe)
+        self.probe = WebRenderProbe(self.ffmpeg, self.ffprobe)
+        self.segment_assembler = WebSegmentAssembler(self.ffmpeg, self.probe)
 
     def render(
         self,
@@ -46,6 +53,7 @@ class WebBrowserCacheRenderer:
         clip_state: WebClipState,
         state: TimelineState,
         target: WebRenderTarget,
+        render_plan: WebRenderPlan,
         *,
         progress=None,
         check_cancelled=None,
@@ -54,7 +62,7 @@ class WebBrowserCacheRenderer:
         executable = self.paths.chromium
         if executable is None or not executable.is_file():
             raise FileNotFoundError("Pinned Playwright Chromium is unavailable")
-        engine = get_web_capture_engine(executable)
+        engine = None
         manifest = spec.manifest
         package_root = web_package_root(entry, manifest)
         variant = manifest.variant_for(clip_state.variant.id if clip_state.variant is not None else None)
@@ -66,9 +74,44 @@ class WebBrowserCacheRenderer:
                     manifest.entry,
                     query=(f"capture=1&variant={variant.id}&scene={runtime_state['scene_id']}"),
                 )
-                capture_modes: tuple[WebCaptureMode, ...] = ("auto", "screenshot")
-                if target.animated:
-                    self._render_animation(
+                capture_modes: tuple[WebCaptureMode, ...] = (
+                    ("screenshot",)
+                    if render_plan.capture_mode == "screenshot"
+                    else ("auto", "screenshot")
+                )
+                direct_failure: str | None = None
+                probe: dict[str, object] | None = None
+                actual_capture: WebRenderActualCapture | None = None
+                if target.animated and render_plan.planned_backend == "webcodecs-h264":
+                    try:
+                        actual_capture = render_webcodecs_h264(
+                            executable=executable,
+                            capture_url=capture_url,
+                            allowed_origin=preview.url_for(""),
+                            runtime_state=runtime_state,
+                            target=target,
+                            render_plan=render_plan,
+                            output_path=partial,
+                            ffmpeg=self.ffmpeg,
+                            progress=progress,
+                            check_cancelled=check_cancelled,
+                        )
+                        probe = self.probe.validate(partial, target, actual_capture)
+                    except DirectH264FallbackRequired as error:
+                        direct_failure = str(error)
+                        actual_capture = None
+                        probe = None
+                        partial.unlink(missing_ok=True)
+                    except RuntimeError as error:
+                        if isinstance(error, (TaskStopped, TaskLeaseLost)):
+                            raise
+                        direct_failure = f"direct H.264 output validation failed: {error}"
+                        actual_capture = None
+                        probe = None
+                        partial.unlink(missing_ok=True)
+                if target.animated and actual_capture is None:
+                    engine = get_web_capture_engine(executable)
+                    capture_metrics = self._render_animation(
                         engine,
                         preview,
                         capture_url,
@@ -83,29 +126,56 @@ class WebBrowserCacheRenderer:
                         progress=progress,
                         check_cancelled=check_cancelled,
                         capture_start_frame=capture_start_frame,
+                        initial_fallback_reason=direct_failure,
                     )
+                    actual_capture = self._actual_capture(capture_metrics)
                 else:
-                    self._render_still(
-                        engine,
-                        preview,
-                        capture_url,
-                        variant.canvas.width,
-                        variant.canvas.height,
-                        spec,
-                        runtime_state,
-                        state,
-                        target,
-                        partial,
-                        capture_modes=capture_modes,
-                        progress=progress,
-                        check_cancelled=check_cancelled,
-                        capture_start_frame=capture_start_frame,
-                    )
-            probe = self._probe(partial, target)
+                    if actual_capture is not None:
+                        capture_metrics = None
+                    else:
+                        engine = get_web_capture_engine(executable)
+                        capture_metrics = self._render_still(
+                            engine,
+                            preview,
+                            capture_url,
+                            variant.canvas.width,
+                            variant.canvas.height,
+                            spec,
+                            runtime_state,
+                            state,
+                            target,
+                            partial,
+                            capture_modes=capture_modes,
+                            progress=progress,
+                            check_cancelled=check_cancelled,
+                            capture_start_frame=capture_start_frame,
+                        )
+                        actual_capture = self._actual_capture(capture_metrics)
+            if actual_capture is None:
+                raise RuntimeError("Editable web renderer returned no capture evidence")
+            if probe is None:
+                probe = self.probe.validate(partial, target, actual_capture)
             partial.replace(target.path)
-            self._publish_manifest(target, probe)
+            publish_web_render_manifest(target, probe, render_plan, actual_capture)
         finally:
             partial.unlink(missing_ok=True)
+            if engine is not None:
+                release_web_capture_engine(executable, engine)
+
+    def compose_segments(
+        self,
+        target: WebRenderTarget,
+        render_plan: WebRenderPlan,
+        segments: list[tuple[WebRenderTarget, WebRenderPlan, bool]],
+        *,
+        check_cancelled=None,
+    ) -> None:
+        self.segment_assembler.compose(
+            target,
+            render_plan,
+            segments,
+            check_cancelled=check_cancelled,
+        )
 
     def _render_animation(
         self,
@@ -124,7 +194,8 @@ class WebBrowserCacheRenderer:
         progress,
         check_cancelled,
         capture_start_frame: int,
-    ) -> None:
+        initial_fallback_reason: str | None = None,
+    ) -> WebCaptureMetrics:
         fps = Fraction(
             state.sequence.profile.fps_numerator,
             state.sequence.profile.fps_denominator,
@@ -148,11 +219,11 @@ class WebBrowserCacheRenderer:
                     )
                 )
 
-        fallback_reason: str | None = None
+        fallback_reason = initial_fallback_reason
         for capture_mode in capture_modes:
             pipe = self.ffmpeg.open_input_pipe(command)
             try:
-                engine.render_frames(
+                metrics = engine.render_frames(
                     url=capture_url,
                     allowed_origin=preview.url_for(""),
                     width=width,
@@ -172,7 +243,9 @@ class WebBrowserCacheRenderer:
                 )
             except FastCaptureFallbackRequired as error:
                 pipe.abort()
-                fallback_reason = str(error)
+                fallback_reason = "; ".join(
+                    item for item in (fallback_reason, str(error)) if item
+                )
                 continue
             except BaseException:
                 pipe.abort()
@@ -180,7 +253,7 @@ class WebBrowserCacheRenderer:
             result = pipe.finish(timeout=1800)
             if result.returncode != 0:
                 raise RuntimeError(f"FFmpeg editable web media render failed: {result.stderr}")
-            return
+            return metrics
         raise RuntimeError("Editable web media capture exhausted its screenshot fallback")
 
     @staticmethod
@@ -200,7 +273,7 @@ class WebBrowserCacheRenderer:
         progress,
         check_cancelled,
         capture_start_frame: int,
-    ) -> None:
+    ) -> WebCaptureMetrics:
         if progress:
             progress(OperationProgress.determinate("web_rendering", completed=0, total=1, unit="frames"))
         frames: list[bytes] = []
@@ -208,7 +281,7 @@ class WebBrowserCacheRenderer:
         for capture_mode in capture_modes:
             frames.clear()
             try:
-                engine.render_frames(
+                metrics = engine.render_frames(
                     url=capture_url,
                     allowed_origin=preview.url_for(""),
                     width=width,
@@ -234,109 +307,62 @@ class WebBrowserCacheRenderer:
         partial.write_bytes(frames[0])
         if progress:
             progress(OperationProgress.determinate("web_rendering", completed=1, total=1, unit="frames"))
+        return metrics
 
-    def _probe(self, path: Path, target: WebRenderTarget) -> dict[str, object]:
-        result = self.ffprobe.run(
-            [
-                "-v",
-                "error",
-                "-show_entries",
-                (
-                    "stream=codec_type,codec_name,pix_fmt,width,height,"
-                    "avg_frame_rate,sample_rate,channels:format=duration"
-                ),
-                "-of",
-                "json",
-                str(path),
-            ],
-            timeout=30,
+    def _probe(
+        self,
+        path: Path,
+        target: WebRenderTarget,
+        actual_capture: WebRenderActualCapture,
+    ) -> dict[str, object]:
+        return self.probe.validate(path, target, actual_capture)
+
+    def _decode_representative_frames(
+        self,
+        path: Path,
+        target: WebRenderTarget,
+    ) -> None:
+        self.probe._decode_representative_frames(path, target)
+
+    def _probe_packet_clock(
+        self,
+        path: Path,
+        target: WebRenderTarget,
+        *,
+        video_stream_index: int,
+        audio_stream_index: int | None,
+    ) -> dict[str, object]:
+        return self.probe._probe_packet_clock(
+            path,
+            target,
+            video_stream_index=video_stream_index,
+            audio_stream_index=audio_stream_index,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"FFprobe rejected editable web media cache: {result.stderr.strip()}")
-        try:
-            payload = json.loads(result.stdout)
-            streams = payload.get("streams") or []
-            video_streams = [item for item in streams if item.get("codec_type") == "video"]
-            audio_streams = [item for item in streams if item.get("codec_type") == "audio"]
-            if len(video_streams) != 1 or len(audio_streams) > 1:
-                raise ValueError("unexpected editable media stream count")
-            stream = video_streams[0]
-            codec_name = str(stream["codec_name"])
-            pixel_format = str(stream["pix_fmt"])
-            width = int(stream["width"])
-            height = int(stream["height"])
-            frame_rate = Fraction(str(stream.get("avg_frame_rate") or "0/1"))
-            duration = Fraction(str((payload.get("format") or {}).get("duration") or "0"))
-            audio = audio_streams[0] if audio_streams else None
-            audio_codec_name = str(audio["codec_name"]) if audio is not None else None
-            audio_sample_rate = int(audio["sample_rate"]) if audio is not None else None
-            audio_channels = int(audio["channels"]) if audio is not None else None
-        except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError) as error:
-            raise RuntimeError("FFprobe returned incomplete editable web media cache metadata") from error
-        expected_codec = "ffv1" if target.animated else "png"
-        expected_frames = target.frame_count if target.animated else 1
-        expected_duration = Fraction(
-            expected_frames * target.fps_denominator,
-            target.fps_numerator,
-        )
-        if (
-            codec_name != expected_codec
-            or (width, height) != (target.width, target.height)
-            or (target.animated and pixel_format != "bgra")
-            or (target.animated and frame_rate != Fraction(target.fps_numerator, target.fps_denominator))
-            or (
-                target.animated
-                and abs(duration - expected_duration) > Fraction(target.fps_denominator, target.fps_numerator)
-            )
-            or (audio is not None) != target.has_audio
-            or (
-                target.has_audio
-                and (
-                    audio_codec_name != "flac"
-                    or audio_sample_rate != target.audio_sample_rate
-                    or audio_channels != target.audio_channels
-                )
-            )
-        ):
-            raise RuntimeError(
-                "Editable web media cache does not match its render target: "
-                f"codec={codec_name}, pixel_format={pixel_format}, size={width}x{height}, "
-                f"frames={expected_frames}, rate={frame_rate}, duration={duration}, "
-                f"audio={audio_codec_name}/{audio_sample_rate}/{audio_channels}"
-            )
-        return {
-            "codec_name": codec_name,
-            "pixel_format": pixel_format,
-            "width": width,
-            "height": height,
-            "frame_count": expected_frames,
-            "fps_numerator": frame_rate.numerator,
-            "fps_denominator": frame_rate.denominator,
-            "has_audio": audio is not None,
-            "audio_codec_name": audio_codec_name,
-            "audio_sample_rate": audio_sample_rate,
-            "audio_channels": audio_channels,
-        }
 
     @staticmethod
-    def _publish_manifest(target: WebRenderTarget, probe: dict[str, object]) -> None:
-        payload = {
-            "schema": WEB_CACHE_MANIFEST_SCHEMA,
-            "renderer_version": WEB_RENDERER_VERSION,
-            "key": target.key,
-            "animated": target.animated,
-            "frame_count": target.frame_count,
-            "width": target.width,
-            "height": target.height,
-            "fps_numerator": target.fps_numerator,
-            "fps_denominator": target.fps_denominator,
-            "has_audio": target.has_audio,
-            "audio_sample_rate": target.audio_sample_rate,
-            "audio_channels": target.audio_channels,
-            "fingerprint": fingerprint_file(target.path).model_dump(mode="json"),
-            "probe": probe,
-        }
-        atomic_write_text(
-            target.manifest_path,
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+    def _actual_capture(metrics: WebCaptureMetrics) -> WebRenderActualCapture:
+        return WebRenderActualCapture(
+            backend=metrics.capture_backend,
+            reason=metrics.capture_backend_reason,
+            fallback_reason=metrics.fallback_reason,
+            worker_count=metrics.worker_count,
+            captured_frames=metrics.captured_frames,
+            elapsed_seconds=metrics.elapsed_seconds,
+        )
+
+    @staticmethod
+    def _publish_manifest(
+        target: WebRenderTarget,
+        probe: dict[str, object],
+        render_plan: WebRenderPlan,
+        actual_capture: WebRenderActualCapture,
+        *,
+        segmentation: dict[str, object] | None = None,
+    ) -> None:
+        publish_web_render_manifest(
+            target,
+            probe,
+            render_plan,
+            actual_capture,
+            segmentation=segmentation,
         )

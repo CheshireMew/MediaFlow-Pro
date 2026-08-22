@@ -10,14 +10,18 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 from xml.etree import ElementTree as ET
 
 import pytest
 from pydantic import ValidationError
 
 import mediaflow.infrastructure.web_browser_cache_renderer as web_browser_cache_module
+import mediaflow.infrastructure.web_direct_h264 as web_direct_h264_module
 import mediaflow.infrastructure.web_package_storage as web_package_module
+import mediaflow.infrastructure.web_render_preflight as web_render_preflight_module
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.task_service import TaskStopped
 from mediaflow.application.timeline_editor import TimelineEditor
@@ -250,6 +254,11 @@ def test_react_filmstrip_captures_only_requested_frames_without_full_cache(
             assert manifest["frame_count"] == 1
             assert manifest["has_audio"] is False
             assert manifest["probe"]["frame_count"] == 1
+            assert manifest["capture"]["planned_mode"] == "auto"
+            assert manifest["capture"]["actual_backend"] in {
+                "drawelement",
+                "screenshot",
+            }
         first_png = tmp_path / "first.png"
         later_png = tmp_path / "later.png"
         for source, destination in ((first, first_png), (later, later_png)):
@@ -269,6 +278,434 @@ def test_react_filmstrip_captures_only_requested_frames_without_full_cache(
         assert (
             hashlib.sha256(first_png.read_bytes()).digest() != hashlib.sha256(later_png.read_bytes()).digest()
         )
+
+
+@pytest.mark.parametrize("dynamic_tag", ("canvas", "video"))
+def test_web_render_preflight_routes_dynamic_surfaces_to_screenshot(
+    tmp_path: Path,
+    dynamic_tag: str,
+) -> None:
+    package = tmp_path / f"nested-{dynamic_tag}-package"
+    shutil.copytree(STARTER, package)
+    entry = package / "index.html"
+    html = entry.read_text(encoding="utf-8")
+    anchor = '    <div class="viewport" id="viewport">'
+    assert anchor in html
+    entry.write_text(
+        html.replace(
+            anchor,
+            f'{anchor}\n      <{dynamic_tag} id="nested-{dynamic_tag}"></{dynamic_tag}>',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with ProjectRepository.create(
+        tmp_path / f"Nested {dynamic_tag} preflight",
+        f"Nested {dynamic_tag} preflight",
+    ) as repository:
+        editor, service = _service(repository)
+        project = repository.projects.get_project()
+        asset = service.packages.import_package(package)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=2,
+        )
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+
+        plan = renderer.inspect_clip_render(timeline, clip.id)
+
+        assert plan.static_compatibility == "screenshot-required"
+        assert plan.capture_mode == "screenshot"
+        assert plan.strategy == "screenshot-only"
+        assert plan.planned_backend == "frame-pipe"
+        assert plan.fallback_backend is None
+        assert [item.code for item in plan.findings] == [
+            "dynamic-surface",
+            "css-filter",
+        ]
+        assert plan.findings[0].path == "index.html"
+        assert plan.actual_capture is None
+        assert plan.cache_status == "missing"
+
+
+def test_web_render_segments_keep_stable_completed_prefixes(tmp_path: Path) -> None:
+    with ProjectRepository.create(
+        tmp_path / "Stable web segments",
+        "Stable web segments",
+    ) as repository:
+        editor, service = _service(repository)
+        project, asset, clip = _add_web_clip(
+            repository,
+            editor,
+            service,
+            duration=450,
+        )
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        original = renderer.cache.target(timeline, clip, asset)
+        original_segments = renderer._segment_targets(original)
+
+        editor.trim_clip(
+            clip.id,
+            timeline_start=clip.timeline_start,
+            source_in=clip.source_in,
+            duration=600,
+        )
+        extended_timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        extended_clip = next(item for item in extended_timeline.clips if item.id == clip.id)
+        extended = renderer.cache.target(extended_timeline, extended_clip, asset)
+        extended_segments = renderer._segment_targets(extended)
+
+        assert original.segment_namespace == extended.segment_namespace
+        assert [item.frame_count for _, item in original_segments] == [300, 150]
+        assert [item.frame_count for _, item in extended_segments] == [300, 300]
+        assert original_segments[0][1].key == extended_segments[0][1].key
+        assert original_segments[1][1].key != extended_segments[1][1].key
+
+
+def test_web_render_reuses_validated_segments_after_clip_extension(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(WebRenderService, "_SEGMENT_SECONDS", 0.1)
+    with ProjectRepository.create(
+        tmp_path / "Reusable web segments",
+        "Reusable web segments",
+    ) as repository:
+        editor, service = _service(repository)
+        project, asset, clip = _add_web_clip(
+            repository,
+            editor,
+            service,
+            duration=6,
+        )
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        initial_target = renderer.cache.target(timeline, clip, asset)
+
+        initial_cache = renderer.render_clip(timeline, clip.id)
+        initial_manifest = json.loads(initial_target.manifest_path.read_text(encoding="utf-8"))
+
+        assert initial_cache == initial_target.path
+        assert initial_manifest["segmentation"]["segment_count"] == 2
+        assert initial_manifest["segmentation"]["rendered_segment_count"] == 2
+        assert initial_manifest["segmentation"]["reused_segment_count"] == 0
+
+        editor.trim_clip(
+            clip.id,
+            timeline_start=clip.timeline_start,
+            source_in=clip.source_in,
+            duration=9,
+        )
+        extended_timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        extended_clip = next(item for item in extended_timeline.clips if item.id == clip.id)
+        extended_target = renderer.cache.target(extended_timeline, extended_clip, asset)
+        extended_cache = renderer.render_clip(extended_timeline, clip.id)
+        extended_manifest = json.loads(
+            extended_target.manifest_path.read_text(encoding="utf-8")
+        )
+
+        assert extended_cache == extended_target.path
+        assert extended_manifest["probe"]["frame_count"] == 9
+        assert extended_manifest["segmentation"]["segment_count"] == 3
+        assert extended_manifest["segmentation"]["rendered_segment_count"] == 1
+        assert extended_manifest["segmentation"]["reused_segment_count"] == 2
+        assert renderer.inspect_clip_render(extended_timeline, clip.id).cache_status == "ready"
+
+
+def _enable_short_non_4k_direct_h264(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        web_render_preflight_module,
+        "DIRECT_H264_MIN_PIXEL_FRAMES",
+        0,
+    )
+    monkeypatch.setattr(
+        web_render_preflight_module,
+        "_is_measured_direct_h264_profile",
+        lambda _target: True,
+    )
+    monkeypatch.setattr(
+        web_direct_h264_module,
+        "_require_nvidia_gpu_headroom",
+        lambda: None,
+    )
+
+
+def test_direct_h264_rejects_saturated_nvidia_gpu_before_browser_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_direct_h264_module.shutil, "which", lambda _name: "nvidia-smi")
+    monkeypatch.setattr(
+        web_direct_h264_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["nvidia-smi"],
+            returncode=0,
+            stdout="100, 7909, 8192\n",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(
+        web_direct_h264_module.DirectH264FallbackRequired,
+        match="utilization=100%.*memory=96.5%",
+    ):
+        web_direct_h264_module._require_nvidia_gpu_headroom()
+
+    monkeypatch.setattr(
+        web_direct_h264_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["nvidia-smi"],
+            returncode=0,
+            stdout="20, 2048, 8192\n",
+            stderr="",
+        ),
+    )
+    admission = web_direct_h264_module._require_nvidia_gpu_headroom()
+    assert admission == {
+        "provider": "nvidia-smi",
+        "utilization_percent": 20,
+        "memory_used_mib": 2048,
+        "memory_total_mib": 8192,
+        "memory_percent": 25.0,
+        "threshold_percent": 90,
+    }
+
+
+def test_direct_h264_preflight_is_limited_to_measured_uhd_4k30_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = web_render_preflight_module._is_measured_direct_h264_profile
+    assert profile(
+        SimpleNamespace(
+            width=3840,
+            height=2160,
+            fps_numerator=30,
+            fps_denominator=1,
+        )
+    )
+    assert profile(
+        SimpleNamespace(
+            width=2160,
+            height=3840,
+            fps_numerator=30_000,
+            fps_denominator=1001,
+        )
+    )
+    for width, height, fps_numerator, fps_denominator in (
+        (1920, 1080, 30, 1),
+        (1280, 720, 30, 1),
+        (3840, 2160, 60, 1),
+        (3840, 2160, 24, 1),
+    ):
+        assert not profile(
+            SimpleNamespace(
+                width=width,
+                height=height,
+                fps_numerator=fps_numerator,
+                fps_denominator=fps_denominator,
+            )
+        )
+
+    with ProjectRepository.create(
+        tmp_path / "Direct H264 workload preflight",
+        "Direct H264 workload preflight",
+        ProjectProfile(fps_numerator=60, fps_denominator=1),
+    ) as repository:
+        editor, service = _service(repository)
+        project, _asset, clip = _add_web_clip(
+            repository,
+            editor,
+            service,
+            duration=300,
+        )
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        square_timeline = repository.timeline.load_timeline(project.main_sequence_id)
+
+        square_plan = renderer.inspect_clip_render(square_timeline, clip.id)
+
+        assert square_plan.planned_backend == "frame-pipe"
+        assert any(
+            "too short" in reason for reason in square_plan.backend_selection_reasons
+        )
+
+        service.clips.select_variant(
+            project.main_sequence_id,
+            clip.id,
+            "landscape",
+            expected_revision=0,
+        )
+        landscape_timeline = repository.timeline.load_timeline(project.main_sequence_id)
+
+        landscape_plan = renderer.inspect_clip_render(landscape_timeline, clip.id)
+
+        assert landscape_plan.planned_backend == "frame-pipe"
+        assert any(
+            "UHD 3840x2160" in reason
+            for reason in landscape_plan.backend_selection_reasons
+        )
+
+        monkeypatch.setattr(
+            web_render_preflight_module,
+            "_is_measured_direct_h264_profile",
+            lambda _target: True,
+        )
+        landscape_plan = renderer.inspect_clip_render(landscape_timeline, clip.id)
+
+        assert landscape_plan.planned_backend == "webcodecs-h264"
+        assert landscape_plan.fallback_backend == "frame-pipe"
+
+
+def test_opaque_long_web_render_uses_bounded_direct_h264(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_short_non_4k_direct_h264(monkeypatch)
+    with ProjectRepository.create(
+        tmp_path / "Direct H264 web render",
+        "Direct H264 web render",
+    ) as repository:
+        editor, service = _service(repository)
+        project, asset, clip = _add_web_clip(
+            repository,
+            editor,
+            service,
+            duration=30,
+        )
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        target = renderer.cache.target(timeline, clip, asset)
+
+        plan = renderer.inspect_clip_render(timeline, clip.id)
+        assert plan.planned_backend == "webcodecs-h264"
+        assert plan.fallback_backend == "frame-pipe"
+
+        cache = renderer.render_clip(timeline, clip.id)
+        manifest = json.loads(target.manifest_path.read_text(encoding="utf-8"))
+        capture = manifest["capture"]
+        encoder = capture["encoder"]
+
+        assert cache == target.path and cache.is_file()
+        assert manifest["schema"] == "mediaflow-web-render-cache/v5"
+        assert capture["plan_digest"] == plan.plan_digest
+        assert capture["planned_backend"] == "webcodecs-h264"
+        assert capture["actual_backend"] == "webcodecs-h264"
+        assert capture["fallback_reason"] is None
+        assert encoder["requested_hardware_acceleration"] == "prefer-hardware"
+        assert encoder["hardware_acceleration_verified"] is True
+        assert encoder["zero_copy_verified"] is False
+        assert encoder["attestation_method"] == "chromium-trace"
+        assert encoder["actual_encoder_name"] == "MediaFoundationVideoEncodeAccelerator"
+        assert encoder["actual_encoder_type"] == "hardware"
+        assert encoder["encoder_storage_type"] == "unknown"
+        assert encoder["input_copy_path"] == "gpu-readback-to-memory"
+        assert 1 <= encoder["attested_frames"] <= 8
+        assert encoder["trace_event_count"] > 0
+        assert encoder["platform_encode_events"] >= encoder["attested_frames"]
+        assert encoder["platform_output_events"] >= encoder["attested_frames"]
+        assert encoder["gpu_readback_events"] >= encoder["attested_frames"]
+        assert encoder["maximum_encode_queue_size"] <= 4
+        assert encoder["maximum_pending_writes"] <= 4
+        assert encoder["encoded_chunks"] == 30
+        assert encoder["encoded_bytes"] > 0
+        assert encoder["timestamps_monotonic"] is True
+        assert encoder["exact_frame_time_boundaries"] is True
+        assert manifest["probe"]["codec_name"] == "h264"
+        assert manifest["probe"]["pixel_format"] == "yuv420p"
+        assert manifest["probe"]["frame_count"] == 30
+        assert manifest["probe"]["color_space"] == "bt709"
+        assert manifest["probe"]["packet_pts_monotonic"] is True
+        assert manifest["probe"]["packet_dts_monotonic"] is True
+        assert manifest["probe"]["maximum_video_clock_error_microseconds"] <= 1_000
+        assert manifest["probe"]["audio_video_end_drift_microseconds"] is None
+        assert not list(cache.parent.glob(".mf-web-h264-*.h264"))
+        assert not list(cache.parent.glob(".mf-web-render-*.mkv"))
+
+        inspected = renderer.inspect_clip_render(timeline, clip.id)
+        assert inspected.cache_status == "ready"
+        assert inspected.actual_capture is not None
+        assert inspected.actual_capture.backend == "webcodecs-h264"
+        before = cache.stat().st_mtime_ns
+        assert renderer.render_clip(timeline, clip.id) == cache
+        assert cache.stat().st_mtime_ns == before
+
+
+def test_direct_h264_uses_rational_frame_boundaries_without_long_run_drift() -> None:
+    from mediaflow.infrastructure.web_direct_h264 import _round_microseconds
+
+    fps_numerator = 30_000
+    fps_denominator = 1001
+    frame_count = round(10 * 60 * fps_numerator / fps_denominator)
+    boundaries = [
+        _round_microseconds(index, fps_numerator, fps_denominator)
+        for index in range(frame_count + 1)
+    ]
+    durations = [
+        right - left
+        for left, right in zip(boundaries, boundaries[1:], strict=False)
+    ]
+    exact_end = Fraction(
+        frame_count * 1_000_000 * fps_denominator,
+        fps_numerator,
+    )
+
+    assert set(durations) == {33_366, 33_367}
+    assert all(duration > 0 for duration in durations)
+    assert sum(durations) == boundaries[-1]
+    assert abs(Fraction(boundaries[-1]) - exact_end) <= Fraction(1, 2)
+
+
+def test_direct_h264_failure_restarts_the_complete_frame_pipe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mediaflow.infrastructure.web_direct_h264 import DirectH264FallbackRequired
+
+    _enable_short_non_4k_direct_h264(monkeypatch)
+
+    with ProjectRepository.create(
+        tmp_path / "Direct H264 fallback",
+        "Direct H264 fallback",
+    ) as repository:
+        editor, service = _service(repository)
+        project, asset, clip = _add_web_clip(
+            repository,
+            editor,
+            service,
+            duration=30,
+        )
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        target = renderer.cache.target(timeline, clip, asset)
+
+        def fail_direct(**_arguments):
+            raise DirectH264FallbackRequired("injected direct encoder failure")
+
+        monkeypatch.setattr(
+            web_browser_cache_module,
+            "render_webcodecs_h264",
+            fail_direct,
+        )
+        cache = renderer.render_clip(timeline, clip.id)
+        manifest = json.loads(target.manifest_path.read_text(encoding="utf-8"))
+
+        assert cache.is_file()
+        assert manifest["capture"]["planned_backend"] == "webcodecs-h264"
+        assert manifest["capture"]["actual_backend"] in {"drawelement", "screenshot"}
+        assert "injected direct encoder failure" in manifest["capture"]["fallback_reason"]
+        assert manifest["capture"]["encoder"] is None
+        assert manifest["probe"]["codec_name"] == "ffv1"
+        assert manifest["probe"]["pixel_format"] == "bgra"
+        assert not list(cache.parent.glob(".mf-web-h264-*.h264"))
+        assert not list(cache.parent.glob(".mf-web-render-*.mkv"))
 
 
 def _native_source_record(
@@ -464,6 +901,67 @@ def _build_native_media_package(tmp_path: Path) -> Path:
         '<div id="native-test-overlay"></div></main>',
     )
     index_path.write_text(index, encoding="utf-8")
+    return package_root
+
+
+def _build_native_audio_only_package(tmp_path: Path) -> Path:
+    package_root = tmp_path / "editable-media-native-audio-only"
+    shutil.copytree(STARTER, package_root)
+    assets = package_root / "assets"
+    assets.mkdir()
+    audio = assets / "native-audio.wav"
+    subprocess.run(
+        [
+            str(RuntimeContext.discover().paths.ffmpeg),
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=660:sample_rate=48000:duration=0.25",
+            "-c:a",
+            "pcm_s16le",
+            "-y",
+            str(audio),
+        ],
+        check=True,
+    )
+    manifest_path = package_root / "editable-media.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["data_fields"].append(
+        {
+            "id": "native_audio",
+            "name": "Native audio",
+            "kind": "media-source",
+            "default": "native-audio",
+        }
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    sources = {
+        "protocol": "visual-multimedia-media-sources",
+        "version": 4,
+        "sources": [
+            _native_source_record(
+                source_id="native-audio",
+                media_type="audio",
+                relative_path="assets/native-audio.wav",
+                binding={
+                    "pipeline": "native-audio",
+                    "loop": "repeat",
+                    "source_in_ms": 0,
+                    "gain_db": -6,
+                },
+                package_root=package_root,
+            )
+        ],
+    }
+    (package_root / "media-sources.json").write_text(
+        json.dumps(sources, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return package_root
 
 
@@ -1016,6 +1514,54 @@ def test_native_video_and_audio_use_one_web_cache_through_final_export(
         repository.close()
 
 
+def test_direct_h264_muxes_the_existing_continuous_native_audio_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_short_non_4k_direct_h264(monkeypatch)
+    package = _build_native_audio_only_package(tmp_path)
+    with ProjectRepository.create(
+        tmp_path / "Direct H264 native audio",
+        "Direct H264 native audio",
+    ) as repository:
+        editor, service = _service(repository)
+        project = repository.projects.get_project()
+        asset = service.packages.import_package(package)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        target = renderer.cache.target(timeline, clip, asset)
+
+        assert asset.metadata.has_audio is True
+        assert not target.native_media_plan.video_segments
+        assert target.native_media_plan.audio_segments
+        assert renderer.inspect_clip_render(timeline, clip.id).planned_backend == "webcodecs-h264"
+
+        cache = renderer.render_clip(timeline, clip.id)
+        manifest = json.loads(target.manifest_path.read_text(encoding="utf-8"))
+
+        assert cache.is_file()
+        assert manifest["capture"]["actual_backend"] == "webcodecs-h264", manifest[
+            "capture"
+        ]["fallback_reason"]
+        assert manifest["probe"]["codec_name"] == "h264"
+        assert manifest["probe"]["has_audio"] is True
+        assert manifest["probe"]["audio_codec_name"] == "flac"
+        assert manifest["probe"]["audio_sample_rate"] == 48000
+        assert manifest["probe"]["audio_channels"] == 2
+        assert manifest["probe"]["packet_pts_monotonic"] is True
+        assert manifest["probe"]["packet_dts_monotonic"] is True
+        assert manifest["probe"]["maximum_video_clock_error_microseconds"] <= 1_000
+        assert 0 <= manifest["probe"]["audio_video_end_drift_microseconds"] <= 33_334
+
+
 def test_native_media_cannot_be_misbound_to_a_browser_asset_slot(
     tmp_path: Path,
 ) -> None:
@@ -1093,8 +1639,12 @@ def test_web_render_restarts_ffmpeg_after_fast_capture_failure(
         assert not list(cache.parent.glob(f"{cache.stem}.*.partial{cache.suffix}"))
         manifest_path = cache.with_name(f"{cache.name}.manifest.json")
         manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert manifest_payload["schema"] == "mediaflow-web-render-cache/v2"
+        assert manifest_payload["schema"] == "mediaflow-web-render-cache/v5"
         assert manifest_payload["probe"]["frame_count"] == 3
+        assert manifest_payload["capture"]["planned_mode"] == "auto"
+        assert manifest_payload["capture"]["planned_backend"] == "frame-pipe"
+        assert manifest_payload["capture"]["actual_backend"] == "screenshot"
+        assert manifest_payload["capture"]["captured_frames"] == 3
         metrics = real_engine.diagnostics().last_metrics
         assert metrics is not None
         assert metrics.capture_backend == "screenshot"
@@ -1170,6 +1720,54 @@ def test_web_render_cancellation_aborts_ffmpeg_and_never_publishes_cache(
         assert not target.path.exists()
         assert not target.path.with_name(f"{target.path.name}.manifest.json").exists()
         assert not list(target.path.parent.glob(f"{target.path.stem}.*.partial{target.path.suffix}"))
+    finally:
+        repository.close()
+
+
+def test_direct_h264_cancellation_removes_stream_and_never_publishes_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_short_non_4k_direct_h264(monkeypatch)
+    repository = ProjectRepository.create(
+        tmp_path / "Cancelled direct H264 render",
+        "Cancelled direct H264 render",
+    )
+    editor, service = _service(repository)
+    try:
+        project, asset, clip = _add_web_clip(
+            repository,
+            editor,
+            service,
+            duration=30,
+        )
+        timeline = repository.timeline.load_timeline(project.main_sequence_id)
+        renderer = WebRenderService(repository, RuntimeContext.discover().paths)
+        target = renderer.cache.target(timeline, clip, asset)
+        completed_frames = 0
+
+        def report(progress) -> None:
+            nonlocal completed_frames
+            if progress.message_code == "web_rendering" and progress.completed:
+                completed_frames = int(progress.completed)
+
+        def cancel_after_first_encoded_frame() -> None:
+            if completed_frames >= 1:
+                raise TaskStopped(TaskStatus.CANCELLED)
+
+        with pytest.raises(TaskStopped):
+            renderer.render_clip(
+                timeline,
+                clip.id,
+                progress=report,
+                check_cancelled=cancel_after_first_encoded_frame,
+            )
+
+        assert completed_frames >= 1
+        assert not target.path.exists()
+        assert not target.manifest_path.exists()
+        assert not list(target.path.parent.glob(".mf-web-h264-*.h264"))
+        assert not list(target.path.parent.glob(".mf-web-render-*.mkv"))
     finally:
         repository.close()
 
@@ -2262,6 +2860,18 @@ def test_v6_cli_chain(
     version = request("project.version.create", {"name": "Before CLI render"})
     assert version["version"]["name"] == "Before CLI render"
 
+    inspected_before = request(
+        "web.clip.render.inspect",
+        {"sequence_id": sequence_id, "clip_id": clip_id},
+    )["render_plan"]
+    assert inspected_before["schema"] == "mediaflow-web-render-plan/v1"
+    assert inspected_before["cache_status"] == "missing"
+    assert inspected_before["capture_mode"] == "auto"
+    assert inspected_before["strategy"] == (
+        "verified-drawelement-with-atomic-screenshot-fallback"
+    )
+    assert inspected_before["verification_frames"]
+
     completed = subprocess.run(
         [sys.executable, "-m", "mediaflow.cli", "execute", "--request", "-"],
         input=json.dumps(request_payload("web.clip.get", {"clip_id": clip_id})),
@@ -2310,6 +2920,18 @@ def test_v6_cli_chain(
     assert completed_render["status"] == "completed"
     artifact = ArtifactReference.model_validate(completed_render["artifacts"][0])
     assert artifact.resolve(project_path).is_file()
+
+    inspected_after = request(
+        "web.clip.render.inspect",
+        {"sequence_id": sequence_id, "clip_id": clip_id},
+    )["render_plan"]
+    assert inspected_after["plan_digest"] == inspected_before["plan_digest"]
+    assert inspected_after["cache_status"] == "ready"
+    assert inspected_after["actual_capture"]["backend"] in {
+        "drawelement",
+        "screenshot",
+    }
+    assert inspected_after["actual_capture"]["captured_frames"] == 2
 
     variants = request(
         "web.batch.create",

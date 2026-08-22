@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
 
 from mediaflow.domain.timebase import reframe_interval
+from mediaflow.waveform_cache import inspect_waveform_cache
 
 from .base import Projector
 
 
 class AssetProjector(Projector):
-    def refresh_assets(self) -> None:
+    def refresh_assets(self, *, refresh_timeline: bool = True) -> None:
         if not self._session.state.binding.current:
             self._session.models.assets.set_items([])
+            self._session.models.filtered_assets.set_extra_search_text({})
             self._session.models.asset_bins.set_items([])
             self._session.models.asset_moments.set_items([])
             return
@@ -25,16 +26,21 @@ class AssetProjector(Projector):
             for asset_id, path in self._session.state.assets.thumbnail_paths.items()
             if asset_id in available_ids
         }
-        transcript_terms: dict[str, list[str]] = {}
-        for document in self._session.state.binding.require_current().list_subtitle_documents():
-            text = " ".join(
-                segment.text
-                for segment in self._session.state.binding.require_current().list_subtitle_segments(
-                    document.id
-                )
+        documents = self._session.state.binding.require_current().list_subtitle_documents()
+        segments_by_document = {
+            document.id: self._session.state.binding.require_current().list_subtitle_segments(
+                document.id
             )
+            for document in documents
+        }
+        transcript_terms: dict[str, list[str]] = {}
+        for document in documents:
+            text = " ".join(segment.text for segment in segments_by_document[document.id])
             for asset_id in {document.asset_id, document.media_asset_id} - {None}:
                 transcript_terms.setdefault(asset_id, []).append(text)
+        self._session.models.filtered_assets.set_extra_search_text(
+            {asset_id: " ".join(values) for asset_id, values in transcript_terms.items()}
+        )
         rows = [
             {
                 "assetId": asset.id,
@@ -54,10 +60,7 @@ class AssetProjector(Projector):
                 ),
                 "proxyReady": bool(asset.proxy_path),
                 "waveformReady": bool(asset.waveform_path),
-                "searchText": self._asset_search_text(
-                    asset,
-                    transcript_terms.get(asset.id, []),
-                ),
+                "searchText": self._asset_search_text(asset),
             }
             for asset in assets
         ]
@@ -88,8 +91,13 @@ class AssetProjector(Projector):
                 for item in bins
             ]
         )
-        self.refresh_asset_moments(assets)
-        self._session.projectors.timeline.refresh_timeline()
+        self.refresh_asset_moments(
+            assets,
+            documents=documents,
+            segments_by_document=segments_by_document,
+        )
+        if refresh_timeline:
+            self._session.projectors.timeline.refresh_timeline()
         for asset in assets:
             self.request_waveform_data(asset.id, asset.waveform_path)
         self._session.state.selection.asset_ids = [
@@ -98,7 +106,7 @@ class AssetProjector(Projector):
         self.request_asset_thumbnails(assets)
 
     @staticmethod
-    def _asset_search_text(asset, transcript_terms: list[str]) -> str:
+    def _asset_search_text(asset) -> str:
         terms = [
             asset.name,
             asset.kind.value,
@@ -110,7 +118,6 @@ class AssetProjector(Projector):
             terms.append(
                 "横屏 landscape" if asset.metadata.width >= asset.metadata.height else "竖屏 portrait"
             )
-        terms.extend(transcript_terms)
         return " ".join(term for term in terms if term).casefold()
 
     def request_asset_thumbnails(self, assets) -> None:
@@ -156,7 +163,13 @@ class AssetProjector(Projector):
         self._session.models.assets.set_items(rows)
         self.refresh_asset_moments(assets)
 
-    def refresh_asset_moments(self, assets) -> None:
+    def refresh_asset_moments(
+        self,
+        assets,
+        *,
+        documents=None,
+        segments_by_document=None,
+    ) -> None:
         if not self._session.state.binding.current or not self._session.state.binding.timeline:
             self._session.models.asset_moments.set_items([])
             return
@@ -167,7 +180,16 @@ class AssetProjector(Projector):
         active_profile = self._session.state.binding.require_timeline().state.sequence.profile
         assets_by_id = {asset.id: asset for asset in assets}
         rows: list[dict] = []
-        for document in self._session.state.binding.require_current().list_subtitle_documents():
+        if documents is None:
+            documents = self._session.state.binding.require_current().list_subtitle_documents()
+        if segments_by_document is None:
+            segments_by_document = {
+                document.id: self._session.state.binding.require_current().list_subtitle_segments(
+                    document.id
+                )
+                for document in documents
+            }
+        for document in documents:
             asset_id = document.media_asset_id or document.asset_id
             asset = assets_by_id.get(asset_id)
             if asset is None:
@@ -177,7 +199,7 @@ class AssetProjector(Projector):
                 if document.sequence_id
                 else main_profile
             )
-            for segment in self._session.state.binding.require_current().list_subtitle_segments(document.id):
+            for segment in segments_by_document[document.id]:
                 start, end = reframe_interval(
                     segment.start_frame,
                     segment.end_frame,
@@ -254,6 +276,6 @@ class AssetProjector(Projector):
 
         def load() -> tuple[int, dict]:
             modified = path.stat().st_mtime_ns
-            return modified, json.loads(path.read_text(encoding="utf-8"))
+            return modified, inspect_waveform_cache(path).as_descriptor(path)
 
         self._session.background.submit("waveform", request_id, load)

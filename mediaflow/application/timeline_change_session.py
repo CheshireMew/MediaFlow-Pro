@@ -12,6 +12,12 @@ from mediaflow.application.project_changes import (
     entity_sequence_change_set,
     timeline_change_set,
 )
+from mediaflow.application.timeline_change_commit import (
+    canonical_timeline_state,
+    commit_clip_delta,
+    copy_timeline_state,
+    record_full_timeline_change,
+)
 from mediaflow.application.timeline_clock import (
     project_frame_profile,
     reframe_timeline_clock,
@@ -23,10 +29,7 @@ from mediaflow.domain.collaboration import ProjectChangeSet
 from mediaflow.domain.frame_clock import MainFrameClockSnapshot
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.timeline import TimelineMergeConflict, TimelineState
-from mediaflow.domain.timeline_history import (
-    TIMELINE_HISTORY_MODE,
-    compact_timeline_change,
-)
+from mediaflow.domain.timeline_history import TIMELINE_HISTORY_MODE
 
 
 class TimelineChangeSession:
@@ -94,7 +97,6 @@ class TimelineChangeSession:
             invalidate_proxies=is_main_sequence,
         )
         if source_snapshot is None:
-
             def mutate(state: TimelineState) -> None:
                 state.sequence = change.state.sequence
                 state.clips = list(change.state.clips)
@@ -173,6 +175,45 @@ class TimelineChangeSession:
         TimelineRules.assign_default_primary_dialogue_track(after)
         TimelineRules.normalize_sequence_in_out(after)
         TimelineRules.normalize_compounds(after)
+        self._commit_prepared(
+            label,
+            before,
+            after,
+            allow_locked_changes=allow_locked_changes,
+        )
+
+    def commit_clip_change(
+        self,
+        label: str,
+        clip_ids: set[str],
+        mutate: Callable[[TimelineState], None],
+    ) -> None:
+        """Commit a clip-only edit through the delta validation and storage path."""
+
+        result = commit_clip_delta(
+            self.repository,
+            self._validator,
+            self.history,
+            self._state,
+            self.sequence_id,
+            label,
+            clip_ids,
+            mutate,
+            self._timeline_action,
+        )
+        if result.committed is None:
+            self._commit_prepared(label, result.before, result.after)
+        else:
+            self._state = result.committed
+
+    def _commit_prepared(
+        self,
+        label: str,
+        before: TimelineState,
+        after: TimelineState,
+        *,
+        allow_locked_changes: bool = False,
+    ) -> None:
         self._validator.validate(
             after,
             baseline=before,
@@ -180,16 +221,12 @@ class TimelineChangeSession:
         )
         if after == before:
             return
-        self._state = self._apply_change(before, after)
-        before_patch, after_patch = compact_timeline_change(before, after)
-        self.history.push(
-            ProjectEditCommand(
-                label=label,
-                undo_actions=[self._timeline_action(after_patch, before_patch)],
-                redo_actions=[self._timeline_action(before_patch, after_patch)],
-            ),
-            timeline_change_set(before, after),
+        self._state = self._apply_change(
+            before,
+            after,
+            source_is_session_state=True,
         )
+        record_full_timeline_change(self.history, label, before, after, self._timeline_action)
 
     def validate_preview(self, candidate: TimelineState) -> None:
         self._validator.validate(candidate, baseline=self._state)
@@ -252,8 +289,16 @@ class TimelineChangeSession:
         self,
         source: TimelineState,
         destination: TimelineState,
+        *,
+        source_is_session_state: bool = False,
     ) -> TimelineState:
         stored_sequence = self.repository.sequences.get_sequence(self.sequence_id)
+        if (
+            source_is_session_state
+            and stored_sequence.timeline_revision
+            == self._state.sequence.timeline_revision
+        ):
+            return self._persist_change(self._state, destination)
         current = (
             self._state
             if stored_sequence.timeline_revision == self._state.sequence.timeline_revision
@@ -265,33 +310,8 @@ class TimelineChangeSession:
         self._validator.validate(merged, baseline=self._state)
         return self._persist_change(current, merged)
 
-    @staticmethod
-    def copy_state(state: TimelineState) -> TimelineState:
-        return state.model_copy(
-            update={
-                "tracks": list(state.tracks),
-                "clips": list(state.clips),
-                "compounds": list(state.compounds),
-                "transitions": list(state.transitions),
-                "markers": list(state.markers),
-                "ranges": list(state.ranges),
-                "web_states": dict(state.web_states),
-            }
-        )
-
-    @staticmethod
-    def canonical_state(state: TimelineState) -> TimelineState:
-        return state.model_copy(
-            update={
-                "tracks": sorted(state.tracks, key=lambda item: (item.position, item.id)),
-                "clips": sorted(state.clips, key=lambda item: (item.timeline_start, item.id)),
-                "compounds": sorted(state.compounds, key=lambda item: item.id),
-                "transitions": sorted(state.transitions, key=lambda item: item.id),
-                "markers": sorted(state.markers, key=lambda item: (item.frame, item.id)),
-                "ranges": sorted(state.ranges, key=lambda item: (item.start_frame, item.id)),
-                "web_states": dict(sorted(state.web_states.items())),
-            }
-        )
+    copy_state = staticmethod(copy_timeline_state)
+    canonical_state = staticmethod(canonical_timeline_state)
 
     def _persist_change(
         self,

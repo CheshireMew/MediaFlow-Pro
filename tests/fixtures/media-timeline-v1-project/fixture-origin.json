@@ -2,6 +2,7 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/scripts/self-test-media-timeline.mjs",
+  "producer_revision": "752315c54042ee8317205b856dd3d91bbe5c1073",
   "media_timeline_version": 1,
   "files": {
     "media-timeline.json": "1a2fadbffb50aede83a273ba69d8d8172143503204fefe4a577a6d8b0290e33d",

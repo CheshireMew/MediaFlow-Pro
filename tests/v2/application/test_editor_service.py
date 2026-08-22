@@ -14,6 +14,7 @@ import pytest
 from aiohttp import ClientSession
 
 import mediaflow.service.client as service_client_module
+import mediaflow.service.desktop_application_proxy as desktop_application_module
 import mediaflow.service.discovery as service_discovery_module
 import mediaflow.service.remote_project as desktop_proxy_module
 from mediaflow.application.asset_task_handlers import AssetTaskHandlers
@@ -22,12 +23,14 @@ from mediaflow.desktop.controllers.controller_hub import EditorControllers
 from mediaflow.domain.collaboration import ProjectChangeEvent
 from mediaflow.domain.enums import TrackKind, TransitionKind
 from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.settings import DesktopSettings, ServiceSettings
 from mediaflow.domain.subtitles import SubtitleSegment
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.project_operation_repository import (
     ProjectOperationRepository,
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.service.client import (
     EditorServiceClient,
     EditorServiceRpcError,
@@ -69,6 +72,40 @@ def _request(
         "actor": {"kind": "agent", "id": "service-test", "name": "Service Test"},
         "client_id": "pytest-service-client",
     }
+
+
+def test_desktop_startup_bootstraps_runtime_settings_and_workspace_in_one_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict]] = []
+    runtime_descriptor = RuntimeContext.discover().desktop_descriptor()
+    service_settings = ServiceSettings()
+    runtime_tool_status = {"operation": None, "revision": 7}
+
+    def bootstrap_call(method: str, params: dict, **_kwargs):
+        calls.append((method, params))
+        return {
+            "runtime_descriptor": runtime_descriptor.model_dump(mode="json"),
+            "settings": encode_transport(service_settings),
+            "runtime_tool_status": encode_transport(runtime_tool_status),
+            "workspace": {"workspace_session_id": "workspace-one-rpc"},
+        }
+
+    monkeypatch.setattr(desktop_application_module, "call_sync", bootstrap_call)
+    monkeypatch.setattr(
+        desktop_application_module.DesktopSettingsRepository,
+        "load",
+        lambda _repository: DesktopSettings(),
+    )
+
+    application = DesktopEditorApplication()
+
+    assert len(calls) == 1
+    assert calls[0][0] == "desktop.bootstrap"
+    assert calls[0][1]["client_id"].startswith("desktop-")
+    assert application.workspace_session_id == "workspace-one-rpc"
+    assert application.service_settings == service_settings
+    assert application.initial_runtime_tool_status == runtime_tool_status
 
 
 @pytest.mark.asyncio
@@ -879,6 +916,16 @@ async def test_real_service_commits_event_then_pushes_and_replays_it(
         assert history["can_undo"] is True
         assert history["can_redo"] is False
         assert history["items"][-1]["id"] == "agent-batch-1"
+        summary = await client.call(
+            "history.list",
+            {"project": str(project), "include_items": False},
+        )
+        assert summary == {
+            "project_revision": history["project_revision"],
+            "items": [],
+            "can_undo": True,
+            "can_redo": False,
+        }
 
         undone = await client.call(
             "history.undo",
@@ -1371,6 +1418,8 @@ def test_desktop_and_agent_share_service_writer_and_live_projection(
         human_track = timeline.add_track(TrackKind.VIDEO, "Human video")
         assert human_track.name == "Human video"
         human_revision = project.content_revision()
+        time.sleep(0.1)
+        assert observed == []
 
         changed = execute_sync(
             _request(

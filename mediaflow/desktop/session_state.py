@@ -27,6 +27,7 @@ from mediaflow.desktop.models import (
     SubtitlePlacementListModel,
     SubtitleSegmentListModel,
     TaskListModel,
+    TimelineClipViewportModel,
     TimelineMarkerListModel,
     TimelineRangeListModel,
     TrackListModel,
@@ -251,6 +252,7 @@ class SessionModels:
     download_entries: DownloadEntryListModel
     tracks: TrackListModel
     clips: ClipListModel
+    visible_clips: TimelineClipViewportModel
     compound_clips: CompoundClipListModel
     transitions: TransitionListModel
     markers: TimelineMarkerListModel
@@ -282,6 +284,7 @@ class SessionModels:
             download_entries=DownloadEntryListModel(parent),
             tracks=TrackListModel(parent),
             clips=ClipListModel(parent),
+            visible_clips=TimelineClipViewportModel(parent),
             compound_clips=CompoundClipListModel(parent),
             transitions=TransitionListModel(parent),
             markers=TimelineMarkerListModel(parent),

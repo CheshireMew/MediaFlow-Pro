@@ -26,6 +26,12 @@ from mediaflow.desktop.models import (
     AssetListModel,
     DictListModel,
     SequenceListModel,
+    TimelineClipViewportModel,
+)
+from mediaflow.desktop.presenters.timeline_projector import (
+    PREVIEW_GRAPH_BASE_IDLE_MS,
+    PREVIEW_GRAPH_MAX_IDLE_MS,
+    preview_graph_idle_delay_ms,
 )
 from mediaflow.desktop.session_state import ImportDropBatch, TimelinePlacement
 from mediaflow.domain.downloads import DownloadRequest
@@ -98,6 +104,70 @@ def test_deferred_model_update_is_readable_before_qml_notification() -> None:
     assert changes == []
     QCoreApplication.processEvents()
     assert changes and changes[0][0] == 0
+
+
+def test_timeline_clip_viewport_keeps_large_fitted_timelines_bounded() -> None:
+    model = TimelineClipViewportModel()
+    rows = []
+    for index in range(5_000):
+        row = {role: "" for role in model._roles}
+        row.update(
+            {
+                "clipId": f"clip-{index}",
+                "trackPosition": index % 4,
+                "audioTrackPosition": -1,
+                "startFrame": index * 10,
+                "durationFrames": 10,
+                "endFrame": index * 10 + 10,
+                "assetKind": "video",
+                "trackKind": "video",
+                "mediaKind": "video_only",
+                "hasAudio": False,
+                "compoundId": "",
+            }
+        )
+        rows.append(row)
+
+    model.set_source_items(rows)
+    model.set_viewport(0, 50_000, 0.02)
+    model.set_selected_ids([row["clipId"] for row in rows])
+
+    assert model.rowCount() <= model._MAX_INTERACTIVE_ROWS
+    assert model.findRow("clipId", "clip-4999") >= 0
+    assert len(model.overview()) == 5_000
+
+    model.set_selected_ids(["clip-4999"])
+    resets: list[None] = []
+    model.modelReset.connect(lambda: resets.append(None))
+    changed = dict(rows[-1])
+    changed["startFrame"] = 50_000
+    changed["endFrame"] = 50_010
+
+    assert model.update_source_items([changed]) is True
+    assert resets == []
+    assert model.get(model.findRow("clipId", "clip-4999"))["startFrame"] == 50_000
+
+
+def test_preview_graph_idle_delay_scales_with_timeline_weight() -> None:
+    assert preview_graph_idle_delay_ms(0) == PREVIEW_GRAPH_BASE_IDLE_MS
+    assert preview_graph_idle_delay_ms(5_000) == 1_180
+    assert preview_graph_idle_delay_ms(50_000) == PREVIEW_GRAPH_MAX_IDLE_MS
+
+
+def test_keyed_model_update_does_not_require_a_full_projection() -> None:
+    model = DictListModel(["id", "value"])
+    model.set_items(
+        [
+            {"id": "first", "value": 1},
+            {"id": "second", "value": 2},
+        ]
+    )
+
+    assert model.update_items_by_key([{"id": "second", "value": 3}]) is True
+    assert model.snapshot() == [
+        {"id": "first", "value": 1},
+        {"id": "second", "value": 3},
+    ]
 
 
 def test_desktop_application_is_widget_capable_for_runtime_directory_fallback() -> None:
@@ -247,7 +317,7 @@ def test_desktop_main_configures_surface_and_webengine_before_application(
     monkeypatch.setattr(
         desktop_app,
         "create_engine",
-        lambda _app, _api: (SimpleNamespace(), controllers),
+        lambda _app, _api, **_kwargs: (SimpleNamespace(), controllers),
     )
     monkeypatch.setattr(sys, "argv", ["mediaflow"])
 
@@ -443,6 +513,53 @@ def test_dubbing_transcription_infers_the_only_audio_track(
         )
         assert selected_track.primary_dialogue is True
         assert selected_languages == ["en"]
+    finally:
+        controllers.shutdown()
+
+
+def test_clip_drag_preview_uses_local_index_without_remote_project_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = EditorApplication()
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(application)
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Local Drag Preview")
+        image_path = tmp_path / "drag-preview.png"
+        image = QImage(32, 18, QImage.Format.Format_RGB32)
+        image.fill(QColor("#334455"))
+        assert image.save(str(image_path))
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        asset = project.import_external_asset(image_path, expected_kind=AssetKind.IMAGE)
+        track = timeline.add_track(TrackKind.VIDEO)
+        clip = timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=24,
+        )
+        controllers.session.projectors.timeline.refresh_timeline()
+        monkeypatch.setattr(
+            timeline,
+            "preview_move_clips",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("drag preview crossed the project RPC boundary")
+            ),
+        )
+
+        preview = controllers.timeline_clips.previewClipMove(
+            clip.id,
+            12,
+            0,
+            False,
+        )
+
+        assert preview["accepted"] is True
+        assert preview["trackId"] == track.id
     finally:
         controllers.shutdown()
 

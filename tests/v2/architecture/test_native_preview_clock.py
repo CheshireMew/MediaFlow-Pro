@@ -22,8 +22,8 @@ def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> N
     assert "m_videoProfile" not in runtime_header
     assert 'factoryConsumer(m_previewProfile, "sdl2_audio"' in runtime_source
     assert 'factoryConsumer(m_previewProfile, "rtaudio"' in runtime_source
-    assert 'propertiesSetInt(previewProperties, "real_time", 0)' in runtime_source
-    assert 'propertiesSetInt(previewProperties, "real_time", -1)' not in runtime_source
+    assert 'propertiesSetInt(previewProperties, "real_time", -1)' in runtime_source
+    assert 'propertiesSetInt(previewProperties, "real_time", 0)' not in runtime_source
     assert '"libmltqt6:libmltglaxnimate-qt6:libmltopencv"' in runtime_source
     assert 'factoryConsumer(m_videoProfile, "null"' not in runtime_source
     assert 'propertiesSetInt(previewProperties, "video_off", 0)' in runtime_source
@@ -110,9 +110,10 @@ def test_native_preview_exposes_buffering_without_clearing_play_intent() -> None
 def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -> None:
     preview_header = PREVIEW_HEADER.read_text(encoding="utf-8")
     preview_source = PREVIEW_SOURCE.read_text(encoding="utf-8")
+    runtime_source = RUNTIME_SOURCE.read_text(encoding="utf-8")
 
     assert "QQueue<PendingFrame> m_pendingFrames" in preview_header
-    assert "MaxPendingPlaybackFrames = 60" in preview_header
+    assert "MaxPendingPlaybackFrames = 8" in preview_header
     assert "std::atomic<bool> m_queuePlaybackFrames" in preview_header
     assert "m_queuePlaybackFrames.store(true" in preview_source
     queue_boundary = preview_source.split("void MltPreviewItem::queueFrame", 1)[1].split(
@@ -122,4 +123,7 @@ def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -
     assert "m_pendingFrames.clear()" in queue_boundary
     assert "m_pendingFrames.size() >= MaxPendingPlaybackFrames" in queue_boundary
     assert "m_pendingFrames.enqueue" in queue_boundary
+    assert "m_pendingDroppedFrames.fetch_add" in queue_boundary
+    assert "&MltRuntime::framesDropped" in preview_source
+    assert "emit framesDropped" in runtime_source
     assert "m_pendingFrame = image" not in preview_source

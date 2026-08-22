@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import queue
 import threading
@@ -23,14 +22,12 @@ from mediaflow.infrastructure.web_capture_models import (
     _WorkerMetrics,
 )
 from mediaflow.infrastructure.web_capture_page import (
-    _CAPTURE_FAST_PNG,
-    _FAST_CAPTURE_COMPATIBILITY,
-    _INJECT_FAST_CAPTURE_CANVAS,
-    _REMOVE_FAST_CAPTURE_CANVAS,
     _browser_was_closed,
     _page_can_be_replaced,
     _retry_capture_url,
     _seek_frame,
+    capture_chrome_screenshot,
+    capture_fast_png,
 )
 from mediaflow.infrastructure.web_capture_quality import (
     _compare_fast_capture,
@@ -42,8 +39,20 @@ from mediaflow.infrastructure.web_capture_scheduler import (
     _CaptureModeConsensus,
     _FrameScheduler,
 )
+from mediaflow.infrastructure.web_capture_scripts import (
+    FAST_CAPTURE_COMPATIBILITY as _FAST_CAPTURE_COMPATIBILITY,
+)
+from mediaflow.infrastructure.web_capture_scripts import (
+    INJECT_FAST_CAPTURE_CANVAS as _INJECT_FAST_CAPTURE_CANVAS,
+)
+from mediaflow.infrastructure.web_capture_scripts import (
+    REMOVE_FAST_CAPTURE_CANVAS as _REMOVE_FAST_CAPTURE_CANVAS,
+)
+from mediaflow.infrastructure.web_capture_scripts import (
+    START_FAST_CAPTURE_PRODUCTION as _START_FAST_CAPTURE_PRODUCTION,
+)
 
-_BROWSER_IDLE_SECONDS = 30.0
+_BROWSER_IDLE_SECONDS = 120.0
 _CAPTURE_PAGE_READY_TIMEOUT_MS = 15_000
 
 
@@ -68,6 +77,11 @@ class _CaptureJob:
     retry_limit: int
 
 
+@dataclass(slots=True)
+class _BrowserWarmupJob:
+    future: Future[None]
+
+
 class _BrowserWorker:
     def __init__(
         self,
@@ -81,7 +95,7 @@ class _BrowserWorker:
         self.index = index
         self.on_browser_launch = on_browser_launch
         self.browser_pool_generation = browser_pool_generation
-        self.jobs: queue.Queue[_CaptureJob | None] = queue.Queue()
+        self.jobs: queue.Queue[_CaptureJob | _BrowserWarmupJob | None] = queue.Queue()
         self._state_lock = threading.Lock()
         self._active_job: _CaptureJob | None = None
         self.thread = threading.Thread(
@@ -93,6 +107,11 @@ class _BrowserWorker:
 
     def submit(self, job: _CaptureJob) -> None:
         self.jobs.put(job)
+
+    def prewarm(self) -> Future[None]:
+        future: Future[None] = Future()
+        self.jobs.put(_BrowserWarmupJob(future=future))
+        return future
 
     def stop(self) -> None:
         with self._state_lock:
@@ -112,16 +131,18 @@ class _BrowserWorker:
         try:
             while True:
                 try:
-                    job = self.jobs.get(timeout=_BROWSER_IDLE_SECONDS)
+                    item = self.jobs.get(timeout=_BROWSER_IDLE_SECONDS)
                 except queue.Empty:
                     if browser is not None:
                         browser.close()
                         browser = None
                     continue
-                if job is None:
+                if item is None:
                     break
-                with self._state_lock:
-                    self._active_job = job
+                job = item if isinstance(item, _CaptureJob) else None
+                if job is not None:
+                    with self._state_lock:
+                        self._active_job = job
                 try:
                     if startup_error is not None:
                         raise startup_error
@@ -171,26 +192,37 @@ class _BrowserWorker:
                         or browser_generation != self.browser_pool_generation.current
                     ):
                         replace_browser()
-                    metrics = self._capture(
-                        browser,
-                        browser_generation,
-                        replace_browser,
-                        job,
+                    metrics = (
+                        self._capture(
+                            browser,
+                            browser_generation,
+                            replace_browser,
+                            job,
+                        )
+                        if job is not None
+                        else None
                     )
                 except BaseException as error:
-                    job.future.set_exception(error)
-                    job.cancelled.set()
+                    item.future.set_exception(error)
+                    if job is not None:
+                        job.cancelled.set()
                     try:
                         if browser is not None and not browser.is_connected():
                             browser = None
                     except BaseException:
                         browser = None
                 else:
-                    job.future.set_result(metrics)
+                    if isinstance(item, _CaptureJob):
+                        if metrics is None:
+                            raise RuntimeError("Editable media capture returned no worker metrics")
+                        item.future.set_result(metrics)
+                    else:
+                        item.future.set_result(None)
                 finally:
-                    with self._state_lock:
-                        if self._active_job is job:
-                            self._active_job = None
+                    if job is not None:
+                        with self._state_lock:
+                            if self._active_job is job:
+                                self._active_job = None
         finally:
             if browser is not None:
                 try:
@@ -256,6 +288,8 @@ class _BrowserWorker:
                 capture_backend_reason = "another capture worker rejected drawElementImage"
             else:
                 capture_backend_reason = fast_capture_attempt.reason
+            if fast_capture:
+                page.evaluate(_START_FAST_CAPTURE_PRODUCTION)
             captured = 0
             seek_seconds = 0.0
             capture_seconds = 0.0
@@ -278,6 +312,7 @@ class _BrowserWorker:
                             _INJECT_FAST_CAPTURE_CANVAS,
                             {"width": job.width, "height": job.height},
                         )
+                        page.evaluate(_START_FAST_CAPTURE_PRODUCTION)
                     browser_replacement_count += 1
                 lease = job.scheduler.lease(self.index)
                 if lease is None:
@@ -502,31 +537,11 @@ class _BrowserWorker:
 
     @staticmethod
     def _capture_fast(page, width: int, height: int) -> bytes:
-        data_url = page.evaluate(
-            _CAPTURE_FAST_PNG,
-            {"width": width, "height": height},
-        )
-        if not isinstance(data_url, str) or "," not in data_url:
-            raise RuntimeError("drawElementImage returned an invalid PNG payload")
-        return base64.b64decode(data_url.split(",", 1)[1], validate=True)
+        return capture_fast_png(page, width, height)
 
     @staticmethod
     def _capture_screenshot(cdp, width: int, height: int) -> bytes:
-        result = cdp.send(
-            "Page.captureScreenshot",
-            {
-                "format": "png",
-                "fromSurface": True,
-                "captureBeyondViewport": False,
-                "optimizeForSpeed": True,
-            },
-        )
-        payload = result.get("data")
-        if not isinstance(payload, str):
-            raise RuntimeError("Chrome returned an invalid PNG screenshot")
-        decoded = base64.b64decode(payload, validate=True)
-        _validate_png(decoded, width, height)
-        return decoded
+        return capture_chrome_screenshot(cdp, width, height)
 
     @staticmethod
     def _put(

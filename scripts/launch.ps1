@@ -10,5 +10,5 @@ if (-not (Test-Path -LiteralPath $env:MEDIAFLOW_PYTHON -PathType Leaf)) {
     throw "MediaFlow Pro Python environment was not found: $env:MEDIAFLOW_PYTHON"
 }
 
-& $env:MEDIAFLOW_PYTHON -m mediaflow.desktop.app @ApplicationArguments
+& $env:MEDIAFLOW_PYTHON -m mediaflow.desktop.bootstrap @ApplicationArguments
 exit $LASTEXITCODE

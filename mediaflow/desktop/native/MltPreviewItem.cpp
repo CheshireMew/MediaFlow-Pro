@@ -157,6 +157,16 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
                 emit bufferedFramesChanged();
             }
         });
+    connect(
+        m_runtime,
+        &MltRuntime::framesDropped,
+        this,
+        [this](int count, quint64 requestId) {
+            if (requestId != m_requestId.load(std::memory_order_acquire) || count <= 0)
+                return;
+            m_pendingDroppedFrames.fetch_add(count, std::memory_order_acq_rel);
+        },
+        Qt::DirectConnection);
     connect(m_runtime, &MltRuntime::errorOccurred, this, &MltPreviewItem::receiveError, Qt::QueuedConnection);
     m_workerThread.setObjectName(QStringLiteral("MediaFlowMltPreview"));
     m_workerThread.start();
@@ -370,13 +380,16 @@ void MltPreviewItem::queueFrame(
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
     bool scheduleDelivery = false;
+    int evictedFrames = 0;
     {
         const QMutexLocker locker(&m_frameMutex);
         if (!m_queuePlaybackFrames.load(std::memory_order_acquire)) {
             m_pendingFrames.clear();
         } else {
-            while (m_pendingFrames.size() >= MaxPendingPlaybackFrames)
+            while (m_pendingFrames.size() >= MaxPendingPlaybackFrames) {
                 m_pendingFrames.dequeue();
+                ++evictedFrames;
+            }
         }
         m_pendingFrames.enqueue(PendingFrame{image, frame, duration, requestId});
         if (!m_frameDeliveryScheduled) {
@@ -384,6 +397,8 @@ void MltPreviewItem::queueFrame(
             scheduleDelivery = true;
         }
     }
+    if (evictedFrames > 0)
+        m_pendingDroppedFrames.fetch_add(evictedFrames, std::memory_order_acq_rel);
     if (scheduleDelivery) {
         QMetaObject::invokeMethod(
             this,
@@ -416,13 +431,16 @@ void MltPreviewItem::deliverPendingFrame()
     if (pending.requestId != m_requestId.load(std::memory_order_acquire))
         return;
     if (m_playing && qFuzzyCompare(qAbs(m_playbackRate), 1.0)) {
-        int dropped = pending.image.isNull() ? 1 : 0;
+        int observedDropped = pending.image.isNull() ? 1 : 0;
         if (m_lastPlaybackFrame >= 0) {
             const int direction = m_playbackRate < 0.0 ? -1 : 1;
             const int advance = (pending.position - m_lastPlaybackFrame) * direction;
             if (advance > 1)
-                dropped += advance - 1;
+                observedDropped = qMax(observedDropped, advance - 1);
         }
+        const int dropped = qMax(
+            observedDropped,
+            m_pendingDroppedFrames.exchange(0, std::memory_order_acq_rel));
         m_lastPlaybackFrame = pending.position;
         if (dropped > 0) {
             m_droppedFrames += dropped;
@@ -460,6 +478,7 @@ void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
     m_queuePlaybackFrames.store(false, std::memory_order_release);
+    m_pendingDroppedFrames.store(0, std::memory_order_release);
     if (m_errorString == message)
         return;
     m_errorString = message;
@@ -498,6 +517,7 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
         m_frameDeliveryScheduled = false;
     }
     m_queuePlaybackFrames.store(false, std::memory_order_release);
+    m_pendingDroppedFrames.store(0, std::memory_order_release);
     if (m_playing) {
         m_playing = false;
         emit playingChanged();

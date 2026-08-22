@@ -12,6 +12,9 @@ from mediaflow.infrastructure.web_capture_models import (
     WebWorkerSizingBound,
 )
 
+_MIN_FRAMES_PER_WORKER = 60
+_MIN_PARALLEL_FRAME_COUNT = 120
+
 
 @dataclass(slots=True)
 class _BooleanDecision:
@@ -180,7 +183,11 @@ def _resolve_worker_count(
         1,
         math.floor(available_memory * 0.5 / estimated_worker_bytes),
     )
-    by_work = 1 if frame_count < 90 else max(1, math.ceil(frame_count / 150))
+    by_work = (
+        1
+        if frame_count < _MIN_PARALLEL_FRAME_COUNT
+        else max(1, math.ceil(frame_count / _MIN_FRAMES_PER_WORKER))
+    )
     pixels = width * height
     by_pixels = 2 if pixels > 8_000_000 else 3 if pixels > 4_000_000 else limit
     limits: tuple[tuple[WebWorkerSizingBound, int], ...] = (

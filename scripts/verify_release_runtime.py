@@ -24,6 +24,7 @@ from mediaflow.service.discovery import ServiceDiscovery, ServicePaths
 from scripts.run_artifacts import verification_run
 
 FORBIDDEN_PROCESS_TERMS = ("node", "electron", "uvicorn", "fastapi")
+MAXIMUM_COLD_STARTUP_SECONDS = 4.5
 
 
 def _stop_owned_service(paths: ServicePaths) -> None:
@@ -86,8 +87,10 @@ def _wait_for_startup_ready(
             "ready_at_ns",
             "root_object_count",
             "event_loop_processed",
+            "startup_phases",
         }:
             raise RuntimeError("Startup readiness evidence has an unexpected schema")
+        phases = payload["startup_phases"]
         if (
             type(payload["schema_version"]) is not int
             or payload["schema_version"] != STARTUP_READY_SCHEMA_VERSION
@@ -97,6 +100,28 @@ def _wait_for_startup_ready(
             or type(payload["root_object_count"]) is not int
             or payload["root_object_count"] < 1
             or payload["event_loop_processed"] is not True
+            or not isinstance(phases, dict)
+            or set(phases) != {
+                "main_started_at_ns",
+                "runtime_ready_at_ns",
+                "service_ready_at_ns",
+                "surface_ready_at_ns",
+                "controllers_ready_at_ns",
+                "qml_loaded_at_ns",
+                "qml_ready_at_ns",
+            }
+            or not all(type(value) is int for value in phases.values())
+            or not (
+                started_at_ns
+                <= phases["main_started_at_ns"]
+                <= phases["runtime_ready_at_ns"]
+                <= phases["service_ready_at_ns"]
+                <= phases["surface_ready_at_ns"]
+                <= phases["controllers_ready_at_ns"]
+                <= phases["qml_loaded_at_ns"]
+                <= phases["qml_ready_at_ns"]
+                == payload["ready_at_ns"]
+            )
         ):
             raise RuntimeError(
                 "Startup readiness evidence does not match the launched process"
@@ -150,8 +175,9 @@ def verify(
         )
     environment[STARTUP_READY_PATH_ENV] = str(ready_path)
     started_at_ns = time.time_ns()
+    startup_started = time.perf_counter()
     process = subprocess.Popen(
-        command or [sys.executable, "-m", "mediaflow.desktop.app"],
+        command or [sys.executable, "-m", "mediaflow.desktop.bootstrap"],
         cwd=ROOT,
         env=environment,
         stdout=subprocess.PIPE,
@@ -166,10 +192,40 @@ def verify(
             started_at_ns=started_at_ns,
             timeout_seconds=startup_timeout_seconds,
         )
+        startup_seconds = time.perf_counter() - startup_started
+        phases = startup_ready["startup_phases"]
+        assert isinstance(phases, dict)
+        startup_phase_seconds = {
+            "python_import": (int(phases["main_started_at_ns"]) - started_at_ns) / 1_000_000_000,
+            "runtime_bootstrap": (
+                int(phases["runtime_ready_at_ns"]) - int(phases["main_started_at_ns"])
+            )
+            / 1_000_000_000,
+            "editor_service": (
+                int(phases["service_ready_at_ns"]) - int(phases["runtime_ready_at_ns"])
+            )
+            / 1_000_000_000,
+            "desktop_surface": (
+                int(phases["surface_ready_at_ns"]) - int(phases["service_ready_at_ns"])
+            )
+            / 1_000_000_000,
+            "controllers": (
+                int(phases["controllers_ready_at_ns"]) - int(phases["surface_ready_at_ns"])
+            )
+            / 1_000_000_000,
+            "qml_load": (
+                int(phases["qml_loaded_at_ns"]) - int(phases["controllers_ready_at_ns"])
+            )
+            / 1_000_000_000,
+            "first_event": (
+                int(phases["qml_ready_at_ns"]) - int(phases["qml_loaded_at_ns"])
+            )
+            / 1_000_000_000,
+        }
         root_process = psutil.Process(process.pid)
-        application_process = psutil.Process(
-            int(startup_ready["pid"])
-        )
+        application_pid = startup_ready["pid"]
+        assert type(application_pid) is int
+        application_process = psutil.Process(application_pid)
         service_discovery = ServiceDiscovery.read(service_paths.discovery)
 
         application_tree = [root_process, *root_process.children(recursive=True)]
@@ -184,9 +240,11 @@ def verify(
         for item in inspected:
             try:
                 name = item.name()
-                command = " ".join(item.cmdline())
-                process_rows.append({"pid": item.pid, "name": name, "command": command})
-                normalized = f"{name} {command}".lower()
+                process_command = " ".join(item.cmdline())
+                process_rows.append(
+                    {"pid": item.pid, "name": name, "command": process_command}
+                )
+                normalized = f"{name} {process_command}".lower()
                 if item.pid in application_tree_pids - {root_process.pid} and any(
                     term in normalized for term in FORBIDDEN_PROCESS_TERMS
                 ):
@@ -210,17 +268,38 @@ def verify(
             row for row in listening if row != expected_listener
         ]
         service_listener_verified = expected_listener in listening
+        application_running = (
+            process.poll() is None
+            and application_process.is_running()
+            and application_process.status()
+            != psutil.STATUS_ZOMBIE
+        )
+        if application_running:
+            application_process.terminate()
+            try:
+                application_process.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                application_process.kill()
+                application_process.wait(timeout=5)
+        desktop_shutdown_verified = not application_process.is_running()
+        resident_service_after_desktop_shutdown = (
+            service_discovery.belongs_to_live_process()
+            and service_process.is_running()
+            and service_process.status() != psutil.STATUS_ZOMBIE
+        )
         report = {
             "launcher_pid": process.pid,
             "application_pid": application_process.pid,
-            "application_running": (
-                process.poll() is None
-                and application_process.is_running()
-                and application_process.status()
-                != psutil.STATUS_ZOMBIE
+            "application_running": application_running,
+            "desktop_shutdown_verified": desktop_shutdown_verified,
+            "resident_service_after_desktop_shutdown": (
+                resident_service_after_desktop_shutdown
             ),
             "startup_ready_path": str(ready_path),
             "startup_ready": startup_ready,
+            "startup_seconds": startup_seconds,
+            "maximum_startup_seconds": MAXIMUM_COLD_STARTUP_SECONDS,
+            "startup_phase_seconds": startup_phase_seconds,
             "processes": process_rows,
             "listening_ports": listening,
             "editor_service_listener": expected_listener,
@@ -231,10 +310,10 @@ def verify(
                 service_listener_verified
                 and not unexpected_listeners
                 and not forbidden
-                and process.poll() is None
-                and application_process.is_running()
-                and application_process.status()
-                != psutil.STATUS_ZOMBIE
+                and startup_seconds <= MAXIMUM_COLD_STARTUP_SECONDS
+                and application_running
+                and desktop_shutdown_verified
+                and resident_service_after_desktop_shutdown
             ),
         }
         report_path = run_dir / "release-runtime-report.json"

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 
+from mediaflow.application.presentation_models import RecentProjectSnapshot
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import AssetKind, TaskStatus, TrackKind
 from mediaflow.domain.storage_names import content_addressed_child_path
@@ -25,12 +25,6 @@ from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.timeline_filmstrip import FILMSTRIP_REQUESTS, TimelineFilmstripService
-
-
-@dataclass(frozen=True, slots=True)
-class RecentProjectSnapshot:
-    items: list[dict]
-    totals: dict[str, int]
 
 
 def _user_visible_task_artifacts(task: Task) -> tuple[ArtifactReference, ...]:

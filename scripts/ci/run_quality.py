@@ -38,23 +38,35 @@ LOCAL_SERIAL_TESTS = (
     "tests/v2/application/test_task_handler_commit_boundaries.py::"
     "test_visual_analysis_cancelled_at_saving_publishes_no_file_or_timeline_edit",
 )
+LOCAL_RUNTIME_SERIAL_TESTS = (
+    "tests/v2/infrastructure/test_release_runtime.py::"
+    "test_release_runtime_reads_ready_evidence_from_the_real_desktop_startup",
+)
 RUFF_TARGETS = (
     "mediaflow",
+    "packaging/windows/portable_entrypoint.py",
     "tests/v2",
     "scripts/ci",
     "scripts/update_qm_translations.py",
     "scripts/prepare_ci_qt.py",
+    "scripts/archive_windows_portable.py",
+    "scripts/build_windows_portable.py",
+    "scripts/generate_runtime_license_bundle.py",
     "scripts/verify_display_capabilities.py",
     "scripts/verify_development_runtime.py",
     "scripts/verify_desktop_cli_requests.py",
     "scripts/verify_license_inventory.py",
     "scripts/verify_performance.py",
     "scripts/verify_preview_performance.py",
+    "scripts/verify_portable_distribution.py",
     "scripts/verify_reference_comparison_chain.py",
     "scripts/verify_real_user_chain.py",
     "scripts/verify_release_runtime.py",
     "scripts/verify_ui_matrix.py",
+    "scripts/verify_waveform_performance.py",
+    "scripts/verify_webcodecs_direct_encode.py",
     "scripts/verify_web_render_performance.py",
+    "scripts/verify_windows_portable.py",
 )
 LOCAL_EVIDENCE_PREFIXES = (".test-runs/",)
 
@@ -153,6 +165,9 @@ def _shard_command(profile: str, shard_index: int, shard_count: int) -> QualityC
         arguments.extend(("--exclude-file", excluded))
     if profile == "lightweight":
         for node in LOCAL_SERIAL_TESTS:
+            arguments.extend(("--exclude-node", node))
+    elif profile == "runtime":
+        for node in LOCAL_RUNTIME_SERIAL_TESTS:
             arguments.extend(("--exclude-node", node))
     arguments.extend(("--run", "--", "-q", "--tb=short", "--durations=25"))
     return QualityCommand(f"{profile}-{shard_index + 1}-of-{shard_count}", tuple(arguments))
@@ -302,6 +317,22 @@ def local_serial_commands() -> tuple[QualityCommand, ...]:
     )
 
 
+def local_runtime_serial_commands() -> tuple[QualityCommand, ...]:
+    return (
+        QualityCommand(
+            "release-startup-performance",
+            _python(
+                "-m",
+                "pytest",
+                *LOCAL_RUNTIME_SERIAL_TESTS,
+                "-q",
+                "--tb=short",
+                "--durations=10",
+            ),
+        ),
+    )
+
+
 def offline_preflight_commands(run_root: Path) -> tuple[QualityCommand, ...]:
     return (
         QualityCommand(
@@ -313,6 +344,15 @@ def offline_preflight_commands(run_root: Path) -> tuple[QualityCommand, ...]:
             ),
         ),
         QualityCommand("performance", _python("-m", "scripts.verify_performance")),
+        QualityCommand(
+            "waveform-performance",
+            _python(
+                "-m",
+                "scripts.verify_waveform_performance",
+                "--root",
+                str(run_root / "waveform-performance"),
+            ),
+        ),
         QualityCommand(
             "preview-performance",
             _python(
@@ -344,6 +384,10 @@ def offline_parallel_commands() -> tuple[QualityCommand, ...]:
 
 def offline_final_commands() -> tuple[QualityCommand, ...]:
     return (
+        QualityCommand(
+            "webcodecs-direct-encode",
+            _python("-m", "scripts.verify_webcodecs_direct_encode"),
+        ),
         QualityCommand(
             "web-render-performance",
             _python("-m", "scripts.verify_web_render_performance"),
@@ -427,6 +471,7 @@ def build_quality_stages(
                 max_workers=max_runtime_workers,
             )
         )
+        stages.append(QualityStage("runtime-serial", local_runtime_serial_commands()))
         stages.append(QualityStage("interactive-verifiers", interactive_verifier_commands()))
         stages.append(QualityStage("interactive-qml", interactive_qml_commands()))
         stages.append(

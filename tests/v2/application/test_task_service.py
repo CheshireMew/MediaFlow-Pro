@@ -39,6 +39,7 @@ from mediaflow.domain.task_commands import (
     AnalyzeSequenceBoundsCommand,
     ExportHighlightsCommand,
     ExportSequenceCommand,
+    GenerateProxyCommand,
     TranscribeSequenceCommand,
 )
 from mediaflow.domain.tasks import (
@@ -108,6 +109,64 @@ def test_real_task_generates_artifact_and_consumer_reads_persisted_result(tmp_pa
 
     service.shutdown()
     project_repository.close()
+
+
+def test_resource_intensive_tasks_serialize_without_blocking_light_work(tmp_path: Path) -> None:
+    root = tmp_path / "Task Resource Admission"
+    project_repository = ProjectRepository.create(root, "Task Resource Admission")
+    project = project_repository.projects.get_project()
+    service = TaskService(TaskRepository(project_repository), max_workers=3)
+    heavy_started = threading.Event()
+    light_started = threading.Event()
+    release_heavy = threading.Event()
+    state_lock = threading.Lock()
+    active_heavy = 0
+    maximum_active_heavy = 0
+
+    def heavy(_context: TaskContext) -> TaskCompletion:
+        nonlocal active_heavy, maximum_active_heavy
+        with state_lock:
+            active_heavy += 1
+            maximum_active_heavy = max(maximum_active_heavy, active_heavy)
+        heavy_started.set()
+        release_heavy.wait(timeout=5)
+        with state_lock:
+            active_heavy -= 1
+        return TaskCompletion()
+
+    def light(_context: TaskContext) -> TaskCompletion:
+        light_started.set()
+        return TaskCompletion()
+
+    service.register(TaskKind.PROXY, heavy)
+    service.register(TaskKind.ANALYZE, light)
+    try:
+        first_heavy = service.start(
+            project_id=project.id,
+            command=GenerateProxyCommand(asset_id="heavy-1"),
+        )
+        assert heavy_started.wait(timeout=2)
+        second_heavy = service.start(
+            project_id=project.id,
+            command=GenerateProxyCommand(asset_id="heavy-2"),
+        )
+        light_task = service.start(
+            project_id=project.id,
+            command=AnalyzeDownloadCommand(url="test://light-work"),
+        )
+
+        assert light_started.wait(timeout=2)
+        assert service.wait(light_task.id, timeout=2).status == TaskStatus.COMPLETED
+        assert maximum_active_heavy == 1
+
+        release_heavy.set()
+        assert service.wait(first_heavy.id, timeout=5).status == TaskStatus.COMPLETED
+        assert service.wait(second_heavy.id, timeout=5).status == TaskStatus.COMPLETED
+        assert maximum_active_heavy == 1
+    finally:
+        release_heavy.set()
+        service.shutdown()
+        project_repository.close()
 
 
 def test_published_task_result_retries_completion_receipt_instead_of_failing(

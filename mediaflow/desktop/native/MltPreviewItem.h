@@ -117,7 +117,7 @@ private slots:
     void receiveError(const QString &message, quint64 requestId);
 
 private:
-    static constexpr qsizetype MaxPendingPlaybackFrames = 60;
+    static constexpr qsizetype MaxPendingPlaybackFrames = 8;
 
     struct PendingFrame
     {
@@ -162,6 +162,7 @@ private:
     bool m_openScheduled = false;
     std::atomic<quint64> m_requestId{0};
     std::atomic<bool> m_queuePlaybackFrames{false};
+    std::atomic<int> m_pendingDroppedFrames{0};
     QMutex m_frameMutex;
     QThread m_workerThread;
     MltRuntime *m_runtime = nullptr;

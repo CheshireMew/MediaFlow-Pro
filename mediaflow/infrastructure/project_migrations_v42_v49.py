@@ -12,6 +12,10 @@ from mediaflow.domain.timeline_history import (
 )
 
 from .editable_media_project_migration import migrate_project_editable_media_to_v6
+from .project_history_repository import (
+    ACTIVE_HISTORY_RETENTION_GROUPS,
+    DISCARDED_HISTORY_RETENTION_GROUPS,
+)
 from .project_snapshot_migration import migrate_version_snapshots
 
 _PRE_COLLABORATION_IDEMPOTENCY_PREFIX = "pre-v44:"
@@ -105,6 +109,53 @@ def migrate_v46_to_v47(workspace) -> None:
         connection.execute(
             "UPDATE schema_info SET version=47 WHERE component='project'"
         )
+
+
+def migrate_v47_to_v48(workspace) -> None:
+    with workspace.transaction() as connection:
+        migrate_version_snapshots(
+            workspace,
+            connection,
+            source_version=47,
+            target_version=48,
+            migrate_database=_migrate_v47_database,
+        )
+        _migrate_v47_database(connection)
+        connection.execute(
+            "UPDATE schema_info SET version=48 WHERE component='project'"
+        )
+
+
+def _add_subtitle_segment_time_index(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_subtitle_segment_document_time
+           ON subtitle_segment(document_id, start_frame, id)"""
+    )
+
+
+def _migrate_v47_database(connection: sqlite3.Connection) -> None:
+    _add_subtitle_segment_time_index(connection)
+    connection.execute(
+        """DELETE FROM undo_group AS candidate
+           WHERE state IN ('applied', 'undone') AND rowid NOT IN (
+               SELECT rowid FROM undo_group
+               WHERE project_id=candidate.project_id
+                 AND state IN ('applied', 'undone')
+               ORDER BY state_revision DESC, updated_at DESC, id DESC
+               LIMIT ?
+           )""",
+        (ACTIVE_HISTORY_RETENTION_GROUPS,),
+    )
+    connection.execute(
+        """DELETE FROM undo_group AS candidate
+           WHERE state='discarded' AND rowid NOT IN (
+               SELECT rowid FROM undo_group
+               WHERE project_id=candidate.project_id AND state='discarded'
+               ORDER BY updated_at DESC, id DESC
+               LIMIT ?
+           )""",
+        (DISCARDED_HISTORY_RETENTION_GROUPS,),
+    )
 
 
 def _add_dubbing_documents(connection: sqlite3.Connection) -> None:

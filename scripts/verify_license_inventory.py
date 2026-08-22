@@ -45,6 +45,10 @@ PYTHON_COMPONENTS = {
     "av": {"BSD-3-Clause"},
     "ctranslate2": {"MIT"},
     "huggingface-hub": {"Apache-2.0"},
+    "pyinstaller": {
+        "GPLv2-or-later with a special exception which allows to use PyInstaller to "
+        "build and distribute non-free programs (including commercial ones)"
+    },
 }
 if platform.system() == "Windows":
     PYTHON_COMPONENTS["pywin32"] = {"PSF"}

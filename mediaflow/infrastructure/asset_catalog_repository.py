@@ -14,6 +14,7 @@ from mediaflow.domain.project import (
     AssetFingerprint,
     MediaMetadata,
 )
+from mediaflow.waveform_cache import waveform_cache_is_current
 
 from .file_fingerprint import fingerprint_file, fingerprint_matches
 from .project_repository_component import ProjectRepositoryComponent
@@ -335,8 +336,25 @@ class AssetCatalogRepository(ProjectRepositoryComponent):
                 )
             )
         if fingerprint_matches(source, asset.fingerprint):
-            if asset.status != AssetStatus.ONLINE:
-                return self.update_asset(asset.model_copy(update={"status": AssetStatus.ONLINE}))
+            waveform_path = asset.waveform_path
+            if waveform_path:
+                candidate = Path(waveform_path)
+                resolved_waveform = (
+                    candidate.resolve()
+                    if candidate.is_absolute()
+                    else (self.project_dir / candidate).resolve()
+                )
+                if not waveform_cache_is_current(resolved_waveform):
+                    waveform_path = None
+            if asset.status != AssetStatus.ONLINE or waveform_path != asset.waveform_path:
+                return self.update_asset(
+                    asset.model_copy(
+                        update={
+                            "status": AssetStatus.ONLINE,
+                            "waveform_path": waveform_path,
+                        }
+                    )
+                )
             return asset
         return self.update_asset(
             asset.model_copy(

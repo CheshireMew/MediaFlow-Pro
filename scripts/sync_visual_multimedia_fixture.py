@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -48,6 +49,42 @@ RESOURCE_CATALOG_SCHEMA_SOURCE = "schemas/media-resource-catalog.v1.schema.json"
 RESOURCE_CATALOG_SOURCE = "media-resource-catalog.json"
 RUNTIME_SOURCE = "assets/web-media-starter/editable-media-runtime.js"
 PORTABLE_TIMELINE_TEST_SCRIPT = "scripts/self-test-media-timeline.mjs"
+
+
+def clean_producer_revision(skill_root: Path) -> str:
+    completed = subprocess.run(
+        ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+        cwd=skill_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "The visual-multimedia producer must be a readable Git worktree:\n"
+            + completed.stderr.strip()
+        )
+    dirty = completed.stdout.strip()
+    if dirty:
+        raise RuntimeError(
+            "Refusing to sync generated consumer fixtures from an uncommitted "
+            "visual-multimedia worktree. Commit the producer sources first:\n"
+            + dirty
+        )
+    revision = subprocess.run(
+        ("git", "rev-parse", "--verify", "HEAD"),
+        cwd=skill_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    ).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RuntimeError(f"Producer HEAD is not a full Git revision: {revision!r}")
+    return revision
 
 
 def package_files(source: Path) -> tuple[Path, ...]:
@@ -156,6 +193,7 @@ def sync_editable_package(
     destination: Path,
     *,
     producer: str,
+    producer_revision: str,
 ) -> dict[str, object]:
     source = source.resolve(strict=True)
     manifest = json.loads((source / "editable-media.json").read_text(encoding="utf-8"))
@@ -167,6 +205,7 @@ def sync_editable_package(
         files=package_files(source),
         origin_fields={
             "producer": producer,
+            "producer_revision": producer_revision,
             "editable_media_version": 6,
         },
     )
@@ -177,6 +216,7 @@ def sync_media_build_case(
     destination: Path,
     *,
     producer: str,
+    producer_revision: str,
 ) -> dict[str, object]:
     source = source.resolve(strict=True)
     plan = json.loads((source / "media-build-plan.json").read_text(encoding="utf-8"))
@@ -191,12 +231,18 @@ def sync_media_build_case(
         files=package_files(source),
         origin_fields={
             "producer": producer,
+            "producer_revision": producer_revision,
             "media_build_plan_version": 1,
         },
     )
 
 
-def sync_portable_timeline_project(skill_root: Path, destination: Path) -> dict[str, object]:
+def sync_portable_timeline_project(
+    skill_root: Path,
+    destination: Path,
+    *,
+    producer_revision: str,
+) -> dict[str, object]:
     node = shutil.which("node")
     if node is None:
         raise RuntimeError("Node.js is required to synchronize the portable timeline fixture")
@@ -235,6 +281,7 @@ def sync_portable_timeline_project(skill_root: Path, destination: Path) -> dict[
         files=tuple(files),
         origin_fields={
             "producer": f"visual-multimedia/{PORTABLE_TIMELINE_TEST_SCRIPT}",
+            "producer_revision": producer_revision,
             "media_timeline_version": 1,
         },
     )
@@ -282,7 +329,12 @@ def sync_runtime_contract(source: Path, destination_name: str) -> Path:
     return destination
 
 
-def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
+def sync_contracts(
+    skill_root: Path,
+    destination: Path,
+    *,
+    producer_revision: str,
+) -> dict[str, object]:
     schema_source = skill_root / SCHEMA_SOURCE
     schema_destination = sync_schema(
         schema_source,
@@ -315,6 +367,7 @@ def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
         "media-resource-catalog.v1.schema.json",
     )
     return {
+        "producer_revision": producer_revision,
         "schema_sha256": sha256_file(schema_destination),
         "runtime_contract_sha256": sha256_file(runtime_contract),
         "runtime_script_sha256": sha256_file(runtime_script),
@@ -327,7 +380,12 @@ def sync_contracts(skill_root: Path, destination: Path) -> dict[str, object]:
     }
 
 
-def sync_resource_catalog(skill_root: Path, destination: Path) -> dict[str, object]:
+def sync_resource_catalog(
+    skill_root: Path,
+    destination: Path,
+    *,
+    producer_revision: str,
+) -> dict[str, object]:
     catalog_path = (skill_root / RESOURCE_CATALOG_SOURCE).resolve(strict=True)
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     if (
@@ -357,6 +415,7 @@ def sync_resource_catalog(skill_root: Path, destination: Path) -> dict[str, obje
         files=tuple(sorted(files, key=lambda path: path.relative_to(skill_root).as_posix())),
         origin_fields={
             "producer": "visual-multimedia/media-resource-catalog.json",
+            "producer_revision": producer_revision,
             "catalog_id": catalog["catalog_id"],
             "catalog_version": catalog["catalog_version"],
         },
@@ -369,15 +428,22 @@ def sync_resource_catalog(skill_root: Path, destination: Path) -> dict[str, obje
     }
 
 
-def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
+def sync_corpus(
+    skill_root: Path,
+    destination: Path,
+    *,
+    producer_revision: str | None = None,
+) -> dict[str, object]:
     skill_root = skill_root.expanduser().resolve(strict=True)
     destination = destination.expanduser().resolve()
+    producer_revision = producer_revision or clean_producer_revision(skill_root)
     packages = {}
     for source_relative, destination_relative in PACKAGE_SOURCES:
         packages[source_relative] = sync_editable_package(
             skill_root / source_relative,
             destination / destination_relative,
             producer=f"visual-multimedia/{source_relative}",
+            producer_revision=producer_revision,
         )
     media_build_cases = {}
     for source_relative, destination_relative in MEDIA_BUILD_CASE_SOURCES:
@@ -385,15 +451,22 @@ def sync_corpus(skill_root: Path, destination: Path) -> dict[str, object]:
             skill_root / source_relative,
             destination / destination_relative,
             producer=f"visual-multimedia/{source_relative}",
+            producer_revision=producer_revision,
         )
-    contracts = sync_contracts(skill_root, destination)
+    contracts = sync_contracts(
+        skill_root,
+        destination,
+        producer_revision=producer_revision,
+    )
     resource_catalog = sync_resource_catalog(
         skill_root,
         destination / "media-resource-catalog-v1-production",
+        producer_revision=producer_revision,
     )
     portable_timeline = sync_portable_timeline_project(
         skill_root,
         destination / "media-timeline-v1-project",
+        producer_revision=producer_revision,
     )
     return {
         "protocol": "mediaflow-editable-media-test-corpus",
@@ -425,14 +498,23 @@ def main() -> int:
     args = parser.parse_args()
     skill_root = args.visual_multimedia_root.expanduser().resolve(strict=True)
     destination = args.destination.expanduser().resolve()
+    producer_revision = clean_producer_revision(skill_root)
     result = (
         {
             "protocol": "mediaflow-editable-media-contracts",
             "version": 1,
-            **sync_contracts(skill_root, destination),
+            **sync_contracts(
+                skill_root,
+                destination,
+                producer_revision=producer_revision,
+            ),
         }
         if args.contracts_only
-        else sync_corpus(skill_root, destination)
+        else sync_corpus(
+            skill_root,
+            destination,
+            producer_revision=producer_revision,
+        )
     )
     print(
         json.dumps(

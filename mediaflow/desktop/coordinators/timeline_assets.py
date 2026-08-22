@@ -206,7 +206,7 @@ class TimelineAssetOperations(SessionCoordinator):
             return requested
         return self._session.state.binding.require_timeline().snap_frame(
             requested,
-            self._session._timeline_snap_targets([], placement.playhead_frame),
+            self._session._timeline_snapping.targets([], placement.playhead_frame),
             self._session._snap_tolerance_frames(placement.pixels_per_frame),
         )
 

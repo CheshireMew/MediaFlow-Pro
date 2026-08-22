@@ -59,6 +59,8 @@ class TimelineRules:
 
     @staticmethod
     def normalize_compounds(state: TimelineState) -> None:
+        if not state.compounds:
+            return
         clips = {clip.id: clip for clip in state.clips}
         normalized: list[CompoundClip] = []
         for compound in state.compounds:
@@ -74,7 +76,7 @@ class TimelineRules:
             ):
                 continue
             normalized.append(compound.model_copy(update={"clip_ids": [clip.id for clip in ordered]}))
-        state.compounds = normalized
+        state.compounds[:] = normalized
 
     @staticmethod
     def transition_is_valid(transition: Transition, clips: dict[str, Clip]) -> bool:

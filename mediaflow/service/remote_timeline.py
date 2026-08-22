@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from mediaflow.application.timeline_snapping import snap_frame
-from mediaflow.domain.enums import ClipMediaKind
-from mediaflow.domain.timeline import Clip, TimelineState
+from mediaflow.domain.timeline import TimelineState
 
 from .commands import DESKTOP_COMMANDS, desktop_command
+from .remote_timeline_cache import project_timeline_write
 
 if TYPE_CHECKING:
     from mediaflow.application.timeline_editor import TimelineEditor as _TimelineCommandSurface
@@ -53,6 +53,7 @@ class RemoteTimelineEditor(_TimelineCommandSurface):
         self.sequence_id = sequence_id
         self._cached_state: TimelineState | None = None
         self._cached_revision = -1
+        self._cached_duration_frames: int | None = None
 
     @property
     def state(self):
@@ -63,7 +64,15 @@ class RemoteTimelineEditor(_TimelineCommandSurface):
                 raise RuntimeError("Editor Service returned an invalid timeline state")
             self._cached_state = value
             self._cached_revision = self._project.known_content_revision
+            self._cached_duration_frames = value.duration_frames
         return self._cached_state
+
+    @property
+    def duration_frames(self) -> int:
+        state = self.state
+        if self._cached_duration_frames is None:
+            self._cached_duration_frames = state.duration_frames
+        return self._cached_duration_frames
 
     @property
     def can_undo(self) -> bool:
@@ -87,31 +96,25 @@ class RemoteTimelineEditor(_TimelineCommandSurface):
             raise RuntimeError("Editor Service returned an invalid reloaded timeline")
         self._cached_state = value
         self._cached_revision = self._project.known_content_revision
+        self._cached_duration_frames = value.duration_frames
         return value
 
     def invalidate(self) -> None:
         self._cached_state = None
         self._cached_revision = -1
+        self._cached_duration_frames = None
 
     def _apply_write(self, command: str, result: Any) -> None:
         state = self._cached_state
         if state is None:
             return
-        moved = result if isinstance(result, list) else [result]
-        if (
-            command not in {"move_clip", "move_clips"}
-            or not moved
-            or not all(isinstance(item, Clip) for item in moved)
-            or state.transitions
-            or any(item.media_kind == ClipMediaKind.LINKED_AV for item in moved)
-        ):
+        projected = project_timeline_write(state, command, result)
+        if projected is None:
             self.invalidate()
             return
-        replacements = {item.id: item for item in moved}
-        self._cached_state = state.model_copy(
-            update={"clips": [replacements.get(item.id, item) for item in state.clips]}
-        )
+        self._cached_state = projected
         self._cached_revision = self._project.known_content_revision
+        self._cached_duration_frames = projected.duration_frames
 
 
 def _install_timeline_commands() -> None:

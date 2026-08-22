@@ -81,6 +81,7 @@ def test_inventory_does_not_follow_links_and_only_reports_cleanup_candidates(
     assert inventory["bytes"] > 3
     assert inventory["cleanup"] == "report-only-until-authorized"
     assert inventory["cleanup_candidates"][0]["path"] == "r-complete"
+    assert inventory["cleanup_candidates"][0]["bytes"] == inventory["bytes"]
 
 
 def test_video_cache_estimate_accounts_for_partial_and_final_files() -> None:
@@ -221,6 +222,44 @@ def test_project_cache_gate_also_enforces_all_projects_total(
         )
 
     assert not current.exists()
+
+
+def test_project_cache_gate_uses_one_exact_inventory_for_both_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects = tmp_path / "projects"
+    current = projects / "current"
+    other = projects / "other"
+    current.mkdir(parents=True)
+    other.mkdir()
+    (current / "current.bin").write_bytes(b"x" * 80)
+    (other / "other.bin").write_bytes(b"x" * 100)
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_CACHE_MAX_BYTES", "100")
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_CACHES_MAX_BYTES", "1000")
+    monkeypatch.setenv("MEDIAFLOW_MINIMUM_FREE_BYTES", "1")
+    monkeypatch.setattr(
+        storage_budget.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=10_000, used=100, free=9_900),
+    )
+    original_inventory = storage_budget.directory_inventory
+    inventory_roots: list[Path] = []
+
+    def observed_inventory(root: str | Path) -> dict[str, object]:
+        inventory_roots.append(Path(root).resolve())
+        return original_inventory(root)
+
+    monkeypatch.setattr(storage_budget, "directory_inventory", observed_inventory)
+
+    with pytest.raises(RuntimeError, match="current project cache"):
+        storage_budget.require_project_cache_budget(
+            current,
+            expected_new_bytes=21,
+            label="current project cache",
+        )
+
+    assert inventory_roots == [projects.resolve()]
 
 
 def test_operation_budget_checks_peak_without_claiming_user_owned_files(

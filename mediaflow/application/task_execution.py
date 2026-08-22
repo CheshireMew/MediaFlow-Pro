@@ -28,6 +28,16 @@ from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.tasks import Task
 
 MINIMUM_RELIABLE_LEASE_DURATION_MS = 1_000
+RESOURCE_INTENSIVE_TASK_KINDS = frozenset(
+    {
+        TaskKind.PROXY,
+        TaskKind.WAVEFORM,
+        TaskKind.TRANSCRIBE,
+        TaskKind.DUBBING,
+        TaskKind.EXPORT,
+        TaskKind.WEB_RENDER,
+    }
+)
 
 
 class TaskExecutionEngine:
@@ -66,6 +76,11 @@ class TaskExecutionEngine:
             max_workers=max_workers,
             thread_name_prefix="mediaflow-task",
         )
+        self.resource_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="mediaflow-heavy-task",
+        )
+        self.worker_slots = threading.Semaphore(max_workers)
         self.tokens: dict[str, CancellationToken] = {}
         self.futures: dict[str, Future[None]] = {}
         self.lock = threading.RLock()
@@ -93,7 +108,12 @@ class TaskExecutionEngine:
                 return False
             self.tokens[task.id] = token
             try:
-                future = self.executor.submit(self._run, task.id, token)
+                executor = (
+                    self.resource_executor
+                    if task.kind in RESOURCE_INTENSIVE_TASK_KINDS
+                    else self.executor
+                )
+                future = executor.submit(self._run_with_admission, task.id, token)
             except Exception:
                 if self.tokens.get(task.id) is token:
                     self.tokens.pop(task.id, None)
@@ -152,10 +172,19 @@ class TaskExecutionEngine:
 
     def close(self) -> None:
         self.executor.shutdown(wait=True, cancel_futures=True)
+        self.resource_executor.shutdown(wait=True, cancel_futures=True)
 
     def require_accepting(self) -> None:
         if not self.accepting:
             raise RuntimeError("Task service is shutting down")
+
+    def _run_with_admission(self, task_id: str, token: CancellationToken) -> None:
+        while not self.worker_slots.acquire(timeout=0.1):
+            token.raise_if_requested()
+        try:
+            self._run(task_id, token)
+        finally:
+            self.worker_slots.release()
 
     def _run(self, task_id: str, token: CancellationToken) -> None:
         heartbeat_stop: threading.Event | None = None

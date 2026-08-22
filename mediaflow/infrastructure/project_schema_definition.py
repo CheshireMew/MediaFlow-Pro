@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 47
+PROJECT_SCHEMA_VERSION = 48
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -473,6 +473,8 @@ CREATE INDEX IF NOT EXISTS idx_track_sequence ON track(sequence_id, position);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_track_primary_dialogue
 ON track(sequence_id) WHERE primary_dialogue=1;
 CREATE INDEX IF NOT EXISTS idx_clip_track_time ON clip(track_id, timeline_start);
+CREATE INDEX IF NOT EXISTS idx_subtitle_segment_document_time
+ON subtitle_segment(document_id, start_frame, id);
 CREATE INDEX IF NOT EXISTS idx_marker_sequence_time ON timeline_marker(sequence_id, frame);
 CREATE INDEX IF NOT EXISTS idx_range_sequence_time ON timeline_range(sequence_id, start_frame);
 CREATE INDEX IF NOT EXISTS idx_task_project_time ON task(project_id, created_at);

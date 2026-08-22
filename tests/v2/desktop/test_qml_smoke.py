@@ -314,6 +314,9 @@ def test_resource_library_panel_adopts_a_real_lut_into_the_selected_clip(
             and workspace.findChild(QQuickItem, "resourceLibraryPanel").isVisible()
         )
 
+        resource_panel = workspace.findChild(QQuickItem, "resourceLibraryPanel")
+        assert resource_panel is not None
+        resource_panel.setProperty("selectedCategory", "lut")
         controllers.resources.refresh("lut", "")
         assert controllers.resources.sourceErrors == []
         assert controllers.resources.resultCount == 1
@@ -2390,7 +2393,7 @@ print('100%', flush=True)
         )
         assert transcription_task.command.plan.asr.model == "tiny.en"
         assert transcription_task.command.plan.timeline_signature != "legacy"
-        assert progress_snapshots
+        assert _process_until(lambda: bool(progress_snapshots), timeout=5)
         assert progress_snapshots == sorted(progress_snapshots)
         documents = controllers.session.state.binding.current.list_subtitle_documents(sequence_id=sequence_id)
         assert len(documents) == 1
@@ -3982,6 +3985,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert moved_audio["startFrame"] == independent_audio_start
         assert detached_video["startFrame"] == first_clip_projection["startFrame"]
         controllers.timeline_view.selectClip(first_clip_projection["clipId"])
+        waveforms = [
+            item for item in _visual_items(timeline) if item.objectName() == "clipWaveform"
+        ]
         assert any(item.parentItem().width() > item.width() for item in waveforms)
         assert all(item.width() <= timeline.width() for item in waveforms)
 
@@ -4047,6 +4053,24 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert _process_until(
             lambda: controllers.subtitle_view.selectedSubtitlePlacementId
             == subtitle_projection["placementId"]
+        )
+        linked_projection = next(
+            controllers.timeline_view.clipsModel.get(index)
+            for index in range(controllers.timeline_view.clipsModel.rowCount())
+            if controllers.timeline_view.clipsModel.get(index)["mediaKind"] == "linked_av"
+            and controllers.timeline_view.clipsModel.get(index)["audioTrackPosition"] == 1
+        )
+        timeline_scroll.setProperty(
+            "contentX",
+            linked_projection["startFrame"] * float(timeline.property("pixelsPerFrame")),
+        )
+        assert _process_until(
+            lambda: any(
+                item.objectName() == "embeddedAudioClip"
+                and item.property("clipId") == linked_projection["clipId"]
+                and item.isVisible()
+                for item in _visual_items(timeline)
+            )
         )
         subtitle_overlays = [
             item

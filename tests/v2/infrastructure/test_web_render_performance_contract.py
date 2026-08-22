@@ -88,7 +88,7 @@ def test_balanced_baseline_rejects_total_or_p95_regressions_over_ten_percent(
     current = {
         "seconds": 10.5,
         "frame_time_p95_ms": 86.0,
-        "worker_count": 2,
+        "worker_count": 3,
         "capture_backend": "drawelement",
     }
     accepted = _balanced_baseline_comparison(
@@ -103,4 +103,6 @@ def test_balanced_baseline_rejects_total_or_p95_regressions_over_ten_percent(
     )
 
     assert accepted["passed"] is True
+    assert accepted["baseline_worker_count"] == 2
+    assert accepted["current_worker_count"] == 3
     assert rejected["passed"] is False

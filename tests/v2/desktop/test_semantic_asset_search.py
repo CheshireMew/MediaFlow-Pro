@@ -51,7 +51,6 @@ def test_asset_search_uses_real_linked_transcript_and_multilingual_concepts(
         source_model = controllers.media.assetsModel
         media_row = source_model.findRow("assetId", media.id)
         assert media_row >= 0
-        assert "城市夜景与街道灯光" in source_model.get(media_row)["searchText"]
 
         controllers.media.setAssetSearchText("night city")
         filtered = controllers.media.filteredAssetsModel

@@ -39,21 +39,28 @@ class DesktopEditorApplication:
             id=f"desktop-{uuid.uuid4().hex}",
             name="MediaFlow Pro desktop",
         )
-        descriptor_value = call_sync("system.runtime.inspect")
+        bootstrap = call_sync(
+            "desktop.bootstrap",
+            {"client_id": self._actor.id},
+        )
+        if not isinstance(bootstrap, dict):
+            raise RuntimeError("Editor Service returned invalid desktop bootstrap data")
+        descriptor_value = bootstrap.get("runtime_descriptor")
         if not isinstance(descriptor_value, dict):
             raise RuntimeError("Editor Service returned an invalid runtime descriptor")
         self.runtime_descriptor = DesktopRuntimeDescriptor.model_validate(descriptor_value)
-        workspace = call_sync(
-            "workspace.attach",
-            {"client_id": self._actor.id},
-        )
+        workspace = bootstrap.get("workspace")
         if not isinstance(workspace, dict) or not workspace.get("workspace_session_id"):
             raise RuntimeError("Editor Service returned an invalid workspace session")
         self.workspace_session_id = str(workspace["workspace_session_id"])
-        settings = decode_transport(call_sync("desktop.application.settings"))
+        settings = decode_transport(bootstrap.get("settings"))
         if not isinstance(settings, ServiceSettings):
             raise RuntimeError("Editor Service returned invalid application settings")
         self._service_settings = settings
+        runtime_tool_status = decode_transport(bootstrap.get("runtime_tool_status"))
+        if not isinstance(runtime_tool_status, dict):
+            raise RuntimeError("Editor Service returned invalid runtime tool status")
+        self._initial_runtime_tool_status = runtime_tool_status
         self._desktop_settings_repository = DesktopSettingsRepository()
         self._desktop_settings = self._desktop_settings_repository.load()
         self.cookies = _RemoteCookieStore()
@@ -65,6 +72,10 @@ class DesktopEditorApplication:
     @property
     def desktop_settings(self) -> DesktopSettings:
         return self._desktop_settings
+
+    @property
+    def initial_runtime_tool_status(self) -> dict:
+        return dict(self._initial_runtime_tool_status)
 
     @property
     def native_qml_root(self) -> Path | None:

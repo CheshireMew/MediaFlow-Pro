@@ -2,19 +2,30 @@ from __future__ import annotations
 
 from PySide6.QtCore import QUrl
 
-from mediaflow.project_presentation import RecentProjectSnapshot
+from mediaflow.application.presentation_models import RecentProjectSnapshot
 
 from .base import Projector
 
 
 class WorkspaceProjector(Projector):
     def refresh_runtime_tool_status(self, *, preserve_cuda: bool = True) -> None:
+        self.apply_runtime_tool_status(
+            self._session._api.runtime_tool_status(),
+            preserve_cuda=preserve_cuda,
+        )
+
+    def apply_runtime_tool_status(
+        self,
+        status: dict,
+        *,
+        preserve_cuda: bool = True,
+    ) -> None:
         cuda = {
             key: self._session.state.runtime_state.status.get(key, "")
             for key in ("cudaStatus", "cudaSummary", "gpuName", "driverVersion")
         }
         self._session.state.runtime_state.status = {
-            **self._session._api.runtime_tool_status(),
+            **status,
             **(cuda if preserve_cuda else {}),
             "busy": False,
             "progressMode": "indeterminate",
