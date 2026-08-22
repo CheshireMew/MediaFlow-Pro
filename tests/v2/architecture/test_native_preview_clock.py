@@ -122,6 +122,8 @@ def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -
     assert "QQueue<PendingFrame> m_pendingFrames" in preview_header
     assert "MaxPendingPlaybackFrames = 8" in preview_header
     assert "std::atomic<bool> m_queuePlaybackFrames" in preview_header
+    assert "bool trackDrops = false" in preview_header
+    assert "std::atomic<bool> m_trackPlaybackDrops" in preview_header
     assert "m_queuePlaybackFrames.store(true" in preview_source
     queue_boundary = preview_source.split("void MltPreviewItem::queueFrame", 1)[1].split(
         "void MltPreviewItem::deliverPendingFrame", 1
@@ -130,6 +132,8 @@ def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -
     assert "m_pendingFrames.clear()" in queue_boundary
     assert "m_pendingFrames.size() >= MaxPendingPlaybackFrames" in queue_boundary
     assert "m_pendingFrames.enqueue" in queue_boundary
+    assert "m_trackPlaybackDrops.load" in queue_boundary
+    assert "if (evicted.trackDrops)" in queue_boundary
     assert "m_pendingDroppedFrames.fetch_add" in queue_boundary
     delivery_boundary = preview_source.split(
         "void MltPreviewItem::deliverPendingFrame", 1
@@ -137,6 +141,7 @@ def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -
     startup_drop_boundary = delivery_boundary.split(
         "const int queuedDropped = m_pendingDroppedFrames.exchange", 1
     )[1].split("m_lastPlaybackFrame = pending.position", 1)[0]
+    assert "if (pending.trackDrops" in delivery_boundary
     assert startup_drop_boundary.index("m_lastPlaybackFrame >= 0") < startup_drop_boundary.index(
         "qMax(observedDropped, queuedDropped)"
     )

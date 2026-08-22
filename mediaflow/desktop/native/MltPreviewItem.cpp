@@ -134,6 +134,9 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
     connect(m_runtime, &MltRuntime::playingChanged, this, [this](bool value, quint64 requestId) {
         if (requestId != m_requestId.load(std::memory_order_acquire))
             return;
+        m_trackPlaybackDrops.store(value, std::memory_order_release);
+        if (!value)
+            m_pendingDroppedFrames.store(0, std::memory_order_release);
         m_queuePlaybackFrames.store(value, std::memory_order_release);
         if (m_playing != value) {
             m_playing = value;
@@ -288,6 +291,8 @@ void MltPreviewItem::setHdrEnabled(bool value)
 void MltPreviewItem::play()
 {
     clearError();
+    if (!m_playing)
+        m_trackPlaybackDrops.store(false, std::memory_order_release);
     m_queuePlaybackFrames.store(true, std::memory_order_release);
     emit playRequested(m_requestId.load(std::memory_order_acquire));
 }
@@ -295,6 +300,8 @@ void MltPreviewItem::play()
 void MltPreviewItem::playRange(int startFrame, int endFrame)
 {
     clearError();
+    if (!m_playing)
+        m_trackPlaybackDrops.store(false, std::memory_order_release);
     m_requestedPosition = qMax(0, startFrame);
     m_seekPending = false;
     m_seekRetryAttempts = 0;
@@ -381,17 +388,19 @@ void MltPreviewItem::queueFrame(
         return;
     bool scheduleDelivery = false;
     int evictedFrames = 0;
+    const bool trackDrops = m_trackPlaybackDrops.load(std::memory_order_acquire);
     {
         const QMutexLocker locker(&m_frameMutex);
         if (!m_queuePlaybackFrames.load(std::memory_order_acquire)) {
             m_pendingFrames.clear();
         } else {
             while (m_pendingFrames.size() >= MaxPendingPlaybackFrames) {
-                m_pendingFrames.dequeue();
-                ++evictedFrames;
+                const PendingFrame evicted = m_pendingFrames.dequeue();
+                if (evicted.trackDrops)
+                    ++evictedFrames;
             }
         }
-        m_pendingFrames.enqueue(PendingFrame{image, frame, duration, requestId});
+        m_pendingFrames.enqueue(PendingFrame{image, frame, duration, requestId, trackDrops});
         if (!m_frameDeliveryScheduled) {
             m_frameDeliveryScheduled = true;
             scheduleDelivery = true;
@@ -430,7 +439,9 @@ void MltPreviewItem::deliverPendingFrame()
     }
     if (pending.requestId != m_requestId.load(std::memory_order_acquire))
         return;
-    if (m_playing && qFuzzyCompare(qAbs(m_playbackRate), 1.0)) {
+    if (pending.trackDrops
+        && m_playing
+        && qFuzzyCompare(qAbs(m_playbackRate), 1.0)) {
         const int queuedDropped = m_pendingDroppedFrames.exchange(
             0,
             std::memory_order_acq_rel);
@@ -448,6 +459,11 @@ void MltPreviewItem::deliverPendingFrame()
             m_droppedFrames += dropped;
             emit droppedFramesChanged();
         }
+    } else if (!pending.trackDrops) {
+        // Consumer startup can enqueue its complete prefill batch before the
+        // main thread receives playingChanged.  Those frames establish the
+        // first presentation baseline and are not playback-time drops.
+        m_pendingDroppedFrames.store(0, std::memory_order_release);
     }
     if (m_position != pending.position) {
         m_position = pending.position;
@@ -480,6 +496,7 @@ void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
     if (requestId != m_requestId.load(std::memory_order_acquire))
         return;
     m_queuePlaybackFrames.store(false, std::memory_order_release);
+    m_trackPlaybackDrops.store(false, std::memory_order_release);
     m_pendingDroppedFrames.store(0, std::memory_order_release);
     if (m_errorString == message)
         return;
@@ -519,6 +536,7 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
         m_frameDeliveryScheduled = false;
     }
     m_queuePlaybackFrames.store(false, std::memory_order_release);
+    m_trackPlaybackDrops.store(false, std::memory_order_release);
     m_pendingDroppedFrames.store(0, std::memory_order_release);
     if (m_playing) {
         m_playing = false;
