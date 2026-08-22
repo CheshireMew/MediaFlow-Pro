@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 import mediaflow.infrastructure.web_browser_cache_renderer as web_browser_cache_module
 import mediaflow.infrastructure.web_direct_h264 as web_direct_h264_module
+import mediaflow.infrastructure.web_direct_h264_browser as web_direct_h264_browser_module
 import mediaflow.infrastructure.web_direct_h264_codec as web_direct_h264_codec_module
 import mediaflow.infrastructure.web_package_storage as web_package_module
 import mediaflow.infrastructure.web_render_preflight as web_render_preflight_module
@@ -497,6 +498,67 @@ def test_direct_h264_selects_the_lowest_sufficient_encoder_level() -> None:
         match="exceed H.264 Level 5.2",
     ):
         select(7680, 4320, 60, 1)
+
+
+def test_direct_h264_abandons_an_encoder_flush_that_never_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+
+    monkeypatch.setattr(
+        web_direct_h264_browser_module,
+        "ENCODER_OPERATION_TIMEOUT_MS",
+        25,
+    )
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=str(RuntimeContext.discover().paths.chromium),
+            headless=True,
+        )
+        try:
+            page = browser.new_page()
+            page.evaluate(
+                """() => {
+                    class StalledVideoEncoder {
+                        static async isConfigSupported(config) {
+                            return {supported: true, config};
+                        }
+                        constructor() {}
+                        configure() {}
+                        flush() { return new Promise(() => {}); }
+                        close() {}
+                    }
+                    Object.defineProperty(globalThis, "VideoEncoder", {
+                        configurable: true,
+                        value: StalledVideoEncoder,
+                    });
+                    Object.defineProperty(globalThis, "VideoFrame", {
+                        configurable: true,
+                        value: class {},
+                    });
+                }"""
+            )
+            support = page.evaluate(
+                web_direct_h264_codec_module.INITIALIZE_ENCODER,
+                {
+                    "config": {"codec": "avc1.4D0028"},
+                    "maximumEncodeQueueSize": 4,
+                    "maximumPendingWrites": 4,
+                    "operationTimeoutMs": (
+                        web_direct_h264_browser_module.ENCODER_OPERATION_TIMEOUT_MS
+                    ),
+                },
+            )
+
+            assert support["supported"] is True
+            with pytest.raises(
+                PlaywrightError,
+                match="final encoder flush timed out after 25 ms",
+            ):
+                page.evaluate(web_direct_h264_codec_module.FINISH_ENCODER)
+        finally:
+            browser.close()
 
 
 def test_direct_h264_rejects_saturated_nvidia_gpu_before_browser_launch(
