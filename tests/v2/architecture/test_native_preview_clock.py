@@ -24,6 +24,8 @@ def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> N
     assert 'factoryConsumer(m_previewProfile, "rtaudio"' in runtime_source
     assert 'propertiesSetInt(previewProperties, "real_time", -1)' in runtime_source
     assert 'propertiesSetInt(previewProperties, "real_time", 0)' not in runtime_source
+    assert "static constexpr int PlaybackPrefillFrames = 4" in runtime_header
+    assert 'qMin(PlaybackPrefillFrames, bufferFrames)' in runtime_source
     assert '"libmltqt6:libmltglaxnimate-qt6:libmltopencv"' in runtime_source
     assert 'factoryConsumer(m_videoProfile, "null"' not in runtime_source
     assert 'propertiesSetInt(previewProperties, "video_off", 0)' in runtime_source
@@ -124,6 +126,8 @@ def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -
     assert "std::atomic<bool> m_queuePlaybackFrames" in preview_header
     assert "bool trackDrops = false" in preview_header
     assert "std::atomic<bool> m_trackPlaybackDrops" in preview_header
+    assert "int m_dropWarmupFramesRemaining = 0" in preview_header
+    assert "MltRuntime::PlaybackPrefillFrames" in preview_source
     assert "m_queuePlaybackFrames.store(true" in preview_source
     queue_boundary = preview_source.split("void MltPreviewItem::queueFrame", 1)[1].split(
         "void MltPreviewItem::deliverPendingFrame", 1
@@ -142,6 +146,10 @@ def test_native_preview_preserves_playback_frames_across_the_worker_boundary() -
         "const int queuedDropped = m_pendingDroppedFrames.exchange", 1
     )[1].split("m_lastPlaybackFrame = pending.position", 1)[0]
     assert "if (pending.trackDrops" in delivery_boundary
+    assert "m_dropWarmupFramesRemaining > 0" in startup_drop_boundary
+    assert startup_drop_boundary.index("m_dropWarmupFramesRemaining > 0") < (
+        startup_drop_boundary.index("m_lastPlaybackFrame >= 0")
+    )
     assert startup_drop_boundary.index("m_lastPlaybackFrame >= 0") < startup_drop_boundary.index(
         "qMax(observedDropped, queuedDropped)"
     )

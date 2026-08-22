@@ -135,6 +135,9 @@ MltPreviewItem::MltPreviewItem(QQuickItem *parent)
         if (requestId != m_requestId.load(std::memory_order_acquire))
             return;
         m_trackPlaybackDrops.store(value, std::memory_order_release);
+        m_dropWarmupFramesRemaining = value
+            ? MltRuntime::PlaybackPrefillFrames
+            : 0;
         if (!value)
             m_pendingDroppedFrames.store(0, std::memory_order_release);
         m_queuePlaybackFrames.store(value, std::memory_order_release);
@@ -446,7 +449,9 @@ void MltPreviewItem::deliverPendingFrame()
             0,
             std::memory_order_acq_rel);
         int dropped = 0;
-        if (m_lastPlaybackFrame >= 0) {
+        if (m_dropWarmupFramesRemaining > 0) {
+            --m_dropWarmupFramesRemaining;
+        } else if (m_lastPlaybackFrame >= 0) {
             int observedDropped = pending.image.isNull() ? 1 : 0;
             const int direction = m_playbackRate < 0.0 ? -1 : 1;
             const int advance = (pending.position - m_lastPlaybackFrame) * direction;
@@ -497,6 +502,7 @@ void MltPreviewItem::receiveError(const QString &message, quint64 requestId)
         return;
     m_queuePlaybackFrames.store(false, std::memory_order_release);
     m_trackPlaybackDrops.store(false, std::memory_order_release);
+    m_dropWarmupFramesRemaining = 0;
     m_pendingDroppedFrames.store(0, std::memory_order_release);
     if (m_errorString == message)
         return;
@@ -537,6 +543,7 @@ void MltPreviewItem::resetPresentationState(bool preservePosition)
     }
     m_queuePlaybackFrames.store(false, std::memory_order_release);
     m_trackPlaybackDrops.store(false, std::memory_order_release);
+    m_dropWarmupFramesRemaining = 0;
     m_pendingDroppedFrames.store(0, std::memory_order_release);
     if (m_playing) {
         m_playing = false;

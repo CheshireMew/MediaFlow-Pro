@@ -573,7 +573,10 @@ bool MltRuntime::startPlaybackConsumer()
     // the audio device as decoding work accumulates.
     m_api.propertiesSetInt(previewProperties, "real_time", -1);
     m_api.propertiesSetInt(previewProperties, "buffer", bufferFrames);
-    m_api.propertiesSetInt(previewProperties, "prefill", qMin(4, bufferFrames));
+    m_api.propertiesSetInt(
+        previewProperties,
+        "prefill",
+        qMin(PlaybackPrefillFrames, bufferFrames));
     m_api.propertiesSetInt(previewProperties, "video_off", 0);
     m_api.propertiesSetInt(previewProperties, "frequency", 48000);
     m_api.propertiesSetInt(previewProperties, "channels", 2);

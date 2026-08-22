@@ -20,6 +20,8 @@ class MltRuntime final : public QObject
     Q_OBJECT
 
 public:
+    static constexpr int PlaybackPrefillFrames = 4;
+
     explicit MltRuntime(QObject *parent = nullptr);
     ~MltRuntime() override;
 
