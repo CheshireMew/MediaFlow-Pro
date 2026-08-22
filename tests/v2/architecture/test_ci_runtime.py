@@ -99,8 +99,10 @@ def test_three_platform_media_runtime_has_one_versioned_contract() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert f'"PySide6=={windows["qt"]["version"]}"' in pyproject
     assert '"aqtinstall==3.3.0"' in pyproject
+    assert '"macholib==1.16.4"' in pyproject
     requirements = (ROOT / "requirements.lock").read_text(encoding="utf-8")
     assert "aqtinstall==3.3.0" in requirements
+    assert "macholib==1.16.4 \\\n    --hash=sha256:" in requirements
 
 
 @pytest.mark.parametrize(

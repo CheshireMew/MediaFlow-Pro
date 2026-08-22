@@ -2,7 +2,13 @@ name: V2 Quality
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - "v*"
   pull_request:
+    branches:
+      - main
   schedule:
     - cron: "17 18 * * *"
   workflow_dispatch:
