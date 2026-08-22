@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QEvent, QObject
 from PySide6.QtGui import QColor, QImage
 
 from mediaflow.application.events import TaskEvent
@@ -104,6 +104,18 @@ def test_deferred_model_update_is_readable_before_qml_notification() -> None:
     assert changes == []
     QCoreApplication.processEvents()
     assert changes and changes[0][0] == 0
+
+
+def test_deferred_model_notification_is_cancelled_when_its_qt_owner_is_deleted() -> None:
+    _application = QCoreApplication.instance() or QCoreApplication([])
+    owner = QObject()
+    model = DictListModel(["id", "value"], owner)
+    model.set_items([{"id": "row", "value": 1}])
+    model.set_items_deferred([{"id": "row", "value": 2}])
+
+    owner.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    QCoreApplication.processEvents()
 
 
 def test_timeline_clip_viewport_keeps_large_fitted_timelines_bounded() -> None:

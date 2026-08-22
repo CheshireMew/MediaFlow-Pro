@@ -84,7 +84,7 @@ class DictListModel(QAbstractListModel):
                 self._deferred_role_changes.setdefault(row, set()).update(changed_roles)
         if self._deferred_role_changes and not self._deferred_change_scheduled:
             self._deferred_change_scheduled = True
-            QTimer.singleShot(0, self._publish_deferred_changes)
+            QTimer.singleShot(0, self, self._publish_deferred_changes)
         if self._deferred_role_changes:
             self._revision += 1
 
@@ -129,7 +129,7 @@ class DictListModel(QAbstractListModel):
                 self.dataChanged.emit(index, index, sorted(changed_roles))
         if deferred and self._deferred_role_changes and not self._deferred_change_scheduled:
             self._deferred_change_scheduled = True
-            QTimer.singleShot(0, self._publish_deferred_changes)
+            QTimer.singleShot(0, self, self._publish_deferred_changes)
         if updated:
             self._revision += 1
         return True
