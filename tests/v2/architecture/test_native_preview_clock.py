@@ -66,6 +66,13 @@ def test_native_preview_uses_one_audio_clock_consumer_for_audio_and_video() -> N
     assert "lagFrames > allowedLeadFrames" in runtime_source
     assert "qFloor(500.0 / m_fps)" in runtime_source
     assert "m_nextCadenceDeadlineNs = nowNs" not in runtime_source
+    startup_catch_up = runtime_source.split(
+        "if (m_missingFrameDeadline.hasExpired() && audioAdvance > 0)", 1
+    )[1].split("m_expectedPresentationPosition = candidate.key()", 1)[0]
+    assert "m_lastPresentationPosition >= 0" in startup_catch_up
+    assert startup_catch_up.index("m_lastPresentationPosition >= 0") < startup_catch_up.index(
+        "skippedFrames ="
+    )
     assert '"consumer-frame-render"' not in runtime_source
     resize_boundary = runtime_source.split(
         "void MltRuntime::setPreviewSize", 1
