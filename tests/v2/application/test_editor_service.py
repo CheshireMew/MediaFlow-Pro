@@ -10,6 +10,7 @@ import wave
 from contextlib import closing
 from pathlib import Path
 
+import psutil
 import pytest
 from aiohttp import ClientSession
 
@@ -209,6 +210,89 @@ def test_started_service_process_is_reaped_after_exit(
 
     assert service_client_module._started_process_exit(1234) == 0
     assert 1234 not in service_client_module._started_processes
+
+
+def test_force_shutdown_kills_only_the_exact_stalled_service_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery = ServiceDiscovery(
+        pid=1234,
+        process_started_at=42.0,
+        started_at=43.0,
+        port=64000,
+        token="x" * 32,
+    )
+
+    class StalledProcess:
+        pid = 1234
+
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+
+        def is_running(self) -> bool:
+            return True
+
+        def status(self) -> str:
+            return psutil.STATUS_RUNNING
+
+        def create_time(self) -> float:
+            return 42.0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout: float) -> int:
+            assert timeout == service_client_module.SERVICE_PROCESS_TERMINATE_TIMEOUT_SECONDS
+            if not self.killed:
+                raise psutil.TimeoutExpired(timeout, pid=self.pid)
+            return 1
+
+    process = StalledProcess()
+    monkeypatch.setattr(service_client_module.psutil, "Process", lambda _pid: process)
+
+    service_client_module._terminate_stalled_service(discovery)
+
+    assert process.terminated is True
+    assert process.killed is True
+
+
+def test_force_shutdown_never_targets_a_reused_process_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery = ServiceDiscovery(
+        pid=1234,
+        process_started_at=42.0,
+        started_at=43.0,
+        port=64000,
+        token="x" * 32,
+    )
+
+    class ReusedProcess:
+        pid = 1234
+        terminated = False
+
+        def is_running(self) -> bool:
+            return True
+
+        def status(self) -> str:
+            return psutil.STATUS_RUNNING
+
+        def create_time(self) -> float:
+            return 84.0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    process = ReusedProcess()
+    monkeypatch.setattr(service_client_module.psutil, "Process", lambda _pid: process)
+
+    service_client_module._terminate_stalled_service(discovery)
+
+    assert process.terminated is False
 
 
 @pytest.mark.asyncio

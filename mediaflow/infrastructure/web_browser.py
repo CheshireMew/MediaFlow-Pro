@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from collections.abc import Callable
 from functools import partial
@@ -15,6 +16,9 @@ from mediaflow.domain.web_manifest import (
     parse_editable_media_manifest,
 )
 from mediaflow.domain.web_media_sources import WebMediaSourcesManifest
+
+logger = logging.getLogger(__name__)
+BROWSER_VALIDATION_ATTEMPTS = 2
 
 SEEK_WEB_FRAME_SCRIPT = """
 async seconds => {
@@ -468,7 +472,6 @@ class BrowserWebPackageValidator(WebPackageValidatorPort):
         executable = self.chromium
         if executable is None or not executable.is_file():
             raise FileNotFoundError("Pinned Playwright Chromium is unavailable")
-        requested_urls: list[str] = []
         media_sources = WebMediaSourcesManifest.model_validate_json(
             (package_root / manifest.media_sources).read_text(encoding="utf-8")
         )
@@ -482,45 +485,85 @@ class BrowserWebPackageValidator(WebPackageValidatorPort):
                 *(item.file.split("#", 1)[0] for item in media_sources.sources),
             ]
         }
+        requested_urls: list[str] = []
         validation_error: Exception | None = None
-        with WebPackagePreviewServer(package_root) as preview, sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                executable_path=str(executable),
-                headless=True,
-                args=["--disable-gpu"],
-            )
-            context = browser.new_context(
-                viewport={
-                    "width": manifest.default_variant.canvas.width,
-                    "height": manifest.default_variant.canvas.height,
-                },
-                device_scale_factor=1,
-            )
-            context.on("request", lambda request: requested_urls.append(request.url))
-            context.route(
-                "http://**/*",
-                lambda route: (route.continue_() if preview.owns_url(route.request.url) else route.abort()),
-            )
-            context.route("https://**/*", lambda route: route.abort())
-            page = context.new_page()
-            page.goto(
-                preview.url_for(
-                    manifest.entry,
-                    query=(f"capture=1&variant={manifest.default_variant_id}&scene={manifest.scenes[0].id}"),
-                ),
-                wait_until="load",
-                timeout=15000,
-            )
+        preview: WebPackagePreviewServer | None = None
+        for attempt in range(BROWSER_VALIDATION_ATTEMPTS):
+            requested_urls = []
+            validation_error = None
             try:
-                validate_editable_media_page(
-                    page,
-                    manifest,
-                    media_sources,
-                    self._contract,
-                )
+                with (
+                    WebPackagePreviewServer(package_root) as current_preview,
+                    sync_playwright() as playwright,
+                ):
+                    preview = current_preview
+                    browser = playwright.chromium.launch(
+                        executable_path=str(executable),
+                        headless=True,
+                        args=["--disable-gpu"],
+                    )
+                    try:
+                        context = browser.new_context(
+                            viewport={
+                                "width": manifest.default_variant.canvas.width,
+                                "height": manifest.default_variant.canvas.height,
+                            },
+                            device_scale_factor=1,
+                        )
+                        context.on(
+                            "request",
+                            # The context is closed before the next attempt can
+                            # replace this attempt-local collection.
+                            lambda request: requested_urls.append(request.url),  # noqa: B023
+                        )
+                        context.route(
+                            "http://**/*",
+                            lambda route: (
+                                route.continue_()
+                                if current_preview.owns_url(route.request.url)
+                                else route.abort()
+                            ),
+                        )
+                        context.route("https://**/*", lambda route: route.abort())
+                        page = context.new_page()
+                        page.goto(
+                            current_preview.url_for(
+                                manifest.entry,
+                                query=(
+                                    "capture=1&"
+                                    f"variant={manifest.default_variant_id}&"
+                                    f"scene={manifest.scenes[0].id}"
+                                ),
+                            ),
+                            wait_until="load",
+                            timeout=15000,
+                        )
+                        try:
+                            validate_editable_media_page(
+                                page,
+                                manifest,
+                                media_sources,
+                                self._contract,
+                            )
+                        except Exception as error:
+                            validation_error = error
+                    finally:
+                        browser.close()
             except Exception as error:
                 validation_error = error
-            browser.close()
+            if (
+                validation_error is not None
+                and type(validation_error).__name__ == "TargetClosedError"
+                and attempt + 1 < BROWSER_VALIDATION_ATTEMPTS
+            ):
+                logger.warning(
+                    "Chromium closed during editable-media validation; retrying once"
+                )
+                continue
+            break
+
+        if preview is None:
+            raise RuntimeError("Editable media browser validation did not start")
 
         remote = [
             url

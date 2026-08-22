@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import psutil
 from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, TCPConnector
 
 from .discovery import SERVICE_PROTOCOL, SERVICE_PROTOCOL_VERSION, ServiceDiscovery, ServicePaths
@@ -29,6 +30,7 @@ class EditorServiceRpcError(RuntimeError):
 _started_processes: dict[int, subprocess.Popen[bytes]] = {}
 _started_processes_lock = threading.Lock()
 SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS = 15.0
+SERVICE_PROCESS_TERMINATE_TIMEOUT_SECONDS = 5.0
 
 
 def _started_process_exit(pid: int) -> int | None:
@@ -42,6 +44,54 @@ def _started_process_exit(pid: int) -> int | None:
             if _started_processes.get(pid) is process:
                 _started_processes.pop(pid, None)
     return exit_code
+
+
+def _matches_service_process(discovery: ServiceDiscovery, process: psutil.Process) -> bool:
+    try:
+        return (
+            process.pid == discovery.pid
+            and process.is_running()
+            and process.status() not in {psutil.STATUS_DEAD, psutil.STATUS_ZOMBIE}
+            and abs(process.create_time() - discovery.process_started_at) < 0.01
+        )
+    except (psutil.Error, OSError):
+        return False
+
+
+def _terminate_stalled_service(discovery: ServiceDiscovery) -> None:
+    """Finish a force shutdown without ever targeting a reused process id."""
+
+    try:
+        process = psutil.Process(discovery.pid)
+    except (psutil.Error, OSError):
+        return
+    if not _matches_service_process(discovery, process):
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=SERVICE_PROCESS_TERMINATE_TIMEOUT_SECONDS)
+        return
+    except psutil.NoSuchProcess:
+        return
+    except psutil.TimeoutExpired:
+        pass
+    except (psutil.AccessDenied, OSError) as error:
+        raise EditorServiceUnavailable(
+            f"Editor Service process {discovery.pid} completed graceful shutdown "
+            "but could not be terminated"
+        ) from error
+    if not _matches_service_process(discovery, process):
+        return
+    try:
+        process.kill()
+        process.wait(timeout=SERVICE_PROCESS_TERMINATE_TIMEOUT_SECONDS)
+    except psutil.NoSuchProcess:
+        return
+    except (psutil.AccessDenied, psutil.TimeoutExpired, OSError) as error:
+        raise EditorServiceUnavailable(
+            f"Editor Service process {discovery.pid} completed graceful shutdown "
+            "but remained alive after termination"
+        ) from error
 
 
 class EditorServiceClient:
@@ -367,8 +417,12 @@ def shutdown_sync_service() -> None:
         if not discovery.belongs_to_live_process():
             return
         if time.monotonic() >= deadline:
-            raise EditorServiceUnavailable(
-                f"Editor Service process {discovery.pid} did not stop within "
-                f"{SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS:g} seconds"
-            )
+            # The server has already accepted a forced shutdown. A disconnected
+            # request may still own an uninterruptible default-executor thread
+            # (for example, an FFmpeg capability probe), which otherwise keeps
+            # the Python interpreter alive after projects and discovery state
+            # have been closed. Escalate only after checking the exact process
+            # creation time so a reused PID can never be targeted.
+            _terminate_stalled_service(discovery)
+            return
         time.sleep(0.05)
