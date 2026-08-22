@@ -156,6 +156,7 @@ private:
     QQueue<PendingFrame> m_pendingFrames;
     int m_requestedPosition = 0;
     int m_lastPlaybackFrame = -1;
+    int m_dropWarmupFramesRemaining = 0;
     bool m_seekPending = false;
     int m_seekRetryAttempts = 0;
     QTimer m_seekRetryTimer;
