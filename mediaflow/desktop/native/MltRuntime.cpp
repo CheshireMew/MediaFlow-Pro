@@ -912,8 +912,16 @@ void MltRuntime::presentNextFrame()
                     audioPosition - m_expectedPresentationPosition) * direction;
                 if (m_missingFrameDeadline.hasExpired() && audioAdvance > 0) {
                     candidate = future;
-                    skippedFrames = qAbs(
-                        candidate.key() - m_expectedPresentationPosition);
+                    // Some audio consumers begin their frame-show callbacks
+                    // after the configured prefill window.  Until one playback
+                    // frame has actually been presented there is no prior
+                    // presentation boundary from which a user-visible drop can
+                    // be measured.  Keep the catch-up behaviour, but only count
+                    // gaps that occur after playback presentation has started.
+                    if (m_lastPresentationPosition >= 0) {
+                        skippedFrames = qAbs(
+                            candidate.key() - m_expectedPresentationPosition);
+                    }
                     m_expectedPresentationPosition = candidate.key();
                 }
             }
