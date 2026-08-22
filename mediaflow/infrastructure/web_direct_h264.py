@@ -21,7 +21,6 @@ from .web_direct_h264_browser import (
     verify_capture_surface,
 )
 from .web_direct_h264_codec import (
-    H264_CODEC,
     MAX_ENCODE_QUEUE_SIZE,
     MAX_PENDING_WRITES,
     round_microseconds,
@@ -196,7 +195,7 @@ def render_webcodecs_h264(
                 f"FFmpeg rejected direct H.264 muxing: {mux_result.stderr.strip()}"
             )
         telemetry = WebRenderEncoderTelemetry(
-            codec=H264_CODEC,
+            codec=str(encoded.requested_config["codec"]),
             browser_version=browser_version,
             requested_hardware_acceleration="prefer-hardware",
             hardware_acceleration_verified=(

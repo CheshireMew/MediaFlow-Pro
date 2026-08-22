@@ -7,9 +7,43 @@ from fractions import Fraction
 from .web_direct_h264_models import DirectH264FallbackRequired, EncodedChunk
 from .web_render_target import WebRenderTarget
 
-H264_CODEC = "avc1.640034"
 MAX_ENCODE_QUEUE_SIZE = 4
 MAX_PENDING_WRITES = 4
+
+_H264_LEVELS: tuple[tuple[int, int, str], ...] = (
+    # maximum macroblocks per frame, maximum macroblocks per second, codec
+    (8_192, 245_760, "avc1.4D0028"),  # Main Profile, Level 4.0 (1080p30)
+    (8_704, 522_240, "avc1.64002A"),  # High Profile, Level 4.2 (1080p60)
+    (22_080, 589_824, "avc1.640032"),  # High Profile, Level 5.0
+    (36_864, 983_040, "avc1.640033"),  # High Profile, Level 5.1 (4K30)
+    (36_864, 2_073_600, "avc1.640034"),  # High Profile, Level 5.2 (4K60)
+)
+
+
+def select_h264_codec(
+    width: int,
+    height: int,
+    fps_numerator: int,
+    fps_denominator: int,
+) -> str:
+    """Choose the lowest H.264 level that can carry the requested frame clock."""
+
+    if min(width, height, fps_numerator, fps_denominator) <= 0:
+        raise ValueError("H.264 dimensions and frame rate must be positive")
+    macroblocks_per_frame = ((width + 15) // 16) * ((height + 15) // 16)
+    macroblocks_per_second = Fraction(
+        macroblocks_per_frame * fps_numerator,
+        fps_denominator,
+    )
+    for maximum_frame, maximum_rate, codec in _H264_LEVELS:
+        if (
+            macroblocks_per_frame <= maximum_frame
+            and macroblocks_per_second <= maximum_rate
+        ):
+            return codec
+    raise DirectH264FallbackRequired(
+        "The requested frame size and rate exceed H.264 Level 5.2"
+    )
 
 
 class BoundedChunkSink:

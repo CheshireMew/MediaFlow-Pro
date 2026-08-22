@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 import mediaflow.infrastructure.web_browser_cache_renderer as web_browser_cache_module
 import mediaflow.infrastructure.web_direct_h264 as web_direct_h264_module
+import mediaflow.infrastructure.web_direct_h264_codec as web_direct_h264_codec_module
 import mediaflow.infrastructure.web_package_storage as web_package_module
 import mediaflow.infrastructure.web_render_preflight as web_render_preflight_module
 from mediaflow.application.sequence_service import SequenceService
@@ -435,6 +436,20 @@ def _enable_short_non_4k_direct_h264(monkeypatch: pytest.MonkeyPatch) -> None:
         "_require_nvidia_gpu_headroom",
         lambda: None,
     )
+
+
+def test_direct_h264_selects_the_lowest_sufficient_encoder_level() -> None:
+    select = web_direct_h264_codec_module.select_h264_codec
+
+    assert select(1920, 1080, 30, 1) == "avc1.4D0028"
+    assert select(1920, 1080, 60, 1) == "avc1.64002A"
+    assert select(3840, 2160, 30, 1) == "avc1.640033"
+    assert select(3840, 2160, 60, 1) == "avc1.640034"
+    with pytest.raises(
+        web_direct_h264_codec_module.DirectH264FallbackRequired,
+        match="exceed H.264 Level 5.2",
+    ):
+        select(7680, 4320, 60, 1)
 
 
 def test_direct_h264_rejects_saturated_nvidia_gpu_before_browser_launch(
