@@ -87,6 +87,39 @@ def _browser_validator() -> BrowserWebPackageValidator:
     return BrowserWebPackageValidator(chromium, editable_media_contract())
 
 
+def test_browser_validator_retries_one_transient_chromium_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mediaflow.infrastructure.web_browser as web_browser_module
+
+    manifest = parse_editable_media_manifest(
+        json.loads((STARTER / "editable-media.json").read_text(encoding="utf-8")),
+        editable_media_contract(),
+    )
+    original = web_browser_module.validate_editable_media_page
+    attempts = 0
+
+    class TargetClosedError(Exception):
+        pass
+
+    def fail_first_attempt(*args, **kwargs) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TargetClosedError("Target page, context or browser has been closed")
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        web_browser_module,
+        "validate_editable_media_page",
+        fail_first_attempt,
+    )
+
+    _browser_validator().validate(STARTER, manifest)
+
+    assert attempts == 2
+
+
 def _service(repository: ProjectRepository) -> tuple[TimelineEditor, WebMediaServices]:
     project = repository.projects.get_project()
     editor = TimelineEditor(repository, project.main_sequence_id)
