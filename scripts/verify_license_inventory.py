@@ -258,7 +258,10 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
         "project_license": "AGPL-3.0-or-later",
         "dependency_lock": str(LOCK_FILE),
         "runtime_lock": str(RUNTIME_LOCK_FILE),
-        "project_license_text_present": (`n            "GNU AFFERO GENERAL PUBLIC LICENSE" in project_license_text`n            and "Version 3" in project_license_text`n        ),
+        "project_license_text_present": (
+            "GNU AFFERO GENERAL PUBLIC LICENSE" in project_license_text
+            and "Version 3" in project_license_text
+        ),
         "font_ofl_text_present": "SIL OPEN FONT LICENSE" in ofl_text and "Version 1.1" in ofl_text,
         "python_components": packages,
         "on_demand_runtime_components": on_demand_runtimes,
