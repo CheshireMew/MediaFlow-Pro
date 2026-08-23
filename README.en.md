@@ -238,7 +238,7 @@ Desktop logs live at `logs/mediaflow.log` under the runtime directory, rotate at
 
 ## License and distribution
 
-MediaFlow Pro source is released under the [GNU GPL v3](LICENSE). Qt, MLT, FFmpeg, yt-dlp, Python packages, and other third-party components keep their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MediaFlow Pro source is released under the [GNU AGPL v3 or later](LICENSE). Qt, MLT, FFmpeg, yt-dlp, Python packages, and other third-party components keep their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 This repository maintains source, build scripts, and dependency manifests. It does not produce a portable bundle or installer unless the project owner explicitly starts a release plan. A Windows release must be built from a clean tag whose exact commit has passed the tag-triggered full quality gate. The pristine portable directory is inventoried before and after acceptance, its copy completes the offline desktop/import/edit/preview/export/reopen chain, and the archive records exact file hashes plus bundled Python, Chromium, MLT, FFmpeg, and Qt license evidence before a new release can be published.
 

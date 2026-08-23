@@ -246,7 +246,7 @@ Get-Content request.json -Raw | mediaflow-cli execute --request -
 
 ## 许可与分发
 
-MediaFlow Pro 源码以 [GNU GPL v3](LICENSE) 发布。Qt、MLT、FFmpeg、yt-dlp、Python 包及其它第三方组件仍适用各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+MediaFlow Pro 源码以 [GNU AGPL v3 or later](LICENSE) 发布。Qt、MLT、FFmpeg、yt-dlp、Python 包及其它第三方组件仍适用各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 本仓库只维护源码、构建脚本和依赖清单。除非项目所有者明确启动发布计划，否则不会生成便携包或安装器。Windows 发布只能从干净标签构建，且标签指向的同一提交必须先通过标签触发的完整质量门。原始便携目录会在验收前后分别生成精确清单；验收只在它的副本上完成离线桌面启动、导入、编辑、预览、导出和重开；归档还必须记录全部文件哈希，以及随包 Python、Chromium、MLT、FFmpeg 和 Qt 的许可证证据，全部通过后才允许新建 Release。
 
