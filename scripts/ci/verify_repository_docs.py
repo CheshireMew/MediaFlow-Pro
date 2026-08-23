@@ -82,9 +82,9 @@ def verify_repository_contract() -> list[str]:
     failures: list[str] = []
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     license_text = (REPOSITORY_ROOT / "LICENSE").read_text(encoding="utf-8")
-    if "GNU GENERAL PUBLIC LICENSE" not in license_text or "Version 3" not in license_text:
-        failures.append("LICENSE is not the complete GNU GPL v3 text")
-    if "[GNU GPL v3](LICENSE)" not in readme:
+    if "GNU AFFERO GENERAL PUBLIC LICENSE" not in license_text or "Version 3" not in license_text:
+        failures.append("LICENSE is not the complete GNU AGPL v3 text")
+    if "[GNU AGPL v3 or later](LICENSE)" not in readme:
         failures.append("README does not link to the project license")
     if "[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)" not in readme:
         failures.append("README does not link to third-party notices")

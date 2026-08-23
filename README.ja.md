@@ -238,7 +238,7 @@ MCP 対応ホストでは、`mediaflow-mcp` を stdio server として設定で�
 
 ## ライセンスと配布
 
-MediaFlow Pro のソースコードは [GNU GPL v3](LICENSE) で公開されています。Qt、MLT、FFmpeg、yt-dlp、Python パッケージ、その他のサードパーティーコンポーネントには、それぞれのライセンスが適用されます。詳細は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
+MediaFlow Pro のソースコードは [GNU AGPL v3 or later](LICENSE) で公開されています。Qt、MLT、FFmpeg、yt-dlp、Python パッケージ、その他のサードパーティーコンポーネントには、それぞれのライセンスが適用されます。詳細は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
 
 このリポジトリが管理するのは、ソースコード、ビルドスクリプト、依存関係マニフェストです。プロジェクト所有者がリリース計画を明示的に開始しない限り、ポータブルパッケージやインストーラーは生成しません。Windows リリースは、対象コミットがタグ起動の完全品質ゲートを通過したクリーンなタグからだけ作成できます。未変更のポータブルディレクトリを検証前後に一覧化し、そのコピーでオフラインのデスクトップ起動、読み込み、編集、プレビュー、書き出し、再読込を完走させます。アーカイブには全ファイルの正確なハッシュと、同梱する Python、Chromium、MLT、FFmpeg、Qt のライセンス証拠がそろわなければ、新しいリリースを公開できません。
 
