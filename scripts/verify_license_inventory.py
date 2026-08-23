@@ -197,7 +197,7 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
     notices = THIRD_PARTY_NOTICES_FILE.read_text(encoding="utf-8")
     on_demand_runtimes = on_demand_runtime_rows(notices)
     diarization_runtimes = diarization_runtime_rows(notices)
-    gpl_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    project_license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     ofl_text = (ROOT / "mediaflow/resources/fonts/OFL.txt").read_text(encoding="utf-8")
     external: dict[str, object]
     if arguments.python_only:
@@ -255,10 +255,10 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
             "ffmpeg_gpl_v3_configuration": ffmpeg_gpl_v3_configuration,
         }
     report = {
-        "project_license": "GPL-3.0-only",
+        "project_license": "AGPL-3.0-or-later",
         "dependency_lock": str(LOCK_FILE),
         "runtime_lock": str(RUNTIME_LOCK_FILE),
-        "gpl_text_present": "GNU GENERAL PUBLIC LICENSE" in gpl_text and "Version 3" in gpl_text,
+        "project_license_text_present": (`n            "GNU AFFERO GENERAL PUBLIC LICENSE" in project_license_text`n            and "Version 3" in project_license_text`n        ),
         "font_ofl_text_present": "SIL OPEN FONT LICENSE" in ofl_text and "Version 1.1" in ofl_text,
         "python_components": packages,
         "on_demand_runtime_components": on_demand_runtimes,
@@ -266,7 +266,7 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> int:
         "external_runtime": external,
     }
     base_passed = (
-        report["gpl_text_present"]
+        report["project_license_text_present"]
         and report["font_ofl_text_present"]
         and all(row["passed"] for row in packages)
         and all(row["passed"] for row in on_demand_runtimes)
