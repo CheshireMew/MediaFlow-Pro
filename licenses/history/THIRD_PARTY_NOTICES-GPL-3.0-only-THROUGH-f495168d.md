@@ -1,6 +1,6 @@
 # Third-party notices
 
-Original MediaFlow Pro source code is licensed under AGPL-3.0-or-later as described in LICENSE-NOTICE.md and LICENSING.md. The components below are not relicensed by MediaFlow Pro; their original copyright and license terms continue to apply.
+MediaFlow Pro is licensed under GNU GPL v3. The components below are not relicensed by MediaFlow Pro; their original copyright and license terms continue to apply.
 
 This source repository does not contain a generated portable runtime. When a portable runtime is explicitly requested, the release verification must regenerate the dependency inventory from the exact files being shipped and include the complete upstream license texts and notices next to those files.
 
@@ -85,5 +85,4 @@ Upstream: https://github.com/lucide-icons/lucide
 
 ## Source availability
 
-MediaFlow Pro source is available from https://github.com/CheshireMew/MediaFlow-Pro. For any future binary release, corresponding source and rebuild instructions for AGPL-covered MediaFlow Pro code must remain available, and dynamically linked LGPL components must remain replaceable as required by their licenses.
-
+MediaFlow Pro source is available from https://github.com/CheshireMew/MediaFlow-Pro. For any future binary release, corresponding source and rebuild instructions for GPL-covered MediaFlow Pro code must remain available, and dynamically linked LGPL components must remain replaceable as required by their licenses.
