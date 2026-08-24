@@ -262,6 +262,71 @@ def test_project_cache_gate_uses_one_exact_inventory_for_both_limits(
     assert inventory_roots == [projects.resolve()]
 
 
+def test_small_project_cache_reservations_defer_only_a_bounded_global_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects = tmp_path / "runtime" / "cache" / "projects"
+    current = projects / "current"
+    other = projects / "other"
+    other.mkdir(parents=True)
+    (other / "existing.bin").write_bytes(b"x" * 100)
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_CACHE_MAX_BYTES", "100000")
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_CACHES_MAX_BYTES", "65536")
+    monkeypatch.setenv("MEDIAFLOW_MINIMUM_FREE_BYTES", "1")
+    monkeypatch.setattr(
+        storage_budget.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=100_000, used=100, free=99_900),
+    )
+    original_inventory = storage_budget.directory_inventory
+    inventory_roots: list[Path] = []
+
+    def observed_inventory(root: str | Path) -> dict[str, object]:
+        inventory_roots.append(Path(root).resolve())
+        return original_inventory(root)
+
+    monkeypatch.setattr(storage_budget, "directory_inventory", observed_inventory)
+
+    initialized = storage_budget.require_project_cache_budget(
+        current,
+        expected_new_bytes=8,
+        label="small waveform",
+    )
+    (current / "realized.bin").parent.mkdir(parents=True, exist_ok=True)
+    (current / "realized.bin").write_bytes(b"x" * 8)
+    deferred = storage_budget.require_project_cache_budget(
+        current,
+        expected_new_bytes=8,
+        label="second small waveform",
+    )
+    reconciled = storage_budget.require_project_cache_budget(
+        current,
+        expected_new_bytes=49,
+        label="reservation threshold",
+    )
+
+    assert "inventory_mode" not in initialized["all_projects"]
+    assert deferred["all_projects"]["inventory_mode"] == (
+        "bounded-deferred-global-inventory"
+    )
+    assert deferred["all_projects"]["pending_reservation_bytes"] == 16
+    assert "inventory_mode" not in reconciled["all_projects"]
+    assert inventory_roots == [
+        projects.resolve(),
+        current.resolve(),
+        projects.resolve(),
+    ]
+    ledger = json.loads(
+        (
+            projects.parent
+            / storage_budget.PROJECT_CACHE_RESERVATION_LEDGER_FILENAME
+        ).read_text(encoding="utf-8")
+    )
+    assert ledger["observed_bytes"] == 108
+    assert ledger["pending_bytes"] == 57
+
+
 def test_operation_budget_checks_peak_without_claiming_user_owned_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -33,7 +33,7 @@ AppScrollView {
 
     function loadLlmProvider() {
         page.providerStateLoaded = false
-        var data = mediaflow.settingsController.selectedLlmProviderData
+        var data = mediaflow.languageSettingsController.selectedLlmProviderData
         llmName.text = data.name || ""
         llmBaseUrl.text = data.baseUrl || ""
         llmApiKey.text = data.apiKey || ""
@@ -72,7 +72,7 @@ AppScrollView {
 
     function requestProviderSelection(providerId) {
         if (!providerDirty) {
-            mediaflow.settingsController.selectLlmProvider(providerId)
+            mediaflow.languageSettingsController.selectLlmProvider(providerId)
             return
         }
         providerActionDialog.request(
@@ -103,9 +103,9 @@ AppScrollView {
         id: providerActionDialog
         onConfirmed: function (actionId) {
             if (actionId.indexOf("remove:") === 0) {
-                mediaflow.settingsController.removeLlmProvider(actionId.slice(7))
+                mediaflow.languageSettingsController.removeLlmProvider(actionId.slice(7))
             } else if (actionId.indexOf("select:") === 0) {
-                mediaflow.settingsController.selectLlmProvider(actionId.slice(7))
+                mediaflow.languageSettingsController.selectLlmProvider(actionId.slice(7))
             }
         }
     }
@@ -128,7 +128,7 @@ AppScrollView {
             Layout.preferredHeight: Math.min(180, Math.max(58, contentHeight))
             clip: true
             spacing: 5
-            model: mediaflow.settingsController.llmProvidersModel
+            model: mediaflow.languageSettingsController.llmProvidersModel
             delegate: Rectangle {
                 required property string providerId
                 required property string name
@@ -140,7 +140,7 @@ AppScrollView {
                 width: providerList.width
                 height: 56
                 radius: Theme.radiusSmall
-                color: mediaflow.settingsController.selectedLlmProviderId === providerId
+                color: mediaflow.languageSettingsController.selectedLlmProviderId === providerId
                        ? Theme.accentSoft : providerMouse.containsMouse
                        ? Theme.surfaceHover : Theme.surfaceRaised
                 border.color: active ? Theme.accent : Theme.border
@@ -231,9 +231,9 @@ AppScrollView {
                     AppCheckBox { id: llmEnabled; text: qsTr("启用") ; checked: true }
                     AppButton {
                         text: qsTr("移除")
-                        enabled: mediaflow.settingsController.selectedLlmProviderId.length > 0
+                        enabled: mediaflow.languageSettingsController.selectedLlmProviderId.length > 0
                         onClicked: page.requestProviderRemoval(
-                            mediaflow.settingsController.selectedLlmProviderId)
+                            mediaflow.languageSettingsController.selectedLlmProviderId)
                     }
                     Item { Layout.fillWidth: true }
                     AppButton {
@@ -241,8 +241,8 @@ AppScrollView {
                         enabled: page.providerDirty
                             && llmBaseUrl.text.trim().length > 0
                             && llmModel.text.trim().length > 0
-                        onClicked: mediaflow.settingsController.saveLlmProvider(
-                            mediaflow.settingsController.selectedLlmProviderId,
+                        onClicked: mediaflow.languageSettingsController.saveLlmProvider(
+                            mediaflow.languageSettingsController.selectedLlmProviderId,
                             llmName.text, llmBaseUrl.text, llmApiKey.text,
                             llmModel.text, llmEnabled.checked)
                     }
@@ -254,14 +254,14 @@ AppScrollView {
             AppButton {
                 Layout.fillWidth: true
                 text: qsTr("设为当前提供商")
-                enabled: mediaflow.settingsController.selectedLlmProviderId.length > 0
-                onClicked: mediaflow.settingsController.setActiveLlmProvider(mediaflow.settingsController.selectedLlmProviderId)
+                enabled: mediaflow.languageSettingsController.selectedLlmProviderId.length > 0
+                onClicked: mediaflow.languageSettingsController.setActiveLlmProvider(mediaflow.languageSettingsController.selectedLlmProviderId)
             }
             AppButton {
                 Layout.fillWidth: true
                 text: qsTr("测试连接")
-                enabled: mediaflow.settingsController.selectedLlmProviderId.length > 0
-                onClicked: mediaflow.settingsController.testLlmProvider(mediaflow.settingsController.selectedLlmProviderId)
+                enabled: mediaflow.languageSettingsController.selectedLlmProviderId.length > 0
+                onClicked: mediaflow.languageSettingsController.testLlmProvider(mediaflow.languageSettingsController.selectedLlmProviderId)
             }
         }
         RowLayout {

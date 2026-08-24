@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +10,7 @@ from mediaflow.application.subtitle_publication import (
     SubtitleDocumentPublication,
     SubtitlePublicationService,
 )
+from mediaflow.application.subtitle_word_timing import estimate_subtitle_words
 from mediaflow.domain.asr import AsrResult, RegionAsrPipeline
 from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.model_base import new_id
@@ -180,7 +180,7 @@ class SubtitleAcquisitionService:
                         for position, word in enumerate(item.words)
                     )
                 else:
-                    words.extend(self._estimated_words(segment))
+                    words.extend(estimate_subtitle_words(segment))
         if existing:
             self.repository.subtitles.save_subtitle_document(document)
             self.repository.subtitles.save_subtitle_segments(document.id, segments)
@@ -225,30 +225,6 @@ class SubtitleAcquisitionService:
             confidence=word.confidence,
             timing_source="recognized",
         )
-
-    @staticmethod
-    def _estimated_words(segment: SubtitleSegment) -> list[SubtitleWord]:
-        tokens = re.findall(
-            r"[\u3400-\u9fff]|[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|[^\s]",
-            segment.text,
-        )
-        if not tokens:
-            return []
-        duration = segment.end_frame - segment.start_frame
-        return [
-            SubtitleWord(
-                segment_id=segment.id,
-                position=position,
-                start_frame=segment.start_frame + duration * position // len(tokens),
-                end_frame=max(
-                    segment.start_frame + duration * position // len(tokens) + 1,
-                    segment.start_frame + duration * (position + 1) // len(tokens),
-                ),
-                text=token,
-                timing_source="estimated",
-            )
-            for position, token in enumerate(tokens)
-        ]
 
     def import_subtitle_file(
         self,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
+from mediaflow.domain.model_base import DomainModel
+
 TranslationMode = Literal["standard", "intelligent", "proofread"]
 
 TRANSLATION_MODES: tuple[TranslationMode, ...] = (
@@ -21,6 +23,26 @@ TRANSLATION_LANGUAGES = (
     "de",
     "ru",
 )
+
+
+class TranslationComparisonRow(DomainModel):
+    row_id: str
+    source_segment_ids: list[str]
+    source_text: str
+    target_segment_id: str = ""
+    target_text: str = ""
+    start_frame: int
+    end_frame: int
+    status: Literal["translated", "missing"]
+
+
+class TranslationComparison(DomainModel):
+    source_document_id: str
+    target_document_id: str = ""
+    source_language: str
+    target_language: str
+    glossary_hit_count: int = 0
+    rows: list[TranslationComparisonRow]
 
 
 def validate_translation_mode(value: str) -> TranslationMode:

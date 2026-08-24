@@ -16,6 +16,7 @@ dependencies = [
     "json-repair==0.61.4",
     "playwright==1.61.0",
     "opencv-python-headless==5.0.0.93",
+    "av==18.0.0",
     "aiohttp==3.14.2",
     "psutil==7.2.2",
     "mcp==2.0.0",
@@ -81,3 +82,38 @@ files = ["mediaflow"]
 ignore_missing_imports = true
 check_untyped_defs = true
 disable_error_code = ["prop-decorator"]
+
+[[tool.mypy.overrides]]
+module = [
+    "mediaflow.application.dubbing_editing",
+    "mediaflow.application.highlight_service",
+    "mediaflow.application.subtitle_editing",
+    "mediaflow.application.translation_comparison",
+    "mediaflow.desktop.controllers.subtitle_translation_controller",
+    "mediaflow.desktop.service_wait",
+    "mediaflow.editor_project_delivery_commands",
+    "mediaflow.editor_project_document_commands",
+    "mediaflow.editor_project_media_commands",
+    "mediaflow.editor_project_script_timeline_commands",
+    "mediaflow.editor_project_task_commands",
+    "mediaflow.editor_project_web_commands",
+    "mediaflow.infrastructure.project_repository",
+    "mediaflow.infrastructure.project_repository_assembly",
+    "mediaflow.service.client",
+    "mediaflow.service.commands",
+    "mediaflow.service.execution",
+    "mediaflow.service.remote_project",
+    "mediaflow.service.request_dispatcher",
+    "mediaflow.service.session_registry",
+]
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+warn_unused_ignores = true
+warn_return_any = true
+implicit_reexport = false
+strict_equality = true
+extra_checks = true

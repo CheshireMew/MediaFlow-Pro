@@ -13,6 +13,9 @@ from .presentation_asr import (
 from .presentation_asr import (
     transcription_configuration_label as transcription_configuration_label,
 )
+from .presentation_asr import (
+    transcription_plan_error_label as transcription_plan_error_label,
+)
 from .presentation_export import (
     encoder_label as encoder_label,
 )
@@ -27,6 +30,21 @@ from .presentation_messages import (
 )
 from .presentation_messages import (
     system_name as system_name,
+)
+from .presentation_resources import (
+    builtin_media_resource_tags as builtin_media_resource_tags,
+)
+from .presentation_resources import (
+    builtin_media_resource_text as builtin_media_resource_text,
+)
+from .presentation_resources import (
+    media_resource_ui_label as media_resource_ui_label,
+)
+from .presentation_runtime import (
+    localized_runtime_tool_status as localized_runtime_tool_status,
+)
+from .presentation_runtime import (
+    runtime_status_text as runtime_status_text,
 )
 from .presentation_subtitles import (
     built_in_subtitle_style_presets as built_in_subtitle_style_presets,
@@ -69,6 +87,9 @@ from .presentation_workspace import (
 )
 from .presentation_workspace import (
     WorkspaceModeDefinition as WorkspaceModeDefinition,
+)
+from .presentation_workspace import (
+    pending_profile_label as pending_profile_label,
 )
 from .presentation_workspace import (
     workspace_mode_catalog as workspace_mode_catalog,

@@ -333,9 +333,7 @@ def test_resource_library_panel_adopts_a_real_lut_into_the_selected_clip(
         lut_asset = project.get_asset(effect.resource_asset_id)
         assert lut_asset.kind == AssetKind.LUT
         assert lut_asset.managed is True
-        assert _process_until(
-            lambda: controllers.workspace.statusMessage == "LUT 已从资源库添加"
-        )
+        assert _process_until(lambda: controllers.workspace.statusMessage == "LUT 已从资源库添加")
         resource_list = workspace.findChild(QQuickItem, "resourceLibraryList")
         assert resource_list is not None and resource_list.property("count") == 1
     finally:
@@ -478,14 +476,9 @@ def test_resource_library_resources_survive_reopen_and_real_export(
         controllers.resources.adoptResource(motion_row["resourceKey"], 50, 3.0, True)
         assert any(item.kind == AssetKind.WEB for item in project.list_assets())
 
-        collection_values = {
-            item["value"] for item in controllers.resources.collectionOptions
-        }
+        collection_values = {item["value"] for item in controllers.resources.collectionOptions}
         assert {"favorites", "featured", "tag:audio"}.issubset(collection_values)
-        assert any(
-            item["value"] == "audio-effect"
-            for item in controllers.resources.categoryOptions
-        )
+        assert any(item["value"] == "audio-effect" for item in controllers.resources.categoryOptions)
         controllers.resources.refresh("", "", "featured")
         assert controllers.resources.resultCount > 0
         assert all(
@@ -506,9 +499,7 @@ def test_resource_library_resources_survive_reopen_and_real_export(
         controllers.resources.toggleFavorite(sound_row["resourceKey"])
         controllers.resources.refresh("", "", "favorites")
         assert controllers.resources.resultCount == 1
-        assert controllers.resources.resourcesModel.get(0)["resourceKey"] == sound_row[
-            "resourceKey"
-        ]
+        assert controllers.resources.resourcesModel.get(0)["resourceKey"] == sound_row["resourceKey"]
         controllers.resources.refresh("sound-effect", "柔和确认音")
         controllers.resources.adoptResource(
             sound_row["resourceKey"],
@@ -522,12 +513,7 @@ def test_resource_library_resources_survive_reopen_and_real_export(
         )
         assert _process_until(
             lambda: any(
-                clip.track_id
-                in {
-                    item.id
-                    for item in timeline.state.tracks
-                    if item.kind == TrackKind.AUDIO
-                }
+                clip.track_id in {item.id for item in timeline.state.tracks if item.kind == TrackKind.AUDIO}
                 for clip in timeline.state.clips
             ),
             timeout=30,
@@ -547,14 +533,11 @@ def test_resource_library_resources_survive_reopen_and_real_export(
 
         controllers.workspace_project.closeProject()
         assert _process_until(
-            lambda: not controllers.workspace.hasProject
-            and not controllers.workspace.projectReleasePending,
+            lambda: not controllers.workspace.hasProject and not controllers.workspace.projectReleasePending,
             timeout=30,
         )
         assert sound_row["resourceKey"] in DesktopSettingsRepository().load().ui.favorite_resource_keys
-        controllers.workspace_project.openProject(
-            QUrl.fromLocalFile(str(project_path)).toString()
-        )
+        controllers.workspace_project.openProject(QUrl.fromLocalFile(str(project_path)).toString())
         assert _process_until(lambda: controllers.workspace.hasProject, timeout=20)
 
         reopened = controllers.session.state.binding.require_current()
@@ -677,8 +660,7 @@ def test_agent_desktop_agent_loop_reaches_qml_and_reads_back_human_edit(
         agent_track_id = agent_write["result"]["track"]["id"]
         assert _process_until(
             lambda: any(
-                controllers.timeline_view.tracksModel.get(index)["trackId"]
-                == agent_track_id
+                controllers.timeline_view.tracksModel.get(index)["trackId"] == agent_track_id
                 for index in range(controllers.timeline_view.tracksModel.rowCount())
             ),
             timeout=10,
@@ -768,6 +750,7 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
         assert _process_until(lambda: page_loader.property("item") is not None)
 
         home = page_loader.property("item")
+        assert controllers.workspace.sequenceOutFrame == 0
         download_url = home.findChild(QQuickItem, "downloadUrlField")
         assert download_url is not None
         assert download_url.property("text") == "https://example.com/remembered-video"
@@ -808,13 +791,22 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
         assert screenshot.is_file() and screenshot.stat().st_size > 0
 
         create_hero = home.findChild(QQuickItem, "homeCreateHero")
+        home_settings_button = home.findChild(QQuickItem, "homeSettingsButton")
         assert create_hero is not None
+        assert home_settings_button is not None and home_settings_button.isVisible()
+        assert QMetaObject.invokeMethod(home_settings_button, "click")
+        home_settings_dialog = home.findChild(QObject, "settingsDialog")
+        assert home_settings_dialog is not None and home_settings_dialog.property("visible")
+        assert QMetaObject.invokeMethod(home_settings_dialog, "close")
         assert QMetaObject.invokeMethod(create_hero, "click")
         create_dialog = home.findChild(QObject, "createProjectDialog")
         create_name = home.findChild(QQuickItem, "createProjectNameField")
+        create_location = home.findChild(QQuickItem, "createProjectLocationField")
         create_button = home.findChild(QQuickItem, "confirmCreateProjectButton")
         assert create_dialog is not None and create_dialog.property("visible")
         assert create_name is not None and create_name.property("text") == ""
+        assert create_location is not None
+        assert Path(create_location.property("text")) == tmp_path / "Projects"
         assert create_button is not None and create_button.property("enabled") is True
         create_render = window.grabWindow()
         assert not create_render.isNull()
@@ -824,6 +816,31 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
             lambda: controllers.workspace.hasProject and controllers.workspace.projectName == "未命名项目 1"
         )
         assert (tmp_path / "Projects" / "未命名项目 1" / "project.mfp").is_file()
+
+        workspace = page_loader.property("item")
+        rename_project = workspace.findChild(QQuickItem, "renameProjectButton")
+        copy_project_path = workspace.findChild(QQuickItem, "copyProjectPathButton")
+        reveal_project_folder = workspace.findChild(QQuickItem, "revealProjectFolderButton")
+        assert all(
+            item is not None
+            for item in (rename_project, copy_project_path, reveal_project_folder)
+        )
+        assert QMetaObject.invokeMethod(rename_project, "click")
+        rename_field = window.findChild(QQuickItem, "renameProjectNameField")
+        rename_confirm = window.findChild(QQuickItem, "confirmRenameProjectButton")
+        assert rename_field is not None and rename_confirm is not None
+        rename_field.setProperty("text", "重新命名的项目")
+        assert QMetaObject.invokeMethod(rename_confirm, "click")
+        assert _process_until(lambda: controllers.workspace.projectName == "重新命名的项目")
+        assert (tmp_path / "Projects" / "未命名项目 1" / "project.mfp").is_file()
+
+        clipboard = QGuiApplication.clipboard()
+        clipboard_before = clipboard.text()
+        try:
+            assert QMetaObject.invokeMethod(copy_project_path, "click")
+            assert clipboard.text() == str(tmp_path / "Projects" / "未命名项目 1")
+        finally:
+            clipboard.setText(clipboard_before)
 
         closing_project = controllers.session.state.binding.current
         assert closing_project is not None
@@ -888,7 +905,7 @@ def test_home_recent_empty_state_is_centered(tmp_path: Path, monkeypatch) -> Non
 
         controllers.workspace_project.openProject(str(closing_project.project_dir))
         assert _process_until(
-            lambda: controllers.workspace.hasProject and controllers.workspace.projectName == "未命名项目 1"
+            lambda: controllers.workspace.hasProject and controllers.workspace.projectName == "重新命名的项目"
         )
         assert controllers.workspace.readOnly is False
         assert controllers.session.state.binding.current.get_task(slow_task.id).status == TaskStatus.PAUSED
@@ -1135,12 +1152,12 @@ def test_sample_project_opens_evolved_workspace_and_guided_tour(
         assert QMetaObject.invokeMethod(source_tab, "click")
         assert _process_until(lambda: source_panel.property("previewMode") == "source")
 
-        controllers.settings.setWorkspaceLayoutPreset("media")
+        controllers.workspace_settings.setWorkspaceLayoutPreset("media")
         assert _process_until(lambda: workspace.property("layoutPreset") == "media")
-        controllers.settings.saveWorkspaceLayout("media", 480, 380, 320, True, False, True)
+        controllers.workspace_settings.saveWorkspaceLayout("media", 480, 380, 320, True, False, True)
         inspector = workspace.findChild(QQuickItem, "inspectorPanel")
         assert inspector is not None and _process_until(lambda: not inspector.isVisible())
-        controllers.settings.setWorkspaceLayoutPreset("standard")
+        controllers.workspace_settings.setWorkspaceLayoutPreset("standard")
         assert _process_until(
             lambda: workspace.property("layoutPreset") == "standard" and inspector.isVisible()
         )
@@ -1207,7 +1224,7 @@ def test_settings_exposes_selectable_external_speech_components(
         )
         workspace = page_loader.property("item")
         assert workspace is not None
-        controllers.settings.saveLlmProvider(
+        controllers.language_settings.saveLlmProvider(
             "",
             "Disabled test provider",
             "https://example.invalid/v1",
@@ -1215,7 +1232,7 @@ def test_settings_exposes_selectable_external_speech_components(
             "test-model",
             False,
         )
-        assert controllers.settings.llmProvidersModel.rowCount() == 1, {
+        assert controllers.language_settings.llmProvidersModel.rowCount() == 1, {
             "errors": controllers.workspace.recentErrors,
             "settings": controllers.settings.settingsData,
         }
@@ -1255,7 +1272,7 @@ def test_settings_exposes_selectable_external_speech_components(
             )
         )
         assert QMetaObject.invokeMethod(dialog, "open")
-        tabs.setProperty("currentIndex", 2)
+        tabs.setProperty("currentIndex", 3)
         assert _process_until(
             lambda: any(
                 item.objectName() == "llmProviderRow" and item.isVisible()
@@ -2446,7 +2463,7 @@ print('100%', flush=True)
         subtitle_text_editor.forceActiveFocus()
         assert _process_until(lambda: subtitle_text_editor.property("activeFocus") is True)
         subtitle_text_editor.setProperty("text", "Timeline button draft")
-        controllers.settings.selectGlossaryTerm("")
+        controllers.language_settings.selectGlossaryTerm("")
         QCoreApplication.processEvents()
         assert subtitle_text_editor.property("text") == "Timeline button draft"
         assert QMetaObject.invokeMethod(subtitle_save, "click")
@@ -2717,14 +2734,14 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         server_thread.start()
         try:
             download_url = f"http://127.0.0.1:{server.server_address[1]}/{source.name}"
-            controllers.tasks.analyzeDownloadUrl(download_url)
+            controllers.downloads.analyzeDownloadUrl(download_url)
             analyze_deadline = time.monotonic() + 20
-            while time.monotonic() < analyze_deadline and not controllers.tasks.downloadPlanReady:
+            while time.monotonic() < analyze_deadline and not controllers.downloads.downloadPlanReady:
                 QCoreApplication.processEvents()
                 time.sleep(0.02)
-            assert controllers.tasks.downloadPlanReady is True
-            assert controllers.tasks.downloadPlanData["title"] == "ui-source"
-            assert controllers.tasks.downloadPlanData["source_url"] == download_url
+            assert controllers.downloads.downloadPlanReady is True
+            assert controllers.downloads.downloadPlanData["title"] == "ui-source"
+            assert controllers.downloads.downloadPlanData["source_url"] == download_url
             assert controllers.settings.settingsData["lastDownloadUrl"] == download_url
             collection_plan = YtDlpDownloadService._plan_from_info(
                 {
@@ -2751,7 +2768,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             dialog_render = root_window.grabWindow()
             dialog_render_path = tmp_path / "download-plan-with-unavailable-entry.png"
             assert not dialog_render.isNull() and dialog_render.save(str(dialog_render_path))
-            controllers.tasks.dismissDownloadPlan()
+            controllers.downloads.dismissDownloadPlan()
         finally:
             server.shutdown()
             server.server_close()
@@ -3481,8 +3498,8 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert QMetaObject.invokeMethod(workspace, "resetPreviewViewport")
         assert preview_viewport.property("viewportZoom") == 1.0
         assert preview_viewport.property("viewportPanX") == 0.0
-        controllers.settings.saveWorkspaceLayout("standard", 400, 360, 380, True, True, True)
-        controllers.settings.saveWindowState(1440, 900, False)
+        controllers.workspace_settings.saveWorkspaceLayout("standard", 400, 360, 380, True, True, True)
+        controllers.workspace_settings.saveWindowState(1440, 900, False)
         persisted_ui = DesktopSettingsRepository(os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"]).load().ui
         assert (
             persisted_ui.workspace_layouts.standard.left_panel_width,
@@ -3985,9 +4002,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         assert moved_audio["startFrame"] == independent_audio_start
         assert detached_video["startFrame"] == first_clip_projection["startFrame"]
         controllers.timeline_view.selectClip(first_clip_projection["clipId"])
-        waveforms = [
-            item for item in _visual_items(timeline) if item.objectName() == "clipWaveform"
-        ]
+        waveforms = [item for item in _visual_items(timeline) if item.objectName() == "clipWaveform"]
         assert any(item.parentItem().width() > item.width() for item in waveforms)
         assert all(item.width() <= timeline.width() for item in waveforms)
 
@@ -4012,7 +4027,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         translation_server_thread.start()
         try:
-            controllers.settings.saveLlmProvider(
+            controllers.language_settings.saveLlmProvider(
                 "",
                 "QML translation fixture",
                 f"http://127.0.0.1:{translation_server.server_address[1]}/v1",
@@ -4367,7 +4382,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         translation_editor.forceActiveFocus()
         assert _process_until(lambda: translation_editor.property("activeFocus") is True)
         translation_editor.setProperty("text", "用户校对后的译文")
-        controllers.settings.selectGlossaryTerm("")
+        controllers.language_settings.selectGlossaryTerm("")
         assert _process_until(
             lambda: visible_translation_control("translationTargetEditor") is not None
             and visible_translation_control("translationSaveSegmentButton") is not None
@@ -4460,6 +4475,10 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 break
             time.sleep(0.02)
         assert analyze_tasks[0]["status"] == "completed", analyze_tasks[0]["error"]
+        assert _process_until(
+            lambda: "integratedLufs" in controllers.audio.audioMetrics,
+            timeout=10,
+        ), controllers.audio.audioMetrics
         assert -100.0 < controllers.audio.audioMetrics["integratedLufs"] < 0.0
         workspace.setProperty("activeMode", "audio")
         assert _process_until(

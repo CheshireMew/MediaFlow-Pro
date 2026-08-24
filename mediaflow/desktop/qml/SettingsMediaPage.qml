@@ -21,7 +21,7 @@ AppScrollView {
         id: clearCookieDialog
         onConfirmed: function (domain) {
             if (domain.length > 0)
-                mediaflow.settingsController.clearManagedCookies(domain)
+                mediaflow.downloadSettingsController.clearManagedCookies(domain)
         }
     }
 
@@ -66,9 +66,9 @@ AppScrollView {
             }
             AppButton {
                 text: qsTr("恢复默认")
-                visible: downloadDirectory.text !== mediaflow.settingsController.builtInMediaDirectory
+                visible: downloadDirectory.text !== mediaflow.downloadSettingsController.builtInMediaDirectory
                 onClicked: {
-                    downloadDirectory.text = mediaflow.settingsController.builtInMediaDirectory
+                    downloadDirectory.text = mediaflow.downloadSettingsController.builtInMediaDirectory
                     page.settingsDialog.updateDraft("downloadDirectory", downloadDirectory.text)
                 }
             }
@@ -159,15 +159,15 @@ AppScrollView {
                     Layout.fillWidth: true
                     Text {
                         Layout.fillWidth: true
-                        text: mediaflow.settingsController.managedCookieStatus.exists
-                              ? (mediaflow.settingsController.managedCookieStatus.valid
-                                 ? qsTr("有效 · %1 小时").arg(mediaflow.settingsController.managedCookieStatus.ageHours)
-                                 : qsTr("已过期 · %1 小时").arg(mediaflow.settingsController.managedCookieStatus.ageHours))
+                        text: mediaflow.downloadSettingsController.managedCookieStatus.exists
+                              ? (mediaflow.downloadSettingsController.managedCookieStatus.valid
+                                 ? qsTr("有效 · %1 小时").arg(mediaflow.downloadSettingsController.managedCookieStatus.ageHours)
+                                 : qsTr("已过期 · %1 小时").arg(mediaflow.downloadSettingsController.managedCookieStatus.ageHours))
                               : qsTr("未保存")
-                        color: mediaflow.settingsController.managedCookieStatus.valid ? Theme.success : Theme.textMuted
+                        color: mediaflow.downloadSettingsController.managedCookieStatus.valid ? Theme.success : Theme.textMuted
                         font.pixelSize: Theme.fontSizeCaption
                     }
-                    AppButton { text: qsTr("检查"); onClicked: mediaflow.settingsController.inspectManagedCookies(cookieDomain.text) }
+                    AppButton { text: qsTr("检查"); onClicked: mediaflow.downloadSettingsController.inspectManagedCookies(cookieDomain.text) }
                     AppButton {
                         text: qsTr("清除")
                         enabled: cookieDomain.text.trim().length > 0
@@ -182,7 +182,7 @@ AppScrollView {
                         text: qsTr("保存")
                         enabled: cookieDomain.text.trim().length > 0 && cookieJsonText.text.trim().length > 0
                         onClicked: {
-                            if (mediaflow.settingsController.saveManagedCookies(
+                            if (mediaflow.downloadSettingsController.saveManagedCookies(
                                     cookieDomain.text, cookieJsonText.text))
                                 page.discardManagedCookieDraft()
                         }
@@ -232,7 +232,7 @@ AppScrollView {
                 Text {
                     Layout.fillWidth: true
                     text: qsTr("yt-dlp：%1。语音组件按需下载，不进入 MediaFlow Pro 安装包。")
-                        .arg(mediaflow.settingsController.runtimeToolStatus.ytDlpVersion || qsTr("未检测"))
+                        .arg(mediaflow.runtimeSettingsController.runtimeToolStatus.ytDlpVersion || qsTr("未检测"))
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap
@@ -275,32 +275,32 @@ AppScrollView {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: mediaflow.settingsController.runtimeToolStatus.cudaSummary || qsTr("尚未检测 CUDA")
-                    color: mediaflow.settingsController.runtimeToolStatus.cudaStatus === "ready" ? Theme.success : Theme.textMuted
+                    text: mediaflow.runtimeSettingsController.runtimeToolStatus.cudaSummary || qsTr("尚未检测 CUDA")
+                    color: mediaflow.runtimeSettingsController.runtimeToolStatus.cudaStatus === "ready" ? Theme.success : Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap
                 }
                 AppProgressBar {
                     Layout.fillWidth: true
-                    visible: mediaflow.settingsController.runtimeToolStatus.busy
+                    visible: mediaflow.runtimeSettingsController.runtimeToolStatus.busy
                     from: 0; to: 100
-                    indeterminate: mediaflow.settingsController.runtimeToolStatus.progressMode !== "determinate"
-                    value: Number(mediaflow.settingsController.runtimeToolStatus.progressValue || 0)
+                    indeterminate: mediaflow.runtimeSettingsController.runtimeToolStatus.progressMode !== "determinate"
+                    value: Number(mediaflow.runtimeSettingsController.runtimeToolStatus.progressValue || 0)
                 }
                 Text {
-                    visible: mediaflow.settingsController.runtimeToolStatus.busy
-                    text: mediaflow.settingsController.runtimeToolStatus.message || qsTr("正在处理")
+                    visible: mediaflow.runtimeSettingsController.runtimeToolStatus.busy
+                    text: mediaflow.runtimeSettingsController.runtimeToolStatus.message || qsTr("正在处理")
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.settingsController.runtimeToolStatus.busy; text: qsTr("检测 CUDA"); onClicked: mediaflow.settingsController.inspectRuntimeTools() }
-                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.settingsController.runtimeToolStatus.busy; text: qsTr("更新 yt-dlp"); onClicked: mediaflow.settingsController.updateYtDlp() }
+                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.runtimeSettingsController.runtimeToolStatus.busy; text: qsTr("检测 CUDA"); onClicked: mediaflow.runtimeSettingsController.inspectRuntimeTools() }
+                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.runtimeSettingsController.runtimeToolStatus.busy; text: qsTr("更新 yt-dlp"); onClicked: mediaflow.runtimeSettingsController.updateYtDlp() }
                     AppButton {
                         objectName: "downloadSelectedRuntimeComponents"
                         Layout.fillWidth: true
-                        enabled: !mediaflow.settingsController.runtimeToolStatus.busy
+                        enabled: !mediaflow.runtimeSettingsController.runtimeToolStatus.busy
                             && (selectXxlDownload.checked || selectGptSoVitsDownload.checked)
                         text: qsTr("下载所选组件")
                         onClicked: {
@@ -309,11 +309,11 @@ AppScrollView {
                                 selected.push("faster-whisper-xxl")
                             if (selectGptSoVitsDownload.checked)
                                 selected.push("gpt-sovits-v2pro")
-                            mediaflow.settingsController.installRuntimeComponents(selected)
+                            mediaflow.runtimeSettingsController.installRuntimeComponents(selected)
                         }
                     }
-                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.settingsController.runtimeToolStatus.busy && page.settingsDialog.runtimeComponent("faster-whisper-xxl").ready; text: qsTr("预热 XXL"); onClicked: mediaflow.settingsController.prewarmAsrCli() }
-                    AppButton { visible: mediaflow.settingsController.runtimeToolStatus.busy; danger: true; text: qsTr("取消"); onClicked: mediaflow.settingsController.cancelRuntimeToolOperation() }
+                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.runtimeSettingsController.runtimeToolStatus.busy && page.settingsDialog.runtimeComponent("faster-whisper-xxl").ready; text: qsTr("预热 XXL"); onClicked: mediaflow.runtimeSettingsController.prewarmAsrCli() }
+                    AppButton { visible: mediaflow.runtimeSettingsController.runtimeToolStatus.busy; danger: true; text: qsTr("取消"); onClicked: mediaflow.runtimeSettingsController.cancelRuntimeToolOperation() }
                 }
             }
         }

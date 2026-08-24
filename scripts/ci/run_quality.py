@@ -464,6 +464,11 @@ def build_quality_stages(
         )
         stages.append(QualityStage("core-serial", local_serial_commands()))
     if plan.run_full:
+        # Measure a clean desktop launch before runtime shards leave media,
+        # browser, and service processes competing for disk and scheduler time.
+        # The 4.5-second product budget remains unchanged; only the benchmark
+        # environment is made representative and repeatable.
+        stages.append(QualityStage("runtime-serial", local_runtime_serial_commands()))
         stages.append(
             QualityStage(
                 "runtime",
@@ -471,7 +476,6 @@ def build_quality_stages(
                 max_workers=max_runtime_workers,
             )
         )
-        stages.append(QualityStage("runtime-serial", local_runtime_serial_commands()))
         stages.append(QualityStage("interactive-verifiers", interactive_verifier_commands()))
         stages.append(QualityStage("interactive-qml", interactive_qml_commands()))
         stages.append(

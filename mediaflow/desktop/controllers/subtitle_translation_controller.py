@@ -1,16 +1,52 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Slot
+from typing import Any
 
-from mediaflow.domain.subtitles import SubtitleSegment
+from PySide6.QtCore import Property, Signal, Slot
+
 from mediaflow.domain.task_commands import TranslateDocumentCommand, TranslateSegmentsCommand
-from mediaflow.domain.translation import validate_translation_mode
+from mediaflow.domain.translation import TranslationComparison, validate_translation_mode
 
 from .controller_facet import ControllerFacet, report_ui_errors
 from .controller_scopes import SubtitlePresentationScope
 
 
 class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
+    presentationChanged = Signal()
+
+    def __init__(self, session: SubtitlePresentationScope) -> None:
+        super().__init__(session)
+        self._comparison = self._empty_comparison()
+        self._task_data: dict[str, Any] = {}
+        self._selected_row_ids: set[str] = set()
+        self._drafts: dict[tuple[str, str], str] = {}
+        self._observed_document_id = ""
+        self._comparison_request_id = 0
+
+    @Property(dict, notify=presentationChanged)
+    def comparisonData(self) -> dict[str, Any]:
+        document = dict(self._comparison)
+        target_document_id = str(document.get("targetDocumentId") or "")
+        document["rows"] = [
+            {
+                **row,
+                "draftText": self._drafts.get(
+                    (target_document_id, str(row.get("targetSegmentId") or "")),
+                    str(row.get("targetText") or ""),
+                ),
+            }
+            for row in document.get("rows", [])
+        ]
+        return document
+
+    @Property(dict, notify=presentationChanged)
+    def taskData(self) -> dict[str, Any]:
+        return dict(self._task_data)
+
+    @Property(list, notify=presentationChanged)
+    def selectedRowIds(self) -> list[str]:
+        return sorted(self._selected_row_ids)
+
     @Slot(str, str, str)
     @report_ui_errors
     def translateDocument(self, document_id: str, target_language: str, mode: str) -> None:
@@ -45,17 +81,17 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
             ),
         )
 
-    @Slot(str, str, "QVariantList", str, str)
+    @Slot(str, str)
     @report_ui_errors
     def translateComparisonSegments(
         self,
-        source_document_id: str,
-        target_document_id: str,
-        segment_ids: list[str],
         target_language: str,
         mode: str,
     ) -> None:
         self._session._require_writable()
+        source_document_id = str(self._comparison.get("sourceDocumentId") or "")
+        target_document_id = str(self._comparison.get("targetDocumentId") or "")
+        segment_ids = self._selected_source_segment_ids()
         if not source_document_id or not target_document_id:
             raise ValueError("请先完成整篇翻译，再局部重译")
         if not segment_ids:
@@ -71,133 +107,194 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
             )
         )
 
-    @Slot(str, str, result="QVariantMap")
-    def translationComparison(self, document_id: str, target_language: str) -> dict:
+    @Slot(str, str)
+    def refreshComparison(self, document_id: str, target_language: str) -> None:
+        self._comparison_request_id += 1
+        request_id = self._comparison_request_id
+        if document_id != self._observed_document_id:
+            self._observed_document_id = document_id
+            self._selected_row_ids.clear()
         if not document_id or not self._session.state.binding.current:
-            return {}
-        selected = self._session.state.binding.require_current().get_subtitle_document(document_id)
-        documents = self._session.state.binding.require_current().list_subtitle_documents()
-        if selected.source_document_id:
-            source = self._session.state.binding.require_current().get_subtitle_document(
-                selected.source_document_id
-            )
-            target = selected
-        else:
-            source = selected
-            candidates = [item for item in documents if item.source_document_id == source.id]
-            preferred = [item for item in candidates if item.language == target_language]
-            target = (preferred or candidates)[-1] if (preferred or candidates) else None
-        source_segments = self._session.state.binding.require_current().list_subtitle_segments(source.id)
-        target_segments = (
-            self._session.state.binding.require_current().list_subtitle_segments(target.id)
-            if target is not None
-            else []
+            self._comparison = self._empty_comparison()
+            self._task_data = {}
+            self.presentationChanged.emit()
+            return
+        project = self._session.state.binding.require_current()
+        self._session.background.submit_project_callback(
+            "translation_comparison",
+            request_id,
+            lambda: project.translation_comparison(document_id, target_language),
+            on_result=lambda result: self._apply_comparison(
+                request_id,
+                document_id,
+                result,
+            ),
+            on_error=lambda error: self._comparison_failed(request_id, error),
         )
-        rows: list[dict] = []
-        matched_source_ids: set[str] = set()
-        if target_segments and all(segment.source_segment_id for segment in target_segments):
-            target_by_source = {segment.source_segment_id: segment for segment in target_segments}
-            for source_segment in source_segments:
-                translated = target_by_source.get(source_segment.id)
-                if translated is not None:
-                    matched_source_ids.add(source_segment.id)
-                rows.append(
-                    self._translation_comparison_row(
-                        source_segments=[source_segment],
-                        target_segment=translated,
-                    )
-                )
-        else:
-            for translated in target_segments:
-                overlapping = [
-                    source_segment
-                    for source_segment in source_segments
-                    if source_segment.end_frame > translated.start_frame
-                    and source_segment.start_frame < translated.end_frame
-                ]
-                matched_source_ids.update(item.id for item in overlapping)
-                rows.append(
-                    self._translation_comparison_row(
-                        source_segments=overlapping,
-                        target_segment=translated,
-                    )
-                )
-            for source_segment in source_segments:
-                if source_segment.id not in matched_source_ids:
-                    rows.append(
-                        self._translation_comparison_row(
-                            source_segments=[source_segment],
-                            target_segment=None,
-                        )
-                    )
-            rows.sort(key=lambda row: (row["startFrame"], row["endFrame"], row["rowId"]))
-        source_text = "\n".join(segment.text for segment in source_segments).casefold()
-        glossary_hits = sum(
-            1
-            for term in self._session.state.service_settings.translation.glossary_terms
-            if term.source.casefold() in source_text
-        )
-        return {
-            "sourceDocumentId": source.id,
-            "targetDocumentId": target.id if target is not None else "",
-            "sourceLanguage": source.language,
-            "targetLanguage": target.language if target is not None else target_language,
-            "glossaryHitCount": glossary_hits,
-            "rows": rows,
-        }
 
-    @Slot(str, str, str, result=bool)
+    @Slot(str, str)
+    def storeTranslationDraft(self, target_segment_id: str, text: str) -> None:
+        target_document_id = str(self._comparison.get("targetDocumentId") or "")
+        if not target_document_id or not target_segment_id:
+            return
+        self._drafts[(target_document_id, target_segment_id)] = text
+        self.presentationChanged.emit()
+
+    @Slot(str)
     @report_ui_errors
-    def updateTranslationSegment(
-        self,
-        target_document_id: str,
-        target_segment_id: str,
-        text: str,
-    ) -> bool:
+    def saveTranslationSegment(self, target_segment_id: str) -> None:
         self._session._require_writable()
-        segment = next(
-            item
-            for item in self._session.state.binding.require_current().list_subtitle_segments(
-                target_document_id
-            )
-            if item.id == target_segment_id
+        target_document_id = str(self._comparison.get("targetDocumentId") or "")
+        key = (target_document_id, target_segment_id)
+        if key not in self._drafts:
+            return
+        text = self._drafts[key]
+        project = self._session.state.binding.require_current()
+        request_id = (self._comparison_request_id, target_document_id, target_segment_id)
+        self._session.background.submit_project_callback(
+            "translation_segment_save",
+            request_id,
+            lambda: project.update_translation_segment_text(
+                target_document_id,
+                target_segment_id,
+                text,
+            ),
+            on_result=lambda _result: self._translation_segment_saved(key),
+            on_error=lambda error: self._session.updates.report_error(
+                f"保存译文失败：{error}"
+            ),
         )
-        self._session.state.binding.require_current().update_subtitle_segment(
-            target_document_id,
-            target_segment_id,
-            start_frame=segment.start_frame,
-            end_frame=segment.end_frame,
-            text=text,
+
+    @Slot(str, result=bool)
+    def rowSelected(self, row_id: str) -> bool:
+        return row_id in self._selected_row_ids
+
+    @Slot(str)
+    def toggleRow(self, row_id: str) -> None:
+        if row_id in self._selected_row_ids:
+            self._selected_row_ids.remove(row_id)
+        else:
+            self._selected_row_ids.add(row_id)
+        self.presentationChanged.emit()
+
+    @Slot()
+    def refreshTaskData(self) -> None:
+        context_id = str(
+            self._comparison.get("sourceDocumentId")
+            or self._observed_document_id
+            or ""
         )
+        self._task_data = self._latest_translation_task(context_id)
+        self.presentationChanged.emit()
+
+    def _apply_comparison(
+        self,
+        request_id: int,
+        document_id: str,
+        result: object | None,
+    ) -> None:
+        if request_id != self._comparison_request_id:
+            return
+        if not isinstance(result, TranslationComparison):
+            raise TypeError("Translation comparison returned an invalid result")
+        data = result.model_dump(mode="python")
+        self._comparison = {
+            "sourceDocumentId": data["source_document_id"],
+            "targetDocumentId": data["target_document_id"],
+            "sourceLanguage": data["source_language"],
+            "targetLanguage": data["target_language"],
+            "glossaryHitCount": data["glossary_hit_count"],
+            "rows": [
+                {
+                    "rowId": row["row_id"],
+                    "sourceSegmentIds": row["source_segment_ids"],
+                    "sourceText": row["source_text"],
+                    "targetSegmentId": row["target_segment_id"],
+                    "targetText": row["target_text"],
+                    "startFrame": row["start_frame"],
+                    "endFrame": row["end_frame"],
+                    "status": row["status"],
+                }
+                for row in data["rows"]
+            ],
+        }
+        target_document_id = str(self._comparison["targetDocumentId"])
+        target_texts = {
+            str(row["targetSegmentId"]): str(row["targetText"])
+            for row in self._comparison["rows"]
+            if row["targetSegmentId"]
+        }
+        self._drafts = {
+            key: value
+            for key, value in self._drafts.items()
+            if key[0] != target_document_id
+            or target_texts.get(key[1]) != value
+        }
+        self._selected_row_ids.intersection_update(
+            str(row["rowId"]) for row in self._comparison["rows"]
+        )
+        self._observed_document_id = document_id
+        self.refreshTaskData()
+
+    def _comparison_failed(self, request_id: int, error: BaseException) -> None:
+        if request_id != self._comparison_request_id:
+            return
+        self._session.updates.report_error(f"读取翻译对照失败：{error}")
+
+    def _translation_segment_saved(self, key: tuple[str, str]) -> None:
+        self._drafts.pop(key, None)
         self._session.projectors.subtitles.refresh_documents()
         self._session.projectors.timeline.refresh_preview_subtitles()
         self._session.projectors.timeline.schedule_preview_graph()
         self._session._set_status("译文已保存")
         self._session.updates.commit(project=True)
         self._session.updates.commit(history=True)
-        return True
+        self.presentationChanged.emit()
+
+    def _selected_source_segment_ids(self) -> list[str]:
+        selected: list[str] = []
+        for row in self._comparison.get("rows", []):
+            if str(row.get("rowId") or "") not in self._selected_row_ids:
+                continue
+            for segment_id in row.get("sourceSegmentIds", []):
+                value = str(segment_id)
+                if value not in selected:
+                    selected.append(value)
+        return selected
+
+    def _latest_translation_task(self, context_id: str) -> dict[str, Any]:
+        matches = [
+            self._session.models.tasks.get(index)
+            for index in range(self._session.models.tasks.rowCount())
+        ]
+        matches = [
+            row
+            for row in matches
+            if row.get("kind") == "translate"
+            and (
+                not context_id
+                or context_id in (row.get("inputAssetIds") or [])
+                or context_id == row.get("contextId")
+            )
+        ]
+        return dict(
+            next(
+                (
+                    row
+                    for row in matches
+                    if row.get("status") in {"pending", "running", "paused"}
+                ),
+                matches[0] if matches else {},
+            )
+        )
 
     @staticmethod
-    def _translation_comparison_row(
-        *,
-        source_segments: list[SubtitleSegment],
-        target_segment: SubtitleSegment | None,
-    ) -> dict:
-        source_ids = [segment.id for segment in source_segments]
-        start_frames = [segment.start_frame for segment in source_segments]
-        end_frames = [segment.end_frame for segment in source_segments]
-        if target_segment is not None:
-            start_frames.append(target_segment.start_frame)
-            end_frames.append(target_segment.end_frame)
-        start_frame = min(start_frames) if start_frames else 0
-        end_frame = max(end_frames) if end_frames else start_frame + 1
+    def _empty_comparison() -> dict[str, Any]:
         return {
-            "rowId": target_segment.id if target_segment is not None else source_ids[0],
-            "sourceSegmentIds": source_ids,
-            "sourceText": "\n".join(segment.text for segment in source_segments),
-            "targetSegmentId": target_segment.id if target_segment is not None else "",
-            "targetText": target_segment.text if target_segment is not None else "",
-            "startFrame": start_frame,
-            "endFrame": end_frame,
-            "status": "translated" if target_segment is not None else "missing",
+            "sourceDocumentId": "",
+            "targetDocumentId": "",
+            "sourceLanguage": "",
+            "targetLanguage": "",
+            "glossaryHitCount": 0,
+            "rows": [],
         }

@@ -20,7 +20,7 @@ def test_xiaoyuzhou_plan_forces_audio_without_overwriting_video_preferences() ->
     try:
         session._set_download_plan(XiaoyuzhouEpisodeResolver._plan_from_html(EPISODE_URL, _episode_html()))
 
-        [request] = controllers.tasks._build_download_requests(
+        [request] = controllers.downloads._build_download_requests(
             "1080p",
             "",
             True,
@@ -32,7 +32,7 @@ def test_xiaoyuzhou_plan_forces_audio_without_overwriting_video_preferences() ->
         assert request.download_subtitles is False
         assert request.entry.suggested_filename
         assert session.state.service_settings.download.resolution == original_resolution
-        assert controllers.tasks.downloadPlanData["media_kind"] == "audio"
+        assert controllers.downloads.downloadPlanData["media_kind"] == "audio"
     finally:
         controllers.shutdown()
 

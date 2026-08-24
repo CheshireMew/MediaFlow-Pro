@@ -40,6 +40,8 @@ class PresentationProjectors:
         )
 
     def refresh_project(self) -> None:
+        self.session.tasks.invalidate_active_workflow()
+        self.session.tasks.refresh_active_workflow()
         self.assets.refresh_assets(refresh_timeline=False)
         self.timeline.refresh_sequences()
         self.tasks.refresh_tasks()

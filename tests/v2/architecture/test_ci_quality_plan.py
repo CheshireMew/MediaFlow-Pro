@@ -243,8 +243,8 @@ def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
         "preflight",
         "core",
         "core-serial",
-        "runtime",
         "runtime-serial",
+        "runtime",
         "interactive-verifiers",
         "interactive-qml",
         "interactive-chains",
@@ -261,6 +261,9 @@ def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
     assert [command.name for command in runtime_serial.commands] == [
         "release-startup-performance"
     ]
+    assert [stage.name for stage in full].index("runtime-serial") < [
+        stage.name for stage in full
+    ].index("runtime")
     interactive_qml = next(stage for stage in full if stage.name == "interactive-qml")
     assert interactive_qml.max_workers == 1
     assert [command.name for command in interactive_qml.commands] == ["qml-project-chain"]

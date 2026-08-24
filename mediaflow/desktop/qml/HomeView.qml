@@ -9,7 +9,12 @@ Rectangle {
     id: root
     objectName: "homeView"
     color: Theme.window
+    property url createProjectParentUrl: mediaflow.workspaceViewController.defaultProjectDirectoryUrl
+    property string createProjectParentPath: String(
+        mediaflow.settingsController.settingsData.defaultProjectDirectory || "")
     readonly property bool modalOpen: createProjectDialog.opened
+        || createProjectFolderDialog.visible
+        || settingsDialog.opened
         || openFolderDialog.visible
         || Boolean(root.Window.window && root.Window.window.downloadPlanVisible)
 
@@ -17,13 +22,15 @@ Rectangle {
         id: downloadUrlPersistenceTimer
         interval: 400
         repeat: false
-        onTriggered: mediaflow.settingsController.setLastDownloadUrl(downloadUrlField.text)
+        onTriggered: mediaflow.downloadSettingsController.setLastDownloadUrl(downloadUrlField.text)
     }
 
     function createProject() {
         if (!mediaflow.workspaceViewController.actionCapabilities.canCreateProject)
             return;
-        mediaflow.workspaceProjectController.createProjectInDefaultDirectory(createProjectNameField.text.trim())
+        mediaflow.workspaceProjectController.createProject(
+            root.createProjectParentPath,
+            createProjectNameField.text.trim())
         if (mediaflow.workspaceViewController.hasProject) {
             createProjectNameField.clear()
             createProjectDialog.close()
@@ -50,6 +57,19 @@ Rectangle {
             mediaflow.workspaceProjectController.openProject(selectedFolder.toString())
         }
     }
+    FolderDialog {
+        id: createProjectFolderDialog
+        title: qsTr("选择新项目的保存位置")
+        currentFolder: root.createProjectParentUrl
+        onAccepted: {
+            root.createProjectParentUrl = selectedFolder
+            root.createProjectParentPath = selectedFolder.toLocalFile()
+        }
+    }
+    SettingsDialog {
+        id: settingsDialog
+        anchors.centerIn: parent
+    }
     AppDialog {
         id: createProjectDialog
         objectName: "createProjectDialog"
@@ -58,7 +78,12 @@ Rectangle {
         width: 430
         modal: true
         title: qsTr("新建项目")
-        onOpened: createProjectNameField.forceActiveFocus()
+        onOpened: {
+            root.createProjectParentUrl = mediaflow.workspaceViewController.defaultProjectDirectoryUrl
+            root.createProjectParentPath = String(
+                mediaflow.settingsController.settingsData.defaultProjectDirectory || "")
+            createProjectNameField.forceActiveFocus()
+        }
         contentItem: ColumnLayout {
             spacing: 12
             Text {
@@ -74,6 +99,28 @@ Rectangle {
                 implicitHeight: 42
                 placeholderText: qsTr("留空将自动使用“未命名项目 1、2…”")
                 onAccepted: root.createProject()
+            }
+            Text {
+                text: qsTr("保存位置")
+                color: Theme.text
+                font.pixelSize: Theme.fontSizeBody
+                font.weight: Font.DemiBold
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                AppTextField {
+                    objectName: "createProjectLocationField"
+                    Layout.fillWidth: true
+                    readOnly: true
+                    text: root.createProjectParentPath
+                    ToolTip.visible: hovered && implicitWidth > width
+                    ToolTip.text: text
+                }
+                AppButton {
+                    objectName: "chooseCreateProjectLocationButton"
+                    text: qsTr("选择…")
+                    onClicked: createProjectFolderDialog.open()
+                }
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -287,11 +334,11 @@ Rectangle {
                                     onTextEdited: downloadUrlPersistenceTimer.restart()
                                     onAccepted: {
                                         downloadUrlPersistenceTimer.stop()
-                                        mediaflow.settingsController.setLastDownloadUrl(text)
+                                        mediaflow.downloadSettingsController.setLastDownloadUrl(text)
                                         if (text.trim().length > 0
-                                                && !mediaflow.taskController.downloadAnalysisBusy
+                                                && !mediaflow.downloadController.downloadAnalysisBusy
                                                 && mediaflow.workspaceViewController.actionCapabilities.canCreateProject)
-                                            mediaflow.taskController.analyzeDownloadUrl(text.trim())
+                                            mediaflow.downloadController.analyzeDownloadUrl(text.trim())
                                     }
                                 }
                                 AppButton {
@@ -307,16 +354,16 @@ Rectangle {
                                 AppButton {
                                     objectName: "quickStartDownloadButton"
                                     primary: true
-                                    text: mediaflow.taskController.downloadAnalysisBusy
+                                    text: mediaflow.downloadController.downloadAnalysisBusy
                                           ? qsTr("正在读取媒体信息…")
                                           : qsTr("下载并新建项目")
                                     enabled: downloadUrlField.text.trim().length > 0
-                                             && !mediaflow.taskController.downloadAnalysisBusy
+                                             && !mediaflow.downloadController.downloadAnalysisBusy
                                              && mediaflow.workspaceViewController.actionCapabilities.canCreateProject
                                     onClicked: {
                                         downloadUrlPersistenceTimer.stop()
-                                        mediaflow.settingsController.setLastDownloadUrl(downloadUrlField.text)
-                                        mediaflow.taskController.analyzeDownloadUrl(downloadUrlField.text.trim())
+                                        mediaflow.downloadSettingsController.setLastDownloadUrl(downloadUrlField.text)
+                                        mediaflow.downloadController.analyzeDownloadUrl(downloadUrlField.text.trim())
                                     }
                                 }
                             }
@@ -412,6 +459,13 @@ Rectangle {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    AppIconButton {
+                        objectName: "homeSettingsButton"
+                        iconName: "settings"
+                        Accessible.name: qsTr("设置")
+                        toolTipText: Accessible.name
+                        onClicked: settingsDialog.open()
+                    }
                     Text {
                         text: qsTr("项目目录可直接复制或移动")
                         color: Theme.textMuted

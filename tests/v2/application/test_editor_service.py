@@ -7,6 +7,7 @@ import struct
 import threading
 import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -21,7 +22,7 @@ import mediaflow.service.remote_project as desktop_proxy_module
 from mediaflow.application.asset_task_handlers import AssetTaskHandlers
 from mediaflow.composition import EditorApplication
 from mediaflow.desktop.controllers.controller_hub import EditorControllers
-from mediaflow.domain.collaboration import ProjectChangeEvent
+from mediaflow.domain.collaboration import ActorIdentity, ProjectChangeEvent
 from mediaflow.domain.enums import TrackKind, TransitionKind
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import DesktopSettings, ServiceSettings
@@ -42,6 +43,8 @@ from mediaflow.service.client import (
 from mediaflow.service.codec import decode_transport, encode_transport
 from mediaflow.service.desktop_application_proxy import DesktopEditorApplication
 from mediaflow.service.discovery import ServiceDiscovery, ServicePaths
+from mediaflow.service.execution import ServiceExecutionPools
+from mediaflow.service.request_dispatcher import ServiceRequestDispatcher
 from mediaflow.service.server import PRIVATE_PORT_END, PRIVATE_PORT_START, EditorServiceServer
 
 
@@ -73,6 +76,15 @@ def _request(
         "actor": {"kind": "agent", "id": "service-test", "name": "Service Test"},
         "client_id": "pytest-service-client",
     }
+
+
+def test_editor_service_deadlines_cover_loaded_windows_runtime_and_stay_bounded() -> None:
+    assert service_client_module.DEFAULT_SERVICE_STARTUP_TIMEOUT_SECONDS == 60.0
+    assert service_client_module.DEFAULT_RPC_TIMEOUT_SECONDS == 120.0
+    with pytest.raises(ValueError, match="Service startup timeout"):
+        service_client_module._validated_service_startup_timeout(math.inf)
+    with pytest.raises(ValueError, match="RPC timeout"):
+        service_client_module._validated_rpc_timeout(math.inf)
 
 
 def test_desktop_startup_bootstraps_runtime_settings_and_workspace_in_one_rpc(
@@ -726,6 +738,53 @@ def test_project_event_cursor_reports_latest_durable_event(tmp_path: Path) -> No
         project.close()
 
 
+def test_remote_project_close_failure_remains_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class EventStream:
+        project_revision = 0
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    def close_call(method: str, _params: dict, **_kwargs):
+        calls.append(method)
+        if len(calls) == 1:
+            raise TimeoutError("controlled close timeout")
+        return {"released": True, "retained_for_tasks": False}
+
+    monkeypatch.setattr(desktop_proxy_module, "_ProjectEventStream", EventStream)
+    monkeypatch.setattr(desktop_proxy_module, "call_sync", close_call)
+    project = desktop_proxy_module.RemoteEditorProject(
+        {
+            "project": str(tmp_path / "retryable-close"),
+            "project_id": "retryable-close",
+            "project_revision": 0,
+            "project_event_cursor": 0,
+            "read_only": False,
+            "owns_project_writer": True,
+        },
+        actor=ActorIdentity(kind="human", id="desktop-retry"),
+        workspace_session_id="workspace-retry",
+    )
+
+    with pytest.raises(TimeoutError, match="controlled close timeout"):
+        project.close(timeout=0.1)
+
+    assert project._closed is False
+    assert project._events.closed is False
+    project.close(timeout=0.1)
+    assert calls == ["project.close", "project.close"]
+    assert project._closed is True
+    assert project._events.closed is True
+
+
 @pytest.mark.asyncio
 async def test_desktop_release_cannot_close_session_between_lookup_and_project_gate(
     tmp_path: Path,
@@ -765,8 +824,7 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
                 target="project",
                 sequence_id="",
                 command="get_project",
-                args_value=[],
-                kwargs_value={},
+                arguments_value={},
                 base_revision=0,
                 request_id="desktop-lifetime-read",
                 actor_value={"kind": "human", "id": "desktop-lifetime-test"},
@@ -791,6 +849,311 @@ async def test_desktop_release_cannot_close_session_between_lookup_and_project_g
         assert decode_transport(response["value"]).name == "Lifetime Boundary"
         assert not registry.has_session(project_root)
     finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_desktop_release_timeout_preserves_the_lease_for_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = EditorServiceServer(paths=_paths(tmp_path / "service-state"))
+    await server.start()
+    try:
+        operations = server._operations
+        assert operations is not None
+        registry = operations.registry
+        project_root = tmp_path / "retryable-server-close"
+        registry.create_desktop_project(
+            project_root,
+            "Retryable server close",
+            ProjectProfile(),
+            True,
+            "desktop-close-retry",
+        )
+        session = registry._sessions[project_root.resolve()]
+        original_close = session.project.close
+        attempts = 0
+
+        def flaky_close(*, timeout=None) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError("controlled project shutdown timeout")
+            original_close(timeout=timeout)
+
+        monkeypatch.setattr(session.project, "close", flaky_close)
+        with pytest.raises(TimeoutError, match="controlled project shutdown timeout"):
+            registry.release_desktop_project(
+                project_root,
+                "desktop-close-retry",
+                0.1,
+            )
+
+        assert registry.has_session(project_root)
+        assert "desktop-close-retry" in registry._desktop_clients[project_root.resolve()]
+        released = registry.release_desktop_project(
+            project_root,
+            "desktop-close-retry",
+            1.0,
+        )
+        assert released == {"released": True, "retained_for_tasks": False}
+        assert attempts == 2
+        assert not registry.has_session(project_root)
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_desktop_release_has_a_real_deadline_while_calls_are_in_flight(
+    tmp_path: Path,
+) -> None:
+    server = EditorServiceServer(paths=_paths(tmp_path / "service-state"))
+    await server.start()
+    allow_call_to_finish = threading.Event()
+    call_entered = threading.Event()
+    try:
+        operations = server._operations
+        assert operations is not None
+        registry = operations.registry
+        project_root = tmp_path / "release-deadline"
+        registry.create_desktop_project(
+            project_root,
+            "Release deadline",
+            ProjectProfile(),
+            True,
+            "desktop-release-deadline",
+        )
+
+        def hold_lease() -> None:
+            with registry.leased_session(project_root):
+                call_entered.set()
+                assert allow_call_to_finish.wait(5)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            held = executor.submit(hold_lease)
+            assert call_entered.wait(3)
+            release = executor.submit(
+                registry.release_desktop_project,
+                project_root,
+                "desktop-release-deadline",
+                0.05,
+            )
+            time.sleep(0.15)
+            completed_within_deadline = release.done()
+            allow_call_to_finish.set()
+            held.result(timeout=3)
+            if not completed_within_deadline:
+                release.result(timeout=3)
+
+        assert completed_within_deadline is True
+        with pytest.raises(TimeoutError, match="active project calls"):
+            release.result(timeout=0)
+        assert registry.has_session(project_root)
+        assert registry.release_desktop_project(
+            project_root,
+            "desktop-release-deadline",
+            1.0,
+        ) == {"released": True, "retained_for_tasks": False}
+    finally:
+        allow_call_to_finish.set()
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_long_task_waits_cannot_starve_service_control_work() -> None:
+    execution = ServiceExecutionPools()
+    release = threading.Event()
+    all_waiters_started = threading.Event()
+    started = 0
+    started_lock = threading.Lock()
+
+    def wait_forever() -> None:
+        nonlocal started
+        with started_lock:
+            started += 1
+            if started == 8:
+                all_waiters_started.set()
+        if not release.wait(5):
+            raise TimeoutError("Test did not release the wait workload")
+
+    waits = [asyncio.create_task(execution.run("wait", wait_forever)) for _ in range(8)]
+    try:
+        assert await asyncio.to_thread(all_waiters_started.wait, 2)
+        control_thread = await asyncio.wait_for(
+            execution.run("control", lambda: threading.current_thread().name),
+            timeout=1,
+        )
+        assert control_thread.startswith("mediaflow-service-control")
+    finally:
+        release.set()
+        await asyncio.gather(*waits)
+        execution.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_work_cannot_starve_runtime_cancellation_control() -> None:
+    execution = ServiceExecutionPools()
+    release = threading.Event()
+    all_workers_started = threading.Event()
+    started = 0
+    started_lock = threading.Lock()
+
+    class RuntimeOperations:
+        def execute_application_command(
+            self,
+            command: str,
+            _args: object,
+            _kwargs: object,
+        ) -> dict[str, object]:
+            nonlocal started
+            if command == "run_runtime_tool":
+                with started_lock:
+                    started += 1
+                    if started == 2:
+                        all_workers_started.set()
+                if not release.wait(5):
+                    raise TimeoutError("Test did not release the runtime workload")
+            return {"command": command}
+
+    class Operations:
+        runtime = RuntimeOperations()
+
+    dispatcher = ServiceRequestDispatcher(
+        Operations(),  # type: ignore[arg-type]
+        None,
+        None,
+        lambda: None,
+        execution,
+    )
+    runtime_params = {
+        "command": "run_runtime_tool",
+        "args": encode_transport(["inspect"]),
+        "kwargs": encode_transport({"arguments": {}}),
+    }
+    active = [
+        asyncio.create_task(dispatcher.dispatch("desktop.application.call", runtime_params)) for _ in range(2)
+    ]
+    try:
+        assert await asyncio.to_thread(all_workers_started.wait, 2)
+        cancelled = await asyncio.wait_for(
+            dispatcher.dispatch(
+                "desktop.application.call",
+                {
+                    "command": "cancel_runtime_tool",
+                    "args": encode_transport([]),
+                    "kwargs": encode_transport({}),
+                },
+            ),
+            timeout=1,
+        )
+        assert cancelled == {"command": "cancel_runtime_tool"}
+    finally:
+        release.set()
+        await asyncio.gather(*active)
+        execution.close()
+
+
+@pytest.mark.asyncio
+async def test_preview_and_long_running_tools_cannot_starve_home_runtime_queries() -> None:
+    execution = ServiceExecutionPools()
+    release = threading.Event()
+    preview_started = threading.Event()
+    tool_started = threading.Event()
+    counters = {"preview": 0, "tool": 0}
+    counters_lock = threading.Lock()
+
+    def hold(workload: str, expected: int, ready: threading.Event) -> None:
+        with counters_lock:
+            counters[workload] += 1
+            if counters[workload] == expected:
+                ready.set()
+        if not release.wait(5):
+            raise TimeoutError(f"Test did not release the {workload} workload")
+
+    preview = [
+        asyncio.create_task(execution.run("preview", hold, "preview", 4, preview_started))
+        for _ in range(4)
+    ]
+    tools = [
+        asyncio.create_task(execution.run("tool", hold, "tool", 2, tool_started))
+        for _ in range(2)
+    ]
+    try:
+        assert await asyncio.to_thread(preview_started.wait, 2)
+        assert await asyncio.to_thread(tool_started.wait, 2)
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                execution.run("runtime", lambda: "recent-projects"),
+                execution.run("runtime", lambda: "runtime-status"),
+                execution.run("runtime", lambda: "encoder-options"),
+            ),
+            timeout=1,
+        )
+        assert results == ["recent-projects", "runtime-status", "encoder-options"]
+    finally:
+        release.set()
+        await asyncio.gather(*preview, *tools)
+        execution.close()
+
+
+@pytest.mark.asyncio
+async def test_closing_one_project_does_not_block_another_project_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = EditorServiceServer(paths=_paths(tmp_path / "service-state"))
+    await server.start()
+    close_entered = threading.Event()
+    allow_close = threading.Event()
+    try:
+        operations = server._operations
+        assert operations is not None
+        registry = operations.registry
+        first_root = tmp_path / "slow-close"
+        second_root = tmp_path / "unrelated-project"
+        registry.create_desktop_project(
+            first_root,
+            "Slow close",
+            ProjectProfile(),
+            True,
+            "desktop-slow-close",
+        )
+        registry.create_desktop_project(
+            second_root,
+            "Unrelated project",
+            ProjectProfile(),
+            True,
+            "desktop-unrelated",
+        )
+        first_session = registry._sessions[first_root.resolve()]
+        original_close = first_session.project.close
+
+        def slow_close(*, timeout=None) -> None:
+            close_entered.set()
+            if not allow_close.wait(5):
+                raise TimeoutError("Test did not release the slow close")
+            original_close(timeout=timeout)
+
+        monkeypatch.setattr(first_session.project, "close", slow_close)
+        closing = asyncio.create_task(
+            asyncio.to_thread(
+                registry.release_desktop_project,
+                first_root,
+                "desktop-slow-close",
+                5.0,
+            )
+        )
+        assert await asyncio.to_thread(close_entered.wait, 2)
+
+        with registry.leased_session(second_root) as unrelated:
+            assert unrelated.project.get_project().name == "Unrelated project"
+        assert not closing.done()
+
+        allow_close.set()
+        assert await closing == {"released": True, "retained_for_tasks": False}
+    finally:
+        allow_close.set()
         await server.stop()
 
 

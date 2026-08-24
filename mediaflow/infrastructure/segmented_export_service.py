@@ -41,7 +41,7 @@ from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.infrastructure.web_render_target import WEB_RENDERER_VERSION
 
 BUILD_PROTOCOL_VERSION = 3
-AUTO_SEGMENT_SECONDS = 10
+AUTO_SEGMENT_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,15 +145,7 @@ class SegmentedExportService:
     def automatic_units(state: TimelineState) -> list[SequenceBuildUnit]:
         """Create stable fixed-time units for ordinary repeated exports."""
 
-        profile = state.sequence.profile
-        unit_frames = max(
-            1,
-            ceil(
-                AUTO_SEGMENT_SECONDS
-                * profile.fps_numerator
-                / profile.fps_denominator
-            ),
-        )
+        unit_frames = SegmentedExportService._automatic_unit_frames(state)
         return [
             SequenceBuildUnit(
                 id=f"auto-{start_frame:012d}-{end_frame:012d}",
@@ -173,7 +165,20 @@ class SegmentedExportService:
         return (
             preset.format != ExportFormat.AUDIO
             and state.sequence.in_out is None
+            and state.duration_frames >= 2 * cls._automatic_unit_frames(state)
             and len(cls.automatic_units(state)) >= 2
+        )
+
+    @staticmethod
+    def _automatic_unit_frames(state: TimelineState) -> int:
+        profile = state.sequence.profile
+        return max(
+            1,
+            ceil(
+                AUTO_SEGMENT_SECONDS
+                * profile.fps_numerator
+                / profile.fps_denominator
+            ),
         )
 
     def build_automatic(

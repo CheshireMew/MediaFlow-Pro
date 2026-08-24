@@ -39,6 +39,12 @@ Flickable {
         function onProjectStateChanged() { canvas.scheduleFilmstrip(); }
     }
 
+    Connections {
+        target: mediaflow.timelineViewportController.visibleClipsModel
+        function onSourceItemsReset() { canvas.scheduleFilmstrip(); }
+        function onSourceItemsPatched() { canvas.scheduleFilmstrip(); }
+    }
+
     Timer {
         id: viewportRequest
         interval: 0
@@ -51,7 +57,7 @@ Flickable {
 
     Timer {
         id: filmstripRequest
-        interval: 120
+        interval: mediaflow.timelineViewController.filmstripIdleDelayMs
         repeat: false
         onTriggered: mediaflow.timelineViewController.requestFilmstrip(
             canvas.contentX / Math.max(0.000001, canvas.view.pixelsPerFrame),

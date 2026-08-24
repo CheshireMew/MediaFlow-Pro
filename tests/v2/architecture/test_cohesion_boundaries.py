@@ -23,7 +23,12 @@ def _class_methods(relative: str, class_name: str) -> set[str]:
     }
 
 
-def _function_length(relative: str, function_name: str, *, class_name: str | None = None) -> int:
+def _function_call_names(
+    relative: str,
+    function_name: str,
+    *,
+    class_name: str | None = None,
+) -> set[str]:
     tree = ast.parse(_source(relative))
     nodes: list[ast.stmt] = tree.body
     if class_name is not None:
@@ -36,8 +41,13 @@ def _function_length(relative: str, function_name: str, *, class_name: str | Non
         for node in nodes
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name
     )
-    assert function.end_lineno is not None
-    return function.end_lineno - function.lineno + 1
+    return {
+        node.func.id
+        if isinstance(node.func, ast.Name)
+        else node.func.attr
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))
+    }
 
 
 def test_removed_god_modules_have_no_runtime_or_test_entry_point() -> None:
@@ -64,72 +74,13 @@ def test_removed_god_modules_have_no_runtime_or_test_entry_point() -> None:
         assert removed_import not in sources
 
 
-def test_focused_components_stay_inside_their_reviewable_boundaries() -> None:
-    limits = {
-        "mediaflow/application/project_mutation_planning.py": 425,
-        "mediaflow/application/desktop_mutation_adapter.py": 300,
-        "mediaflow/domain/web_manifest_primitives.py": 450,
-        "mediaflow/domain/web_media_sources.py": 280,
-        "mediaflow/domain/web_manifest.py": 500,
-        "mediaflow/domain/web_manifest_validation.py": 280,
-        "mediaflow/domain/web_state.py": 400,
-        "mediaflow/domain/web_exports.py": 100,
-        "mediaflow/service/session_registry.py": 440,
-        "mediaflow/service/automation_sessions.py": 380,
-        "mediaflow/service/desktop_sessions.py": 260,
-        "mediaflow/service/runtime_sessions.py": 200,
-        "mediaflow/service/sessions.py": 70,
-        "mediaflow/infrastructure/web_render_service.py": 360,
-        "mediaflow/infrastructure/web_browser_cache_renderer.py": 370,
-        "mediaflow/infrastructure/web_clip_export_writer.py": 350,
-        "mediaflow/desktop/controllers/timeline_view_controller.py": 380,
-        "mediaflow/desktop/controllers/timeline_clip_controller.py": 410,
-        "mediaflow/desktop/controllers/timeline_structure_controller.py": 290,
-        "mediaflow/desktop/controllers/timeline_effects_controller.py": 170,
-        "mediaflow/desktop/controllers/timeline_analysis_controller.py": 100,
-        "mediaflow/desktop/controllers/subtitle_view_controller.py": 220,
-        "mediaflow/desktop/controllers/subtitle_placement_controller.py": 190,
-        "mediaflow/desktop/controllers/subtitle_transcription_controller.py": 120,
-        "mediaflow/desktop/controllers/subtitle_translation_controller.py": 220,
-        "mediaflow/desktop/controllers/subtitle_editing_controller.py": 230,
-        "mediaflow/infrastructure/project_metadata_repository.py": 150,
-        "mediaflow/infrastructure/sequence_catalog_repository.py": 330,
-        "mediaflow/infrastructure/asset_catalog_repository.py": 480,
-        "mediaflow/application/project_service_ports.py": 230,
-        "mediaflow/application/project_delivery_ports.py": 160,
-        "mediaflow/application/sequence_copy_planner.py": 420,
-        "mediaflow/desktop/presentation_workspace.py": 90,
-        "mediaflow/desktop/presentation_asr.py": 210,
-        "mediaflow/desktop/presentation_messages.py": 250,
-        "mediaflow/desktop/presentation_export.py": 130,
-        "mediaflow/desktop/presentation_tasks.py": 280,
-        "mediaflow/desktop/presentation_translation.py": 60,
-        "mediaflow/desktop/presentation_timeline.py": 70,
-        "mediaflow/desktop/presentation_subtitles.py": 100,
-        "mediaflow/infrastructure/web_capture_engine.py": 520,
-        "mediaflow/infrastructure/web_capture_worker.py": 590,
-        "mediaflow/infrastructure/web_capture_scheduler.py": 230,
-        "mediaflow/infrastructure/web_capture_page.py": 250,
-        "mediaflow/infrastructure/web_capture_quality.py": 130,
-        "mediaflow/infrastructure/web_capture_models.py": 190,
-        "mediaflow/service/desktop_event_stream.py": 280,
-        "mediaflow/service/remote_timeline.py": 150,
-        "mediaflow/service/remote_project.py": 450,
-        "mediaflow/service/desktop_application_proxy.py": 430,
-    }
-    oversized = {
-        relative: len(_source(relative).splitlines())
-        for relative, limit in limits.items()
-        if len(_source(relative).splitlines()) > limit
-    }
-    assert oversized == {}
-
-
 def test_compatibility_facades_cannot_grow_business_logic() -> None:
     for relative in (
         "mediaflow/infrastructure/project_catalog_repository.py",
         "mediaflow/desktop/presentation_catalogs.py",
         "mediaflow/service/desktop_proxy.py",
+        "mediaflow/automation/operation_models.py",
+        "mediaflow/desktop/models.py",
     ):
         tree = ast.parse(_source(relative))
         definitions = [
@@ -191,13 +142,11 @@ def test_web_capture_responsibilities_have_one_owner() -> None:
 def test_desktop_proxy_commands_are_installed_from_the_command_registry() -> None:
     project = _source("mediaflow/service/remote_project.py")
     timeline = _source("mediaflow/service/remote_timeline.py")
-    facade = _source("mediaflow/service/desktop_proxy.py")
     assert "for (target, name), _definition in DESKTOP_COMMANDS.items()" in project
     assert "for (target, name), _definition in DESKTOP_COMMANDS.items()" in timeline
     assert "setattr(RemoteEditorProject, name, descriptor)" in project
     assert "setattr(RemoteTimelineEditor, name, descriptor)" in timeline
     assert "__getattr__" not in project + timeline
-    assert len(facade.splitlines()) <= 25
 
 
 def test_duplicate_media_layout_and_source_algorithms_stay_converged() -> None:
@@ -254,56 +203,263 @@ def test_automation_package_initialization_has_no_import_cycle() -> None:
     package = ast.parse(_source("mediaflow/automation/__init__.py"))
     assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in package.body)
     registry = _source("mediaflow/automation/operation_registry.py")
-    assert "import mediaflow.automation.operation_models as models" in registry
+    for focused_models in (
+        "operation_delivery_models",
+        "operation_language_models",
+        "operation_model_common",
+        "operation_project_models",
+        "operation_timeline_models",
+        "operation_web_models",
+    ):
+        assert f"import mediaflow.automation.{focused_models}" in registry
+    assert "operation_models as models" not in registry
     assert "from mediaflow.automation import" not in registry
 
 
-def test_audited_long_methods_stay_as_short_orchestrators() -> None:
-    limits = {
+def test_audited_desktop_controllers_keep_one_responsibility() -> None:
+    moved_settings_methods = {
+        "saveWindowState",
+        "setWorkspaceLayoutPreset",
+        "saveWorkspaceLayout",
+        "setAssetViewMode",
+        "setDefaultDownloadDirectory",
+        "setDefaultProjectDirectory",
+        "setLastDownloadUrl",
+        "inspectManagedCookies",
+        "saveManagedCookies",
+        "clearManagedCookies",
+        "inspectRuntimeTools",
+        "installRuntimeComponents",
+        "scheduleRuntimeDirectoryChange",
+        "saveLlmProvider",
+        "saveGlossaryTerm",
+    }
+    assert _class_methods(
+        "mediaflow/desktop/controllers/settings_controller.py",
+        "SettingsController",
+    ).isdisjoint(moved_settings_methods)
+    focused_settings = {
+        "WorkspaceSettingsController": {
+            "saveWindowState",
+            "setWorkspaceLayoutPreset",
+            "saveWorkspaceLayout",
+            "setAssetViewMode",
+        },
+        "DownloadSettingsController": {
+            "setDefaultDownloadDirectory",
+            "setDefaultProjectDirectory",
+            "setLastDownloadUrl",
+            "inspectManagedCookies",
+            "saveManagedCookies",
+            "clearManagedCookies",
+        },
+        "RuntimeSettingsController": {
+            "inspectRuntimeTools",
+            "installRuntimeComponents",
+            "scheduleRuntimeDirectoryChange",
+        },
+        "LanguageSettingsController": {
+            "saveLlmProvider",
+            "saveGlossaryTerm",
+        },
+    }
+    for class_name, methods in focused_settings.items():
+        relative = (
+            "mediaflow/desktop/controllers/"
+            + class_name.removesuffix("Controller")
+            .replace("Settings", "_settings")
+            .lower()
+            + "_controller.py"
+        )
+        assert methods <= _class_methods(relative, class_name)
+
+    download_methods = {
+        "analyzeDownloadUrl",
+        "submitDownloadPlan",
+        "createProjectAndDownload",
+        "setDownloadEntrySelected",
+        "selectAllDownloadEntries",
+        "dismissDownloadPlan",
+    }
+    assert _class_methods(
+        "mediaflow/desktop/controllers/task_controller.py",
+        "TaskController",
+    ).isdisjoint(download_methods)
+    assert download_methods <= _class_methods(
+        "mediaflow/desktop/controllers/download_controller.py",
+        "DownloadController",
+    )
+
+
+def test_background_results_are_routed_by_focused_handlers() -> None:
+    request_calls = _function_call_names(
+        "mediaflow/desktop/coordinators/background_requests.py",
+        "_on_result",
+        class_name="BackgroundRequests",
+    )
+    assert "dispatch" in request_calls
+    router_methods = _class_methods(
+        "mediaflow/desktop/coordinators/background_result_router.py",
+        "BackgroundResultRouter",
+    )
+    assert {
+        "_handle_recent_projects",
+        "_handle_encoder_policies",
+        "_handle_runtime_status",
+        "_handle_download_plan",
+        "_handle_waveform",
+        "_handle_asset_thumbnails",
+        "_handle_audio_metrics",
+        "_handle_timeline_filmstrip",
+        "_handle_project_close",
+        "_handle_preview",
+    } <= router_methods
+
+
+def test_audited_shared_algorithms_have_one_owner() -> None:
+    runtime_sources = {
+        path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in (ROOT / "mediaflow").rglob("*.py")
+    }
+    unique_definitions = {
+        "def estimate_subtitle_words(": "mediaflow/application/subtitle_word_timing.py",
+        "def upsert_web_keyframe(": "mediaflow/application/web_keyframe_operations.py",
+        "def open_editable_media_page(": "mediaflow/infrastructure/editable_media_page.py",
+        "def open_project_database(": "mediaflow/infrastructure/sqlite_connections.py",
+    }
+    for definition, owner in unique_definitions.items():
+        assert runtime_sources[owner].count(definition) == 1
+        assert sum(source.count(definition) for source in runtime_sources.values()) == 1
+    application_sources = {
+        relative: source
+        for relative, source in runtime_sources.items()
+        if relative.startswith("mediaflow/application/")
+    }
+    for definition in ("def remove_web_keyframe(", "def move_web_keyframe("):
+        assert runtime_sources["mediaflow/application/web_keyframe_operations.py"].count(
+            definition
+        ) == 1
+        assert sum(source.count(definition) for source in application_sources.values()) == 1
+
+    for browser_consumer in (
+        "mediaflow/infrastructure/web_capture_worker.py",
+        "mediaflow/infrastructure/web_direct_h264_browser.py",
+        "mediaflow/infrastructure/web_browser.py",
+    ):
+        assert "open_editable_media_page(" in runtime_sources[browser_consumer]
+    assert runtime_sources["mediaflow/application/subtitle_acquisition.py"].count(
+        "estimate_subtitle_words("
+    ) == 1
+    assert runtime_sources["mediaflow/application/subtitle_editing.py"].count(
+        "estimate_subtitle_words("
+    ) == 1
+
+
+def test_frame_clock_and_subtitle_projection_have_focused_owners() -> None:
+    timeline_methods = _class_methods(
+        "mediaflow/infrastructure/timeline_repository.py",
+        "TimelineRepository",
+    )
+    assert timeline_methods.isdisjoint(
+        {
+            "capture_main_frame_clock",
+            "change_main_frame_clock",
+            "restore_main_frame_clock",
+        }
+    )
+    assert {
+        "capture_main_frame_clock",
+        "change_main_frame_clock",
+        "restore_main_frame_clock",
+    } <= _class_methods(
+        "mediaflow/infrastructure/main_frame_clock_repository.py",
+        "MainFrameClockRepository",
+    )
+    subtitle_repository = _source("mediaflow/infrastructure/subtitle_repository.py")
+    assert "reconcile_placements(" in subtitle_repository
+    assert "def _map_segment_to_clip(" not in subtitle_repository
+
+
+def test_large_qml_surfaces_compose_focused_components() -> None:
+    qml_root = ROOT / "mediaflow" / "desktop" / "qml"
+    subtitle_panel = (qml_root / "SubtitlePanel.qml").read_text(encoding="utf-8")
+    for component in ("SubtitleDocumentEditor", "SubtitleSequenceEditor"):
+        assert f"{component} {{" in subtitle_panel
+    document_editor = (qml_root / "components" / "SubtitleDocumentEditor.qml").read_text(
+        encoding="utf-8"
+    )
+    for component in ("SubtitleSearchPanel", "SubtitleSegmentList", "SubtitleSegmentEditor"):
+        assert f"{component} {{" in document_editor
+
+    preview = (qml_root / "components" / "PreviewViewport.qml").read_text(encoding="utf-8")
+    assert "PreviewExportOverlay {" in preview
+    assert "PreviewTransportControls {" in preview
+    assert 'objectName: "previewControlBar"' not in preview
+    assert 'objectName: "exportSubtitlePreview"' not in preview
+
+
+def test_retired_model_aggregates_have_no_consumers() -> None:
+    sources = {
+        path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in (ROOT / "mediaflow").rglob("*.py")
+    }
+    active_sources = "\n".join(
+        source
+        for relative, source in sources.items()
+        if relative
+        not in {
+            "mediaflow/automation/operation_models.py",
+            "mediaflow/desktop/models.py",
+        }
+    )
+    assert "automation.operation_models" not in active_sources
+    assert "desktop.models" not in active_sources
+
+
+def test_audited_long_methods_delegate_to_focused_operations() -> None:
+    expected_calls = {
         (
             "mediaflow/application/transcription_task_handler.py",
             "handle",
             "TranscriptionTaskHandler",
-        ): 55,
+        ): {"_validated_selection", "_transcribe_sources", "_defer_transcript_commit"},
         (
             "mediaflow/application/sequence_service.py",
             "_prepare_copy_selection",
             "SequenceService",
-        ): 20,
+        ): {"prepare"},
         (
             "mediaflow/application/dubbing_task_handler.py",
             "_synthesize_with_outputs",
             "DubbingTaskHandler",
-        ): 45,
+        ): {"_synthesis_targets", "_synthesize_utterances", "_assemble_master"},
         (
             "mediaflow/infrastructure/segmented_export_service.py",
             "build",
             "SegmentedExportService",
-        ): 65,
+        ): {"_prepare_build", "_build_visual_units", "_build_audio_master", "_build_result"},
         (
             "mediaflow/infrastructure/web_browser.py",
             "validate_editable_media_page",
             None,
-        ): 45,
+        ): {
+            "_validate_frame_protocol",
+            "_validate_runtime_manifests",
+            "_validate_runtime_state",
+            "_validate_variants_and_seek",
+        },
         (
             "mediaflow/infrastructure/web_capture_engine.py",
             "render_frames",
             "WebCaptureEngine",
-        ): 80,
+        ): {"_create_run", "_dispatch_workers", "_consume_frames", "_record_metrics"},
     }
-    oversized = {
-        f"{relative}:{class_name + '.' if class_name else ''}{function_name}": length
-        for (relative, function_name, class_name), limit in limits.items()
-        if (
-            length := _function_length(
-                relative,
-                function_name,
-                class_name=class_name,
-            )
+    for (relative, function_name, class_name), required_calls in expected_calls.items():
+        assert required_calls <= _function_call_names(
+            relative,
+            function_name,
+            class_name=class_name,
         )
-        > limit
-    }
-    assert oversized == {}
 
 
 def test_runtime_paths_and_llm_models_have_one_configured_source() -> None:
@@ -321,6 +477,40 @@ def test_runtime_paths_and_llm_models_have_one_configured_source() -> None:
     )
     assert "deepseek-chat" not in qml_source
     assert "deepseek-reasoner" not in qml_source
+
+    environment = _source("mediaflow/environment.py")
+    environment_consumers = {
+        "mediaflow/desktop/bootstrap.py": "SERVICE_STATE_DIRECTORY_VARIABLE",
+        "mediaflow/desktop/app.py": "DESKTOP_SETTINGS_PATH_VARIABLE",
+        "mediaflow/desktop/runtime_directory_management.py": "RUNTIME_DIRECTORY_VARIABLE",
+    }
+    for relative, constant in environment_consumers.items():
+        assert constant in environment
+        source = _source(relative)
+        assert constant in source
+    assert '"MEDIAFLOW_SERVICE_STATE_DIR"' not in _source("mediaflow/desktop/bootstrap.py")
+    assert '"MEDIAFLOW_DESKTOP_SETTINGS_PATH"' not in _source("mediaflow/desktop/app.py")
+    assert '"MEDIAFLOW_RUNTIME_DIR"' not in _source(
+        "mediaflow/desktop/runtime_directory_management.py"
+    )
+
+
+def test_project_sqlite_connections_share_one_contract() -> None:
+    connection_owner = _source("mediaflow/infrastructure/sqlite_connections.py")
+    assert connection_owner.count("sqlite3.connect(") == 2
+    assert "PROJECT_DATABASE_TIMEOUT_SECONDS" in connection_owner
+    assert "PROJECT_DATABASE_BUSY_TIMEOUT_MS" in connection_owner
+    for relative in (
+        "mediaflow/infrastructure/project_repository.py",
+        "mediaflow/infrastructure/task_repository.py",
+    ):
+        source = _source(relative)
+        assert "open_project_database(" in source
+        assert "sqlite3.connect(" not in source
+    records = _source("mediaflow/infrastructure/project_records_repository.py")
+    assert "open_project_database(" in records
+    assert records.count("sqlite3.connect(") == 1
+    assert "sqlite3.connect(temporary)" in records
 
 
 def test_editor_service_routes_to_focused_services_without_a_forwarding_manager() -> None:

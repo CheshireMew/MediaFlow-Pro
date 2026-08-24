@@ -226,7 +226,6 @@ def status_message(source: str, *arguments: object) -> str:
         "运行时工具操作已取消": QCoreApplication.translate("StatusMessageCatalog", "运行时工具操作已取消"),
         "运行时工具操作已完成": QCoreApplication.translate("StatusMessageCatalog", "运行时工具操作已完成"),
         "错误详情已复制": QCoreApplication.translate("StatusMessageCatalog", "错误详情已复制"),
-        "项目已保存": QCoreApplication.translate("StatusMessageCatalog", "项目已保存"),
         "项目已关闭：%1": QCoreApplication.translate("StatusMessageCatalog", "项目已关闭：%1"),
         "项目已创建": QCoreApplication.translate("StatusMessageCatalog", "项目已创建"),
         "项目已创建，正在下载视频": QCoreApplication.translate(
@@ -236,6 +235,10 @@ def status_message(source: str, *arguments: object) -> str:
             "StatusMessageCatalog", "项目已创建，正在下载音频"
         ),
         "项目已打开": QCoreApplication.translate("StatusMessageCatalog", "项目已打开"),
+        "项目已重命名为“%1”": QCoreApplication.translate(
+            "StatusMessageCatalog", "项目已重命名为“%1”"
+        ),
+        "项目路径已复制": QCoreApplication.translate("StatusMessageCatalog", "项目路径已复制"),
         "项目正被其他窗口使用，已只读打开": QCoreApplication.translate(
             "StatusMessageCatalog", "项目正被其他窗口使用，已只读打开"
         ),

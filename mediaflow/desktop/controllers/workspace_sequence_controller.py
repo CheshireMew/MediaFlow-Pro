@@ -158,8 +158,3 @@ class WorkspaceSequenceController(ControllerFacet[WorkspaceSequenceScope]):
         self._session.projectors.timeline.schedule_preview_graph()
         self._session.updates.commit(project=True, history=True)
         self._session._set_status("序列配置已更新")
-
-    @Slot()
-    def saveProject(self) -> None:
-        if self._session.state.binding.current:
-            self._session._set_status("项目已保存")

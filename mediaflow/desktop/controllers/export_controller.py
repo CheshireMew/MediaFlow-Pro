@@ -220,5 +220,7 @@ class ExportController(ControllerFacet[ExportControllerScope]):
             sequence_id=self._session.state.binding.active_sequence_id,
         )
         if task and workflow_link:
-            self._session.state.binding.require_current().attach_export_task(workflow.id, task.id)
+            self._session.state.binding.require_current().attach_export_task(workflow_link.run_id, task.id)
+            self._session.tasks.invalidate_active_workflow()
+            self._session.tasks.refresh_active_workflow()
             self._session.updates.commit(workflow=True)

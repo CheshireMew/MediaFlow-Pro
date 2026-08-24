@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.workflow_models import WorkflowUpdate
+from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.tasks import Task
+from mediaflow.domain.workflows import WorkflowRun
 
 
 class EditorProjectTaskWorkflowCommands:
@@ -84,14 +86,18 @@ class EditorProjectTaskWorkflowCommands:
         self._require_writable()
         return self._tasks.clear_history()
 
-    def active_workflow(self):
+    def active_workflow(self) -> WorkflowRun | None:
         return self._workflows.active_run()
 
     def set_workflow_mode(self, value: bool | None) -> None:
         self._workflows.set_project_mode(value)
 
-    def begin_download_workflow(self, *args: Any, **kwargs: Any):
-        return self._workflows.begin_download(*args, **kwargs)
+    def begin_download_workflow(
+        self,
+        sequence_id: str,
+        requests: list[DownloadRequest],
+    ) -> WorkflowUpdate:
+        return self._workflows.begin_download(sequence_id, requests)
 
     def attach_export_task(self, run_id: str, task_id: str) -> None:
         self._workflows.attach_export_task(run_id, task_id)
@@ -102,8 +108,16 @@ class EditorProjectTaskWorkflowCommands:
     def skip_workflow(self, run_id: str) -> WorkflowUpdate:
         return self._workflows.skip(run_id)
 
-    def continue_workflow(self, *args: Any, **kwargs: Any) -> WorkflowUpdate:
-        return self._workflows.continue_run(*args, **kwargs)
+    def continue_workflow(
+        self,
+        run_id: str,
+        *,
+        target_language: str = "",
+    ) -> WorkflowUpdate:
+        return self._workflows.continue_run(
+            run_id,
+            target_language=target_language,
+        )
 
     def reconcile_workflow(self) -> None:
         self._require_writable()

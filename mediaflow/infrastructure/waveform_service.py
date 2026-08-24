@@ -6,6 +6,11 @@ import math
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
+from typing import cast
+
+import av
+import numpy as np
+from numpy.typing import NDArray
 
 from mediaflow.application.ports import AssetProcessingDocuments
 from mediaflow.atomic_file import unique_temporary_sibling
@@ -19,7 +24,6 @@ from mediaflow.waveform_cache import (
     write_waveform_cache,
 )
 
-from .ffmpeg_runner import FfmpegRunner
 from .runtime_paths import RuntimePaths
 from .storage_budget import reserve_project_cache
 
@@ -36,7 +40,6 @@ class WaveformService:
     ):
         self.repository = repository
         self.paths = paths
-        self.ffmpeg = FfmpegRunner(self.paths.ffmpeg)
 
     def prepare(
         self,
@@ -69,28 +72,9 @@ class WaveformService:
             for block_size in self.BLOCK_SIZES
         }
         temporary_output = unique_temporary_sibling(output, label="waveform")
-        pipe = None
         try:
             if progress:
                 progress(OperationProgress.indeterminate("waveform_decoding"))
-            pipe = self.ffmpeg.open_output_pipe(
-                [
-                    "-v",
-                    "error",
-                    "-i",
-                    str(source),
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    str(self.SAMPLE_RATE),
-                    "-f",
-                    "s16le",
-                    "pipe:1",
-                ]
-            )
-            import numpy as np
-
             with ExitStack() as stack:
                 fragment_streams = {
                     block_size: stack.enter_context(path.open("xb"))
@@ -127,14 +111,12 @@ class WaveformService:
                     write_level(level_index + 1, aggregate)
 
                 sample_count = 0
-                remainder = b""
-                while chunk := pipe.read(512 * 1024):
+                target_chunk_samples = 256 * 1024
+
+                def consume_samples(samples: NDArray[np.int16]) -> None:
+                    nonlocal base_carry, sample_count
                     if check_cancelled is not None:
                         check_cancelled()
-                    payload = remainder + chunk
-                    even_length = len(payload) - len(payload) % 2
-                    remainder = payload[even_length:]
-                    samples = np.frombuffer(payload[:even_length], dtype="<i2")
                     sample_count += int(samples.size)
                     combined = (
                         np.concatenate((base_carry, samples))
@@ -162,12 +144,78 @@ class WaveformService:
                                 unit="media_seconds",
                             )
                         )
-                if remainder:
-                    raise RuntimeError("Waveform decoder returned an incomplete PCM sample")
-                result = pipe.finish(timeout=300)
-                pipe = None
-                if result.returncode != 0:
-                    raise RuntimeError(f"Waveform decode failed: {result.stderr}")
+
+                def accept_frame(frame: av.AudioFrame) -> None:
+                    samples = cast(
+                        NDArray[np.int16],
+                        np.ascontiguousarray(
+                            frame.to_ndarray().reshape(-1),
+                            dtype="<i2",
+                        ),
+                    )
+                    if not samples.size:
+                        return
+                    consume_samples(samples)
+
+                with av.open(str(source), mode="r") as container:
+                    audio_stream = next(iter(container.streams.audio), None)
+                    if audio_stream is None:
+                        raise RuntimeError("Waveform source contains no audio stream")
+                    fifo = av.AudioFifo()
+                    source_chunk_samples: int | None = None
+                    resampler: av.AudioResampler | None = None
+                    passthrough = False
+
+                    def accept_source_frame(frame: av.AudioFrame) -> None:
+                        if passthrough:
+                            accept_frame(frame)
+                            return
+                        if resampler is None:
+                            raise RuntimeError("Waveform audio resampler is not initialized")
+                        for resampled_frame in resampler.resample(frame):
+                            accept_frame(resampled_frame)
+
+                    for decoded_frame in container.decode(audio_stream):
+                        if source_chunk_samples is None:
+                            if decoded_frame.sample_rate <= 0:
+                                raise RuntimeError("Waveform decoder returned an invalid sample rate")
+                            source_chunk_samples = max(
+                                1,
+                                round(
+                                    target_chunk_samples
+                                    * decoded_frame.sample_rate
+                                    / self.SAMPLE_RATE
+                                ),
+                            )
+                            passthrough = (
+                                decoded_frame.format.name == "s16"
+                                and decoded_frame.layout.name == "mono"
+                                and decoded_frame.sample_rate == self.SAMPLE_RATE
+                            )
+                            if not passthrough:
+                                resampler = av.AudioResampler(
+                                    format="s16",
+                                    layout="mono",
+                                    rate=self.SAMPLE_RATE,
+                                )
+                        # The waveform is a sequential sample projection. Ignore
+                        # packet timestamp gaps just as the former raw PCM pipe
+                        # did, and let AudioFifo coalesce tiny codec frames in C.
+                        decoded_frame.pts = None
+                        fifo.write(decoded_frame)
+                        while fifo.samples >= source_chunk_samples:
+                            source_frame = fifo.read(source_chunk_samples)
+                            if source_frame is None:
+                                raise RuntimeError("Waveform decoder FIFO lost buffered audio")
+                            accept_source_frame(source_frame)
+                    if fifo.samples:
+                        source_frame = fifo.read(fifo.samples)
+                        if source_frame is None:
+                            raise RuntimeError("Waveform decoder FIFO lost its final audio")
+                        accept_source_frame(source_frame)
+                    if resampler is not None:
+                        for resampled_frame in resampler.resample(None):
+                            accept_frame(resampled_frame)
                 if progress:
                     decoded_seconds = sample_count / self.SAMPLE_RATE
                     progress(
@@ -226,8 +274,6 @@ class WaveformService:
             temporary_output.replace(output)
             return output
         finally:
-            if pipe is not None:
-                pipe.abort()
             temporary_output.unlink(missing_ok=True)
             for path in fragments.values():
                 path.unlink(missing_ok=True)

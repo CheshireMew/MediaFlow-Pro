@@ -10,6 +10,7 @@ from mediaflow.application.project_service_ports import (
 from mediaflow.application.project_storage_ports import (
     AssetDocuments,
     AudioDocuments,
+    FrameClockDocuments,
     HighlightDocuments,
     ProjectAccess,
     ProjectMetadataDocuments,
@@ -56,6 +57,9 @@ class TranscriptEditingDocuments(ProjectAccess, Protocol):
 
     @property
     def timeline(self) -> TimelineDocuments: ...
+
+    @property
+    def frame_clock(self) -> FrameClockDocuments: ...
 
     @property
     def audio(self) -> AudioDocuments: ...

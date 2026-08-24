@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from .execution import ServiceWorkload
+
 CommandAccess = Literal["read", "write", "runtime"]
 DesktopTarget = Literal["project", "timeline"]
 
@@ -12,6 +14,7 @@ class DesktopCommandGroup:
     target: DesktopTarget
     access: CommandAccess
     names: tuple[str, ...]
+    workload: ServiceWorkload = "project"
     reversible: frozenset[str] = frozenset()
     all_reversible: bool = False
 
@@ -34,6 +37,7 @@ PROJECT_REVERSIBLE_COMMANDS = frozenset(
         "split_subtitle_segment",
         "update_subtitle_placement_range",
         "update_subtitle_segment",
+        "update_translation_segment_text",
     }
 )
 
@@ -72,6 +76,7 @@ DESKTOP_COMMAND_GROUPS = (
             "list_sequences",
             "list_subtitle_documents",
             "list_subtitle_placements",
+            "list_subtitle_placements_for_segments",
             "list_subtitle_segments",
             "list_subtitle_words",
             "list_tasks",
@@ -92,6 +97,7 @@ DESKTOP_COMMAND_GROUPS = (
             "suggested_profile",
             "task_events_after",
             "task_snapshot",
+            "translation_comparison",
             "web_render_cache_ready",
             "web_runtime_state",
             "wait_for_task",
@@ -101,23 +107,28 @@ DESKTOP_COMMAND_GROUPS = (
         target="project",
         access="runtime",
         names=(
-            "attach_export_task",
-            "begin_download_workflow",
             "cancel_all_tasks",
             "cancel_task",
             "cancel_workflow",
-            "clear_task_history",
             "close_web_preview",
+            "pause_all_tasks",
+            "pause_task",
+        ),
+        workload="control",
+    ),
+    DesktopCommandGroup(
+        target="project",
+        access="runtime",
+        names=(
+            "attach_export_task",
+            "begin_download_workflow",
+            "clear_task_history",
             "continue_workflow",
             "delete_task",
             "export_fcpxml",
-            "export_web_clip",
             "import_asset",
             "plan_web_asset_rebind",
             "prepare_web_sequence",
-            "refresh_workflow_mode",
-            "pause_all_tasks",
-            "pause_task",
             "reconcile_workflow",
             "resume_task",
             "retry_task",
@@ -168,6 +179,7 @@ DESKTOP_COMMAND_GROUPS = (
             "remove_audio_effect",
             "remove_web_keyframe",
             "remove_web_parameter_keyframe",
+            "rename_project",
             "reset_subtitle_placement_range",
             "restore_version",
             "save_audio_bus",
@@ -190,6 +202,7 @@ DESKTOP_COMMAND_GROUPS = (
             "update_subtitle_placement_range",
             "update_subtitle_placement_text",
             "update_subtitle_segment",
+            "update_translation_segment_text",
             "update_web_clip",
             "update_web_data",
             "update_web_data_from_file",

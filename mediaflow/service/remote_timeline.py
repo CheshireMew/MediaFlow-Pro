@@ -39,7 +39,7 @@ class _RemoteTimelineMethod:
                 **kwargs,
             )
             if self.definition.access == "write":
-                instance._apply_write(self.definition.name, result)
+                instance._apply_write(self.definition.name, result, args=args, kwargs=kwargs)
             return result
 
         return invoke
@@ -104,11 +104,30 @@ class RemoteTimelineEditor(_TimelineCommandSurface):
         self._cached_revision = -1
         self._cached_duration_frames = None
 
-    def _apply_write(self, command: str, result: Any) -> None:
+    def advance_revision(self, revision: int) -> None:
+        """Keep an exact cached timeline across a proven unrelated project write."""
+
+        if self._cached_state is not None:
+            self._cached_revision = int(revision)
+
+    def _apply_write(
+        self,
+        command: str,
+        result: Any,
+        *,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         state = self._cached_state
         if state is None:
             return
-        projected = project_timeline_write(state, command, result)
+        projected = project_timeline_write(
+            state,
+            command,
+            result,
+            args=args,
+            kwargs=kwargs,
+        )
         if projected is None:
             self.invalidate()
             return

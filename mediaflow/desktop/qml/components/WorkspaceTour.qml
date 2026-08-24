@@ -74,7 +74,7 @@ Item {
     }
     function finish() {
         visible = false;
-        mediaflow.settingsController.setWorkspaceTourCompleted(true);
+        mediaflow.workspaceSettingsController.setWorkspaceTourCompleted(true);
     }
 
     onStepChanged: Qt.callLater(syncTarget)

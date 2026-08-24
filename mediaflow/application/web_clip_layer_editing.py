@@ -9,6 +9,11 @@ from mediaflow.application import web_package_contract as web_contract
 from mediaflow.application import web_package_files as web_files
 from mediaflow.application.web_clip_editing_context import web_clip_editing_context
 from mediaflow.application.web_field_validation import WebFieldValidator
+from mediaflow.application.web_keyframe_operations import (
+    move_web_keyframe,
+    remove_web_keyframe,
+    upsert_web_keyframe,
+)
 from mediaflow.domain.web_manifest_primitives import (
     CONTINUOUS_ANIMATION_FIELDS,
     WebEditableField,
@@ -17,8 +22,6 @@ from mediaflow.domain.web_manifest_primitives import (
 from mediaflow.domain.web_state import (
     WebAnimationTrack,
     WebClipState,
-    WebEasing,
-    WebKeyframe,
     WebLayerOverride,
     WebSceneState,
     WebStateDiff,
@@ -189,15 +192,12 @@ class WebClipLayerEditing:
         animations = {key: dict(tracks) for key, tracks in current_scene.animations.items()}
         layer_tracks = animations.setdefault(layer_id, {})
         existing = layer_tracks.get(field)
-        keyframes = [item for item in (existing.keyframes if existing else []) if item.time_ms != time_ms]
-        keyframes.append(
-            WebKeyframe(
-                time_ms=time_ms,
-                value=validated_value,
-                easing=WebEasing.model_validate(easing or {}),
-            )
+        keyframes = upsert_web_keyframe(
+            existing.keyframes if existing else (),
+            time_ms=time_ms,
+            value=validated_value,
+            easing=easing,
         )
-        keyframes.sort(key=lambda item: item.time_ms)
         interpolation = "continuous" if field in CONTINUOUS_ANIMATION_FIELDS else "discrete"
         layer_tracks[field] = WebAnimationTrack(
             field=cast(WebEditableField, field),
@@ -237,9 +237,11 @@ class WebClipLayerEditing:
         tracks = animations.get(layer_id)
         if not tracks or field not in tracks:
             raise KeyError(f"{layer_id}/{field}/{time_ms}")
-        remaining = [item for item in tracks[field].keyframes if item.time_ms != time_ms]
-        if len(remaining) == len(tracks[field].keyframes):
-            raise KeyError(f"{layer_id}/{field}/{time_ms}")
+        remaining = remove_web_keyframe(
+            tracks[field].keyframes,
+            time_ms=time_ms,
+            missing_identity=f"{layer_id}/{field}/{time_ms}",
+        )
         if remaining:
             tracks[field] = tracks[field].model_copy(update={"keyframes": remaining})
         else:
@@ -280,17 +282,13 @@ class WebClipLayerEditing:
         track = animations.get(layer_id, {}).get(cast(WebEditableField, field))
         if track is None:
             raise KeyError(f"{layer_id}/{field}/{old_time_ms}")
-        moving = next(
-            (item for item in track.keyframes if item.time_ms == old_time_ms),
-            None,
+        keyframes = move_web_keyframe(
+            track.keyframes,
+            old_time_ms=old_time_ms,
+            new_time_ms=new_time_ms,
+            missing_identity=f"{layer_id}/{field}/{old_time_ms}",
+            occupied_message="Editable media keyframe destination is occupied",
         )
-        if moving is None:
-            raise KeyError(f"{layer_id}/{field}/{old_time_ms}")
-        if any(item.time_ms == new_time_ms and item.time_ms != old_time_ms for item in track.keyframes):
-            raise ValueError("Editable media keyframe destination is occupied")
-        keyframes = [item for item in track.keyframes if item.time_ms != old_time_ms]
-        keyframes.append(moving.model_copy(update={"time_ms": new_time_ms}))
-        keyframes.sort(key=lambda item: item.time_ms)
         animations[layer_id][cast(WebEditableField, field)] = track.model_copy(
             update={"keyframes": keyframes}
         )

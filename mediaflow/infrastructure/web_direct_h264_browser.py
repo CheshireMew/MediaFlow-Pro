@@ -7,6 +7,7 @@ from typing import Any
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.web_rendering import WebRenderPlan
 
+from .editable_media_page import open_editable_media_page
 from .web_browser import verify_non_monotonic_seek_pixels
 from .web_capture_models import WebFrameCaptureError
 from .web_capture_page import (
@@ -83,66 +84,28 @@ def open_capture_page(
     width: int,
     height: int,
 ):
-    context = browser.new_context(
-        viewport={"width": width, "height": height},
-        device_scale_factor=1,
-    )
     page_errors: list[str] = []
     resource_failures: list[str] = []
-    try:
-        context.route(
-            "http://**/*",
-            lambda route: (
-                route.continue_()
-                if route.request.url.startswith(allowed_origin)
-                else route.abort()
-            ),
-        )
-        context.route("https://**/*", lambda route: route.abort())
-        page = context.new_page()
-        page.on("pageerror", lambda error: page_errors.append(str(error)))
-        page.on(
-            "requestfailed",
-            lambda request: resource_failures.append(
-                f"{request.url}: {request.failure or 'request failed'}"
-            ),
-        )
-        page.goto(capture_url, wait_until="load", timeout=15_000)
-        page.wait_for_function(
-            """() => window.editableMedia
-                && window.editableMedia.ready instanceof Promise
-                && window.__hf
-                && typeof window.__hf.seek === "function"
-                && window.__hf.duration > 0""",
-            timeout=15_000,
-        )
-        page.evaluate("() => window.editableMedia.ready")
-        page.evaluate(
-            """async () => {
-                await document.fonts.ready;
-                await Promise.all(Array.from(document.images).map(image => image.decode()));
-            }"""
-        )
-        roundtrip = page.evaluate(
-            """state => {
-                window.editableMedia.setState(state);
-                return window.editableMedia.getState();
-            }""",
-            runtime_state,
-        )
-        if roundtrip != runtime_state:
-            raise DirectH264FallbackRequired(
-                "editable-media runtime rejected the persisted clip state"
-            )
-        cdp = context.new_cdp_session(page)
-        cdp.send(
-            "Emulation.setDefaultBackgroundColorOverride",
-            {"color": {"r": 0, "g": 0, "b": 0, "a": 0}},
-        )
-        return context, page, cdp, page_errors, resource_failures
-    except BaseException:
+    context, page, cdp = open_editable_media_page(
+        browser,
+        url=capture_url,
+        width=width,
+        height=height,
+        owns_url=lambda value: value.startswith(allowed_origin),
+        runtime_state=runtime_state,
+        state_error=lambda: DirectH264FallbackRequired(
+            "editable-media runtime rejected the persisted clip state"
+        ),
+        transparent_background=True,
+        on_page_error=lambda error: page_errors.append(str(error)),
+        on_request_failed=lambda request: resource_failures.append(
+            f"{request.url}: {request.failure or 'request failed'}"
+        ),
+    )
+    if cdp is None:
         context.close()
-        raise
+        raise AssertionError("Transparent editable-media page did not create a CDP session")
+    return context, page, cdp, page_errors, resource_failures
 
 
 def require_clean_page(page_errors: list[str], resource_failures: list[str]) -> None:

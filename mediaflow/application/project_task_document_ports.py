@@ -6,6 +6,7 @@ from mediaflow.application.project_storage_ports import (
     AssetDocuments,
     AudioDocuments,
     DubbingDocuments,
+    FrameClockDocuments,
     HighlightDocuments,
     ProjectAccess,
     ProjectMetadataDocuments,
@@ -71,6 +72,9 @@ class TranscriptionTaskDocuments(
 
     @property
     def timeline(self) -> TimelineDocuments: ...
+
+    @property
+    def frame_clock(self) -> FrameClockDocuments: ...
 
     @property
     def subtitles(self) -> SubtitleDocuments: ...

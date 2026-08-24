@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Any
 
 from mediaflow.domain.progress import OperationProgress
@@ -9,6 +10,33 @@ from mediaflow.domain.settings import ServiceSettings
 
 from .codec import decode_transport, encode_transport
 from .events import EventHub, ServiceEvent
+from .execution import ServiceWorkload
+
+_APPLICATION_COMMAND_WORKLOADS: dict[str, ServiceWorkload] = {
+    "analyze_download_url": "tool",
+    "asset_thumbnail_paths": "preview",
+    "cancel_timeline_filmstrip_requests": "control",
+    "timeline_filmstrip_paths": "preview",
+    "default_media_directory": "runtime",
+    "discover_encoder_policy_options": "runtime",
+    "installed_asr_models": "runtime",
+    "recent_projects": "runtime",
+    "search_media_resources": "runtime",
+    "cancel_runtime_tool": "control",
+    "runtime_tool_status": "runtime",
+    "run_runtime_tool": "tool",
+    "test_llm_provider": "tool",
+    "write_asset_preview_snapshot": "preview",
+    "write_preview_snapshot": "preview",
+}
+APPLICATION_COMMAND_WORKLOADS = MappingProxyType(_APPLICATION_COMMAND_WORKLOADS)
+
+
+def application_command_workload(command: str) -> ServiceWorkload:
+    try:
+        return APPLICATION_COMMAND_WORKLOADS[command]
+    except KeyError as error:
+        raise ValueError(f"Unknown desktop application command: {command}") from error
 
 
 class ApplicationRuntimeOperations:
@@ -42,9 +70,7 @@ class ApplicationRuntimeOperations:
     def desktop_bootstrap(self) -> dict[str, Any]:
         bootstrap_status = getattr(self.application, "bootstrap_runtime_tool_status", None)
         runtime_status = (
-            bootstrap_status()
-            if callable(bootstrap_status)
-            else self.application.runtime_tool_status()
+            bootstrap_status() if callable(bootstrap_status) else self.application.runtime_tool_status()
         )
         return {
             "runtime_descriptor": self.desktop_runtime_descriptor(),
@@ -74,25 +100,7 @@ class ApplicationRuntimeOperations:
         args_value: Any,
         kwargs_value: Any,
     ) -> Any:
-        allowed = {
-            "analyze_download_url",
-            "asset_thumbnail_paths",
-            "cancel_timeline_filmstrip_requests",
-            "timeline_filmstrip_paths",
-            "default_media_directory",
-            "discover_encoder_policy_options",
-            "installed_asr_models",
-            "recent_projects",
-            "search_media_resources",
-            "cancel_runtime_tool",
-            "runtime_tool_status",
-            "run_runtime_tool",
-            "test_llm_provider",
-            "write_asset_preview_snapshot",
-            "write_preview_snapshot",
-        }
-        if command not in allowed:
-            raise ValueError(f"Unknown desktop application command: {command}")
+        application_command_workload(command)
         args = decode_transport(args_value)
         kwargs = decode_transport(kwargs_value)
         if not isinstance(args, list) or not isinstance(kwargs, dict):

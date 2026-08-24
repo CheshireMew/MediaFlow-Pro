@@ -543,16 +543,16 @@ class ProjectLifecycle(SessionCoordinator):
     def cancel_filmstrip(self, project: DesktopProject | None = None) -> None:
         self._session.state.requests.filmstrip_id += 1
         target = project or self._session.state.binding.current
+        future = self._session.state.requests.filmstrip_future
+        if future is not None:
+            future.cancel()
+            self._session.state.requests.filmstrip_future = None
         if target is not None:
             self._session._api.cancel_timeline_filmstrip_requests(
                 target.project_dir,
                 request_owner=target.actor_id,
                 request_generation=self._session.state.requests.filmstrip_id,
             )
-        future = self._session.state.requests.filmstrip_future
-        if future is not None:
-            future.cancel()
-            self._session.state.requests.filmstrip_future = None
 
     def shutdown(self) -> None:
         try:

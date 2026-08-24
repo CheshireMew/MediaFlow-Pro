@@ -121,6 +121,61 @@ def test_atomic_automation_receipt_failure_rolls_back_database_srt_and_history(
         assert "Must roll back" in archived[0].read_text(encoding="utf-8-sig")
 
 
+def test_reversible_operation_uses_its_exact_history_without_project_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = EditorApplication()
+    with application.create_project(
+        tmp_path / "Exact Reversible Observation",
+        "Exact Reversible Observation",
+    ) as project:
+        document, segment, _output = _add_subtitle_document(
+            project,
+            tmp_path / "exact-source.srt",
+            "Before",
+        )
+
+        monkeypatch.setattr(
+            project._repository.observations,
+            "capture",
+            lambda _scopes: (_ for _ in ()).throw(
+                AssertionError("reversible operation captured the project document")
+            ),
+        )
+
+        def update(_retrying: bool) -> dict:
+            changed = project.update_subtitle_segment(
+                document.id,
+                segment.id,
+                start_frame=segment.start_frame,
+                end_frame=segment.end_frame,
+                text="After",
+            )
+            return {"segment": changed.model_dump(mode="json")}
+
+        result, event = project.execute_automation_request(
+            "exact-reversible-subtitle",
+            "subtitle.segment.update",
+            {"document_id": document.id, "segment_id": segment.id},
+            update,
+            atomic=True,
+            base_revision=project.content_revision(),
+            actor=ActorIdentity(kind="system", id="exact-history-test"),
+            mutation_plan=ProjectMutationPlan.scoped(
+                [f"/subtitles/documents/{document.id}"]
+            ),
+            reversible=True,
+        )
+
+        assert result["segment"]["text"] == "After"
+        assert event is not None
+        assert all(
+            path.startswith(f"/subtitles/documents/{document.id}/")
+            for path in event.write_set
+        )
+
+
 def test_named_version_restore_joins_automation_and_all_srt_publications(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -23,6 +23,31 @@ Item {
         clipOverview.requestPaint();
     }
 
+    function patchOverview(changedRows, removedIds) {
+        const removed = {};
+        const changed = {};
+        for (let index = 0; index < removedIds.length; ++index)
+            removed[String(removedIds[index])] = true;
+        for (let index = 0; index < changedRows.length; ++index)
+            changed[String(changedRows[index].clipId)] = changedRows[index];
+        const nextRows = [];
+        for (let index = 0; index < clipRows.length; ++index) {
+            const clipId = String(clipRows[index].clipId);
+            if (removed[clipId] === true)
+                continue;
+            if (changed[clipId] !== undefined) {
+                nextRows.push(changed[clipId]);
+                delete changed[clipId];
+            } else {
+                nextRows.push(clipRows[index]);
+            }
+        }
+        for (const clipId in changed)
+            nextRows.push(changed[clipId]);
+        clipRows = nextRows;
+        clipOverview.requestPaint();
+    }
+
     function clipAt(contentX, contentY) {
         const frame = contentX / Math.max(0.000001, view.pixelsPerFrame);
         const trackPosition = Math.floor((contentY - 12) / view.trackPitch);
@@ -41,11 +66,11 @@ Item {
     Component.onCompleted: refreshOverview()
 
     Connections {
-        target: mediaflow.timelineViewController.clipsModel
-        function onModelReset() { clipLayer.refreshOverview(); }
-        function onRowsInserted() { clipLayer.refreshOverview(); }
-        function onRowsRemoved() { clipLayer.refreshOverview(); }
-        function onDataChanged() { clipLayer.refreshOverview(); }
+        target: mediaflow.timelineViewportController.visibleClipsModel
+        function onSourceItemsReset() { clipLayer.refreshOverview(); }
+        function onSourceItemsPatched(changedRows, removedIds) {
+            clipLayer.patchOverview(changedRows, removedIds);
+        }
     }
 
     Connections {

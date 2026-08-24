@@ -9,6 +9,7 @@ Rectangle {
     objectName: "workspaceInspector"
 
     property int playheadFrame: 0
+    readonly property bool modalOpen: renameProjectDialog.opened
     signal editProfileRequested
     signal seekRequested(int frame)
 
@@ -27,7 +28,22 @@ Rectangle {
     readonly property string panelTitle:
         hasMultipleClips ? qsTr("批量片段参数")
         : hasTimelineSelection ? qsTr("片段参数")
-        : hasAssetSelection ? qsTr("素材参数") : qsTr("草稿参数")
+        : hasAssetSelection ? qsTr("素材参数") : qsTr("项目参数")
+
+    function openRenameProjectDialog() {
+        renameProjectNameField.text = mediaflow.workspaceViewController.projectName
+        renameProjectDialog.open()
+        renameProjectNameField.forceActiveFocus()
+        renameProjectNameField.selectAll()
+    }
+
+    function renameProject() {
+        const name = renameProjectNameField.text.trim()
+        if (name.length === 0)
+            return
+        mediaflow.workspaceProjectController.renameProject(name)
+        renameProjectDialog.close()
+    }
 
     color: Theme.surface
     radius: Theme.radius
@@ -139,7 +155,7 @@ Rectangle {
                     InfoRow {
                         Layout.leftMargin: 18
                         Layout.rightMargin: 18
-                        labelText: qsTr("草稿名称")
+                        labelText: qsTr("项目名称")
                         valueText: mediaflow.workspaceViewController.projectName
                     }
                     InfoRow {
@@ -162,6 +178,39 @@ Rectangle {
                         labelText: qsTr("项目状态")
                         valueText: mediaflow.workspaceViewController.readOnly
                             ? qsTr("只读") : qsTr("可编辑")
+                    }
+                    InfoRow {
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        labelText: qsTr("保存方式")
+                        valueText: mediaflow.workspaceViewController.readOnly
+                            ? qsTr("只读项目不会写入更改") : qsTr("所有更改自动保存")
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        spacing: 8
+                        AppButton {
+                            objectName: "renameProjectButton"
+                            Layout.fillWidth: true
+                            text: qsTr("重命名")
+                            enabled: mediaflow.workspaceViewController.actionCapabilities.canEdit
+                            onClicked: root.openRenameProjectDialog()
+                        }
+                        AppButton {
+                            objectName: "copyProjectPathButton"
+                            Layout.fillWidth: true
+                            text: qsTr("复制路径")
+                            onClicked: mediaflow.workspaceProjectController.copyProjectPath()
+                        }
+                        AppButton {
+                            objectName: "revealProjectFolderButton"
+                            Layout.fillWidth: true
+                            text: qsTr("打开文件夹")
+                            onClicked: mediaflow.workspaceProjectController.revealProjectFolder()
+                        }
                     }
 
                     Rectangle {
@@ -299,6 +348,51 @@ Rectangle {
             }
 
             MultiClipPanel {}
+        }
+    }
+
+    AppDialog {
+        id: renameProjectDialog
+        objectName: "renameProjectDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(440, Overlay.overlay ? Overlay.overlay.width - 48 : 440)
+        modal: true
+        title: qsTr("重命名项目")
+        closePolicy: Popup.CloseOnEscape
+        contentItem: ColumnLayout {
+            spacing: 12
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("项目目录不会改名，已有素材和外部引用不会受影响。")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeBodySmall
+                wrapMode: Text.WordWrap
+            }
+            AppTextField {
+                id: renameProjectNameField
+                objectName: "renameProjectNameField"
+                Layout.fillWidth: true
+                placeholderText: qsTr("项目名称")
+                onAccepted: root.renameProject()
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: qsTr("取消")
+                    onClicked: renameProjectDialog.close()
+                }
+                AppButton {
+                    objectName: "confirmRenameProjectButton"
+                    primary: true
+                    text: qsTr("保存名称")
+                    enabled: renameProjectNameField.text.trim().length > 0
+                        && renameProjectNameField.text.trim()
+                            !== mediaflow.workspaceViewController.projectName
+                    onClicked: root.renameProject()
+                }
+            }
         }
     }
 }

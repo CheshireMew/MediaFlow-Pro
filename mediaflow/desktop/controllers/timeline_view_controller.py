@@ -11,6 +11,18 @@ from .controller_facet import ControllerFacet
 from .controller_scopes import TimelinePresentationScope
 from .timeline_selection import sequence_boundary_analysis_running
 
+FILMSTRIP_BASE_IDLE_MS = 120
+FILMSTRIP_MAX_IDLE_MS = 2_500
+FILMSTRIP_CLIPS_PER_ADDED_MS = 2
+
+
+def filmstrip_idle_delay_ms(clip_count: int) -> int:
+    return min(
+        FILMSTRIP_MAX_IDLE_MS,
+        FILMSTRIP_BASE_IDLE_MS
+        + max(0, int(clip_count)) // FILMSTRIP_CLIPS_PER_ADDED_MS,
+    )
+
 
 class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
     projectStateChanged = Signal()
@@ -27,6 +39,10 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
     @Property(QObject, constant=True)
     def clipsModel(self) -> QObject:
         return self._session.models.clips
+
+    @Property(int, notify=projectStateChanged)
+    def filmstripIdleDelayMs(self) -> int:
+        return filmstrip_idle_delay_ms(self._session.models.clips.rowCount())
 
     @Slot(float, float, float, int)
     def requestFilmstrip(

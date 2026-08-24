@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
 from mediaflow.domain.highlights import HighlightCandidate
 
 from .project_repository_component import ProjectRepositoryComponent
 
+if TYPE_CHECKING:
+    from .project_database_session import ProjectDatabaseSession
+    from .project_metadata_repository import ProjectMetadataRepository
+
 
 class HighlightRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        projects: Callable[[], ProjectMetadataRepository],
+    ) -> None:
+        super().__init__(database)
+        self._projects = projects
+
     def save_highlights(self, candidates: list[HighlightCandidate]) -> None:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if any(candidate.project_id != project.id for candidate in candidates):
             raise ValueError("Highlight belongs to another project")
         with self.transaction() as connection:

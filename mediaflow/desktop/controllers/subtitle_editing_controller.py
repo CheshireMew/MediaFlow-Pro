@@ -27,7 +27,11 @@ class SubtitleEditingController(ControllerFacet[SubtitlePresentationScope]):
             end_frame=end_frame,
             text=text,
         )
-        self._session._finish_subtitle_edit([segment.id], "字幕已保存")
+        self._session._finish_subtitle_edit(
+            [segment.id],
+            "字幕已保存",
+            changed_segments=[segment],
+        )
         return True
 
     @Slot()
@@ -186,7 +190,11 @@ class SubtitleEditingController(ControllerFacet[SubtitlePresentationScope]):
             replacement,
             match_case=match_case,
         )
-        self._session._finish_subtitle_edit([updated.id], "已替换当前匹配")
+        self._session._finish_subtitle_edit(
+            [updated.id],
+            "已替换当前匹配",
+            changed_segments=[updated],
+        )
 
     @Slot(str, bool, result="QVariantList")
     def findSubtitleMatches(self, search: str, match_case: bool) -> list[dict]:

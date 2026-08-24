@@ -142,7 +142,7 @@ Panel {
                         Text {
                             text: kind
                             color: Theme.textMuted
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontSizeCaption
                         }
                         AppIcon {
                             visible: keyframeCount > 0
@@ -155,7 +155,7 @@ Panel {
                             visible: keyframeCount > 0
                             text: keyframeCount
                             color: Theme.textMuted
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontSizeCaption
                         }
                     }
                     AppIconButton {
@@ -299,16 +299,29 @@ Panel {
             font.pixelSize: Theme.fontSizeCaption
             font.weight: Font.DemiBold
         }
-        AppButton {
+        RowLayout {
             Layout.fillWidth: true
-            text: qsTr("检查新版网页包")
-            onClicked: rebindDialog.open()
-        }
-        AppButton {
-            Layout.fillWidth: true
-            visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
-            text: qsTr("复制换版检查为 CLI 请求")
-            onClicked: mediaflow.automationController.copyWebRebindPlanRequest()
+            AppButton {
+                Layout.fillWidth: true
+                text: qsTr("检查新版网页包")
+                onClicked: rebindDialog.open()
+            }
+            AppIconButton {
+                id: rebindPlanAutomationButton
+                visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
+                iconName: "more"
+                Accessible.name: qsTr("换版检查自动化操作")
+                toolTipText: Accessible.name
+                AppMenu {
+                    id: rebindPlanAutomationMenu
+                    y: rebindPlanAutomationButton.height + 4
+                    AppMenuItem {
+                        text: qsTr("复制换版检查为 CLI 请求")
+                        onTriggered: mediaflow.automationController.copyWebRebindPlanRequest()
+                    }
+                }
+                onClicked: rebindPlanAutomationMenu.open()
+            }
         }
         Text {
             Layout.fillWidth: true
@@ -334,7 +347,7 @@ Panel {
                     Layout.fillWidth: true
                     text: String(modelData.path) + "\n" + String(modelData.message)
                     color: Theme.warning
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WrapAnywhere
                 }
                 AppComboBox {
@@ -353,24 +366,35 @@ Panel {
             }
         }
 
-        AppButton {
+        RowLayout {
             Layout.fillWidth: true
             visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
-            primary: true
-            text: qsTr("按已审阅计划重新绑定")
-            enabled: Object.keys(
+            readonly property bool planReady: Object.keys(
                 mediaflow.webDeliveryController.rebindPlan.resolutions || {}).length
                 === (mediaflow.webDeliveryController.rebindPlan.conflicts || []).length
-            onClicked: mediaflow.webDeliveryController.commitRebind()
-        }
-        AppButton {
-            Layout.fillWidth: true
-            visible: String(mediaflow.webDeliveryController.rebindPlan.new_source_hash || "").length > 0
-            text: qsTr("复制换版提交为 CLI 请求")
-            enabled: Object.keys(
-                mediaflow.webDeliveryController.rebindPlan.resolutions || {}).length
-                === (mediaflow.webDeliveryController.rebindPlan.conflicts || []).length
-            onClicked: mediaflow.automationController.copyWebRebindCommitRequest()
+            AppButton {
+                Layout.fillWidth: true
+                primary: true
+                text: qsTr("按已审阅计划重新绑定")
+                enabled: parent.planReady
+                onClicked: mediaflow.webDeliveryController.commitRebind()
+            }
+            AppIconButton {
+                id: rebindCommitAutomationButton
+                iconName: "more"
+                Accessible.name: qsTr("换版提交自动化操作")
+                toolTipText: Accessible.name
+                enabled: parent.planReady
+                AppMenu {
+                    id: rebindCommitAutomationMenu
+                    y: rebindCommitAutomationButton.height + 4
+                    AppMenuItem {
+                        text: qsTr("复制换版提交为 CLI 请求")
+                        onTriggered: mediaflow.automationController.copyWebRebindCommitRequest()
+                    }
+                }
+                onClicked: rebindCommitAutomationMenu.open()
+            }
         }
 
         Text {

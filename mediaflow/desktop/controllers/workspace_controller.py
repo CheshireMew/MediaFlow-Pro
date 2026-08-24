@@ -4,7 +4,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
-from mediaflow.desktop.presentation_workspace import workspace_mode_catalog
+from mediaflow.desktop.presentation_workspace import (
+    pending_profile_label,
+    workspace_mode_catalog,
+)
 
 from .controller_facet import ControllerFacet
 from .controller_scopes import WorkspaceViewScope
@@ -104,7 +107,7 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
             self._session.state.binding.active_sequence_id
         )
         if not sequence.profile_confirmed:
-            return "等待首个视频"
+            return pending_profile_label()
         profile = sequence.profile
         fps = profile.fps_numerator / profile.fps_denominator
         return f"{profile.width}×{profile.height}  {fps:.3f} fps".replace(".000", "")
@@ -203,10 +206,9 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
 
     @Property(int, notify=historyChanged)
     def sequenceOutFrame(self) -> int:
-        if (
-            not self._session.state.binding.timeline
-            or self._session.state.binding.require_timeline().state.sequence.in_out is None
-        ):
+        if not self._session.state.binding.timeline:
+            return 0
+        if self._session.state.binding.require_timeline().state.sequence.in_out is None:
             return self._session.state.binding.require_timeline().duration_frames
         return self._session.state.binding.require_timeline().state.sequence.in_out.out_frame
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mediaflow.infrastructure.editable_media_page import open_editable_media_page
 from mediaflow.infrastructure.web_browser import verify_non_monotonic_seek_pixels
 from mediaflow.infrastructure.web_capture_models import (
     FastCaptureFallbackRequired,
@@ -53,7 +54,6 @@ from mediaflow.infrastructure.web_capture_scripts import (
 )
 
 _BROWSER_IDLE_SECONDS = 120.0
-_CAPTURE_PAGE_READY_TIMEOUT_MS = 15_000
 
 
 @dataclass(slots=True)
@@ -420,53 +420,19 @@ class _BrowserWorker:
 
     @staticmethod
     def _open_capture_page(browser, job: _CaptureJob, *, url: str | None = None):
-        context = browser.new_context(
-            viewport={"width": job.width, "height": job.height},
-            device_scale_factor=1,
+        context, page, cdp = open_editable_media_page(
+            browser,
+            url=url or job.url,
+            width=job.width,
+            height=job.height,
+            owns_url=lambda value: value.startswith(job.allowed_origin),
+            runtime_state=job.runtime_state,
+            transparent_background=True,
         )
-        try:
-            context.route(
-                "http://**/*",
-                lambda route: (
-                    route.continue_() if route.request.url.startswith(job.allowed_origin) else route.abort()
-                ),
-            )
-            context.route("https://**/*", lambda route: route.abort())
-            page = context.new_page()
-            page.goto(url or job.url, wait_until="load", timeout=15000)
-            page.wait_for_function(
-                """() => window.editableMedia
-                    && window.editableMedia.ready instanceof Promise
-                    && window.__hf
-                && typeof window.__hf.seek === "function"
-                && window.__hf.duration > 0""",
-                timeout=_CAPTURE_PAGE_READY_TIMEOUT_MS,
-            )
-            page.evaluate("() => window.editableMedia.ready")
-            page.evaluate(
-                """async () => {
-                    await document.fonts.ready;
-                    await Promise.all(Array.from(document.images).map(image => image.decode()));
-                }"""
-            )
-            roundtrip = page.evaluate(
-                """state => {
-                    window.editableMedia.setState(state);
-                    return window.editableMedia.getState();
-                }""",
-                job.runtime_state,
-            )
-            if roundtrip != job.runtime_state:
-                raise RuntimeError("Editable media runtime rejected the persisted clip state")
-            cdp = context.new_cdp_session(page)
-            cdp.send(
-                "Emulation.setDefaultBackgroundColorOverride",
-                {"color": {"r": 0, "g": 0, "b": 0, "a": 0}},
-            )
-            return context, page, cdp
-        except BaseException:
+        if cdp is None:
             context.close()
-            raise
+            raise AssertionError("Transparent editable-media page did not create a CDP session")
+        return context, page, cdp
 
     def _enable_fast_capture(
         self,

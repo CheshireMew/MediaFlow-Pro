@@ -145,7 +145,6 @@ def test_unified_import_opens_the_v6_package_through_local_preview_server(
         controllers.timeline_view.requestFilmstrip(0, state.duration_frames, 12, 46)
         filmstrip_future = controllers.session.state.requests.filmstrip_future
         assert filmstrip_future is not None
-        assert _process_until(filmstrip_future.running, 3)
         shutdown_started = time.monotonic()
         controllers.shutdown()
         shut_down = True

@@ -1606,7 +1606,7 @@ def test_short_sequence_archive_is_recoverable_through_project_history(
             "client_id": client_id,
             "target": "project",
             "command": "archive_short_sequence",
-            "args": [short.id],
+            "arguments": {"sequence_id": short.id},
             "base_revision": base_revision,
             "request_id": "archive-short-sequence",
             "actor": _SERVICE_API.actor,

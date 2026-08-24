@@ -126,6 +126,34 @@ def migrate_v47_to_v48(workspace) -> None:
         )
 
 
+def migrate_v48_to_v49(workspace) -> None:
+    with workspace.transaction() as connection:
+        migrate_version_snapshots(
+            workspace,
+            connection,
+            source_version=48,
+            target_version=49,
+            migrate_database=_add_task_claimable_indexes,
+        )
+        _add_task_claimable_indexes(connection)
+        connection.execute(
+            "UPDATE schema_info SET version=49 WHERE component='project'"
+        )
+
+
+def _add_task_claimable_indexes(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_task_claimable_pending
+           ON task(created_at, id)
+           WHERE status='pending' AND execution_owner_id IS NULL"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_task_claimable_running
+           ON task(lease_expires_at, created_at, id)
+           WHERE status='running'"""
+    )
+
+
 def _add_subtitle_segment_time_index(connection: sqlite3.Connection) -> None:
     connection.execute(
         """CREATE INDEX IF NOT EXISTS idx_subtitle_segment_document_time

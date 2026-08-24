@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from functools import wraps
+from typing import Any, ParamSpec, TypeVar, cast
 
-from mediaflow.application.edit_history import (
-    ProjectEditAction,
-    ProjectEditCommand,
-    ProjectEditHistory,
-)
+from mediaflow.application.edit_history import ProjectEditHistory
 from mediaflow.application.ports import SubtitleEditingDocuments
 from mediaflow.application.project_changes import (
     entity_change_set,
@@ -15,23 +13,34 @@ from mediaflow.application.project_changes import (
     project_path_segment,
 )
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
-from mediaflow.domain.collaboration import ProjectChangeSet
+from mediaflow.application.subtitle_word_timing import estimate_subtitle_words
+from mediaflow.domain.collaboration import (
+    ProjectChangeSet,
+    ProjectEditAction,
+    ProjectEditCommand,
+)
 from mediaflow.domain.subtitle_file import SubtitleCue, SubtitleFile
 from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timebase import seconds_to_frames
 
 _UNSET = object()
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
-def recorded_subtitle_edit(label: str):
-    def decorate(method):
+def recorded_subtitle_edit(
+    label: str,
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    def decorate(method: Callable[_P, _R]) -> Callable[_P, _R]:
         @wraps(method)
-        def wrapped(self, document_id: str, *args, **kwargs):
+        def wrapped(*args: Any, **kwargs: Any) -> _R:
+            self = args[0]
+            document_id = str(args[1] if len(args) > 1 else kwargs["document_id"])
             if self.history is None:
-                return method(self, document_id, *args, **kwargs)
+                return method(*args, **kwargs)
             before = self.repository.subtitles.list_subtitle_segments(document_id)
             before_words = self.repository.subtitles.list_subtitle_words(document_id)
-            result = method(self, document_id, *args, **kwargs)
+            result = method(*args, **kwargs)
             after = self.repository.subtitles.list_subtitle_segments(document_id)
             after_words = self.repository.subtitles.list_subtitle_words(document_id)
             if before != after or before_words != after_words:
@@ -71,7 +80,7 @@ def recorded_subtitle_edit(label: str):
                 )
             return result
 
-        return wrapped
+        return cast(Callable[_P, _R], wrapped)
 
     return decorate
 
@@ -96,6 +105,10 @@ class SubtitleEditingService:
             self.history.register_handler(
                 "subtitle.placement.restore",
                 self._apply_placement_history_action,
+            )
+            self.history.register_handler(
+                "subtitle.segment.restore",
+                self._apply_segment_history_action,
             )
 
     def update_placement_range(
@@ -160,7 +173,6 @@ class SubtitleEditingService:
             timing_overridden=timing_overridden,
         )
 
-    @recorded_subtitle_edit("修改字幕")
     def update_segment(
         self,
         document_id: str,
@@ -174,35 +186,23 @@ class SubtitleEditingService:
         value = text.strip()
         if not value:
             raise ValueError("字幕文本不能为空")
-        segments = self.repository.subtitles.list_subtitle_segments(document_id)
-        try:
-            index = next(index for index, item in enumerate(segments) if item.id == segment_id)
-        except StopIteration as error:
-            raise KeyError(segment_id) from error
-        previous = segments[index]
+        previous = self.repository.subtitles.get_subtitle_segment(document_id, segment_id)
         changes: dict[str, object] = {
-                "start_frame": int(start_frame),
-                "end_frame": int(end_frame),
-                "text": value,
+            "start_frame": int(start_frame),
+            "end_frame": int(end_frame),
+            "text": value,
         }
         if speaker is not _UNSET:
             changes["speaker"] = (
                 " ".join(str(speaker).split()) if speaker is not None else None
             ) or None
         updated = previous.model_copy(update=changes)
-        segments[index] = updated
-        words = self.repository.subtitles.list_subtitle_words(document_id)
-        if (
-            previous.start_frame == updated.start_frame
-            and previous.end_frame == updated.end_frame
-            and previous.text == updated.text
-        ):
-            updated_words = words
-        else:
-            updated_words = [word for word in words if word.segment_id != segment_id]
-            updated_words.extend(self._estimated_words(updated))
-        self._save_segments(document_id, segments, words=updated_words)
-        return updated
+        return self._commit_segment_edit(
+            document_id,
+            previous,
+            updated,
+            label="修改字幕",
+        )
 
     def update_script_segment(
         self,
@@ -212,11 +212,7 @@ class SubtitleEditingService:
         text: str | None = None,
         speaker: str | None | object = _UNSET,
     ) -> SubtitleSegment:
-        segments = self.repository.subtitles.list_subtitle_segments(document_id)
-        try:
-            segment = next(item for item in segments if item.id == segment_id)
-        except StopIteration as error:
-            raise KeyError(segment_id) from error
+        segment = self.repository.subtitles.get_subtitle_segment(document_id, segment_id)
         if text is None and speaker is _UNSET:
             raise ValueError("Script segment update must change text or speaker")
         return self.update_segment(
@@ -501,7 +497,6 @@ class SubtitleEditingService:
             self._save_segments(document_id, updated)
         return count
 
-    @recorded_subtitle_edit("替换当前字幕文本")
     def replace_match(
         self,
         document_id: str,
@@ -515,11 +510,7 @@ class SubtitleEditingService:
     ) -> SubtitleSegment:
         if not search:
             raise ValueError("查找内容不能为空")
-        segments = self.repository.subtitles.list_subtitle_segments(document_id)
-        try:
-            segment = next(item for item in segments if item.id == segment_id)
-        except StopIteration as error:
-            raise KeyError(segment_id) from error
+        segment = self.repository.subtitles.get_subtitle_segment(document_id, segment_id)
         if start < 0 or end <= start or end > len(segment.text):
             raise ValueError("当前查找结果已经失效，请重新查找")
         current = segment.text[start:end]
@@ -529,12 +520,12 @@ class SubtitleEditingService:
         value = f"{segment.text[:start]}{replacement}{segment.text[end:]}"
         if not value.strip():
             raise ValueError("替换后字幕文本不能为空")
-        updated_segment = segment.model_copy(update={"text": value})
-        self._save_segments(
+        return self._commit_segment_edit(
             document_id,
-            [updated_segment if item.id == segment.id else item for item in segments],
+            segment,
+            segment.model_copy(update={"text": value}),
+            label="替换当前字幕文本",
         )
-        return updated_segment
 
     def find_matches(
         self,
@@ -584,29 +575,73 @@ class SubtitleEditingService:
 
         self.publication.commit_document_change(document_id, save)
 
-    @staticmethod
-    def _estimated_words(segment: SubtitleSegment) -> list[SubtitleWord]:
-        tokens = re.findall(
-            r"[\u3400-\u9fff]|[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|[^\s]",
-            segment.text,
+    def _commit_segment_edit(
+        self,
+        document_id: str,
+        previous: SubtitleSegment,
+        updated: SubtitleSegment,
+        *,
+        label: str,
+    ) -> SubtitleSegment:
+        before_words = self.repository.subtitles.list_subtitle_words_for_segment(
+            document_id,
+            previous.id,
         )
-        if not tokens:
-            return []
-        duration = segment.end_frame - segment.start_frame
-        return [
-            SubtitleWord(
-                segment_id=segment.id,
-                position=position,
-                start_frame=segment.start_frame + duration * position // len(tokens),
-                end_frame=max(
-                    segment.start_frame + duration * position // len(tokens) + 1,
-                    segment.start_frame + duration * (position + 1) // len(tokens),
+        if (
+            previous.start_frame == updated.start_frame
+            and previous.end_frame == updated.end_frame
+            and previous.text == updated.text
+        ):
+            updated_words = list(before_words)
+        else:
+            updated_words = estimate_subtitle_words(updated)
+        if previous == updated and before_words == updated_words:
+            return previous
+
+        self.publication.commit_document_change(
+            document_id,
+            lambda: self.repository.subtitles.save_subtitle_segment_state(
+                document_id,
+                updated,
+                list(updated_words),
+            ),
+        )
+        if self.history is not None:
+            root = f"/subtitles/documents/{project_path_segment(document_id)}"
+            self.history.push(
+                ProjectEditCommand(
+                    label=label,
+                    undo_actions=[
+                        self._segment_history_action(
+                            document_id,
+                            previous,
+                            list(before_words),
+                        )
+                    ],
+                    redo_actions=[
+                        self._segment_history_action(
+                            document_id,
+                            updated,
+                            list(updated_words),
+                        )
+                    ],
                 ),
-                text=token,
-                timing_source="estimated",
+                ProjectChangeSet.combine(
+                    [
+                        entity_change_set(
+                            f"{root}/segments/{project_path_segment(previous.id)}",
+                            previous,
+                            updated,
+                        ),
+                        entity_sequence_change_set(
+                            f"{root}/words",
+                            before_words,
+                            updated_words,
+                        ),
+                    ]
+                ),
             )
-            for position, token in enumerate(tokens)
-        ]
+        return updated
 
     def _restore_document_state(
         self,
@@ -648,6 +683,24 @@ class SubtitleEditingService:
             payload={"placement": value.model_dump(mode="json", exclude_computed_fields=True)},
         )
 
+    @staticmethod
+    def _segment_history_action(
+        document_id: str,
+        segment: SubtitleSegment,
+        words: list[SubtitleWord],
+    ) -> ProjectEditAction:
+        return ProjectEditAction(
+            kind="subtitle.segment.restore",
+            payload={
+                "document_id": document_id,
+                "segment": segment.model_dump(mode="json", exclude_computed_fields=True),
+                "words": [
+                    item.model_dump(mode="json", exclude_computed_fields=True)
+                    for item in words
+                ],
+            },
+        )
+
     def _apply_document_history_action(self, action: ProjectEditAction) -> None:
         payload = action.payload
         self._restore_document_state(
@@ -663,6 +716,23 @@ class SubtitleEditingService:
             value.start_frame,
             value.end_frame,
             timing_overridden=value.timing_overridden,
+        )
+
+    def _apply_segment_history_action(self, action: ProjectEditAction) -> None:
+        payload = action.payload
+        document_id = str(payload.get("document_id") or "")
+        segment = SubtitleSegment.model_validate(payload.get("segment"))
+        words = [
+            SubtitleWord.model_validate(item)
+            for item in payload.get("words") or []
+        ]
+        self.publication.commit_document_change(
+            document_id,
+            lambda: self.repository.subtitles.save_subtitle_segment_state(
+                document_id,
+                segment,
+                words,
+            ),
         )
 
     def _words_after_split(

@@ -344,7 +344,7 @@ def test_worker_sizing_reports_memory_as_the_real_limit(
     assert sizing.estimated_worker_bytes > 256 * 1024**2
 
 
-def test_worker_sizing_uses_three_workers_for_the_cold_180_frame_case(
+def test_worker_sizing_keeps_the_cold_180_frame_case_balanced_at_two_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -360,9 +360,9 @@ def test_worker_sizing_uses_three_workers_for_the_cold_180_frame_case(
         limit=4,
     )
 
-    assert sizing.workers == 3
+    assert sizing.workers == 2
     assert sizing.bound_by == "work"
-    assert sizing.work_limit == 3
+    assert sizing.work_limit == 2
 
 
 def test_png_validation_rejects_wrong_dimensions_and_non_png_payloads() -> None:

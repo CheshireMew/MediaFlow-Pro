@@ -80,7 +80,9 @@ class TimelineChangeSession:
         project = self.repository.projects.get_project()
         is_main_sequence = self.sequence_id == project.main_sequence_id
         source_snapshot = (
-            self.repository.timeline.capture_main_frame_clock(self.sequence_id) if is_main_sequence else None
+            self.repository.frame_clock.capture_main_frame_clock(self.sequence_id)
+            if is_main_sequence
+            else None
         )
         source_state = source_snapshot.timeline if source_snapshot is not None else self._state
         if source_snapshot is not None:
@@ -114,7 +116,7 @@ class TimelineChangeSession:
             allow_locked_changes=True,
             assets={asset.id: asset for asset in change.assets},
         )
-        destination_snapshot = self.repository.timeline.change_main_frame_clock(
+        destination_snapshot = self.repository.frame_clock.change_main_frame_clock(
             source_snapshot,
             change.state,
             list(change.assets),
@@ -277,7 +279,7 @@ class TimelineChangeSession:
             )
             return
         if mode == "frame_clock":
-            self.repository.timeline.restore_main_frame_clock(
+            self.repository.frame_clock.restore_main_frame_clock(
                 MainFrameClockSnapshot.model_validate(payload.get("source")),
                 MainFrameClockSnapshot.model_validate(payload.get("destination")),
             )
@@ -320,28 +322,30 @@ class TimelineChangeSession:
     ) -> TimelineState:
         before_clips = {clip.id: clip for clip in before.clips}
         after_clips = {clip.id: clip for clip in after.clips}
-        graph_is_unchanged = (
-            before.sequence == after.sequence
-            and before.tracks == after.tracks
+        non_clip_graph_is_unchanged = (
+            before.tracks == after.tracks
             and before.compounds == after.compounds
             and before.transitions == after.transitions
             and before.markers == after.markers
             and before.ranges == after.ranges
-            and set(before_clips) == set(after_clips)
         )
-        if graph_is_unchanged:
+        if non_clip_graph_is_unchanged:
             changed_clip_ids = {
-                clip_id for clip_id, clip in after_clips.items() if clip != before_clips[clip_id]
+                clip_id
+                for clip_id, clip in after_clips.items()
+                if clip != before_clips.get(clip_id)
             }
-            changed_web_states = [
-                web_state
-                for clip_id, web_state in after.web_states.items()
-                if web_state != before.web_states.get(clip_id)
-            ]
-            revision = (
-                self.repository.timeline.save_timeline(after)
-                if changed_web_states
-                else self.repository.timeline.save_clip_changes(after, changed_clip_ids)
+            removed_clip_ids = set(before_clips) - set(after_clips)
+            changed_web_state_ids = {
+                clip_id
+                for clip_id in set(before.web_states) | set(after.web_states)
+                if before.web_states.get(clip_id) != after.web_states.get(clip_id)
+            }
+            revision = self.repository.timeline.save_clip_set_changes(
+                after,
+                changed_clip_ids=changed_clip_ids,
+                removed_clip_ids=removed_clip_ids,
+                changed_web_state_ids=changed_web_state_ids,
             )
         else:
             revision = self.repository.timeline.save_timeline(after)

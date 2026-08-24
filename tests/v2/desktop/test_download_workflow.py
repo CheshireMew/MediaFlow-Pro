@@ -95,7 +95,7 @@ def test_shutdown_cancels_inflight_download_analysis_within_socket_bound(
     )
     controllers = EditorControllers()
     try:
-        controllers.tasks.analyzeDownloadUrl(f"http://127.0.0.1:{server.server_address[1]}/watch")
+        controllers.downloads.analyzeDownloadUrl(f"http://127.0.0.1:{server.server_address[1]}/watch")
         # Runtime shards can concurrently start Chromium and FFmpeg. Waiting
         # for request admission is not part of the shutdown latency contract.
         assert request_seen.wait(timeout=10)
@@ -161,7 +161,7 @@ def test_collection_plan_runs_as_one_workflow_and_publishes_downloaded_assets(
         )
         session._set_download_plan(plan)
 
-        controllers.tasks.submitDownloadPlan("best", "1-2", False, "best", "")
+        controllers.downloads.submitDownloadPlan("best", "1-2", False, "best", "")
 
         run = session.state.binding.current.list_workflow_runs(active_only=True)[0]
         task_ids = run.payload.task_ids
@@ -296,7 +296,7 @@ def test_default_workspace_contains_real_downloaded_video_and_subtitles(
         )
         page_url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
         session._set_download_plan(YtDlpDownloadService(RuntimeContext.discover().paths).analyze(page_url))
-        controllers.tasks.submitDownloadPlan("best", "", True, "best", "")
+        controllers.downloads.submitDownloadPlan("best", "", True, "best", "")
 
         run = session.state.binding.current.list_workflow_runs(active_only=True)[0]
         completed = session.state.binding.current.wait_for_task(run.payload.task_ids[0], timeout=30)
@@ -405,7 +405,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert window.findChild(QQuickItem, "toggleAdvancedDownloadOptionsButton") is None
 
         custom_media = tmp_path / "Custom Media"
-        controllers.settings.setDefaultDownloadDirectory(str(custom_media))
+        controllers.download_settings.setDefaultDownloadDirectory(str(custom_media))
         assert _process_until(
             lambda: reset_media.isVisible() and Path(destination.property("text")) == custom_media
         )
@@ -484,7 +484,7 @@ def test_quick_start_creates_profiled_project_and_shows_real_download_progress(
         assert not settings_render.isNull() and settings_render.save(str(settings_screenshot))
         assert QMetaObject.invokeMethod(settings_dialog, "close")
 
-        assert _process_until(lambda: controllers.tasks.downloadProgressVisible)
+        assert _process_until(lambda: controllers.downloads.downloadProgressVisible)
         assert transfer_started.wait(timeout=5)
         banner = workspace.findChild(QQuickItem, "downloadProgressBanner")
         progress_bar = workspace.findChild(QQuickItem, "downloadProgressBar")

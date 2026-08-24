@@ -235,10 +235,7 @@ def transcribe_sequence(context: OperationContext) -> dict:
 
 def preview_transcript_edit(context: OperationContext) -> dict:
     edit = TranscriptEditRequest.model_validate(context.required("edit"))
-    plan = context.project.preview_transcript_edit(
-        edit,
-        context.project.timeline(edit.sequence_id),
-    )
+    plan = context.project.preview_transcript_edit(edit)
     return {"plan": plan}
 
 
@@ -251,10 +248,7 @@ def apply_transcript_edit(context: OperationContext) -> dict:
             "Transcript edit plan contains warnings; review them and set "
             "arguments.accept_warnings=true to apply"
         )
-    result = context.project.apply_transcript_edit(
-        plan,
-        context.project.timeline(plan.sequence_id),
-    )
+    result = context.project.apply_transcript_edit(plan)
     return {"edit": result}
 
 

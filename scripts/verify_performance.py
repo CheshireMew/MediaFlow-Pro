@@ -43,6 +43,8 @@ SUBTITLE_COUNT = 5_000
 OPEN_LIMIT_SECONDS = 6.0
 VISIBLE_LIMIT_SECONDS = 8.0
 EDIT_LIMIT_SECONDS = 0.08
+STRUCTURAL_EDIT_LIMIT_SECONDS = 0.5
+SUBTITLE_EDIT_LIMIT_SECONDS = 0.75
 INTERACTIVE_CLIP_LIMIT = 640
 MEMORY_DELTA_LIMIT_BYTES = 512 * 1024 * 1024
 MAX_PERFORMANCE_ATTEMPTS = 2
@@ -150,7 +152,14 @@ def create_fixture(root: Path) -> Path:
 def _performance_passed(report: dict[str, object]) -> bool:
     return all(
         report[key] is True
-        for key in ("open_passed", "visible_passed", "edit_passed", "memory_passed")
+        for key in (
+            "open_passed",
+            "visible_passed",
+            "edit_passed",
+            "structural_edits_passed",
+            "subtitle_edit_passed",
+            "memory_passed",
+        )
     )
 
 
@@ -224,6 +233,63 @@ def verify(
         if persisted_clip is None or persisted_clip.timeline_start != moved_start_frame:
             raise RuntimeError("The measured edit reached the model but not persistent storage")
 
+        started = time.perf_counter()
+        controllers.timeline_clips.duplicateClip(last_clip_id, 3.0, 0)
+        duplicate_seconds = time.perf_counter() - started
+        copied_id = controllers.session.state.selection.clip_ids[0]
+        copied_row = controllers.timeline_view.clipsModel.get(
+            controllers.timeline_view.clipsModel.findRow("clipId", copied_id)
+        )
+        if not copied_row or controllers.timeline_view.clipsModel.rowCount() != CLIP_COUNT + 1:
+            raise RuntimeError("The measured duplicate did not reach the QML model")
+
+        started = time.perf_counter()
+        controllers.timeline_clips.splitClip(
+            copied_id,
+            int(copied_row["startFrame"]) + 5,
+        )
+        split_seconds = time.perf_counter() - started
+        if controllers.timeline_view.clipsModel.rowCount() != CLIP_COUNT + 2:
+            raise RuntimeError("The measured split did not reach the QML model")
+
+        started = time.perf_counter()
+        controllers.timeline_clips.deleteSelectedClips(False)
+        delete_seconds = time.perf_counter() - started
+        if controllers.timeline_view.clipsModel.rowCount() != CLIP_COUNT + 1:
+            raise RuntimeError("The measured delete did not reach the QML model")
+
+        document_id = controllers.subtitle_view.subtitleDocumentsModel.get(0)["documentId"]
+        controllers.subtitle_view.selectSubtitleDocument(document_id)
+        subtitle_row = controllers.subtitle_view.subtitleSegmentsModel.get(SUBTITLE_COUNT - 1)
+        updated_subtitle_text = f"{subtitle_row['text']} / 已修改"
+        started = time.perf_counter()
+        controllers.subtitle_editing.updateSubtitleSegment(
+            subtitle_row["segmentId"],
+            subtitle_row["startFrame"],
+            subtitle_row["endFrame"],
+            updated_subtitle_text,
+        )
+        subtitle_edit_seconds = time.perf_counter() - started
+        projected_subtitle = controllers.subtitle_view.subtitleSegmentsModel.get(
+            controllers.subtitle_view.subtitleSegmentsModel.findRow(
+                "segmentId",
+                subtitle_row["segmentId"],
+            )
+        )
+        if projected_subtitle.get("text") != updated_subtitle_text:
+            raise RuntimeError("The measured subtitle edit did not reach the QML model")
+
+        with ProjectRepository.open(project_dir, writable=False) as persisted_repository:
+            persisted_after_edits = persisted_repository.timeline.load_timeline(sequence_id)
+            persisted_subtitle = persisted_repository.subtitles.get_subtitle_segment(
+                document_id,
+                subtitle_row["segmentId"],
+            )
+        if len(persisted_after_edits.clips) != CLIP_COUNT + 1:
+            raise RuntimeError("The measured structural edits did not reach persistent storage")
+        if persisted_subtitle.text != updated_subtitle_text:
+            raise RuntimeError("The measured subtitle edit did not reach persistent storage")
+
         window = engine.rootObjects()[0]
         quick_window = wrapInstance(getCppPointer(window)[0], QQuickWindow)
         screenshot = evidence / "large-project.png"
@@ -238,6 +304,12 @@ def verify(
             "visible_limit_seconds": VISIBLE_LIMIT_SECONDS,
             "edit_seconds": edit_seconds,
             "edit_limit_seconds": EDIT_LIMIT_SECONDS,
+            "duplicate_seconds": duplicate_seconds,
+            "split_seconds": split_seconds,
+            "delete_seconds": delete_seconds,
+            "structural_edit_limit_seconds": STRUCTURAL_EDIT_LIMIT_SECONDS,
+            "subtitle_edit_seconds": subtitle_edit_seconds,
+            "subtitle_edit_limit_seconds": SUBTITLE_EDIT_LIMIT_SECONDS,
             "snap_probe_seconds": snap_probe_seconds,
             "snap_target_count": snap_target_count,
             "interactive_clip_count": interactive_clip_count,
@@ -250,6 +322,13 @@ def verify(
             "open_passed": open_seconds < OPEN_LIMIT_SECONDS,
             "visible_passed": visible_seconds < VISIBLE_LIMIT_SECONDS,
             "edit_passed": edit_seconds < EDIT_LIMIT_SECONDS,
+            "structural_edits_passed": max(
+                duplicate_seconds,
+                split_seconds,
+                delete_seconds,
+            )
+            < STRUCTURAL_EDIT_LIMIT_SECONDS,
+            "subtitle_edit_passed": subtitle_edit_seconds < SUBTITLE_EDIT_LIMIT_SECONDS,
             "memory_passed": memory_delta_bytes < MEMORY_DELTA_LIMIT_BYTES,
             "screenshot": str(screenshot),
             "project": str(project_dir),

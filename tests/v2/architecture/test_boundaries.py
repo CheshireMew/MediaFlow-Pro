@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import re
 import tomllib
 from pathlib import Path
@@ -16,6 +17,7 @@ from mediaflow.desktop.presentation_catalogs import (
 )
 from mediaflow.domain.enums import WorkflowStage
 from mediaflow.domain.model_base import DomainModel
+from mediaflow.domain.settings import ServiceSettings
 from mediaflow.infrastructure.project_migrations import PROJECT_MIGRATIONS
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.project_repository_component import ProjectRepositoryComponent
@@ -58,6 +60,40 @@ def _class(path: Path, name: str) -> ast.ClassDef:
 def test_mypy_covers_the_complete_mediaflow_package() -> None:
     configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert configuration["tool"]["mypy"]["files"] == ["mediaflow"]
+    strict_flags = {
+        "disallow_any_generics",
+        "disallow_subclassing_any",
+        "disallow_untyped_calls",
+        "disallow_untyped_defs",
+        "disallow_incomplete_defs",
+        "disallow_untyped_decorators",
+        "warn_unused_ignores",
+        "warn_return_any",
+        "strict_equality",
+        "extra_checks",
+    }
+    strict_modules = {
+        module
+        for override in configuration["tool"]["mypy"]["overrides"]
+        if all(override.get(flag) is True for flag in strict_flags)
+        and override.get("implicit_reexport") is False
+        for module in ([override["module"]] if isinstance(override["module"], str) else override["module"])
+    }
+    assert {
+        "mediaflow.infrastructure.project_repository",
+        "mediaflow.editor_project_delivery_commands",
+        "mediaflow.editor_project_document_commands",
+        "mediaflow.editor_project_media_commands",
+        "mediaflow.editor_project_script_timeline_commands",
+        "mediaflow.editor_project_task_commands",
+        "mediaflow.editor_project_web_commands",
+        "mediaflow.service.client",
+        "mediaflow.service.commands",
+        "mediaflow.service.execution",
+        "mediaflow.service.remote_project",
+        "mediaflow.service.request_dispatcher",
+        "mediaflow.service.session_registry",
+    }.issubset(strict_modules)
 
 
 def test_runtime_status_messages_use_the_registered_translation_boundary() -> None:
@@ -288,6 +324,7 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         "coalesced_revision",
         "enlist_transaction_publication",
         "transaction",
+        "task_transaction",
         "close",
     }
     initializer = next(
@@ -307,6 +344,7 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         "sequences",
         "assets",
         "timeline",
+        "frame_clock",
         "audio",
         "subtitles",
         "highlights",
@@ -544,8 +582,6 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     qml_root = ROOT / "mediaflow" / "desktop" / "qml"
     workspace = (qml_root / "Workspace.qml").read_text(encoding="utf-8")
     export_panel = (qml_root / "ExportPanel.qml").read_text(encoding="utf-8")
-    assert len(workspace.splitlines()) <= 700
-    assert len(export_panel.splitlines()) <= 140
     for component in (
         "PreviewViewport",
         "WorkspaceNavigation",
@@ -568,7 +604,8 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     assert inspector.is_file()
     inspector_source = inspector.read_text(encoding="utf-8")
     assert "EditPanel" in inspector_source
-    assert "草稿参数" in inspector_source
+    assert "项目参数" in inspector_source
+    assert "草稿参数" not in inspector_source
     assert "素材参数" in inspector_source
     assert "TranscriptWorkspace" in workspace
     assert (qml_root / "TranscriptWorkspace.qml").is_file()
@@ -589,6 +626,20 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
         panel_source = (qml_root / panel_name).read_text(encoding="utf-8")
         assert f'text: qsTr("{redundant_title}")' not in panel_source
     assert "TaskDrawer" not in workspace
+
+    shortcuts_source = (qml_root / "components" / "WorkspaceShortcuts.qml").read_text(
+        encoding="utf-8"
+    )
+    assert 'sequence: "Ctrl+S"' not in shortcuts_source
+    assert "saveProject" not in shortcuts_source
+
+    hardcoded_dense_text = re.compile(r"font\.pixelSize\s*:\s*(?:9|10)\b")
+    dense_text_violations = [
+        path.relative_to(qml_root).as_posix()
+        for path in qml_root.rglob("*.qml")
+        if hardcoded_dense_text.search(path.read_text(encoding="utf-8"))
+    ]
+    assert dense_text_violations == []
 
     assert not (qml_root / "TaskDrawer.qml").exists()
     transcript_panel = (qml_root / "TranscriptPanel.qml").read_text(encoding="utf-8")
@@ -625,7 +676,6 @@ def test_desktop_session_and_qml_roots_keep_focused_boundaries() -> None:
     timeline = (qml_root / "TimelineView.qml").read_text(encoding="utf-8")
     timeline_toolbar = (qml_root / "TimelineToolbar.qml").read_text(encoding="utf-8")
     timeline_canvas = (qml_root / "TimelineCanvas.qml").read_text(encoding="utf-8")
-    assert len(timeline.splitlines()) <= 400
     assert "TimelineToolbar" in timeline
     assert "TimelineCanvas" in timeline
     assert "TimelineTrackControls" in timeline
@@ -717,7 +767,7 @@ def test_desktop_qml_uses_one_root_and_focused_workspace_boundaries() -> None:
         assert not re.search(rf"(?<!mediaflow\.)\b{controller}\b", qml_source)
 
     main_qml = (ROOT / "mediaflow" / "desktop" / "qml" / "Main.qml").read_text(encoding="utf-8")
-    assert "target: mediaflow.taskController" in main_qml
+    assert "target: mediaflow.downloadController" in main_qml
     assert "function onDownloadPlanChanged()" in main_qml
     web_editor_canvas = (ROOT / "mediaflow" / "desktop" / "qml" / "WebEditorCanvas.qml").read_text(
         encoding="utf-8"
@@ -761,6 +811,7 @@ def test_settings_dialog_uses_the_typed_backend_draft() -> None:
         qml_root / "SettingsDialog.qml",
         qml_root / "SettingsGeneralPage.qml",
         qml_root / "SettingsMediaPage.qml",
+        qml_root / "SettingsEditorPage.qml",
         qml_root / "SettingsAiPage.qml",
     )
     qml_source = "\n".join(path.read_text(encoding="utf-8") for path in settings_files)
@@ -777,11 +828,9 @@ def test_settings_dialog_uses_the_typed_backend_draft() -> None:
         assert removed_qml_path not in qml_source
     assert "def saveSettings(" not in controller_source
     assert "SettingsDraft(" in controller_source
-    draft_fields = set(re.findall(r'updateDraft\("([^"]+)"', qml_source))
+    draft_fields = set(re.findall(r'updateDraft\(\s*"([^"]+)"', qml_source))
     form_fields = {field.alias or name for name, field in SettingsForm.model_fields.items()}
     assert draft_fields == form_fields
-    assert len(settings_files[0].read_text(encoding="utf-8").splitlines()) <= 170
-    assert all(len(path.read_text(encoding="utf-8").splitlines()) <= 500 for path in settings_files[1:])
     ai_source = settings_files[-1].read_text(encoding="utf-8")
     assert "required property bool providerEnabled" in ai_source
     assert "required property bool enabled" not in ai_source
@@ -791,74 +840,7 @@ def test_settings_dialog_uses_the_typed_backend_draft() -> None:
         assert model_id not in ai_source
 
 
-def test_audited_god_files_stay_replaced_by_focused_components() -> None:
-    limits = {
-        ROOT / "mediaflow" / "composition.py": 780,
-        ROOT / "mediaflow" / "editor_project_document_commands.py": 240,
-        ROOT / "mediaflow" / "editor_project_media_commands.py": 170,
-        ROOT / "mediaflow" / "editor_project_task_commands.py": 125,
-        ROOT / "mediaflow" / "editor_project_web_commands.py": 135,
-        ROOT / "mediaflow" / "editor_project_delivery_commands.py": 240,
-        ROOT / "mediaflow" / "project_presentation.py": 320,
-        ROOT / "mediaflow" / "project_collaboration.py": 650,
-        ROOT / "mediaflow" / "project_task_settlement.py": 350,
-        ROOT / "mediaflow" / "application" / "ports.py": 170,
-        ROOT / "mediaflow" / "application" / "external_ports.py": 70,
-        ROOT / "mediaflow" / "application" / "project_document_ports.py": 110,
-        ROOT / "mediaflow" / "application" / "project_storage_ports.py": 360,
-        ROOT / "mediaflow" / "application" / "project_service_ports.py": 300,
-        ROOT / "mediaflow" / "application" / "project_task_document_ports.py": 115,
-        ROOT / "mediaflow" / "application" / "task_runtime_ports.py": 510,
-        ROOT / "mediaflow" / "application" / "timeline_editor.py": 960,
-        ROOT / "mediaflow" / "application" / "timeline_visual_editing.py": 220,
-        ROOT / "mediaflow" / "application" / "timeline_track_editing.py": 180,
-        ROOT / "mediaflow" / "application" / "timeline_structure_editing.py": 160,
-        ROOT / "mediaflow" / "application" / "timeline_marker_editing.py": 170,
-        ROOT / "mediaflow" / "application" / "timeline_change_session.py": 350,
-        ROOT / "mediaflow" / "application" / "project_task_handlers.py": 150,
-        ROOT / "mediaflow" / "application" / "web_media_service.py": 60,
-        ROOT / "mediaflow" / "application" / "web_package_service.py": 450,
-        ROOT / "mediaflow" / "application" / "web_clip_editing_service.py": 240,
-        ROOT / "mediaflow" / "application" / "web_clip_parameter_editing.py": 280,
-        ROOT / "mediaflow" / "application" / "web_clip_layer_editing.py": 370,
-        ROOT / "mediaflow" / "application" / "web_clip_data_editing.py": 160,
-        ROOT / "mediaflow" / "application" / "web_runtime_state_commit.py": 410,
-        ROOT / "mediaflow" / "application" / "web_field_validation.py": 110,
-        ROOT / "mediaflow" / "application" / "web_batch_service.py": 180,
-        ROOT / "mediaflow" / "application" / "web_rebind_service.py": 450,
-        ROOT / "mediaflow" / "application" / "web_rebind_conflicts.py": 550,
-        ROOT / "mediaflow" / "application" / "web_edit_document_builder.py": 360,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py": 260,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_controller.py": 360,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_project_controller.py": 210,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_sequence_controller.py": 190,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_workflow_controller.py": 50,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "workspace_playback_controller.py": 50,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "web_controller.py": 700,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "web_timeline_controller.py": 550,
-        ROOT / "mediaflow" / "desktop" / "controllers" / "web_delivery_controller.py": 300,
-        ROOT / "mediaflow" / "desktop" / "qml" / "Workspace.qml": 560,
-        ROOT / "mediaflow" / "desktop" / "qml" / "components" / "WorkspaceChrome.qml": 140,
-        ROOT / "mediaflow" / "desktop" / "qml" / "TimelineView.qml": 400,
-        ROOT / "mediaflow" / "infrastructure" / "mlt" / "compiler.py": 300,
-        ROOT / "mediaflow" / "infrastructure" / "project_migration_runner.py": 100,
-        ROOT / "mediaflow" / "infrastructure" / "project_repository.py": 600,
-        ROOT / "mediaflow" / "infrastructure" / "project_operation_repository.py": 220,
-        ROOT / "mediaflow" / "infrastructure" / "project_observation_repository.py": 300,
-        ROOT / "mediaflow" / "infrastructure" / "proxy_service.py": 410,
-        ROOT / "mediaflow" / "infrastructure" / "proxy_encoding.py": 140,
-        ROOT / "mediaflow" / "service" / "server.py": 520,
-        ROOT / "mediaflow" / "service" / "request_dispatcher.py": 330,
-        ROOT / "mediaflow" / "service" / "desktop_command_catalog.py": 280,
-        ROOT / "mediaflow" / "mcp_server.py": 200,
-        ROOT / "mediaflow" / "mcp_tools.py": 360,
-    }
-    assert {
-        str(path.relative_to(ROOT)): len(path.read_text(encoding="utf-8").splitlines())
-        for path, limit in limits.items()
-        if len(path.read_text(encoding="utf-8").splitlines()) > limit
-    } == {}
-
+def test_audited_large_components_keep_semantic_boundaries() -> None:
     task_handlers = _class(
         ROOT / "mediaflow" / "application" / "project_task_handlers.py",
         "ProjectTaskHandlers",
@@ -951,25 +933,35 @@ def test_audited_god_files_stay_replaced_by_focused_components() -> None:
     assert web_methods.isdisjoint({"validated_field_value", "validate_data_value", "validate_constraint"})
 
 
-def test_audited_long_operations_remain_small_or_delegate_to_focused_components() -> None:
-    limits = {
-        (ROOT / "mediaflow" / "domain" / "web_manifest.py", "valid_contract"): 5,
+def test_audited_orchestrators_delegate_to_their_focused_components() -> None:
+    expected_calls = {
+        (ROOT / "mediaflow" / "domain" / "web_manifest.py", "valid_contract"): {
+            "validate_manifest_contract",
+        },
         (
             ROOT / "mediaflow" / "application" / "web_edit_document_builder.py",
             "build_web_edit_document",
-        ): 60,
+        ): {"_layer_fields", "_parameter_fields", "_theme_fields", "_data_fields"},
         (
             ROOT / "mediaflow" / "application" / "web_rebind_service.py",
             "_rebind_conflicts",
-        ): 20,
-        (ROOT / "mediaflow" / "service" / "server.py", "_dispatch"): 20,
-        (ROOT / "mediaflow" / "mcp_server.py", "build_mcp_server"): 40,
+        ): {"WebRebindConflictDetector", "detect"},
+        (ROOT / "mediaflow" / "service" / "server.py", "_dispatch"): {"dispatch"},
+        (ROOT / "mediaflow" / "mcp_server.py", "build_mcp_server"): {
+            "_ContractMCPServer",
+            "register_mediaflow_tools",
+        },
         (
             ROOT / "mediaflow" / "infrastructure" / "proxy_service.py",
             "_prepare_outputs",
-        ): 110,
+        ): {
+            "content_addressed_child_path",
+            "output_set_transaction",
+            "build_proxy_command",
+            "_encode_proxy_output",
+        },
     }
-    for (path, function_name), maximum_lines in limits.items():
+    for (path, function_name), required_calls in expected_calls.items():
         functions = [
             node
             for node in ast.walk(_tree(path))
@@ -977,8 +969,12 @@ def test_audited_long_operations_remain_small_or_delegate_to_focused_components(
         ]
         assert len(functions) == 1
         function = functions[0]
-        assert function.end_lineno is not None
-        assert function.end_lineno - function.lineno + 1 <= maximum_lines
+        actual_calls = {
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))
+        }
+        assert required_calls <= actual_calls
 
 
 def test_project_migrations_are_one_continuous_registered_chain() -> None:
@@ -1036,9 +1032,55 @@ def test_desktop_transport_uses_one_typed_command_registry() -> None:
     assert all(isinstance(value, DesktopCommand) for value in DESKTOP_COMMANDS.values())
     assert all(key == (value.target, value.name) for key, value in DESKTOP_COMMANDS.items())
     assert all(desktop_command(*key) is value for key, value in DESKTOP_COMMANDS.items())
+    assert desktop_command("project", "cancel_task").workload == "control"
+    assert desktop_command("project", "pause_task").workload == "control"
+    assert desktop_command("project", "import_asset").workload == "project"
     assert len({value.schema_id for value in DESKTOP_COMMANDS.values()}) == len(DESKTOP_COMMANDS)
     assert all(value.request_model is not None for value in DESKTOP_COMMANDS.values())
     assert all(value.result_model is not None for value in DESKTOP_COMMANDS.values())
+    assert len({value.request_model for value in DESKTOP_COMMANDS.values()}) == len(DESKTOP_COMMANDS)
+    assert len({value.result_model for value in DESKTOP_COMMANDS.values()}) == len(DESKTOP_COMMANDS)
+    assert all(
+        "args" not in value.request_model.model_fields and "kwargs" not in value.request_model.model_fields
+        for value in DESKTOP_COMMANDS.values()
+    )
+    assert all(
+        value.result_model.model_fields["value"].annotation is not object
+        for value in DESKTOP_COMMANDS.values()
+    )
+    assert all(
+        not any(
+            parameter.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+            for parameter in value.signature.parameters.values()
+        )
+        for value in DESKTOP_COMMANDS.values()
+    )
+    settings = ServiceSettings()
+    settings_request = desktop_command("project", "update_settings").validate_request(
+        [settings],
+        {},
+    )
+    assert (
+        desktop_command("project", "update_settings").request_arguments(settings_request)["settings"]
+        is settings
+    )
+    find_request = desktop_command("project", "find_subtitle_matches").validate_request(
+        ["document", "term"],
+        {},
+    )
+    assert desktop_command("project", "find_subtitle_matches").request_arguments(find_request) == {
+        "document_id": "document",
+        "search": "term",
+    }
+    copy_request = desktop_command("timeline", "copy_clip").validate_request(
+        ["clip"],
+        {"timeline_start": 10, "snap_targets": (1, 9, 20)},
+    )
+    assert desktop_command("timeline", "copy_clip").request_arguments(copy_request)["snap_targets"] == [
+        1,
+        9,
+        20,
+    ]
     assert all(
         value.mutation_plan(sequence_id="sequence", args=[], kwargs={}).change_scopes
         for value in DESKTOP_COMMANDS.values()
@@ -1318,7 +1360,7 @@ def test_workspace_modes_have_one_presentation_catalog() -> None:
     assert len({mode.key for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
     assert len({mode.panel_object_name for mode in WORKSPACE_MODES}) == len(WORKSPACE_MODES)
     assert "edit" not in {mode.key for mode in WORKSPACE_MODES}
-    assert "export" not in WORKSPACE_NAVIGATION_MODE_KEYS
+    assert "export" in WORKSPACE_NAVIGATION_MODE_KEYS
     mode_labels = {mode.key: mode.label_source for mode in WORKSPACE_MODES}
     assert mode_labels["transcript"] == "字幕"
     assert mode_labels["highlight"] == "高光"

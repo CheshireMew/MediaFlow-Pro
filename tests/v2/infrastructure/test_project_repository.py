@@ -50,6 +50,9 @@ from mediaflow.domain.timeline import (
 )
 from mediaflow.file_digest import sha256_file
 from mediaflow.infrastructure.audio_repository import AudioRepository
+from mediaflow.infrastructure.editable_media_project_migration import (
+    reconcile_editable_media_v4_archives,
+)
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file, fingerprint_matches
 from mediaflow.infrastructure.project_migration_runner import (
     ProjectSchemaMigrator,
@@ -65,6 +68,61 @@ def _open_writable(root: Path, **options) -> ProjectRepository:
         writable=True,
         **options,
     )
+
+
+def test_project_name_is_validated_persisted_and_reopened(tmp_path: Path) -> None:
+    project_root = tmp_path / "Stable Project Folder"
+    with ProjectRepository.create(project_root, "Original name") as repository:
+        revision = repository.content_revision()
+        renamed = repository.projects.rename_project("  Renamed project  ")
+        assert renamed.name == "Renamed project"
+        assert repository.content_revision() == revision + 1
+        with pytest.raises(ValueError, match="Project name cannot be empty"):
+            repository.projects.rename_project("   ")
+
+    with ProjectRepository.open(project_root, writable=True) as reopened:
+        assert reopened.projects.get_project().name == "Renamed project"
+
+
+def test_task_lease_heartbeat_does_not_observe_or_touch_project_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with ProjectRepository.create(tmp_path / "TaskHeartbeat", "Task heartbeat") as repository:
+        project = repository.projects.get_project()
+        tasks = TaskRepository(repository)
+        pending = tasks.create(
+            Task(
+                project_id=project.id,
+                command=AnalyzeDownloadCommand(url="test://heartbeat"),
+            )
+        )
+        claimed = tasks.claim(pending.id, "heartbeat-owner", 30_000)
+        assert claimed is not None
+        revision = repository.content_revision()
+
+        def unexpected_observation(_paths):
+            raise AssertionError("task-state transactions must not observe the project aggregate")
+
+        monkeypatch.setattr(repository.observations, "capture", unexpected_observation)
+        renewed = tasks.renew_lease(pending.id, "heartbeat-owner", 30_000)
+
+        assert renewed is not None
+        assert renewed.heartbeat_at is not None
+        assert repository.content_revision() == revision
+
+
+def test_editable_media_archive_reconciliation_propagates_storage_failures() -> None:
+    class BrokenWorkspace:
+        read_only = False
+        project_dir = Path("D:/broken-project")
+
+        @staticmethod
+        def _fetchall(_query: str):
+            raise sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        reconcile_editable_media_v4_archives(BrokenWorkspace())
 
 
 def test_undo_history_retention_bounds_active_and_discarded_groups(
@@ -146,6 +204,60 @@ def test_subtitle_segment_listing_uses_document_time_index(tmp_path: Path) -> No
         )
 
 
+def test_claimable_task_queries_exclude_terminal_history_with_partial_indexes(
+    tmp_path: Path,
+) -> None:
+    with ProjectRepository.create(
+        tmp_path / "Task Claimable Index",
+        "Task Claimable Index",
+    ) as repository:
+        pending_plan = repository._fetchall(
+            """EXPLAIN QUERY PLAN
+               SELECT * FROM task
+               WHERE status='pending' AND execution_owner_id IS NULL"""
+        )
+        expired_plan = repository._fetchall(
+            """EXPLAIN QUERY PLAN
+               SELECT * FROM task
+               WHERE status='running' AND lease_expires_at<=?""",
+            (1,),
+        )
+
+        assert any(
+            "idx_task_claimable_pending" in str(row["detail"])
+            for row in pending_plan
+        )
+        assert any(
+            "idx_task_claimable_running" in str(row["detail"])
+            for row in expired_plan
+        )
+
+
+def test_v48_migration_adds_claimable_task_indexes(tmp_path: Path) -> None:
+    root = tmp_path / "TaskClaimableMigration"
+    with ProjectRepository.create(root, "TaskClaimableMigration"):
+        pass
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute("DROP INDEX idx_task_claimable_pending")
+        connection.execute("DROP INDEX idx_task_claimable_running")
+        connection.execute(
+            "UPDATE schema_info SET version=48 WHERE component='project'"
+        )
+
+    with _open_writable(root) as repository:
+        indexes = {
+            str(row["name"])
+            for row in repository._fetchall("PRAGMA index_list(task)")
+        }
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+        assert {
+            "idx_task_claimable_pending",
+            "idx_task_claimable_running",
+        } <= indexes
+
+
 def test_project_repository_owns_the_project_root_path_boundary(
     tmp_path: Path,
     max_project_path: Path,
@@ -200,6 +312,35 @@ def test_nested_transaction_rolls_back_its_partial_writes_when_outer_recovers(
         project = repository.projects.get_project()
         assert project.name == "Outer change survived"
         assert project.workflow_auto_continue is None
+
+
+def test_outer_transaction_reuses_its_committed_revision_without_a_post_commit_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with ProjectRepository.create(
+        tmp_path / "KnownRevision",
+        "KnownRevision",
+    ) as repository:
+        original_reader = repository._content_revision_if_available
+        observed_revisions: list[int | None] = []
+
+        def record_revision() -> int | None:
+            revision = original_reader()
+            observed_revisions.append(revision)
+            return revision
+
+        monkeypatch.setattr(
+            repository,
+            "_content_revision_if_available",
+            record_revision,
+        )
+        with repository.transaction() as connection:
+            repository._touch_project(connection)
+
+        assert len(observed_revisions) == 2
+        assert observed_revisions[-1] == observed_revisions[0] + 1
+        assert repository.known_content_revision == observed_revisions[-1]
 
 
 def test_base_exception_rolls_back_outer_transaction_and_connection_recovers(
@@ -711,6 +852,8 @@ def test_version_thirty_three_project_migrates_task_leases_and_request_state(
         connection.row_factory = sqlite3.Row
         connection.execute("DROP TABLE task_consumption")
         connection.execute("ALTER TABLE automation_request DROP COLUMN state")
+        connection.execute("DROP INDEX idx_task_claimable_pending")
+        connection.execute("DROP INDEX idx_task_claimable_running")
         for column in (
             "stop_request",
             "lease_expires_at",

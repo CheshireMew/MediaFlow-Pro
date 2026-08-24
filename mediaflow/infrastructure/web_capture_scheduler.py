@@ -12,7 +12,7 @@ from mediaflow.infrastructure.web_capture_models import (
     WebWorkerSizingBound,
 )
 
-_MIN_FRAMES_PER_WORKER = 60
+_MIN_FRAMES_PER_WORKER = 150
 _MIN_PARALLEL_FRAME_COUNT = 120
 
 

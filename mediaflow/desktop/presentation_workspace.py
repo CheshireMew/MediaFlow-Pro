@@ -50,7 +50,6 @@ WORKSPACE_MODES = (
         str(QT_TRANSLATE_NOOP("WorkspaceNavigation", "导出")),
         "exportPanel",
         "export",
-        False,
     ),
     WorkspaceModeDefinition(
         "tasks",
@@ -74,3 +73,7 @@ def workspace_mode_catalog() -> list[dict[str, object]]:
         }
         for mode in WORKSPACE_MODES
     ]
+
+
+def pending_profile_label() -> str:
+    return QCoreApplication.translate("WorkspaceProfileCatalog", "等待首个视频")

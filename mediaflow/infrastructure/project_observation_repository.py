@@ -5,12 +5,23 @@ from typing import Any
 
 from mediaflow.domain.collaboration import ProjectWritePath
 
+from .project_database_session import ProjectDatabaseSession
 from .project_observation import ObservedProjectValue, ProjectObservation
 from .project_repository_component import ProjectRepositoryComponent
+from .project_repository_relations import ProjectObservationSources
 
 
 class ProjectObservationRepository(ProjectRepositoryComponent):
     """Read the user-observable project document at declared mutation scopes."""
+
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        sources: ProjectObservationSources,
+    ) -> None:
+        super().__init__(database)
+        self._sources = sources
 
     def capture(self, scopes: list[str]) -> ProjectObservation:
         documents: dict[str, Any] = {}
@@ -30,20 +41,48 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
 
     def _targeted_value(self, path: ProjectWritePath) -> ObservedProjectValue | None:
         segments = tuple(self._pointer_value(segment) for segment in path.segments)
+        if (
+            len(segments) >= 5
+            and segments[0] == "subtitles"
+            and segments[1] == "documents"
+            and segments[3] in {"segments", "words"}
+        ):
+            document_id = segments[2]
+            item_id = segments[4]
+            try:
+                if segments[3] == "segments":
+                    document = self._model(
+                        self._sources.subtitles.get_subtitle_segment(
+                            document_id,
+                            item_id,
+                        )
+                    )
+                else:
+                    document = self._model(
+                        self._sources.subtitles.get_subtitle_word(
+                            document_id,
+                            item_id,
+                        )
+                    )
+            except KeyError:
+                return ObservedProjectValue(False)
+            if len(segments) == 5:
+                return ObservedProjectValue(True, document)
+            return self._resolve(document, path.segments[5:])
         if len(segments) == 3 and segments[0] == "sequences" and segments[2] == "tracks":
             return ObservedProjectValue(
                 True,
-                self._entity_map(self._relations.timeline.list_tracks(segments[1])),
+                self._entity_map(self._sources.timeline.list_tracks(segments[1])),
             )
         if len(segments) == 3 and segments[0] == "sequences" and segments[2] == "transitions":
             return ObservedProjectValue(
                 True,
-                self._entity_map(self._relations.timeline.list_transitions(segments[1])),
+                self._entity_map(self._sources.timeline.list_transitions(segments[1])),
             )
         if len(segments) < 4 or segments[0] != "sequences" or segments[2] != "clips":
             return None
         try:
-            clip = self._relations.timeline.get_clip(segments[1], segments[3])
+            clip = self._sources.timeline.get_clip(segments[1], segments[3])
         except KeyError:
             return ObservedProjectValue(False)
         document = self._model(clip)
@@ -127,8 +166,8 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             raise RuntimeError(f"Project mutation scope has no observable state reader: /{root}") from error
 
     def _project_document(self) -> dict[str, Any]:
-        project = self._model(self._relations.projects.get_project())
-        project["versions"] = self._entity_map(self._relations.records.list_project_versions())
+        project = self._model(self._sources.projects.get_project())
+        project["versions"] = self._entity_map(self._sources.records.list_project_versions())
         project["content"] = {
             "assets": self._assets_document(),
             "asset-bins": self._asset_bins_document(),
@@ -144,20 +183,20 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
         return project
 
     def _assets_document(self) -> dict[str, Any]:
-        assets = self._entity_map(self._relations.assets.list_assets())
-        web_specs = {item.asset_id: self._model(item) for item in self._relations.web.list_web_asset_specs()}
+        assets = self._entity_map(self._sources.assets.list_assets())
+        web_specs = {item.asset_id: self._model(item) for item in self._sources.web.list_web_asset_specs()}
         for asset_id, spec in web_specs.items():
             if asset_id in assets:
                 assets[asset_id]["web-package"] = spec
         return assets
 
     def _asset_bins_document(self) -> dict[str, Any]:
-        return self._entity_map(self._relations.assets.list_asset_bins())
+        return self._entity_map(self._sources.assets.list_asset_bins())
 
     def _sequences_document(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        for sequence in self._relations.sequences.list_sequences(include_archived=True):
-            state = self._relations.timeline.load_timeline(sequence.id)
+        for sequence in self._sources.sequences.list_sequences(include_archived=True):
+            state = self._sources.timeline.load_timeline(sequence.id)
             tracks = self._entity_map(state.tracks)
             tracks["order"] = [track.id for track in state.tracks]
             result[sequence.id] = {
@@ -177,9 +216,9 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
         documents: dict[str, Any] = {}
         all_segments: dict[str, Any] = {}
         all_words: dict[str, Any] = {}
-        for document in self._relations.subtitles.list_subtitle_documents():
-            segments = self._relations.subtitles.list_subtitle_segments(document.id)
-            words = self._relations.subtitles.list_subtitle_words(document.id)
+        for document in self._sources.subtitles.list_subtitle_documents():
+            segments = self._sources.subtitles.list_subtitle_segments(document.id)
+            words = self._sources.subtitles.list_subtitle_words(document.id)
             all_segments.update(self._entity_map(segments))
             all_words.update(self._entity_map(words))
             documents[document.id] = {
@@ -198,31 +237,31 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
         }
 
     def _sequence_subtitles(self, sequence_id: str) -> dict[str, Any]:
-        documents = self._relations.subtitles.list_subtitle_documents(sequence_id=sequence_id)
+        documents = self._sources.subtitles.list_subtitle_documents(sequence_id=sequence_id)
         return self._entity_map(documents)
 
     def _audio_document(self) -> dict[str, Any]:
         buses: dict[str, Any] = {}
         effects: dict[str, Any] = {}
-        for sequence in self._relations.sequences.list_sequences(include_archived=True):
-            for bus in self._relations.audio.list_audio_buses(sequence.id):
+        for sequence in self._sources.sequences.list_sequences(include_archived=True):
+            for bus in self._sources.audio.list_audio_buses(sequence.id):
                 buses[bus.id] = self._model(bus)
-                for effect in self._relations.audio.list_audio_effects(bus.id):
+                for effect in self._sources.audio.list_audio_effects(bus.id):
                     effects[effect.id] = self._model(effect)
         return {"buses": buses, "effects": effects}
 
     def _web_document(self) -> dict[str, Any]:
         clips: dict[str, Any] = {}
-        for sequence in self._relations.sequences.list_sequences(include_archived=True):
-            for clip_id, state in self._relations.web.list_web_clip_states(sequence.id).items():
+        for sequence in self._sources.sequences.list_sequences(include_archived=True):
+            for clip_id, state in self._sources.web.list_web_clip_states(sequence.id).items():
                 clips[clip_id] = self._model(state)
         return {"clips": clips}
 
     def _dubbing_document(self) -> dict[str, Any]:
-        return self._entity_map(self._relations.dubbing.list_sessions())
+        return self._entity_map(self._sources.dubbing.list_sessions())
 
     def _highlights_document(self) -> dict[str, Any]:
-        return self._entity_map(self._relations.highlights.list_highlights())
+        return self._entity_map(self._sources.highlights.list_highlights())
 
     def _tasks_document(self) -> dict[str, Any]:
         tasks = {str(row["id"]): row for row in self._rows("SELECT * FROM task ORDER BY id")}
@@ -234,7 +273,7 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             "exports": {
                 str(row["id"]): row for row in self._rows("SELECT * FROM export_history ORDER BY id")
             },
-            "versions": self._entity_map(self._relations.records.list_project_versions()),
+            "versions": self._entity_map(self._sources.records.list_project_versions()),
         }
 
     @staticmethod

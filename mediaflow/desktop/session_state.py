@@ -6,33 +6,40 @@ from dataclasses import dataclass, field
 
 from PySide6.QtCore import QObject
 
-from mediaflow.desktop.models import (
+from mediaflow.desktop.asset_list_models import (
     AssetBinListModel,
     AssetFilterModel,
     AssetListModel,
     AssetMomentFilterModel,
     AssetMomentListModel,
+)
+from mediaflow.desktop.creative_list_models import (
     AudioBusListModel,
     AudioEffectListModel,
     AudioEffectParameterListModel,
-    ClipListModel,
-    CompoundClipListModel,
-    DownloadEntryListModel,
-    GlossaryTermListModel,
     HighlightListModel,
-    LlmProviderListModel,
-    RecentProjectListModel,
-    SequenceListModel,
+)
+from mediaflow.desktop.settings_list_models import GlossaryTermListModel, LlmProviderListModel
+from mediaflow.desktop.subtitle_list_models import (
     SubtitleDocumentListModel,
     SubtitlePlacementListModel,
     SubtitleSegmentListModel,
-    TaskListModel,
+)
+from mediaflow.desktop.task_list_models import TaskListModel
+from mediaflow.desktop.timeline_list_models import (
+    ClipListModel,
+    CompoundClipListModel,
     TimelineClipViewportModel,
     TimelineMarkerListModel,
     TimelineRangeListModel,
     TrackListModel,
     TransitionListModel,
     WebLayerListModel,
+)
+from mediaflow.desktop.workspace_list_models import (
+    DownloadEntryListModel,
+    RecentProjectListModel,
+    SequenceListModel,
 )
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.settings import DesktopSettings, ServiceSettings

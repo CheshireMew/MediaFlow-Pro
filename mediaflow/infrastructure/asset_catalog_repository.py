@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mediaflow.domain.enums import (
     AssetKind,
@@ -20,8 +22,21 @@ from .file_fingerprint import fingerprint_file, fingerprint_matches
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import model_json as _model_json
 
+if TYPE_CHECKING:
+    from .project_database_session import ProjectDatabaseSession
+    from .project_metadata_repository import ProjectMetadataRepository
+
 
 class AssetCatalogRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        projects: Callable[[], ProjectMetadataRepository],
+    ) -> None:
+        super().__init__(database)
+        self._projects = projects
+
     def resolve_existing_file(self, path: str | Path) -> Path:
         source = Path(path).resolve(strict=True)
         if not source.is_file():
@@ -49,7 +64,7 @@ class AssetCatalogRepository(ProjectRepositoryComponent):
         return candidates
 
     def add_asset(self, asset: Asset) -> Asset:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if asset.project_id != project.id:
             raise ValueError("Asset belongs to a different project")
         stored_path = self._store_asset_path(asset.path, managed=asset.managed)
@@ -99,7 +114,7 @@ class AssetCatalogRepository(ProjectRepositoryComponent):
                 and existing.fingerprint == fingerprint
             ):
                 return existing
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         return Asset(
             project_id=project.id,
             name=source.name,
@@ -115,7 +130,7 @@ class AssetCatalogRepository(ProjectRepositoryComponent):
         )
 
     def commit_external_asset(self, asset: Asset) -> Asset:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if (
             asset.project_id != project.id
             or asset.origin != AssetOrigin.EXTERNAL
@@ -185,7 +200,7 @@ class AssetCatalogRepository(ProjectRepositoryComponent):
         return ordered
 
     def create_asset_bin(self, name: str, parent_id: str | None = None) -> AssetBin:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if parent_id is not None and not any(
             item.id == parent_id for item in self.list_asset_bins()
         ):

@@ -38,7 +38,7 @@ ColumnLayout {
             visible: String(root.definition.unit || "").length > 0
             text: String(root.definition.unit || "")
             color: Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: Theme.fontSizeCaption
         }
     }
 

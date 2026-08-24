@@ -77,18 +77,14 @@ class DesktopProjectOperations:
         target: DesktopTarget,
         sequence_id: str,
         command: str,
-        args_value: Any,
-        kwargs_value: Any,
+        arguments_value: Any,
         base_revision: int | None,
         request_id: str,
         actor_value: dict[str, Any],
     ) -> dict[str, Any]:
         definition = desktop_command(target, command)
-        request = definition.validate_request(args_value, kwargs_value)
-        args = decode_transport(request.args)
-        kwargs = decode_transport(request.kwargs)
-        if not isinstance(args, list) or not isinstance(kwargs, dict):
-            raise ValueError("Desktop command args and kwargs must decode to an array and object")
+        request = definition.validate_arguments(decode_transport(arguments_value))
+        arguments = definition.request_arguments(request)
         identity = ActorIdentity.model_validate(actor_value)
         session_scope = (
             self.registry.leased_session if definition.access == "read" else self.registry.locked_session
@@ -101,10 +97,10 @@ class DesktopProjectOperations:
             receiver: Any = session.project if target == "project" else session.project.timeline(sequence_id)
 
             def invoke() -> Any:
-                return definition.invoke(receiver, args, kwargs)
+                return definition.invoke(receiver, request)
 
             if definition.access != "write":
-                encoded = definition.validate_result(encode_transport(invoke()))
+                encoded = encode_transport(definition.validate_result(invoke()))
                 return {
                     "value": encoded,
                     "project_revision": session.project.content_revision(),
@@ -113,15 +109,15 @@ class DesktopProjectOperations:
                 }
             mutation_plan = definition.mutation_plan(
                 sequence_id=sequence_id,
-                args=args,
-                kwargs=kwargs,
+                args=[],
+                kwargs=arguments,
                 project=session.project,
             )
             write_set = mutation_plan.conflict_set
             envelope = AutomationRequest(
                 operation=f"desktop.{target}.{command}",
                 project=str(path),
-                arguments={"args": args_value, "kwargs": kwargs_value},
+                arguments={"arguments": arguments_value},
                 request_id=request_id or uuid.uuid4().hex,
                 base_revision=base_revision,
                 actor=identity,
@@ -155,7 +151,7 @@ class DesktopProjectOperations:
                 effective.operation,
                 effective.arguments,
                 lambda _retrying: {
-                    "value": definition.validate_result(encode_transport(invoke()))
+                    "value": encode_transport(definition.validate_result(invoke()))
                 },
                 atomic=True,
                 base_revision=effective.base_revision,

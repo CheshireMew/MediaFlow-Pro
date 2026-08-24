@@ -17,7 +17,7 @@
     <context>
         <name>AsrLanguageCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_asr.py" line="+94" />
+            <location filename="../../desktop/presentation_asr.py" line="+106" />
             <source>语言：自动识别</source>
             <translation>Language: Auto Detect</translation>
         </message>
@@ -932,17 +932,7 @@
             <translation>Ripple Delete</translation>
         </message>
         <message>
-            <location line="+18" />
-            <source>视觉资源 · 转场</source>
-            <translation>Visual Assets · Transitions</translation>
-        </message>
-        <message>
-            <location line="+7" />
-            <source>选择一个片段，在它与同轨道下一个相邻片段之间创建转场。</source>
-            <translation>Select a clip to create a transition to the next adjacent clip on the same track.</translation>
-        </message>
-        <message>
-            <location line="+125" />
+            <location line="+27" />
             <source>调整所选转场</source>
             <translation>Edit Selected Transition</translation>
         </message>
@@ -1168,17 +1158,22 @@
             <translation>The selected encoder is unavailable. Switch to the software encoder or another available encoder.</translation>
         </message>
         <message>
-            <location line="+17" />
+            <location line="+19" />
             <source>导出 FCPXML（Final Cut Pro / DaVinci Resolve）</source>
             <translation>Export FCPXML (Final Cut Pro / DaVinci Resolve)</translation>
         </message>
         <message>
-            <location line="+7" />
+            <location line="+8" />
+            <source>导出自动化操作</source>
+            <translation>Export automation actions</translation>
+        </message>
+        <message>
+            <location line="+8" />
             <source>复制当前导出为 CLI 请求</source>
             <translation>Copy Current Export as CLI Request</translation>
         </message>
         <message>
-            <location line="+20" />
+            <location line="+23" />
             <source>导出任务</source>
             <translation>Export Task</translation>
         </message>
@@ -1789,13 +1784,13 @@
     <context>
         <name>HomeView</name>
         <message>
-            <location filename="../../desktop/qml/HomeView.qml" line="+48" />
+            <location filename="../../desktop/qml/HomeView.qml" line="+55" />
             <source>选择包含 project.mfp 的项目目录</source>
             <translation>Choose a project folder containing project.mfp</translation>
         </message>
         <message>
-            <location line="+12" />
-            <location line="+113" />
+            <location line="+25" />
+            <location line="+140" />
             <location line="+53" />
             <source>新建项目</source>
             <translation>New Project</translation>
@@ -1811,17 +1806,32 @@
             <translation>Quick Start</translation>
         </message>
         <message>
-            <location line="-208" />
+            <location line="-230" />
             <source>项目名称（选填）</source>
             <translation>Project Name (Optional)</translation>
         </message>
         <message>
-            <location line="+10" />
+            <location line="-28" />
+            <source>选择新项目的保存位置</source>
+            <translation>Choose Where to Save the New Project</translation>
+        </message>
+        <message>
+            <location line="+38" />
             <source>留空将自动使用“未命名项目 1、2…”</source>
             <translation>Leave blank to use “Untitled Project 1, 2…” automatically</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="+4" />
+            <source>保存位置</source>
+            <translation>Save Location</translation>
+        </message>
+        <message>
+            <location line="+17" />
+            <source>选择…</source>
+            <translation>Choose…</translation>
+        </message>
+        <message>
+            <location line="+14" />
             <source>创建项目</source>
             <translation>Create Project</translation>
         </message>
@@ -1862,7 +1872,12 @@
             <translation>Recent Projects</translation>
         </message>
         <message>
-            <location line="+23" />
+            <location line="+25" />
+            <source>设置</source>
+            <translation>Settings</translation>
+        </message>
+        <message>
+            <location line="+5" />
             <source>项目目录可直接复制或移动</source>
             <translation>Project folders can be copied or moved directly</translation>
         </message>
@@ -1916,7 +1931,7 @@
             <translation>Project moved or unavailable</translation>
         </message>
         <message>
-            <location line="-176" />
+            <location line="-183" />
             <source>下载并新建项目</source>
             <translation>Download &amp; Create Project</translation>
         </message>
@@ -1946,7 +1961,7 @@
             <translation>Open Project</translation>
         </message>
         <message>
-            <location line="+340" />
+            <location line="+347" />
             <source>最近产物</source>
             <translation>Recent Output</translation>
         </message>
@@ -1970,7 +1985,7 @@
     <context>
         <name>InspectorPanel</name>
         <message>
-            <location filename="../../desktop/qml/InspectorPanel.qml" line="+28" />
+            <location filename="../../desktop/qml/InspectorPanel.qml" line="+29" />
             <source>批量片段参数</source>
             <translation>Batch Clip Properties</translation>
         </message>
@@ -1985,12 +2000,7 @@
             <translation>Media Settings</translation>
         </message>
         <message>
-            <location line="+0" />
-            <source>草稿参数</source>
-            <translation>Draft Settings</translation>
-        </message>
-        <message>
-            <location line="+17" />
+            <location line="+32" />
             <source>主时间线</source>
             <translation>Main Timeline</translation>
         </message>
@@ -2021,22 +2031,28 @@
         </message>
         <message>
             <location line="+1" />
-            <location line="+174" />
+            <location line="+207" />
             <source>素材</source>
             <translation>Media</translation>
         </message>
         <message>
-            <location line="-101" />
+            <location line="-134" />
             <source>项目</source>
             <translation>Project</translation>
         </message>
         <message>
-            <location line="+8" />
-            <source>草稿名称</source>
-            <translation>Draft Name</translation>
+            <location line="-119" />
+            <source>项目参数</source>
+            <translation>Project details</translation>
         </message>
         <message>
-            <location line="+6" />
+            <location line="+127" />
+            <location line="+218" />
+            <source>项目名称</source>
+            <translation>Project Name</translation>
+        </message>
+        <message>
+            <location line="-212" />
             <source>保存位置</source>
             <translation>Save Location</translation>
         </message>
@@ -2061,7 +2077,37 @@
             <translation>Editable</translation>
         </message>
         <message>
+            <location line="+5" />
+            <source>保存方式</source>
+            <translation>Save method</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>只读项目不会写入更改</source>
+            <translation>Read-only projects do not write changes</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>所有更改自动保存</source>
+            <translation>All changes are saved automatically</translation>
+        </message>
+        <message>
             <location line="+11" />
+            <source>重命名</source>
+            <translation>Rename</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>复制路径</source>
+            <translation>Copy path</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>打开文件夹</source>
+            <translation>Open Folder</translation>
+        </message>
+        <message>
+            <location line="+13" />
             <source>时间线</source>
             <translation>Timeline</translation>
         </message>
@@ -2157,11 +2203,44 @@
             <source>波形</source>
             <translation>Waveform</translation>
         </message>
+        <message>
+            <location line="+26" />
+            <source>重命名项目</source>
+            <translation>Rename project</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>项目目录不会改名，已有素材和外部引用不会受影响。</source>
+            <translation>The project folder will not be renamed, so existing media and external references are unaffected.</translation>
+        </message>
+        <message>
+            <location line="+16" />
+            <source>取消</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>保存名称</source>
+            <translation>Save name</translation>
+        </message>
+    </context>
+    <context>
+        <name>LlmProviderCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_llm.py" line="+7" />
+            <source>自定义 / 本地</source>
+            <translation>Custom / Local</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>推理模式（%1）</source>
+            <translation>Reasoning mode (%1)</translation>
+        </message>
     </context>
     <context>
         <name>Main</name>
         <message>
-            <location filename="../../desktop/qml/Main.qml" line="+265" />
+            <location filename="../../desktop/qml/Main.qml" line="+263" />
             <source>确认下载</source>
             <translation>Confirm Download</translation>
         </message>
@@ -2176,7 +2255,7 @@
             <translation>Link analysis complete</translation>
         </message>
         <message>
-            <location line="-242" />
+            <location line="-240" />
             <source>最佳可用质量</source>
             <translation>Best available quality</translation>
         </message>
@@ -2187,7 +2266,7 @@
             <translation>Download Audio Only</translation>
         </message>
         <message>
-            <location line="+147" />
+            <location line="+145" />
             <source>这项内容刚刚被其他协作者修改</source>
             <translation>This item was just changed by another collaborator</translation>
         </message>
@@ -2612,6 +2691,270 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>MediaResourcePresentation</name>
+        <message>
+            <location filename="../../desktop/presentation_resources.py" line="+9" />
+            <source>全部</source>
+            <translation>All</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>MG 动画</source>
+            <translation>Motion graphics</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>音效素材</source>
+            <translation>Sound effects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>音频效果</source>
+            <translation>Audio effects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>转场</source>
+            <translation>Transitions</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>特效</source>
+            <translation>Visual effects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <location line="+51" />
+            <source>缩放</source>
+            <translation>Zoom</translation>
+        </message>
+        <message>
+            <location line="-50" />
+            <source>LUT</source>
+            <translation>LUT</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>收藏夹</source>
+            <translation>Favorites</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>热门</source>
+            <translation>Popular</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>文字</source>
+            <translation>Text</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>进度</source>
+            <translation>Progress</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>电影感</source>
+            <translation>Cinematic</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>科技</source>
+            <translation>Technology</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>音频</source>
+            <translation>Audio</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>叠加</source>
+            <translation>Overlay</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>动效</source>
+            <translation>Motion</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>内置</source>
+            <translation>Built-in</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>交叉溶解</source>
+            <translation>Cross Dissolve</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>前后画面平滑叠化，适合大多数连续镜头。</source>
+            <translation>Smoothly blends adjacent shots; suitable for most continuous edits.</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>淡化</source>
+            <translation>Fade</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>前一个镜头逐渐让位于后一个镜头。</source>
+            <translation>Gradually transitions from the previous shot to the next.</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>淡黑</source>
+            <translation>Fade to Black</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>经过黑场连接两个镜头，适合段落分隔。</source>
+            <translation>Connects two shots through black; suitable for section breaks.</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>左擦除</source>
+            <translation>Wipe Left</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>新画面从右向左擦入。</source>
+            <translation>The new shot wipes in from right to left.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>右擦除</source>
+            <translation>Wipe Right</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>新画面从左向右擦入。</source>
+            <translation>The new shot wipes in from left to right.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>左滑动</source>
+            <translation>Slide Left</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>两个镜头保持空间关系并一起向左移动。</source>
+            <translation>Both shots keep their spatial relationship and move left together.</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>右滑动</source>
+            <translation>Slide Right</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>两个镜头保持空间关系并一起向右移动。</source>
+            <translation>Both shots keep their spatial relationship and move right together.</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>通过中心缩放连接两个镜头。</source>
+            <translation>Connects two shots with a centered zoom.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>亮度 / 对比度 / 饱和度</source>
+            <translation>Brightness / Contrast / Saturation</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高斯模糊</source>
+            <translation>Gaussian Blur</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>暗角</source>
+            <translation>Vignette</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>可编辑参数并进入片段视觉效果链。</source>
+            <translation>Adds editable parameters to the clip's visual effects chain.</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>参数均衡器</source>
+            <translation>Parametric EQ</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>高通</source>
+            <translation>High-pass</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>低通</source>
+            <translation>Low-pass</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>压缩器</source>
+            <translation>Compressor</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>限制器</source>
+            <translation>Limiter</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>噪声门</source>
+            <translation>Noise Gate</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>RNNoise</source>
+            <translation>RNNoise</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>声道映射</source>
+            <translation>Channel Mapping</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>响度标准化</source>
+            <translation>Loudness Normalization</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>自动闪避</source>
+            <translation>Auto Ducking</translation>
+        </message>
+        <message>
+            <location line="+2" />
+            <source>应用到所选音频总线，并保留完整可编辑参数。</source>
+            <translation>Applies to the selected audio bus while keeping all parameters editable.</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>Blend</source>
+            <translation>Blend</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Motion</source>
+            <translation>Motion</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Audio</source>
+            <translation>Audio</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Built-in</source>
+            <translation>Built-in</translation>
+        </message>
+    </context>
+    <context>
         <name>MultiClipPanel</name>
         <message>
             <location filename="../../desktop/qml/components/MultiClipPanel.qml" line="+26" />
@@ -2665,39 +3008,9 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
-        <name>PreviewViewport</name>
+        <name>PreviewTransportControls</name>
         <message>
-            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+373" />
-            <source>正在准备画面 · 已缓冲 %1 帧</source>
-            <translation>Preparing frames · %1 buffered</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>正在准备画面</source>
-            <translation>Preparing frames</translation>
-        </message>
-        <message>
-            <location line="+51" />
-            <source>预览不可用：</source>
-            <translation>Preview unavailable: </translation>
-        </message>
-        <message>
-            <location line="+0" />
-            <source>把素材添加到时间线开始创作</source>
-            <translation>Add media to the timeline to start creating</translation>
-        </message>
-        <message>
-            <location line="+73" />
-            <source>HDR 预览</source>
-            <translation>HDR Preview</translation>
-        </message>
-        <message>
-            <location line="+0" />
-            <source>HDR 项目 / SDR 预览</source>
-            <translation>HDR Project / SDR Preview</translation>
-        </message>
-        <message>
-            <location line="+58" />
+            <location filename="../../desktop/qml/components/PreviewTransportControls.qml" line="+55" />
             <source>上一帧</source>
             <translation>Previous Frame</translation>
         </message>
@@ -2727,7 +3040,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Playback Position</translation>
         </message>
         <message>
-            <location line="+16" />
+            <location line="+37" />
             <source>播放速度</source>
             <translation>Playback Speed</translation>
         </message>
@@ -2770,6 +3083,39 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+9" />
             <source>切换全屏</source>
             <translation>Toggle Full Screen</translation>
+        </message>
+    </context>
+    <context>
+        <name>PreviewViewport</name>
+        <message>
+            <location filename="../../desktop/qml/components/PreviewViewport.qml" line="+360" />
+            <source>正在准备画面 · 已缓冲 %1 帧</source>
+            <translation>Preparing frames · %1 buffered</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>正在准备画面</source>
+            <translation>Preparing frames</translation>
+        </message>
+        <message>
+            <location line="+26" />
+            <source>预览不可用：</source>
+            <translation>Preview unavailable: </translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>把素材添加到时间线开始创作</source>
+            <translation>Add media to the timeline to start creating</translation>
+        </message>
+        <message>
+            <location line="+20" />
+            <source>HDR 预览</source>
+            <translation>HDR Preview</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>HDR 项目 / SDR 预览</source>
+            <translation>HDR Project / SDR Preview</translation>
         </message>
     </context>
     <context>
@@ -2838,6 +3184,152 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+10" />
             <source>当前未命名的编辑会被该版本替换。已有命名版本和快照文件会保留。</source>
             <translation>Current unnamed edits will be replaced by this version. Existing named versions and snapshot files will be kept.</translation>
+        </message>
+    </context>
+    <context>
+        <name>ResourceLibraryPanel</name>
+        <message>
+            <location filename="../../desktop/qml/ResourceLibraryPanel.qml" line="+77" />
+            <source>资源库</source>
+            <translation>Resource library</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>%1 项</source>
+            <translation>%1 items</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>搜索名称、标签、用途或提供方</source>
+            <translation>Search names, tags, uses, or providers</translation>
+        </message>
+        <message>
+            <location line="+27" />
+            <source>发现</source>
+            <translation>Discover</translation>
+        </message>
+        <message>
+            <location line="+98" />
+            <source>音效</source>
+            <translation>Sound effects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>音频效果</source>
+            <translation>Audio effects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>特效</source>
+            <translation>Visual effects</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>转场</source>
+            <translation>Transitions</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>缩放</source>
+            <translation>Zoom</translation>
+        </message>
+        <message>
+            <location line="+17" />
+            <source> · 热门</source>
+            <translation>· Popular</translation>
+        </message>
+        <message>
+            <location line="+11" />
+            <source>取消收藏</source>
+            <translation>Remove from favorites</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>收藏</source>
+            <translation>Add to favorites</translation>
+        </message>
+        <message>
+            <location line="+38" />
+            <source>停止</source>
+            <translation>Stop</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>试听</source>
+            <translation>Preview Audio</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>应用</source>
+            <translation>Apply</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>导入并添加</source>
+            <translation>Import and add</translation>
+        </message>
+        <message>
+            <location line="+32" />
+            <source>没有匹配的资源</source>
+            <translation>No matching resources</translation>
+        </message>
+    </context>
+    <context>
+        <name>RuntimeStatusCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_runtime.py" line="+8" />
+            <source>尚未检测 CUDA</source>
+            <translation>CUDA has not been checked</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>内置 faster-whisper 当前不能使用 CUDA，可继续使用 CPU</source>
+            <translation>The built-in faster-whisper cannot use CUDA; CPU remains available</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>该可选组件没有当前平台的受支持构建</source>
+            <translation>This optional component has no supported build for the current platform</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>尚未安装或选择本地目录</source>
+            <translation>Not installed and no local directory selected</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>尚未安装本地 3D-Speaker 音色模型</source>
+            <translation>The local 3D-Speaker voice model is not installed</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>3D-Speaker 模型大小不正确，请重新安装</source>
+            <translation>The 3D-Speaker model has the wrong size; reinstall it</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>运行环境不可用</source>
+            <translation>The runtime environment is unavailable</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>CUDA 可用，检测到 %1 个设备</source>
+            <translation>CUDA is available; %1 device(s) detected</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>本地说话人识别探测失败：%1</source>
+            <translation>Local speaker-identification probe failed: %1</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>探测失败：%1</source>
+            <translation>Probe failed: %1</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>探测退出码 %1</source>
+            <translation>Probe exit code %1</translation>
         </message>
     </context>
     <context>
@@ -3087,7 +3579,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Discard and close</translation>
         </message>
         <message>
-            <location line="+93" />
+            <location line="+95" />
             <source>常规</source>
             <translation>General</translation>
         </message>
@@ -3098,11 +3590,16 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+1" />
+            <source>编辑器</source>
+            <translation>Editor</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>AI</source>
             <translation>AI</translation>
         </message>
         <message>
-            <location line="+28" />
+            <location line="+32" />
             <source>常规设置已保存；界面语言将在重启后生效</source>
             <translation>General settings saved; the interface language changes after restart</translation>
         </message>
@@ -3128,9 +3625,167 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
     </context>
     <context>
+        <name>SettingsEditorPage</name>
+        <message>
+            <location filename="../../desktop/qml/SettingsEditorPage.qml" line="+34" />
+            <source>资源库目录</source>
+            <translation>Resource library catalogs</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>每行填写一个 media-resource-catalog.json 的绝对路径。目录会校验素材哈希、许可声明与采用方式后出现在资源库。</source>
+            <translation>Enter one absolute media-resource-catalog.json path per line. Catalogs appear in the resource library after media hashes, license declarations, and adoption methods are validated.</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>例如 &lt;资源目录&gt;/catalog.json</source>
+            <translation>For example &lt;resource directory&gt;/catalog.json</translation>
+        </message>
+        <message>
+            <location line="+7" />
+            <source>音频默认值</source>
+            <translation>Audio Defaults</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>响度目标（LUFS）</source>
+            <translation>Loudness Target (LUFS)</translation>
+        </message>
+        <message>
+            <location line="+21" />
+            <source>True Peak（dBTP）</source>
+            <translation>True Peak (dBTP)</translation>
+        </message>
+        <message>
+            <location line="+23" />
+            <source>声道布局</source>
+            <translation>Channel Layout</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>单声道</source>
+            <translation>Mono</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>立体声</source>
+            <translation>Stereo</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>多人音色识别</source>
+            <translation>Multi-speaker Voice Identification</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>普通模式直接按英文转写片段提取 3D-Speaker 音色并聚类，适合轮流说话的音频，不需要 Hugging Face 账号或令牌。</source>
+            <translation>Standard mode extracts and clusters 3D-Speaker voice embeddings from English transcript segments. It is designed for turn-taking audio and needs no Hugging Face account or token.</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>Community-1 用于多人同时说话等复杂录音，需要先在 Hugging Face 接受模型条款并配置令牌。</source>
+            <translation>Community-1 is for complex recordings with overlapping speakers and requires accepting the Hugging Face model terms and configuring a token.</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>识别方式</source>
+            <translation>Identification method</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>转写片段音色聚类（推荐）</source>
+            <translation>Transcript Voice Clustering (Recommended)</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>重叠语音 Community-1</source>
+            <translation>Overlapping Speech: Community-1</translation>
+        </message>
+        <message>
+            <location line="+15" />
+            <source>本地音色模型已就绪：%1</source>
+            <translation>Local voice model ready: %1</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>尚未安装本地音色模型</source>
+            <translation>Local voice model is not installed</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>重新安装</source>
+            <translation>Reinstall</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>安装本地模型</source>
+            <translation>Install Local Model</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>pyannote Python</source>
+            <translation>pyannote Python</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>选择独立 pyannote 环境中的 python.exe</source>
+            <translation>Select python.exe from the isolated pyannote environment</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>选择</source>
+            <translation>Choose</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>Community-1 模型</source>
+            <translation>Community-1 model</translation>
+        </message>
+        <message>
+            <location line="+17" />
+            <source>Hugging Face 令牌</source>
+            <translation>Hugging Face token</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>本地模型已缓存时可以留空</source>
+            <translation>May be left blank when the model is cached locally</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>说话人识别设备</source>
+            <translation>Diarization Device</translation>
+        </message>
+        <message>
+            <location line="+10" />
+            <source>自动</source>
+            <translation>Auto</translation>
+        </message>
+        <message>
+            <location line="+12" />
+            <source>选择 pyannote.audio Python</source>
+            <translation>Select pyannote.audio Python</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>Python (python.exe)</source>
+            <translation>Python (python.exe)</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>可执行文件 (*.exe)</source>
+            <translation>Executable Files (*.exe)</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>可执行文件 (*)</source>
+            <translation>Executable Files (*)</translation>
+        </message>
+    </context>
+    <context>
         <name>SettingsGeneralPage</name>
         <message>
-            <location filename="../../desktop/qml/SettingsGeneralPage.qml" line="+35" />
+            <location filename="../../desktop/qml/SettingsGeneralPage.qml" line="+27" />
             <source>界面</source>
             <translation>Interface</translation>
         </message>
@@ -3176,12 +3831,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+3" />
-            <location line="+234" />
             <source>选择</source>
             <translation>Choose</translation>
         </message>
         <message>
-            <location line="-231" />
+            <location line="+3" />
             <source>运行环境</source>
             <translation>Runtime storage</translation>
         </message>
@@ -3262,12 +3916,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+5" />
-            <location line="+160" />
             <source>自动</source>
             <translation>Auto</translation>
         </message>
         <message>
-            <location line="-160" />
+            <location line="+0" />
             <source>原始素材</source>
             <translation>Original Media</translation>
         </message>
@@ -3282,117 +3935,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Enable HDR preview when supported</translation>
         </message>
         <message>
-            <location line="+3" />
-            <source>音频默认值</source>
-            <translation>Audio Defaults</translation>
-        </message>
-        <message>
-            <location line="+4" />
-            <source>响度目标（LUFS）</source>
-            <translation>Loudness Target (LUFS)</translation>
-        </message>
-        <message>
-            <location line="+20" />
-            <source>True Peak（dBTP）</source>
-            <translation>True Peak (dBTP)</translation>
-        </message>
-        <message>
-            <location line="+21" />
-            <source>声道布局</source>
-            <translation>Channel Layout</translation>
-        </message>
-        <message>
-            <location line="+6" />
-            <source>单声道</source>
-            <translation>Mono</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>立体声</source>
-            <translation>Stereo</translation>
-        </message>
-        <message>
-            <location line="+6" />
-            <source>多人音色识别</source>
-            <translation>Multi-speaker Voice Identification</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>普通模式直接按英文转写片段提取 3D-Speaker 音色并聚类，适合轮流说话的音频，不需要 Hugging Face 账号或令牌。</source>
-            <translation>Standard mode extracts and clusters 3D-Speaker voice embeddings from English transcript segments. It is designed for turn-taking audio and needs no Hugging Face account or token.</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>Community-1 用于多人同时说话等复杂录音，需要先在 Hugging Face 接受模型条款并配置令牌。</source>
-            <translation>Community-1 is for complex recordings with overlapping speakers and requires accepting the Hugging Face model terms and configuring a token.</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>识别方式</source>
-            <translation>Identification method</translation>
-        </message>
-        <message>
-            <location line="+6" />
-            <source>转写片段音色聚类（推荐）</source>
-            <translation>Transcript Voice Clustering (Recommended)</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>重叠语音 Community-1</source>
-            <translation>Overlapping Speech: Community-1</translation>
-        </message>
-        <message>
-            <location line="+14" />
-            <source>本地音色模型已就绪：%1</source>
-            <translation>Local voice model ready: %1</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>尚未安装本地音色模型</source>
-            <translation>Local voice model is not installed</translation>
-        </message>
-        <message>
-            <location line="+9" />
-            <source>重新安装</source>
-            <translation>Reinstall</translation>
-        </message>
-        <message>
-            <location line="+0" />
-            <source>安装本地模型</source>
-            <translation>Install Local Model</translation>
-        </message>
-        <message>
             <location line="+7" />
-            <source>pyannote Python</source>
-            <translation>pyannote Python</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>选择独立 pyannote 环境中的 python.exe</source>
-            <translation>Select python.exe from the isolated pyannote environment</translation>
-        </message>
-        <message>
-            <location line="+9" />
-            <source>Community-1 模型</source>
-            <translation>Community-1 model</translation>
-        </message>
-        <message>
-            <location line="+12" />
-            <source>Hugging Face 令牌</source>
-            <translation>Hugging Face token</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>本地模型已缓存时可以留空</source>
-            <translation>May be left blank when the model is cached locally</translation>
-        </message>
-        <message>
-            <location line="+8" />
-            <source>说话人识别设备</source>
-            <translation>Diarization Device</translation>
-        </message>
-        <message>
-            <location line="+13" />
             <source>选择默认项目保存目录</source>
             <translation>Choose Default Project Folder</translation>
         </message>
@@ -3425,26 +3968,6 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+9" />
             <source>迁移现有数据</source>
             <translation>Migrate existing data</translation>
-        </message>
-        <message>
-            <location line="+12" />
-            <source>选择 pyannote.audio Python</source>
-            <translation>Select pyannote.audio Python</translation>
-        </message>
-        <message>
-            <location line="+3" />
-            <source>Python (python.exe)</source>
-            <translation>Python (python.exe)</translation>
-        </message>
-        <message>
-            <location line="+0" />
-            <source>可执行文件 (*.exe)</source>
-            <translation>Executable Files (*.exe)</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>可执行文件 (*)</source>
-            <translation>Executable Files (*)</translation>
         </message>
     </context>
     <context>
@@ -3974,12 +4497,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+1" />
             <location line="+1" />
             <location line="+1" />
-            <location line="+1" />
             <source>项目与面板</source>
             <translation>Project and panels</translation>
         </message>
         <message>
-            <location line="-6" />
+            <location line="-5" />
             <source>导入素材</source>
             <translation>Import Media</translation>
         </message>
@@ -3987,11 +4509,6 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+1" />
             <source>打开导出页</source>
             <translation>Open Export</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>保存项目状态</source>
-            <translation>Save project state</translation>
         </message>
         <message>
             <location line="+1" />
@@ -4558,6 +5075,31 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+1" />
+            <source>视觉效果已从资源库添加</source>
+            <translation>Visual effect added from the resource library</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>LUT 已从资源库添加</source>
+            <translation>LUT added from the resource library</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>音频效果已从资源库添加</source>
+            <translation>Audio effect added from the resource library</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>已收藏资源</source>
+            <translation>Added to favorites</translation>
+        </message>
+        <message>
+            <location line="+1" />
+            <source>已取消收藏资源</source>
+            <translation>Removed from favorites</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>视觉效果已移除</source>
             <translation>Visual effect removed</translation>
         </message>
@@ -4598,6 +5140,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+1" />
+            <source>转场已从资源库添加</source>
+            <translation>Transition added from the resource library</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>转录设置已更新</source>
             <translation>Transcription settings updated</translation>
         </message>
@@ -4615,11 +5162,6 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+1" />
             <source>错误详情已复制</source>
             <translation>Error details copied</translation>
-        </message>
-        <message>
-            <location line="+1" />
-            <source>项目已保存</source>
-            <translation>Project saved</translation>
         </message>
         <message>
             <location line="+1" />
@@ -4648,14 +5190,24 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+1" />
+            <source>项目已重命名为“%1”</source>
+            <translation>Project renamed to “%1”</translation>
+        </message>
+        <message>
+            <location line="+3" />
+            <source>项目路径已复制</source>
+            <translation>Project path copied</translation>
+        </message>
+        <message>
+            <location line="+1" />
             <source>项目正被其他窗口使用，已只读打开</source>
             <translation>The project is in use by another window and was opened read-only</translation>
         </message>
     </context>
     <context>
-        <name>SubtitlePanel</name>
+        <name>SubtitleDocumentEditor</name>
         <message>
-            <location filename="../../desktop/qml/SubtitlePanel.qml" line="+125" />
+            <location filename="../../desktop/qml/components/SubtitleDocumentEditor.qml" line="+18" />
             <source>导出字幕文档</source>
             <translation>Export Subtitle Document</translation>
         </message>
@@ -4665,7 +5217,90 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>SRT Subtitles (*.srt)</translation>
         </message>
         <message>
+            <location line="+7" />
+            <source>添加</source>
+            <translation>Add</translation>
+        </message>
+        <message>
             <location line="+5" />
+            <source>合并</source>
+            <translation>Merge</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>删除</source>
+            <translation>Delete</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>更多</source>
+            <translation>More</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>关闭查找替换</source>
+            <translation>Close Find and Replace</translation>
+        </message>
+        <message>
+            <location line="+0" />
+            <source>查找替换</source>
+            <translation>Find and Replace</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>导出 SRT</source>
+            <translation>Export SRT</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>翻译所选</source>
+            <translation>Translate Selected</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>复制 SRT</source>
+            <translation>Copy SRT</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>粘贴替换</source>
+            <translation>Paste and Replace</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>打开文件夹</source>
+            <translation>Open Folder</translation>
+        </message>
+        <message>
+            <location line="+16" />
+            <source>字幕段</source>
+            <translation>Subtitle Segment</translation>
+        </message>
+        <message>
+            <location line="+6" />
+            <source>已选 %1 条</source>
+            <translation>%1 selected</translation>
+        </message>
+        <message>
+            <location line="+8" />
+            <source>长度阈值</source>
+            <translation>Length Threshold</translation>
+        </message>
+        <message>
+            <location line="+13" />
+            <source>智能拆分</source>
+            <translation>Smart Split</translation>
+        </message>
+        <message>
+            <location line="+5" />
+            <source>修复重叠</source>
+            <translation>Fix Overlaps</translation>
+        </message>
+    </context>
+    <context>
+        <name>SubtitlePanel</name>
+        <message>
+            <location filename="../../desktop/qml/SubtitlePanel.qml" line="+30" />
             <source>字幕文档</source>
             <translation>Subtitle Documents</translation>
         </message>
@@ -4711,67 +5346,14 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+3" />
-            <location line="+417" />
             <source>序列字幕</source>
             <translation>Sequence Subtitles</translation>
         </message>
+    </context>
+    <context>
+        <name>SubtitleSearchPanel</name>
         <message>
-            <location line="-400" />
-            <source>添加</source>
-            <translation>Add</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>合并</source>
-            <translation>Merge</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>删除</source>
-            <translation>Delete</translation>
-        </message>
-        <message>
-            <location line="+9" />
-            <source>更多</source>
-            <translation>More</translation>
-        </message>
-        <message>
-            <location line="+6" />
-            <source>查找替换</source>
-            <translation>Find and Replace</translation>
-        </message>
-        <message>
-            <location line="+0" />
-            <source>关闭查找替换</source>
-            <translation>Close Find and Replace</translation>
-        </message>
-        <message>
-            <location line="+4" />
-            <source>导出 SRT</source>
-            <translation>Export SRT</translation>
-        </message>
-        <message>
-            <location line="+6" />
-            <source>翻译所选</source>
-            <translation>Translate Selected</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>复制 SRT</source>
-            <translation>Copy SRT</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>粘贴替换</source>
-            <translation>Paste and Replace</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>打开文件夹</source>
-            <translation>Open Folder</translation>
-        </message>
-        <message>
-            <location line="+21" />
+            <location filename="../../desktop/qml/components/SubtitleSearchPanel.qml" line="+40" />
             <source>查找</source>
             <translation>Find</translation>
         </message>
@@ -4820,33 +5402,44 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <source>替换当前</source>
             <translation>Replace Current</translation>
         </message>
+    </context>
+    <context>
+        <name>SubtitleSegmentEditor</name>
         <message>
-            <location line="+19" />
-            <source>字幕段</source>
-            <translation>Subtitle Segment</translation>
+            <location filename="../../desktop/qml/components/SubtitleSegmentEditor.qml" line="+70" />
+            <source>开始帧</source>
+            <translation>Start Frame</translation>
         </message>
         <message>
-            <location line="+6" />
-            <source>已选 %1 条</source>
-            <translation>%1 selected</translation>
+            <location line="+15" />
+            <source>结束帧</source>
+            <translation>End Frame</translation>
+        </message>
+        <message>
+            <location line="+19" />
+            <source>播放头设为开始</source>
+            <translation>Set Start to Playhead</translation>
+        </message>
+        <message>
+            <location line="+9" />
+            <source>播放头设为结束</source>
+            <translation>Set End to Playhead</translation>
+        </message>
+        <message>
+            <location line="+22" />
+            <source>按中点拆分</source>
+            <translation>Split at Midpoint</translation>
         </message>
         <message>
             <location line="+8" />
-            <source>长度阈值</source>
-            <translation>Length Threshold</translation>
+            <source>保存修改</source>
+            <translation>Save Changes</translation>
         </message>
+    </context>
+    <context>
+        <name>SubtitleSegmentList</name>
         <message>
-            <location line="+13" />
-            <source>智能拆分</source>
-            <translation>Smart Split</translation>
-        </message>
-        <message>
-            <location line="+5" />
-            <source>修复重叠</source>
-            <translation>Fix Overlaps</translation>
-        </message>
-        <message>
-            <location line="+70" />
+            <location filename="../../desktop/qml/components/SubtitleSegmentList.qml" line="+91" />
             <source>播放这一条</source>
             <translation>Play This Subtitle</translation>
         </message>
@@ -4866,7 +5459,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Merge Selected Subtitles</translation>
         </message>
         <message>
-            <location line="+11" />
+            <location line="+5" />
+            <source>按中点拆分</source>
+            <translation>Split at Midpoint</translation>
+        </message>
+        <message>
+            <location line="+6" />
             <source>删除所选字幕</source>
             <translation>Delete Selected Subtitles</translation>
         </message>
@@ -4880,39 +5478,16 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <source>转录媒体或导入 SRT 后，可以在这里逐条编辑。</source>
             <translation>After transcribing media or importing an SRT, edit each segment here.</translation>
         </message>
+    </context>
+    <context>
+        <name>SubtitleSequenceEditor</name>
         <message>
-            <location line="+15" />
-            <source>开始帧</source>
-            <translation>Start Frame</translation>
+            <location filename="../../desktop/qml/components/SubtitleSequenceEditor.qml" line="+14" />
+            <source>序列字幕</source>
+            <translation>Sequence Subtitles</translation>
         </message>
         <message>
-            <location line="+15" />
-            <source>结束帧</source>
-            <translation>End Frame</translation>
-        </message>
-        <message>
-            <location line="-47" />
-            <location line="+105" />
-            <source>按中点拆分</source>
-            <translation>Split at Midpoint</translation>
-        </message>
-        <message>
-            <location line="-39" />
-            <source>播放头设为开始</source>
-            <translation>Set Start to Playhead</translation>
-        </message>
-        <message>
-            <location line="+11" />
-            <source>播放头设为结束</source>
-            <translation>Set End to Playhead</translation>
-        </message>
-        <message>
-            <location line="+36" />
-            <source>保存修改</source>
-            <translation>Save Changes</translation>
-        </message>
-        <message>
-            <location line="+32" />
+            <location line="+9" />
             <source>放入当前序列</source>
             <translation>Place in Current Sequence</translation>
         </message>
@@ -4932,7 +5507,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Select a subtitle document and place it in the current sequence.</translation>
         </message>
         <message>
-            <location line="+27" />
+            <location line="+25" />
             <source>保存为序列覆盖</source>
             <translation>Save as Sequence Override</translation>
         </message>
@@ -4973,7 +5548,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_messages.py" line="-221" />
+            <location filename="../../desktop/presentation_messages.py" line="-234" />
             <source>主序列</source>
             <translation>Main Sequence</translation>
         </message>
@@ -5733,7 +6308,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TimelineAudioClipLayer</name>
         <message>
-            <location filename="../../desktop/qml/TimelineAudioClipLayer.qml" line="+58" />
+            <location filename="../../desktop/qml/TimelineAudioClipLayer.qml" line="+150" />
             <source>%1 的音频，起始帧 %2，持续 %3 帧</source>
             <translation>%1 audio, starting at frame %2 for %3 frames</translation>
         </message>
@@ -5746,7 +6321,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TimelineCanvas</name>
         <message>
-            <location filename="../../desktop/qml/TimelineCanvas.qml" line="+241" />
+            <location filename="../../desktop/qml/TimelineCanvas.qml" line="+258" />
             <source>序列入点 %1</source>
             <translation>Sequence In %1</translation>
         </message>
@@ -5774,7 +6349,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TimelineClipLayer</name>
         <message>
-            <location filename="../../desktop/qml/TimelineClipLayer.qml" line="+81" />
+            <location filename="../../desktop/qml/TimelineClipLayer.qml" line="+199" />
             <source>片段 %1，起始帧 %2，持续 %3 帧</source>
             <translation>Clip %1, starts at frame %2, duration %3 frames</translation>
         </message>
@@ -6237,17 +6812,17 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TranscriptPanel</name>
         <message>
-            <location filename="../../desktop/qml/TranscriptPanel.qml" line="+265" />
+            <location filename="../../desktop/qml/TranscriptPanel.qml" line="+277" />
             <source>转录任务</source>
             <translation>Transcription Task</translation>
         </message>
         <message>
-            <location line="-151" />
+            <location line="-165" />
             <source>当前时间轴</source>
             <translation>Current Timeline</translation>
         </message>
         <message>
-            <location line="-53" />
+            <location line="-51" />
             <source>%1 小时 %2 分钟</source>
             <translation>%1 hr %2 min</translation>
         </message>
@@ -6262,7 +6837,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>%1 sec</translation>
         </message>
         <message>
-            <location line="+57" />
+            <location line="+55" />
             <source>只读取标记为“对白”的音轨，并合并实际使用到的源音频区间；不会再转录未使用的完整素材。</source>
             <translation>Only audio tracks marked as Dialogue are read. Source-audio ranges actually used on the timeline are merged; unused portions of source media are not transcribed.</translation>
         </message>
@@ -6317,7 +6892,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Engine: Built-in faster-whisper</translation>
         </message>
         <message>
-            <location line="+9" />
+            <location line="+11" />
             <source>正在转录…</source>
             <translation>Transcribing…</translation>
         </message>
@@ -6327,12 +6902,17 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Transcribe Current Timeline</translation>
         </message>
         <message>
-            <location line="+13" />
+            <location line="+14" />
+            <source>转录自动化操作</source>
+            <translation>Transcription automation actions</translation>
+        </message>
+        <message>
+            <location line="+9" />
             <source>复制当前转录为 CLI 请求</source>
             <translation>Copy Current Transcription as CLI Request</translation>
         </message>
         <message>
-            <location line="+42" />
+            <location line="+44" />
             <source>时间轴字幕已生成</source>
             <translation>Timeline Subtitles Created</translation>
         </message>
@@ -6388,6 +6968,19 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+1" />
             <source>多人配音</source>
             <translation>Multi-speaker Dubbing</translation>
+        </message>
+    </context>
+    <context>
+        <name>TranscriptionPlanCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_asr.py" line="-175" />
+            <source>当前没有可转录的时间轴</source>
+            <translation>No timeline is available for transcription</translation>
+        </message>
+        <message>
+            <location line="+4" />
+            <source>当前时间轴还没有可转录的素材</source>
+            <translation>The current timeline has no media available for transcription</translation>
         </message>
     </context>
     <context>
@@ -6456,7 +7049,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TranslationPanel</name>
         <message>
-            <location filename="../../desktop/qml/TranslationPanel.qml" line="+195" />
+            <location filename="../../desktop/qml/TranslationPanel.qml" line="+113" />
             <source>翻译</source>
             <translation>Translation</translation>
         </message>
@@ -6466,12 +7059,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Glossary</translation>
         </message>
         <message>
-            <location line="+267" />
+            <location line="+256" />
             <source>还没有字幕文档</source>
             <translation>No subtitle documents yet</translation>
         </message>
         <message>
-            <location line="-183" />
+            <location line="-172" />
             <source>校对整篇</source>
             <translation>Proofread Entire Document</translation>
         </message>
@@ -6506,7 +7099,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Retranslate Selected (%1)</translation>
         </message>
         <message>
-            <location line="+17" />
+            <location line="+14" />
             <source>翻译任务</source>
             <translation>Translation Task</translation>
         </message>
@@ -6531,7 +7124,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Place in Sequence</translation>
         </message>
         <message>
-            <location line="+45" />
+            <location line="+48" />
             <source>%1–%2 帧</source>
             <translation>Frames %1–%2</translation>
         </message>
@@ -6556,12 +7149,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>No translation generated</translation>
         </message>
         <message>
-            <location line="+17" />
+            <location line="+16" />
             <source>保存译文</source>
             <translation>Save Translation</translation>
         </message>
         <message>
-            <location line="+25" />
+            <location line="+15" />
             <source>没有可对照的字幕段</source>
             <translation>No Subtitle Segments to Compare</translation>
         </message>
@@ -6770,22 +7363,27 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Animation and effect parameters</translation>
         </message>
         <message>
-            <location line="+85" />
+            <location line="+88" />
+            <source>换版检查自动化操作</source>
+            <translation>Rebind review automation actions</translation>
+        </message>
+        <message>
+            <location line="+6" />
             <source>复制换版检查为 CLI 请求</source>
             <translation>Copy Revision Check as CLI Request</translation>
         </message>
         <message>
-            <location line="+39" />
+            <location line="+43" />
             <source>请选择此项如何处理</source>
             <translation>Choose how to handle this item</translation>
         </message>
         <message>
-            <location line="+11" />
+            <location line="+16" />
             <source>按已审阅计划重新绑定</source>
             <translation>Rebind using reviewed plan</translation>
         </message>
         <message>
-            <location line="-117" />
+            <location line="-135" />
             <source>品牌主题</source>
             <translation>Brand Theme</translation>
         </message>
@@ -6830,22 +7428,27 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Update Web Media</translation>
         </message>
         <message>
-            <location line="+7" />
+            <location line="+9" />
             <source>检查新版网页包</source>
             <translation>Check Updated Web Package</translation>
         </message>
         <message>
-            <location line="+12" />
+            <location line="+23" />
             <source>新增 %1 · 保留 %2 · 移除 %3 · 冲突 %4</source>
             <translation>Added %1 · Kept %2 · Removed %3 · Conflicts %4</translation>
         </message>
         <message>
-            <location line="+53" />
+            <location line="+56" />
+            <source>换版提交自动化操作</source>
+            <translation>Rebind commit automation actions</translation>
+        </message>
+        <message>
+            <location line="+7" />
             <source>复制换版提交为 CLI 请求</source>
             <translation>Copy Revision Commit as CLI Request</translation>
         </message>
         <message>
-            <location line="+9" />
+            <location line="+10" />
             <source>同源多格式导出</source>
             <translation>Multi-format Export</translation>
         </message>
@@ -7042,7 +7645,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>The workflow is paused. Resolve the current stage.</translation>
         </message>
         <message>
-            <location line="+62" />
+            <location line="+73" />
             <source>选择目标语言</source>
             <translation>Choose Target Language</translation>
         </message>
@@ -7105,7 +7708,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>Workspace</name>
         <message>
-            <location filename="../../desktop/qml/Workspace.qml" line="+196" />
+            <location filename="../../desktop/qml/Workspace.qml" line="+208" />
             <source>时间线</source>
             <translation>Timeline</translation>
         </message>
@@ -7279,6 +7882,11 @@ After confirmation, the link will be updated and preview caches and audio wavefo
         </message>
         <message>
             <location line="+6" />
+            <source>资源</source>
+            <translation>Resources</translation>
+        </message>
+        <message>
+            <location line="+6" />
             <source>字幕</source>
             <translation>Subtitles</translation>
         </message>
@@ -7298,7 +7906,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Export</translation>
         </message>
         <message>
-            <location line="+7" />
+            <location line="+6" />
             <source>任务</source>
             <translation>Tasks</translation>
         </message>
@@ -7361,6 +7969,14 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <location line="+5" />
             <source>截取当前帧</source>
             <translation>Capture current frame</translation>
+        </message>
+    </context>
+    <context>
+        <name>WorkspaceProfileCatalog</name>
+        <message>
+            <location filename="../../desktop/presentation_workspace.py" line="+23" />
+            <source>等待首个视频</source>
+            <translation>Waiting for the first video</translation>
         </message>
     </context>
     <context>

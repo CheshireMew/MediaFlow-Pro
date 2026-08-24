@@ -25,14 +25,39 @@ Item {
         embeddedAudioOverview.requestPaint();
     }
 
+    function patchOverview(changedRows, removedIds) {
+        const removed = {};
+        const changed = {};
+        for (let index = 0; index < removedIds.length; ++index)
+            removed[String(removedIds[index])] = true;
+        for (let index = 0; index < changedRows.length; ++index)
+            changed[String(changedRows[index].clipId)] = changedRows[index];
+        const nextRows = [];
+        for (let index = 0; index < clipRows.length; ++index) {
+            const clipId = String(clipRows[index].clipId);
+            if (removed[clipId] === true)
+                continue;
+            if (changed[clipId] !== undefined) {
+                nextRows.push(changed[clipId]);
+                delete changed[clipId];
+            } else {
+                nextRows.push(clipRows[index]);
+            }
+        }
+        for (const clipId in changed)
+            nextRows.push(changed[clipId]);
+        clipRows = nextRows;
+        embeddedAudioOverview.requestPaint();
+    }
+
     Component.onCompleted: refreshOverview()
 
     Connections {
-        target: mediaflow.timelineViewController.clipsModel
-        function onModelReset() { embeddedAudioLayer.refreshOverview(); }
-        function onRowsInserted() { embeddedAudioLayer.refreshOverview(); }
-        function onRowsRemoved() { embeddedAudioLayer.refreshOverview(); }
-        function onDataChanged() { embeddedAudioLayer.refreshOverview(); }
+        target: mediaflow.timelineViewportController.visibleClipsModel
+        function onSourceItemsReset() { embeddedAudioLayer.refreshOverview(); }
+        function onSourceItemsPatched(changedRows, removedIds) {
+            embeddedAudioLayer.patchOverview(changedRows, removedIds);
+        }
     }
 
     Connections {

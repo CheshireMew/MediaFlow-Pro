@@ -9,9 +9,11 @@ from pathlib import Path
 
 import psutil
 
+from mediaflow.environment import SERVICE_STATE_DIRECTORY_VARIABLE
+
 
 def _service_state_root() -> Path:
-    configured = os.environ.get("MEDIAFLOW_SERVICE_STATE_DIR", "").strip()
+    configured = os.environ.get(SERVICE_STATE_DIRECTORY_VARIABLE, "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
     local = os.environ.get("LOCALAPPDATA", "").strip()

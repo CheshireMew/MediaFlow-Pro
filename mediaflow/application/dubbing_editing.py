@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mediaflow.application.ports import DubbingDocuments
+from mediaflow.domain.dubbing import DubbingSession, DubbingUtterance
 
 
 class DubbingEditingService:
@@ -17,10 +18,10 @@ class DubbingEditingService:
         self.documents = documents
         self.require_writable = require_writable
 
-    def get_session(self, session_id: str):
+    def get_session(self, session_id: str) -> DubbingSession:
         return self.documents.get_session(session_id)
 
-    def list_sessions(self, *, sequence_id: str | None = None):
+    def list_sessions(self, *, sequence_id: str | None = None) -> list[DubbingSession]:
         return self.documents.list_sessions(sequence_id=sequence_id)
 
     def update_speaker(
@@ -32,7 +33,7 @@ class DubbingEditingService:
         display_name: str,
         review_status: str,
         primary_reference_id: str,
-    ):
+    ) -> DubbingSession:
         self.require_writable()
         session = self.documents.get_session(session_id)
         speaker = next(item for item in session.speakers if item.id == speaker_id)
@@ -93,7 +94,7 @@ class DubbingEditingService:
         expected_revision: int,
         text: str,
         language: str,
-    ):
+    ) -> DubbingSession:
         self.require_writable()
         session = self.documents.get_session(session_id)
         normalized_text = text.strip()
@@ -155,7 +156,7 @@ class DubbingEditingService:
         target_text: str,
         speaker_id: str,
         review_status: str,
-    ):
+    ) -> DubbingSession:
         self.require_writable()
         session = self.documents.get_session(session_id)
         text = target_text.strip()
@@ -201,7 +202,7 @@ class DubbingEditingService:
         )
 
     @staticmethod
-    def _reset_utterance(utterance):
+    def _reset_utterance(utterance: DubbingUtterance) -> DubbingUtterance:
         return utterance.model_copy(
             update={
                 "status": "pending",

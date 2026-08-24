@@ -33,12 +33,8 @@ def _configure_environment(run_dir: Path) -> None:
     # surface and therefore cannot be used as product screenshot evidence.
     os.environ["QT_QPA_PLATFORM"] = "windows" if os.name == "nt" else "offscreen"
     os.environ["QT_SCALE_FACTOR"] = "1"
-    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(
-        run_dir / "settings/service-settings.json"
-    )
-    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(
-        run_dir / "settings/desktop-settings.json"
-    )
+    os.environ["MEDIAFLOW_SERVICE_SETTINGS_PATH"] = str(run_dir / "settings/service-settings.json")
+    os.environ["MEDIAFLOW_DESKTOP_SETTINGS_PATH"] = str(run_dir / "settings/desktop-settings.json")
     os.environ["MEDIAFLOW_MEDIA_ROOT"] = str(run_dir / "media")
     os.environ["MEDIAFLOW_PROJECT_ROOT"] = str(run_dir / "projects")
     os.environ["MEDIAFLOW_SERVICE_STATE_DIR"] = str(run_dir / "editor-service")
@@ -219,7 +215,7 @@ def update_screenshots(run_dir: Path) -> list[dict[str, object]]:
                 raise RuntimeError("Workspace tour could not be dismissed")
             if not _wait(QCoreApplication.processEvents, lambda: not tour.isVisible()):
                 raise RuntimeError("Workspace tour remained visible")
-        controllers.settings.setWorkspaceLayoutPreset("standard")
+        controllers.workspace_settings.setWorkspaceLayoutPreset("standard")
         clip_model = controllers.timeline_view.clipsModel
         if clip_model.rowCount() < 2:
             raise RuntimeError("Sample project did not create the expected timeline")
@@ -240,8 +236,7 @@ def update_screenshots(run_dir: Path) -> list[dict[str, object]]:
             QCoreApplication.processEvents,
             lambda: bool(controllers.workspace.previewGraphPath)
             and Path(controllers.workspace.previewGraphPath).is_file()
-            and preview_player.property("duration")
-            == controllers.workspace.timelineDurationFrames
+            and preview_player.property("duration") == controllers.workspace.timelineDurationFrames
             and not preview_player.property("errorString"),
             timeout=30,
         ):
@@ -314,11 +309,15 @@ def update_screenshots(run_dir: Path) -> list[dict[str, object]]:
         program_monitor["frame"] = preview_frame
         images.append(workspace_record)
     finally:
-        controllers.shutdown()
-        shutdown_sync_service()
-        engine.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-        QCoreApplication.processEvents()
+        try:
+            controllers.shutdown()
+        finally:
+            try:
+                shutdown_sync_service()
+            finally:
+                engine.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                QCoreApplication.processEvents()
     return images
 
 
