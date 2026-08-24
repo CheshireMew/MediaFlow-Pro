@@ -36,6 +36,7 @@ RUNTIME_TEST_NODE_PREFIXES = (
     "tests/v2/application/test_subtitle_services.py::test_new_translation_commit_failure_leaves_no_document_or_visible_srt",
     "tests/v2/application/test_subtitle_services.py::test_overlap_fix_and_clipboard_replacement_persist_through_srt_boundary",
     "tests/v2/application/test_subtitle_services.py::test_sequence_subtitle_timing_edit_persists_through_document_sync_and_undo",
+    "tests/v2/application/test_subtitle_services.py::test_single_subtitle_edit_uses_segment_scoped_storage_and_history",
     "tests/v2/application/test_subtitle_services.py::test_srt_import_edit_place_compile_and_export_use_one_document_boundary",
     "tests/v2/application/test_subtitle_services.py::test_smart_split_and_delete_preserve_existing_placement_identity",
     "tests/v2/application/test_subtitle_services.py::test_subtitle_edit_database_commit_failure_restores_database_and_visible_srt",
