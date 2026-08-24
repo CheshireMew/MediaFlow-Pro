@@ -8,10 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mediaflow.infrastructure.project_repository_relations import (
-    ProjectRepositoryRelations,
-)
-
 
 @dataclass(frozen=True, slots=True)
 class ProjectDatabaseSession:
@@ -20,7 +16,6 @@ class ProjectDatabaseSession:
     project_dir: Path
     database_path: Path
     read_only: bool
-    relations: ProjectRepositoryRelations
     connection: sqlite3.Connection
     connection_lock: threading.RLock
     transaction_factory: Callable[[], AbstractContextManager[sqlite3.Connection]]

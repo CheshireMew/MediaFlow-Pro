@@ -146,7 +146,7 @@ Item {
                         : mediaflow.taskController.activeTaskCount > 99
                         ? "99+" : String(mediaflow.taskController.activeTaskCount)
                     color: Theme.onAccent
-                    font.pixelSize: 9
+                    font.pixelSize: Theme.fontSizeCaption
                     font.weight: Font.Bold
                 }
             }
@@ -274,6 +274,7 @@ Item {
             primary: true
             implicitHeight: Theme.controlHeightCompact
             enabled: mediaflow.workspaceViewController.actionCapabilities.canStartTasks
+                && mediaflow.exportController.canExportSequence
             onClicked: root.exportRequested()
         }
     }

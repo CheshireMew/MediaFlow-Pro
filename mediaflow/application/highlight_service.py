@@ -9,6 +9,7 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.progress import OperationProgress
+from mediaflow.domain.project import Sequence
 from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.timebase import reframe_frames
 
@@ -222,11 +223,21 @@ class HighlightService:
         self._candidate(candidate_id)
         self.repository.highlights.delete_highlight(candidate_id)
 
-    def create_short_sequence(self, candidate_id: str, *, name: str | None = None):
+    def create_short_sequence(
+        self,
+        candidate_id: str,
+        *,
+        name: str | None = None,
+    ) -> Sequence:
         with self.repository.transaction():
             return self._create_short_sequence(candidate_id, name=name)
 
-    def _create_short_sequence(self, candidate_id: str, *, name: str | None = None):
+    def _create_short_sequence(
+        self,
+        candidate_id: str,
+        *,
+        name: str | None = None,
+    ) -> Sequence:
         candidate = self._candidate(candidate_id)
         if candidate.sequence_id:
             try:

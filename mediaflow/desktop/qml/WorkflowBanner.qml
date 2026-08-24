@@ -13,7 +13,7 @@ Rectangle {
     objectName: "workflowBanner"
     visible: mediaflow.workspaceViewController.workflowPending
         && !(mediaflow.workspaceViewController.workflowStage === "download"
-            && mediaflow.taskController.downloadProgressVisible)
+            && mediaflow.downloadController.downloadProgressVisible)
     color: mediaflow.workspaceViewController.workflowStatus === "blocked"
         ? Theme.warningSoft : Theme.surfaceFloating
     radius: Theme.radius
@@ -111,17 +111,28 @@ Rectangle {
         }
 
         ColumnLayout {
-            visible: !root.compactLayout
             Layout.fillWidth: true
             spacing: 2
             Text {
-                text: root.stageLabel(mediaflow.workspaceViewController.workflowStage)
+                objectName: "workflowCompactSummary"
+                Layout.fillWidth: true
+                text: root.compactLayout
+                    ? root.stageLabel(mediaflow.workspaceViewController.workflowStage)
+                        + " · " + root.message(mediaflow.workspaceViewController.workflowMessageCode)
+                    : root.stageLabel(mediaflow.workspaceViewController.workflowStage)
                 color: Theme.text
-                font.pixelSize: Theme.fontSizeBody
+                font.pixelSize: root.compactLayout
+                    ? Theme.fontSizeCaption : Theme.fontSizeBody
                 font.weight: Font.DemiBold
+                elide: Text.ElideRight
+                ToolTip.visible: root.compactLayout && compactWorkflowTextHover.hovered
+                    && implicitWidth > width
+                ToolTip.text: text
+                HoverHandler { id: compactWorkflowTextHover }
             }
             Text {
                 Layout.fillWidth: true
+                visible: !root.compactLayout
                 text: root.message(mediaflow.workspaceViewController.workflowMessageCode)
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption

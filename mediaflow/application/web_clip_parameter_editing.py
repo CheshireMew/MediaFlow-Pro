@@ -6,11 +6,14 @@ from typing import Literal, cast
 from pydantic import JsonValue
 
 from mediaflow.application.web_clip_editing_context import web_clip_editing_context
+from mediaflow.application.web_keyframe_operations import (
+    move_web_keyframe,
+    remove_web_keyframe,
+    upsert_web_keyframe,
+)
 from mediaflow.domain.web_manifest_primitives import WebInterpolation
 from mediaflow.domain.web_state import (
     WebClipState,
-    WebEasing,
-    WebKeyframe,
     WebParameterAnimationTrack,
     WebSceneState,
 )
@@ -99,15 +102,12 @@ class WebClipParameterEditing:
             raise PermissionError(f"Editable parameter is locked: {parameter_id}")
         animations = dict(current_scene.parameter_animations)
         existing = animations.get(parameter_id)
-        keyframes = [item for item in (existing.keyframes if existing else []) if item.time_ms != time_ms]
-        keyframes.append(
-            WebKeyframe(
-                time_ms=time_ms,
-                value=value,
-                easing=WebEasing.model_validate(easing or {}),
-            )
+        keyframes = upsert_web_keyframe(
+            existing.keyframes if existing else (),
+            time_ms=time_ms,
+            value=value,
+            easing=easing,
         )
-        keyframes.sort(key=lambda item: item.time_ms)
         interpolation: WebInterpolation = (
             "continuous" if definition.descriptor.kind in {"number", "integer"} else "discrete"
         )
@@ -146,9 +146,11 @@ class WebClipParameterEditing:
         track = animations.get(parameter_id)
         if track is None:
             raise KeyError(f"{parameter_id}/{time_ms}")
-        remaining = [item for item in track.keyframes if item.time_ms != time_ms]
-        if len(remaining) == len(track.keyframes):
-            raise KeyError(f"{parameter_id}/{time_ms}")
+        remaining = remove_web_keyframe(
+            track.keyframes,
+            time_ms=time_ms,
+            missing_identity=f"{parameter_id}/{time_ms}",
+        )
         if remaining:
             animations[parameter_id] = track.model_copy(update={"keyframes": remaining})
         else:
@@ -187,17 +189,13 @@ class WebClipParameterEditing:
         track = animations.get(parameter_id)
         if track is None:
             raise KeyError(f"{parameter_id}/{old_time_ms}")
-        moving = next(
-            (item for item in track.keyframes if item.time_ms == old_time_ms),
-            None,
+        keyframes = move_web_keyframe(
+            track.keyframes,
+            old_time_ms=old_time_ms,
+            new_time_ms=new_time_ms,
+            missing_identity=f"{parameter_id}/{old_time_ms}",
+            occupied_message="Editable parameter keyframe destination is occupied",
         )
-        if moving is None:
-            raise KeyError(f"{parameter_id}/{old_time_ms}")
-        if any(item.time_ms == new_time_ms and item.time_ms != old_time_ms for item in track.keyframes):
-            raise ValueError("Editable parameter keyframe destination is occupied")
-        keyframes = [item for item in track.keyframes if item.time_ms != old_time_ms]
-        keyframes.append(moving.model_copy(update={"time_ms": new_time_ms}))
-        keyframes.sort(key=lambda item: item.time_ms)
         animations[parameter_id] = track.model_copy(update={"keyframes": keyframes})
         scenes = dict(current.scenes)
         scenes[resolved_scene_id] = current_scene.model_copy(update={"parameter_animations": animations})

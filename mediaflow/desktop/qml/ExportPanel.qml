@@ -93,22 +93,36 @@ ColumnLayout {
                 exportFileDialogs.openSequenceDialog();
         }
     }
-    AppButton {
-        objectName: "exportFcpxmlButton"
+    RowLayout {
         Layout.fillWidth: true
-        text: qsTr("导出 FCPXML（Final Cut Pro / DaVinci Resolve）")
-        enabled: root.canExportSequence
-        onClicked: exportFileDialogs.openFcpxmlDialog()
-    }
-    AppButton {
-        objectName: "copyExportCliRequestButton"
-        Layout.fillWidth: true
-        text: qsTr("复制当前导出为 CLI 请求")
-        enabled: root.canExportSequence
-        onClicked: mediaflow.automationController.copyCurrentExportRequest(
-            root.selectedFormat().value,
-            root.selectedFormat().suffix,
-            exportSettings.exportOptions())
+        AppButton {
+            objectName: "exportFcpxmlButton"
+            Layout.fillWidth: true
+            text: qsTr("导出 FCPXML（Final Cut Pro / DaVinci Resolve）")
+            enabled: root.canExportSequence
+            onClicked: exportFileDialogs.openFcpxmlDialog()
+        }
+        AppIconButton {
+            id: exportAutomationButton
+            objectName: "exportAutomationButton"
+            iconName: "more"
+            Accessible.name: qsTr("导出自动化操作")
+            toolTipText: Accessible.name
+            enabled: root.canExportSequence
+            AppMenu {
+                id: exportAutomationMenu
+                y: exportAutomationButton.height + 4
+                AppMenuItem {
+                    objectName: "copyExportCliRequestButton"
+                    text: qsTr("复制当前导出为 CLI 请求")
+                    onTriggered: mediaflow.automationController.copyCurrentExportRequest(
+                        root.selectedFormat().value,
+                        root.selectedFormat().suffix,
+                        exportSettings.exportOptions())
+                }
+            }
+            onClicked: exportAutomationMenu.open()
+        }
     }
     AppScrollView {
         id: settingsScroll

@@ -64,14 +64,21 @@ class TimelineSnapTargetIndex:
         self._state_identity = id(state)
         self._subtitle_revision = subtitle_revision
 
-    def update_clips(self, state: Any, clips: Iterable[Any]) -> None:
+    def update_clips(
+        self,
+        state: Any,
+        clips: Iterable[Any],
+        removed_clip_ids: Iterable[str] = (),
+    ) -> None:
         changed = {clip.id: clip for clip in clips}
-        if not changed or not self._state_identity:
+        removed = set(removed_clip_ids)
+        if (not changed and not removed) or not self._state_identity:
             return
+        discarded = set(changed) | removed
         self._entries = [
             entry
             for entry in self._entries
-            if entry[1] != "clip" or entry[2] not in changed
+            if entry[1] != "clip" or entry[2] not in discarded
         ]
         self._entries.extend(
             edge

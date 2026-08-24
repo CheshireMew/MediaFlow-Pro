@@ -32,6 +32,7 @@ from mediaflow.domain.enums import (
     TrackKind,
 )
 from mediaflow.domain.sequence_audio import select_audible_sequence_audio
+from mediaflow.domain.subtitles import SubtitleSegment
 from mediaflow.service.client import EditorServiceRpcError
 from mediaflow.service.desktop_application_proxy import (
     DesktopEditorApplication,
@@ -182,12 +183,19 @@ class ProjectSession(QObject):
         selected_ids: list[str],
         status_source: str,
         *status_arguments: object,
+        changed_segments: list[SubtitleSegment] | None = None,
     ) -> None:
         self.state.selection.subtitle_segment_ids = list(selected_ids)
-        self.projectors.subtitles.refresh_documents()
-        self.projectors.timeline.refresh_preview_subtitles()
+        if changed_segments is None:
+            self.projectors.subtitles.refresh_documents()
+            self.projectors.timeline.refresh_preview_subtitles()
+            self.updates.commit(project=True)
+        else:
+            self.projectors.subtitles.refresh_segment_rows(changed_segments)
+            self.projectors.timeline.refresh_preview_subtitle_segments(
+                changed_segments
+            )
         self.updates.commit(selection=True)
-        self.updates.commit(project=True)
         self.updates.commit(history=True)
         self.projectors.timeline.schedule_preview_graph()
         self._set_status(status_source, *status_arguments)
@@ -226,6 +234,8 @@ class ProjectSession(QObject):
         )
 
     def _apply_workflow_update(self, update: WorkflowUpdate) -> None:
+        self.tasks.invalidate_active_workflow()
+        self.tasks.refresh_active_workflow()
         if update.selected_asset_ids:
             self.state.selection.asset_ids = list(update.selected_asset_ids)
             self.updates.commit(selection=True)

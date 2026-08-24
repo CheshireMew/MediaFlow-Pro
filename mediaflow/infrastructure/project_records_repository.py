@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mediaflow.atomic_file import unique_temporary_sibling
 from mediaflow.domain.enums import TaskStatus
@@ -14,7 +16,12 @@ from mediaflow.file_digest import sha256_file
 
 from .project_repository_component import ProjectRepositoryComponent
 from .project_schema_definition import PROJECT_SCHEMA_VERSION
-from .sqlite_uri import read_only_database_uri
+from .sqlite_connections import open_project_database
+
+if TYPE_CHECKING:
+    from .project_database_session import ProjectDatabaseSession
+    from .project_metadata_repository import ProjectMetadataRepository
+    from .sequence_catalog_repository import SequenceCatalogRepository
 
 _TERMINAL_TASK_STATUSES = tuple(
     status.value for status in TaskStatus if status.is_terminal
@@ -22,8 +29,19 @@ _TERMINAL_TASK_STATUSES = tuple(
 
 
 class ProjectRecordsRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        projects: Callable[[], ProjectMetadataRepository],
+        sequences: Callable[[], SequenceCatalogRepository],
+    ) -> None:
+        super().__init__(database)
+        self._projects = projects
+        self._sequences = sequences
+
     def save_export_history(self, record: ExportHistoryRecord) -> ExportHistoryRecord:
-        self._relations.sequences.get_sequence(record.sequence_id)
+        self._sequences().get_sequence(record.sequence_id)
         with self.transaction() as connection:
             connection.execute(
                 """INSERT INTO export_history(
@@ -96,7 +114,9 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                 # The repository transaction holds BEGIN IMMEDIATE, so task
                 # writers cannot change the database while this separate
                 # read-only connection captures the last committed state.
-                with closing(self._open_database(self._database.database_path)) as source:
+                with closing(
+                    open_project_database(self._database.database_path, read_only=True)
+                ) as source:
                     with closing(sqlite3.connect(temporary)) as snapshot, snapshot:
                         source.backup(snapshot)
                 self._validate_snapshot_database(
@@ -137,7 +157,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
             raise
 
     def list_project_versions(self) -> list[ProjectVersionRecord]:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         rows = self._fetchall(
             """SELECT id, name, snapshot_path, sha256, content_revision, created_at
                FROM project_version WHERE project_id=? ORDER BY created_at DESC, id""",
@@ -158,12 +178,12 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
             if sha256_file(snapshot_path) != record.sha256:
                 raise RuntimeError("命名版本快照校验失败")
 
-            project = self._relations.projects.get_project()
+            project = self._projects().get_project()
             self._validate_snapshot_database(
                 snapshot_path,
                 expected_project_id=project.id,
             )
-            with closing(self._open_database(snapshot_path)) as snapshot:
+            with closing(open_project_database(snapshot_path, read_only=True)) as snapshot:
                 with self.transaction() as connection:
                     self._require_no_active_tasks(connection)
                     current_revision = self.content_revision()
@@ -194,18 +214,6 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                         raise RuntimeError("命名版本快照包含无效项目关系")
         return record
 
-    @staticmethod
-    def _open_database(path: Path) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            read_only_database_uri(path),
-            uri=True,
-            timeout=5.0,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
-
     def _validate_snapshot_database(
         self,
         path: Path,
@@ -213,7 +221,7 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
         expected_project_id: str,
         expected_content_revision: int | None = None,
     ) -> None:
-        with closing(self._open_database(path)) as source:
+        with closing(open_project_database(path, read_only=True)) as source:
             version_row = source.execute(
                 "SELECT version FROM schema_info WHERE component='project'"
             ).fetchone()

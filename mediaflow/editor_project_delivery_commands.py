@@ -3,21 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
-from mediaflow.application.edit_history import (
-    ProjectEditAction,
-    ProjectEditCommand,
-    ProjectEditHistory,
-)
+from mediaflow.application.edit_history import ProjectEditHistory
 from mediaflow.application.portable_timeline_import import PortableTimelineImportService
 from mediaflow.application.ports import StructuredFileReader
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
-from mediaflow.domain.collaboration import ProjectChange, ProjectChangeSet
+from mediaflow.domain.collaboration import (
+    ProjectChange,
+    ProjectChangeSet,
+    ProjectEditAction,
+    ProjectEditCommand,
+)
+from mediaflow.domain.portable_timeline import LoadedPortableTimeline
+from mediaflow.domain.project import Asset
+from mediaflow.domain.project_records import ProjectVersionRecord
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import ImportAssetCommand, TaskCommand
 from mediaflow.domain.tasks import Task
+from mediaflow.domain.timeline import TimelineState
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.mlt import (
     LoudnessAnalysisService,
@@ -25,7 +30,7 @@ from mediaflow.infrastructure.mlt import (
     TimelineCompiler,
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
-from mediaflow.infrastructure.proxy_service import ProxyService
+from mediaflow.infrastructure.proxy_service import ProxyDecision, ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.project_task_settlement import ProjectTaskResult, ProjectTaskSettlement
@@ -48,23 +53,28 @@ class EditorProjectDeliveryCommands:
 
         def _require_writable(self) -> None: ...
 
-    def inspect_portable_timeline(self, path: str | Path):
+    def inspect_portable_timeline(self, path: str | Path) -> LoadedPortableTimeline:
         return self._portable_timelines.inspect(path)
 
-    def import_portable_timeline(self, path: str | Path, *, sequence_id: str):
+    def import_portable_timeline(
+        self,
+        path: str | Path,
+        *,
+        sequence_id: str,
+    ) -> tuple[LoadedPortableTimeline, TimelineState, dict[str, Asset], list[str]]:
         self._require_writable()
         return self._portable_timelines.import_timeline(
             path,
             sequence_id=sequence_id,
         )
 
-    def create_version(self, name: str):
+    def create_version(self, name: str) -> ProjectVersionRecord:
         return self._repository.records.create_project_version(name)
 
-    def list_versions(self):
+    def list_versions(self) -> list[ProjectVersionRecord]:
         return self._repository.records.list_project_versions()
 
-    def restore_version(self, version_id: str):
+    def restore_version(self, version_id: str) -> ProjectVersionRecord:
         with self._repository.transaction():
             record = self._repository.records.restore_project_version(version_id)
             self._subtitle_publication.reconcile_document_srts()
@@ -106,7 +116,13 @@ class EditorProjectDeliveryCommands:
             overwrite=overwrite,
         )
 
-    def proxy_decision(self, asset, *, dropped_frames: int = 0, manual: bool = False):
+    def proxy_decision(
+        self,
+        asset: Asset,
+        *,
+        dropped_frames: int = 0,
+        manual: bool = False,
+    ) -> ProxyDecision:
         return ProxyService.decision(asset, dropped_frames=dropped_frames, manual=manual)
 
     def sequence_boundary_snapshot_hash(self, sequence_id: str) -> str:

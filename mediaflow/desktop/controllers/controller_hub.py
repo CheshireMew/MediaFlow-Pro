@@ -9,8 +9,12 @@ from .automation_controller import AutomationController
 from .controller_scopes import (
     automation_scope,
     creative_scope,
+    download_scope,
+    download_settings_scope,
     export_scope,
+    language_settings_scope,
     media_scope,
+    runtime_settings_scope,
     settings_scope,
     subtitle_scope,
     task_scope,
@@ -19,15 +23,20 @@ from .controller_scopes import (
     workspace_playback_scope,
     workspace_project_scope,
     workspace_sequence_scope,
+    workspace_settings_scope,
     workspace_view_scope,
     workspace_workflow_scope,
 )
+from .download_controller import DownloadController
+from .download_settings_controller import DownloadSettingsController
 from .dubbing_controller import DubbingController
 from .export_controller import ExportController
 from .highlight_controller import HighlightController
+from .language_settings_controller import LanguageSettingsController
 from .media_controller import MediaController
 from .project_controller import ProjectSession
 from .resource_library_controller import ResourceLibraryController
+from .runtime_settings_controller import RuntimeSettingsController
 from .settings_controller import SettingsController
 from .subtitle_editing_controller import SubtitleEditingController
 from .subtitle_placement_controller import SubtitlePlacementController
@@ -48,6 +57,7 @@ from .workspace_controller import WorkspaceViewController
 from .workspace_playback_controller import WorkspacePlaybackController
 from .workspace_project_controller import WorkspaceProjectController
 from .workspace_sequence_controller import WorkspaceSequenceController
+from .workspace_settings_controller import WorkspaceSettingsController
 from .workspace_workflow_controller import WorkspaceWorkflowController
 
 
@@ -77,6 +87,10 @@ class EditorControllers(QObject):
         self.workspace_workflow = WorkspaceWorkflowController(workspace_workflow_scope(self.session))
         self.workspace_playback = WorkspacePlaybackController(workspace_playback_scope(self.session))
         self.settings = SettingsController(settings)
+        self.runtime_settings = RuntimeSettingsController(runtime_settings_scope(self.session))
+        self.language_settings = LanguageSettingsController(language_settings_scope(self.session))
+        self.download_settings = DownloadSettingsController(download_settings_scope(self.session))
+        self.workspace_settings = WorkspaceSettingsController(workspace_settings_scope(self.session))
         self.media = MediaController(media)
         self.resources = ResourceLibraryController(media)
         self.timeline_view = TimelineViewController(timeline)
@@ -94,6 +108,7 @@ class EditorControllers(QObject):
         self.audio = AudioController(creative)
         self.dubbing = DubbingController(creative)
         self.tasks = TaskController(tasks)
+        self.downloads = DownloadController(download_scope(self.session))
         self.export = ExportController(exports)
         self.web = WebController(web)
         self.web_timeline = WebTimelineController(web, self.web)
@@ -112,6 +127,10 @@ class EditorControllers(QObject):
             "workspaceWorkflow": self.workspace_workflow,
             "workspacePlayback": self.workspace_playback,
             "settings": self.settings,
+            "runtimeSettings": self.runtime_settings,
+            "languageSettings": self.language_settings,
+            "downloadSettings": self.download_settings,
+            "workspaceSettings": self.workspace_settings,
             "media": self.media,
             "resources": self.resources,
             "timelineView": self.timeline_view,
@@ -129,6 +148,7 @@ class EditorControllers(QObject):
             "audio": self.audio,
             "dubbing": self.dubbing,
             "tasks": self.tasks,
+            "downloads": self.downloads,
             "export": self.export,
             "web": self.web,
             "webTimeline": self.web_timeline,
@@ -142,6 +162,26 @@ class EditorControllers(QObject):
     workspaceWorkflowController = Property(QObject, lambda self: self.workspace_workflow, constant=True)
     workspacePlaybackController = Property(QObject, lambda self: self.workspace_playback, constant=True)
     settingsController = Property(QObject, lambda self: self.settings, constant=True)
+    runtimeSettingsController = Property(
+        QObject,
+        lambda self: self.runtime_settings,
+        constant=True,
+    )
+    languageSettingsController = Property(
+        QObject,
+        lambda self: self.language_settings,
+        constant=True,
+    )
+    downloadSettingsController = Property(
+        QObject,
+        lambda self: self.download_settings,
+        constant=True,
+    )
+    workspaceSettingsController = Property(
+        QObject,
+        lambda self: self.workspace_settings,
+        constant=True,
+    )
     mediaController = Property(QObject, lambda self: self.media, constant=True)
     resourceLibraryController = Property(QObject, lambda self: self.resources, constant=True)
     timelineViewController = Property(QObject, lambda self: self.timeline_view, constant=True)
@@ -167,6 +207,7 @@ class EditorControllers(QObject):
     audioController = Property(QObject, lambda self: self.audio, constant=True)
     dubbingController = Property(QObject, lambda self: self.dubbing, constant=True)
     taskController = Property(QObject, lambda self: self.tasks, constant=True)
+    downloadController = Property(QObject, lambda self: self.downloads, constant=True)
     exportController = Property(QObject, lambda self: self.export, constant=True)
     webController = Property(QObject, lambda self: self.web, constant=True)
     webTimelineController = Property(QObject, lambda self: self.web_timeline, constant=True)

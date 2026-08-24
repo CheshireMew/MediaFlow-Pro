@@ -28,7 +28,7 @@ class _ProjectChangeContext:
     request_id: str
     undo_group_id: str
     change_scopes: tuple[str, ...]
-    before: ProjectObservation
+    before: ProjectObservation | None
 
 
 class ProjectEventRepository(ProjectRepositoryComponent):
@@ -73,6 +73,7 @@ class ProjectEventRepository(ProjectRepositoryComponent):
         request_id: str,
         undo_group_id: str,
         write_set: list[str],
+        capture_implicit_baseline: bool = True,
     ) -> Iterator[None]:
         stack = list(getattr(self._change_context, "stack", ()))
         stack.append(
@@ -82,7 +83,11 @@ class ProjectEventRepository(ProjectRepositoryComponent):
                 request_id=request_id,
                 undo_group_id=undo_group_id,
                 change_scopes=tuple(write_set),
-                before=self._observe_changes(write_set),
+                before=(
+                    self._observe_changes(write_set)
+                    if capture_implicit_baseline
+                    else None
+                ),
             )
         )
         self._change_context.stack = stack
@@ -314,6 +319,10 @@ class ProjectEventRepository(ProjectRepositoryComponent):
             )
             change_scopes = list(fallback_observation.values)
             before = fallback_observation
+        if before is None:
+            raise RuntimeError(
+                f"Project mutation {context.operation!r} did not publish its explicit change event"
+            )
         changes = before.changes_to(self._observe_changes(change_scopes))
         if not changes.changes:
             raise RuntimeError(

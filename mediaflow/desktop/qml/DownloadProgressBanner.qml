@@ -7,7 +7,7 @@ import "components"
 Rectangle {
     id: root
     objectName: "downloadProgressBanner"
-    visible: mediaflow.taskController.downloadProgressVisible
+    visible: mediaflow.downloadController.downloadProgressVisible
     color: Theme.surfaceFloating
     radius: Theme.radius
     border.width: 1
@@ -41,17 +41,17 @@ Rectangle {
                 Layout.fillWidth: true
                 Text {
                     Layout.fillWidth: true
-                    text: mediaflow.taskController.activeDownloadCount > 1
-                          ? qsTr("正在下载 %1 个视频").arg(mediaflow.taskController.activeDownloadCount)
-                          : qsTr("正在下载：%1").arg(mediaflow.taskController.activeDownloadTitle)
+                    text: mediaflow.downloadController.activeDownloadCount > 1
+                          ? qsTr("正在下载 %1 个视频").arg(mediaflow.downloadController.activeDownloadCount)
+                          : qsTr("正在下载：%1").arg(mediaflow.downloadController.activeDownloadTitle)
                     color: Theme.text
                     font.pixelSize: Theme.fontSizeBodySmall
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                 }
                 Text {
-                    visible: mediaflow.taskController.downloadProgressDeterminate
-                    text: Math.round(mediaflow.taskController.downloadProgress) + "%"
+                    visible: mediaflow.downloadController.downloadProgressDeterminate
+                    text: Math.round(mediaflow.downloadController.downloadProgress) + "%"
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                 }
@@ -62,8 +62,8 @@ Rectangle {
                 Layout.fillWidth: true
                 from: 0
                 to: 100
-                indeterminate: !mediaflow.taskController.downloadProgressDeterminate
-                value: mediaflow.taskController.downloadProgress
+                indeterminate: !mediaflow.downloadController.downloadProgressDeterminate
+                value: mediaflow.downloadController.downloadProgress
             }
         }
         AppButton {

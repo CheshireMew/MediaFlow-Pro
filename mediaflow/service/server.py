@@ -27,6 +27,7 @@ from .discovery import (
     ServicePaths,
 )
 from .events import EVENT_STREAM_OVERFLOW, EventHub, ServiceEvent
+from .execution import ServiceBusyError, ServiceExecutionPools
 from .project_paths import project_path
 from .request_dispatcher import ServiceRequestDispatcher
 from .sessions import EditorServiceOperations
@@ -84,6 +85,8 @@ class EditorServiceServer:
         self._stop = asyncio.Event()
         self._event_hub: EventHub | None = None
         self._operations: EditorServiceOperations | None = None
+        self._execution: ServiceExecutionPools | None = None
+        self._dispatcher: ServiceRequestDispatcher | None = None
         self._workspaces: WorkspaceRegistry | None = None
         self._websockets: set[web.WebSocketResponse] = set()
         self.discovery: ServiceDiscovery | None = None
@@ -101,6 +104,14 @@ class EditorServiceServer:
             # after the per-user service lock is held.
             application = self._application_factory()
             self._operations = EditorServiceOperations(application, self._event_hub)
+            self._execution = ServiceExecutionPools()
+            self._dispatcher = ServiceRequestDispatcher(
+                self._operations,
+                self._workspaces,
+                self._event_hub,
+                self.request_stop,
+                self._execution,
+            )
             app = web.Application(
                 middlewares=[self._authenticate],
                 client_max_size=8 * 1024 * 1024,
@@ -150,7 +161,11 @@ class EditorServiceServer:
                 self._runner = None
             if self._operations is not None:
                 try:
-                    await asyncio.to_thread(self._operations.close)
+                    execution = self._execution
+                    if execution is None:
+                        self._operations.close()
+                    else:
+                        await execution.run("lifecycle", self._operations.close)
                 except BaseException as error:
                     stop_error = error
                 finally:
@@ -163,11 +178,19 @@ class EditorServiceServer:
                     shutdown_web_capture_engines,
                 )
 
-                await asyncio.to_thread(shutdown_web_capture_engines)
+                execution = self._execution
+                if execution is None:
+                    shutdown_web_capture_engines()
+                else:
+                    await execution.run("lifecycle", shutdown_web_capture_engines)
             except BaseException as error:
                 if stop_error is None:
                     stop_error = error
         finally:
+            self._dispatcher = None
+            if self._execution is not None:
+                self._execution.close()
+                self._execution = None
             if self._socket is not None:
                 self._socket.close()
                 self._socket = None
@@ -249,6 +272,13 @@ class EditorServiceServer:
             except Exception:
                 logger.exception("Failed to publish the project conflict event")
             response = _json_rpc_error(identifier, -32009, str(error), error.as_dict())
+        except ServiceBusyError as error:
+            response = _json_rpc_error(
+                identifier,
+                -32029,
+                str(error),
+                {"type": type(error).__name__, "retryable": True},
+            )
         except RuntimeError as error:
             response = _json_rpc_error(identifier, -32000, str(error), {"type": type(error).__name__})
         except Exception as error:
@@ -269,7 +299,11 @@ class EditorServiceServer:
         project_value = str(context.get("project") or "")
         if not project_value:
             return
-        identity = await asyncio.to_thread(
+        execution = self._execution
+        if execution is None:
+            raise RuntimeError("Editor Service execution pools are not ready")
+        identity = await execution.run(
+            "project",
             operations.desktop.project_identity,
             project_path(project_value),
         )
@@ -320,17 +354,10 @@ class EditorServiceServer:
         }
 
     async def _dispatch(self, method: str, params: dict[str, Any]) -> Any:
-        operations = self._operations
-        workspaces = self._workspaces
-        events = self._event_hub
-        if operations is None:
+        dispatcher = self._dispatcher
+        if dispatcher is None:
             raise RuntimeError("Editor Service is not ready")
-        return await ServiceRequestDispatcher(
-            operations,
-            workspaces,
-            events,
-            self.request_stop,
-        ).dispatch(method, params)
+        return await dispatcher.dispatch(method, params)
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         events = self._event_hub
@@ -415,7 +442,11 @@ class EditorServiceServer:
                     subscription_ready.clear()
                     workspace_session_id = str(value.get("workspace_session_id") or "")
                     project_client_id = str(value.get("client_id") or "")
-                    identity = await asyncio.to_thread(
+                    execution = self._execution
+                    if execution is None:
+                        raise RuntimeError("Editor Service execution pools are not ready")
+                    identity = await execution.run(
+                        "project",
                         operations.desktop.project_identity,
                         path,
                     )
@@ -452,7 +483,8 @@ class EditorServiceServer:
                         return True
 
                     events.replace_selector(subscription, selects_current_scope)
-                    snapshot = await asyncio.to_thread(
+                    snapshot = await execution.run(
+                        "project",
                         operations.desktop.project_subscription,
                         path,
                         project_cursor=project_cursor,

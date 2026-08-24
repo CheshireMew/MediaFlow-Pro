@@ -82,6 +82,48 @@ def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
     assert [(item.timeline_start, item.duration) for item in persisted.clips] == [(0, 40), (40, 60)]
 
 
+def test_clip_membership_edits_use_the_incremental_storage_boundary(
+    editor_fixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    source = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=120,
+    )
+    calls: list[tuple[set[str], set[str]]] = []
+    original = repository.timeline.save_clip_set_changes
+
+    def save_delta(state, *, changed_clip_ids, removed_clip_ids, changed_web_state_ids):
+        calls.append((set(changed_clip_ids), set(removed_clip_ids)))
+        return original(
+            state,
+            changed_clip_ids=changed_clip_ids,
+            removed_clip_ids=removed_clip_ids,
+            changed_web_state_ids=changed_web_state_ids,
+        )
+
+    monkeypatch.setattr(repository.timeline, "save_clip_set_changes", save_delta)
+    monkeypatch.setattr(
+        repository.timeline,
+        "save_timeline",
+        lambda _state: (_ for _ in ()).throw(
+            AssertionError("clip membership edit rewrote the complete timeline")
+        ),
+    )
+
+    copied = editor.copy_clip(source.id, timeline_start=120)
+    left, right = editor.split_clip(copied.id, 180)
+    editor.delete_clips([right.id])
+
+    assert calls[0] == ({copied.id}, set())
+    assert calls[1] == ({left.id, right.id}, set())
+    assert calls[2] == (set(), {right.id})
+
+
 def test_batch_add_is_one_atomic_undoable_edit(editor_fixture) -> None:
     repository, editor, asset, video_track = editor_fixture
     clips = editor.add_clips(
@@ -1572,10 +1614,10 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
                 )
             ]
         )
-        before = repository.timeline.capture_main_frame_clock(sequence_id)
+        before = repository.frame_clock.capture_main_frame_clock(sequence_id)
 
         editor.set_sequence_profile(profile_120.model_copy(update={"fps_numerator": 24}))
-        after = repository.timeline.capture_main_frame_clock(sequence_id)
+        after = repository.frame_clock.capture_main_frame_clock(sequence_id)
         assert after != before
         assert after.assets[0].proxy_path is None
         assert after.assets[0].sdr_preview_proxy_path is None
@@ -1593,17 +1635,17 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
             after.timeline.ranges[0].end_frame,
         ) == (0, 2)
         with ProjectRepository.open(project_dir, writable=False) as observer:
-            assert observer.timeline.capture_main_frame_clock(sequence_id) == after
+            assert observer.frame_clock.capture_main_frame_clock(sequence_id) == after
 
         editor.undo()
-        assert repository.timeline.capture_main_frame_clock(sequence_id) == before
+        assert repository.frame_clock.capture_main_frame_clock(sequence_id) == before
         with ProjectRepository.open(project_dir, writable=False) as observer:
-            assert observer.timeline.capture_main_frame_clock(sequence_id) == before
+            assert observer.frame_clock.capture_main_frame_clock(sequence_id) == before
 
         editor.redo()
-        assert repository.timeline.capture_main_frame_clock(sequence_id) == after
+        assert repository.frame_clock.capture_main_frame_clock(sequence_id) == after
         with ProjectRepository.open(project_dir, writable=False) as observer:
-            assert observer.timeline.capture_main_frame_clock(sequence_id) == after
+            assert observer.frame_clock.capture_main_frame_clock(sequence_id) == after
 
         current_asset = repository.assets.get_asset(asset.id)
         repository.assets.update_asset(
@@ -1614,7 +1656,7 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
                 }
             )
         )
-        resolution_before = repository.timeline.capture_main_frame_clock(sequence_id)
+        resolution_before = repository.frame_clock.capture_main_frame_clock(sequence_id)
         editor.reload()
         editor.set_sequence_profile(
             editor.state.sequence.profile.model_copy(
@@ -1626,10 +1668,10 @@ def test_main_frame_clock_snapshot_round_trip_is_exact_across_reopen(
                 }
             )
         )
-        resolution_after = repository.timeline.capture_main_frame_clock(sequence_id)
+        resolution_after = repository.frame_clock.capture_main_frame_clock(sequence_id)
         assert resolution_after.assets[0].proxy_path is None
         assert resolution_after.assets[0].sdr_preview_proxy_path is None
         editor.undo()
-        assert repository.timeline.capture_main_frame_clock(sequence_id) == resolution_before
+        assert repository.frame_clock.capture_main_frame_clock(sequence_id) == resolution_before
         editor.redo()
-        assert repository.timeline.capture_main_frame_clock(sequence_id) == resolution_after
+        assert repository.frame_clock.capture_main_frame_clock(sequence_id) == resolution_after

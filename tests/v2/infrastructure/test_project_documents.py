@@ -4,10 +4,11 @@ import pytest
 
 from mediaflow.application.highlight_service import HighlightService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.application.translation_comparison import TranslationComparisonService
 from mediaflow.domain.audio import AudioEffect
 from mediaflow.domain.enums import AssetKind, AudioEffectKind, ClipMediaKind, TrackKind
 from mediaflow.domain.highlights import HighlightCandidate
-from mediaflow.domain.settings import LlmProviderSettings
+from mediaflow.domain.settings import GlossaryTermSettings, LlmProviderSettings
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.domain.timeline import Clip
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -84,6 +85,68 @@ def test_source_translation_and_sequence_placement_keep_stable_links(tmp_path: P
         )
         assert updated_segment.text == "你好呀"
         assert repository.subtitles.list_subtitle_placements(subtitle_track.id)[0].text_override is None
+
+
+def test_translation_comparison_is_one_typed_project_query(tmp_path: Path) -> None:
+    source_file = tmp_path / "translation-source.mp4"
+    source_file.write_bytes(b"media")
+    with ProjectRepository.create(tmp_path / "Translation", "Translation") as repository:
+        asset = repository.assets.import_external_asset(source_file, AssetKind.VIDEO)
+        project = repository.projects.get_project()
+        source = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            language="en",
+        )
+        source_segments = [
+            SubtitleSegment(
+                id="source-one",
+                document_id=source.id,
+                start_frame=0,
+                end_frame=20,
+                text="MediaFlow editor",
+            ),
+            SubtitleSegment(
+                id="source-two",
+                document_id=source.id,
+                start_frame=20,
+                end_frame=40,
+                text="Second line",
+            ),
+        ]
+        repository.subtitles.create_subtitle_document(source, source_segments)
+        target = SubtitleDocument(
+            project_id=project.id,
+            asset_id=asset.id,
+            language="zh_CN",
+            source_document_id=source.id,
+            is_source=False,
+        )
+        repository.subtitles.create_subtitle_document(
+            target,
+            [
+                SubtitleSegment(
+                    document_id=target.id,
+                    source_segment_id="source-one",
+                    start_frame=0,
+                    end_frame=20,
+                    text="媒体流编辑器",
+                )
+            ],
+        )
+
+        comparison = TranslationComparisonService(repository).compare(
+            source.id,
+            "zh_CN",
+            [GlossaryTermSettings(source="MediaFlow", target="媒体流")],
+        )
+
+        assert comparison.source_document_id == source.id
+        assert comparison.target_document_id == target.id
+        assert comparison.glossary_hit_count == 1
+        assert [row.status for row in comparison.rows] == ["translated", "missing"]
+        assert comparison.rows[0].source_segment_ids == ["source-one"]
+        assert comparison.rows[1].source_segment_ids == ["source-two"]
 
 
 def test_subtitle_placement_can_be_clipped_and_offset_for_a_short_sequence(

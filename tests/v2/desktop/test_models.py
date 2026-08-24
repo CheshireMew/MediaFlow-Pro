@@ -17,23 +17,29 @@ from mediaflow.application.events import TaskEvent
 from mediaflow.application.task_service import TaskCompletion
 from mediaflow.application.workflow_coordinator import WorkflowCoordinator
 from mediaflow.composition import EditorApplication
+from mediaflow.desktop.asset_list_models import AssetFilterModel, AssetListModel
 from mediaflow.desktop.controllers import EditorControllers
 from mediaflow.desktop.controllers.project_controller import ProjectSession
+from mediaflow.desktop.controllers.subtitle_transcription_controller import (
+    SubtitleTranscriptionController,
+)
+from mediaflow.desktop.controllers.timeline_view_controller import (
+    FILMSTRIP_BASE_IDLE_MS,
+    FILMSTRIP_MAX_IDLE_MS,
+    filmstrip_idle_delay_ms,
+)
 from mediaflow.desktop.coordinators.project_lifecycle import ProjectLifecycle
 from mediaflow.desktop.coordinators.task_events import TaskOperations
-from mediaflow.desktop.models import (
-    AssetFilterModel,
-    AssetListModel,
-    DictListModel,
-    SequenceListModel,
-    TimelineClipViewportModel,
-)
+from mediaflow.desktop.list_model_base import DictListModel
 from mediaflow.desktop.presenters.timeline_projector import (
     PREVIEW_GRAPH_BASE_IDLE_MS,
     PREVIEW_GRAPH_MAX_IDLE_MS,
     preview_graph_idle_delay_ms,
 )
+from mediaflow.desktop.session_events import SessionEvents
 from mediaflow.desktop.session_state import ImportDropBatch, TimelinePlacement
+from mediaflow.desktop.timeline_list_models import TimelineClipViewportModel
+from mediaflow.desktop.workspace_list_models import SequenceListModel
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import (
     AssetKind,
@@ -76,6 +82,61 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 from tests.v2.real_media import generate_real_media
+
+
+def test_transcription_plan_projection_is_computed_once_per_change(
+    monkeypatch,
+    qapp: QCoreApplication,
+) -> None:
+    parent = QObject()
+    events = SessionEvents(parent)
+    session = SimpleNamespace(parent=parent, events=events)
+    calls: list[object] = []
+    plan = SimpleNamespace(
+        region_count=3,
+        timeline_start_frame=10,
+        timeline_end_frame=70,
+        recognition_seconds=2.0,
+        source_count=1,
+        asr=SimpleNamespace(
+            engine="faster_whisper",
+            model="tiny.en",
+            device="cpu",
+            language="en",
+            parallel_chunks=1,
+        ),
+    )
+
+    def calculate(candidate) -> object:
+        calls.append(candidate)
+        return plan
+
+    monkeypatch.setattr(
+        "mediaflow.desktop.controllers.subtitle_transcription_controller.current_transcription_plan",
+        calculate,
+    )
+    controller = SubtitleTranscriptionController(session)
+    notifications: list[None] = []
+    controller.planChanged.connect(lambda: notifications.append(None))
+
+    assert controller.canTranscribeCurrentSequence is True
+    assert controller.transcriptionPlanSummary["regionCount"] == 3
+    assert controller.transcriptionPlanSummary["sourceCount"] == 1
+    assert calls == [session]
+
+    for change_signal in (
+        events.historyChanged,
+        events.settingsChanged,
+        events.projectStateChanged,
+    ):
+        change_signal.emit()
+        assert controller.canTranscribeCurrentSequence is True
+        assert controller.transcriptionPlanSummary["regionCount"] == 3
+
+    assert calls == [session, session, session, session]
+    assert notifications == []
+    qapp.processEvents()
+    assert notifications == [None]
 
 
 def test_subject_tracking_modes_do_not_reuse_each_others_active_task() -> None:
@@ -150,20 +211,31 @@ def test_timeline_clip_viewport_keeps_large_fitted_timelines_bounded() -> None:
 
     model.set_selected_ids(["clip-4999"])
     resets: list[None] = []
+    patches: list[tuple[list[dict], list[str]]] = []
     model.modelReset.connect(lambda: resets.append(None))
+    model.sourceItemsPatched.connect(
+        lambda changed_rows, removed_ids: patches.append((changed_rows, removed_ids))
+    )
     changed = dict(rows[-1])
     changed["startFrame"] = 50_000
     changed["endFrame"] = 50_010
 
     assert model.update_source_items([changed]) is True
     assert resets == []
+    assert patches == [([changed], [])]
     assert model.get(model.findRow("clipId", "clip-4999"))["startFrame"] == 50_000
 
 
 def test_preview_graph_idle_delay_scales_with_timeline_weight() -> None:
     assert preview_graph_idle_delay_ms(0) == PREVIEW_GRAPH_BASE_IDLE_MS
-    assert preview_graph_idle_delay_ms(5_000) == 1_180
+    assert preview_graph_idle_delay_ms(5_000) == PREVIEW_GRAPH_MAX_IDLE_MS
     assert preview_graph_idle_delay_ms(50_000) == PREVIEW_GRAPH_MAX_IDLE_MS
+
+
+def test_filmstrip_idle_delay_keeps_large_timeline_work_behind_edits() -> None:
+    assert filmstrip_idle_delay_ms(0) == FILMSTRIP_BASE_IDLE_MS
+    assert filmstrip_idle_delay_ms(5_000) == FILMSTRIP_MAX_IDLE_MS
+    assert filmstrip_idle_delay_ms(50_000) == FILMSTRIP_MAX_IDLE_MS
 
 
 def test_keyed_model_update_does_not_require_a_full_projection() -> None:
@@ -179,6 +251,26 @@ def test_keyed_model_update_does_not_require_a_full_projection() -> None:
     assert model.snapshot() == [
         {"id": "first", "value": 1},
         {"id": "second", "value": 3},
+    ]
+
+
+def test_keyed_model_membership_patch_reuses_unchanged_rows() -> None:
+    model = DictListModel(["id", "value"])
+    model.set_items(
+        [
+            {"id": "first", "value": 1},
+            {"id": "second", "value": 2},
+        ]
+    )
+
+    assert model.patch_items_by_key(
+        [{"id": "third", "value": 3}],
+        removed_keys={"second"},
+        ordered_keys=["first", "third"],
+    )
+    assert model.snapshot() == [
+        {"id": "first", "value": 1},
+        {"id": "third", "value": 3},
     ]
 
 
@@ -470,7 +562,7 @@ def test_startup_archives_unreadable_settings_and_continues_with_defaults(
 def test_window_state_persists_normal_geometry_and_maximized_flag() -> None:
     controllers = EditorControllers()
     try:
-        controllers.settings.saveWindowState(1024, 640, True)
+        controllers.workspace_settings.saveWindowState(1024, 640, True)
 
         persisted = DesktopSettingsRepository().load().ui
         assert (persisted.window_width, persisted.window_height) == (1024, 640)
@@ -485,13 +577,10 @@ def test_dubbing_transcription_infers_the_only_audio_track(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = EditorApplication()
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(application)
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(application))
     selected_languages: list[str] = []
     monkeypatch.setattr(
-        "mediaflow.desktop.controllers.dubbing_controller."
-        "start_current_transcription_task",
+        "mediaflow.desktop.controllers.dubbing_controller.start_current_transcription_task",
         lambda _session, asr: selected_languages.append(asr.language),
     )
     try:
@@ -520,9 +609,7 @@ def test_dubbing_transcription_infers_the_only_audio_track(
 
         controllers.dubbing.transcribeSource("en")
 
-        selected_track = next(
-            item for item in timeline.state.tracks if item.id == track.id
-        )
+        selected_track = next(item for item in timeline.state.tracks if item.id == track.id)
         assert selected_track.primary_dialogue is True
         assert selected_languages == ["en"]
     finally:
@@ -534,9 +621,7 @@ def test_clip_drag_preview_uses_local_index_without_remote_project_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = EditorApplication()
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(application)
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(application))
     try:
         controllers.workspace_project.createProject(str(tmp_path), "Local Drag Preview")
         image_path = tmp_path / "drag-preview.png"
@@ -576,6 +661,48 @@ def test_clip_drag_preview_uses_local_index_without_remote_project_call(
         controllers.shutdown()
 
 
+def test_clip_row_projection_preserves_metrics_until_audio_content_changes(
+    tmp_path: Path,
+) -> None:
+    application = EditorApplication()
+    controllers = EditorControllers(application=DesktopPresentationApplication(application))
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Metrics Ownership")
+        image_path = tmp_path / "metrics-ownership.png"
+        image = QImage(32, 18, QImage.Format.Format_RGB32)
+        image.fill(QColor("#334455"))
+        assert image.save(str(image_path))
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        asset = project.import_external_asset(image_path, expected_kind=AssetKind.IMAGE)
+        track = timeline.add_track(TrackKind.VIDEO)
+        clip = timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=24,
+        )
+        controllers.session.projectors.timeline.refresh_timeline()
+        metrics = {"integratedLufs": -24.4, "truePeakDbtp": -20.1}
+        controllers.session.state.presentation.audio_metrics = metrics
+
+        controllers.session.projectors.timeline.refresh_clip_rows(
+            [clip.id],
+            clips=[clip],
+            refresh_relations=False,
+            schedule_preview=False,
+        )
+
+        assert controllers.audio.audioMetrics == metrics
+
+        controllers.timeline_clips.setClipAudio(clip.id, -3.0, 0.0, 0, 0)
+
+        assert controllers.audio.audioMetrics == {}
+    finally:
+        controllers.shutdown()
+
+
 def test_shutdown_drains_project_readers_before_releasing_project() -> None:
     controllers = EditorControllers()
     events: list[str] = []
@@ -602,6 +729,37 @@ def test_shutdown_drains_project_readers_before_releasing_project() -> None:
     controllers.shutdown()
 
     assert events == ["project-requests", "project", "application-requests"]
+
+
+def test_shutdown_finishes_every_cleanup_stage_after_cancellation_failure() -> None:
+    controllers = EditorControllers()
+    events: list[str] = []
+
+    def fail_filmstrip_cancel() -> None:
+        events.append("filmstrip")
+        raise RuntimeError("controlled filmstrip cancellation failure")
+
+    controllers.session.lifecycle.cancel_filmstrip = fail_filmstrip_cancel
+    controllers.session.background.shutdown_project_requests = lambda: events.append("project-requests")
+    controllers.session.lifecycle.shutdown = lambda: events.append("project")
+    controllers.workspace_project._finish_pending_project_close = lambda: events.append("pending-close")
+    controllers.session._api.close_client_transport = lambda: events.append("transport")
+    controllers.session.background.shutdown_application_requests = lambda: events.append(
+        "application-requests"
+    )
+
+    with pytest.raises(RuntimeError, match="controlled filmstrip cancellation failure"):
+        controllers.shutdown()
+
+    assert controllers.session.state.requests.shutting_down is True
+    assert events == [
+        "filmstrip",
+        "project-requests",
+        "project",
+        "pending-close",
+        "transport",
+        "application-requests",
+    ]
 
 
 def test_project_request_shutdown_is_bounded_for_uncooperative_reader() -> None:
@@ -1147,19 +1305,19 @@ def test_download_plan_queues_selected_entries_as_typed_requests(
     )
     assert plan is not None
     session._set_download_plan(plan)
-    controllers.settings.setLastDownloadUrl("https://example.com/remembered-video")
-    controllers.settings.setDefaultProjectDirectory(str(tmp_path))
+    controllers.download_settings.setLastDownloadUrl("https://example.com/remembered-video")
+    controllers.download_settings.setDefaultProjectDirectory(str(tmp_path))
     selected_directory = tmp_path / "Selected Downloads"
-    controllers.settings.setDefaultDownloadDirectory(str(selected_directory))
+    controllers.download_settings.setDefaultDownloadDirectory(str(selected_directory))
 
-    controllers.tasks.submitDownloadPlan(
+    controllers.downloads.submitDownloadPlan(
         "1080p",
         "1,3",
         False,
         "best",
         "Prefix",
     )
-    controllers.settings.resetDefaultDownloadDirectory()
+    controllers.download_settings.resetDefaultDownloadDirectory()
 
     assert [request.entry.download_url for request in captured] == [
         "https://www.bilibili.com/video/BV0000000001",
@@ -1172,7 +1330,8 @@ def test_download_plan_queues_selected_entries_as_typed_requests(
     assert controllers.settings.settingsData["downloadSubtitles"] is False
     assert controllers.settings.settingsData["downloadCodec"] == "best"
     assert (
-        controllers.settings.settingsData["downloadDirectory"] == controllers.settings.builtInMediaDirectory
+        controllers.settings.settingsData["downloadDirectory"]
+        == controllers.download_settings.builtInMediaDirectory
     )
     persisted = ServiceSettingsRepository().load()
     assert persisted.download.last_url == "https://example.com/remembered-video"
@@ -1202,7 +1361,7 @@ def test_download_entry_model_exposes_unavailable_collection_slots() -> None:
 
     controllers.session._set_download_plan(plan)
 
-    model = controllers.tasks.downloadEntriesModel
+    model = controllers.downloads.downloadEntriesModel
     assert model.rowCount() == 2
     assert model.get(0)["selected"] is True
     assert model.get(1)["available"] is False

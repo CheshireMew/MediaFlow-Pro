@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 48
+PROJECT_SCHEMA_VERSION = 49
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -478,6 +478,12 @@ ON subtitle_segment(document_id, start_frame, id);
 CREATE INDEX IF NOT EXISTS idx_marker_sequence_time ON timeline_marker(sequence_id, frame);
 CREATE INDEX IF NOT EXISTS idx_range_sequence_time ON timeline_range(sequence_id, start_frame);
 CREATE INDEX IF NOT EXISTS idx_task_project_time ON task(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_claimable_pending
+ON task(created_at, id)
+WHERE status='pending' AND execution_owner_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_task_claimable_running
+ON task(lease_expires_at, created_at, id)
+WHERE status='running';
 CREATE INDEX IF NOT EXISTS idx_project_event_project_cursor
 ON project_event(project_id, cursor);
 CREATE INDEX IF NOT EXISTS idx_undo_group_project_state_revision

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 
 from .controller_facet import ControllerFacet, report_ui_errors
 from .controller_scopes import WorkspaceProjectScope
@@ -93,6 +95,32 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
         self._session.projectors.workspace.refresh_recent_projects()
         self._session.updates.commit(project=True)
 
+    @Slot(str)
+    @report_ui_errors
+    def renameProject(self, name: str) -> None:
+        self._session._require_writable()
+        project = self._session.state.binding.require_current().rename_project(name)
+        self._session.updates.commit(project=True, history=True)
+        self._session._set_status("项目已重命名为“%1”", project.name)
+
+    @Slot()
+    @report_ui_errors
+    def revealProjectFolder(self) -> None:
+        if self._session.state.binding.current is None:
+            raise RuntimeError("请先打开一个项目")
+        project_dir = self._session.state.binding.require_current().project_dir
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(project_dir))):
+            raise RuntimeError("无法在文件管理器中打开项目目录")
+
+    @Slot()
+    @report_ui_errors
+    def copyProjectPath(self) -> None:
+        if self._session.state.binding.current is None:
+            raise RuntimeError("请先打开一个项目")
+        project_dir = self._session.state.binding.require_current().project_dir
+        QGuiApplication.clipboard().setText(str(project_dir))
+        self._session._set_status("项目路径已复制")
+
     @Slot()
     @report_ui_errors
     def retryProjectClose(self) -> None:
@@ -139,16 +167,29 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
 
     @Slot()
     def shutdown(self) -> None:
-        self._session.lifecycle.cancel_filmstrip()
         self._session.state.requests.shutting_down = True
         self._session.state.runtime_state.cancel.set()
+        first_error: BaseException | None = None
+
+        def finish(label: str, operation: Callable[[], object]) -> None:
+            nonlocal first_error
+            try:
+                operation()
+            except BaseException as error:
+                logger.exception("Desktop shutdown could not finish %s", label)
+                if first_error is None:
+                    first_error = error
+
+        finish("timeline filmstrip cancellation", self._session.lifecycle.cancel_filmstrip)
         if self._session.state.runtime_state.thread and self._session.state.runtime_state.thread.is_alive():
             self._session.state.runtime_state.thread.join(timeout=5)
-        self._session.background.shutdown_project_requests()
-        self._session.lifecycle.shutdown()
-        self._finish_pending_project_close()
-        self._session._api.close_client_transport()
-        self._session.background.shutdown_application_requests()
+        finish("project background requests", self._session.background.shutdown_project_requests)
+        finish("project lifecycle", self._session.lifecycle.shutdown)
+        finish("pending project close", self._finish_pending_project_close)
+        finish("service transport", self._session._api.close_client_transport)
+        finish("application background requests", self._session.background.shutdown_application_requests)
+        if first_error is not None:
+            raise first_error
 
     def _finish_pending_project_close(self) -> None:
         close_future = self._session.state.requests.project_close_future

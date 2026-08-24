@@ -22,6 +22,7 @@ from mediaflow.domain.task_commands import (
     TranslateSegmentsCommand,
 )
 from mediaflow.domain.tasks import Task
+from mediaflow.domain.workflows import WorkflowRun
 
 from .base import SessionCoordinator
 
@@ -39,6 +40,8 @@ class TaskOperations(SessionCoordinator):
         self._blocked_event_cursor: int | None = None
         self._terminal_replays: dict[str, Task] = {}
         self._reported_delivery_errors: set[tuple[str, int]] = set()
+        self._active_workflow: WorkflowRun | None = None
+        self._active_workflow_loaded = False
         self._bridge = _TaskEventBridge(session)
         self._bridge.eventReceived.connect(self._on_event)
 
@@ -49,6 +52,17 @@ class TaskOperations(SessionCoordinator):
         self._blocked_event_cursor = None
         self._terminal_replays.clear()
         self._reported_delivery_errors.clear()
+        self.invalidate_active_workflow()
+
+    def invalidate_active_workflow(self) -> None:
+        self._active_workflow = None
+        self._active_workflow_loaded = False
+
+    def refresh_active_workflow(self) -> WorkflowRun | None:
+        current = self._session.state.binding.current
+        self._active_workflow = current.active_workflow() if current is not None else None
+        self._active_workflow_loaded = True
+        return self._active_workflow
 
     def reconcile_committed_results(self) -> None:
         current = self._session.state.binding.current
@@ -276,6 +290,9 @@ class TaskOperations(SessionCoordinator):
                     self._session._set_status("分析期间时间线已修改，请重新运行智能入出点")
                 else:
                     sequence = current.get_sequence(result.sequence_id)
+                    bounds = sequence.in_out
+                    if bounds is None:
+                        raise RuntimeError("序列入出点任务完成后没有返回有效范围")
                     without_speech = result.sequence_bounds_status == "applied_without_speech"
                     if result.sequence_id == self._session.state.binding.active_sequence_id:
                         self._session.state.binding.timeline = current.timeline(
@@ -284,28 +301,28 @@ class TaskOperations(SessionCoordinator):
                         if without_speech:
                             self._session._finish_sequence_in_out_edit(
                                 "已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏",
-                                sequence.in_out.in_frame,
-                                sequence.in_out.out_frame,
+                                bounds.in_frame,
+                                bounds.out_frame,
                             )
                         else:
                             self._session._finish_sequence_in_out_edit(
                                 "已设置序列入出点：%1–%2 帧",
-                                sequence.in_out.in_frame,
-                                sequence.in_out.out_frame,
+                                bounds.in_frame,
+                                bounds.out_frame,
                             )
                     else:
                         if without_speech:
                             self._session._set_status(
                                 "已设置序列入出点：%1–%2 帧；未发现启用的字幕，"
                                 "只处理了黑屏；结果已应用到原序列",
-                                sequence.in_out.in_frame,
-                                sequence.in_out.out_frame,
+                                bounds.in_frame,
+                                bounds.out_frame,
                             )
                         else:
                             self._session._set_status(
                                 "已设置序列入出点：%1–%2 帧；结果已应用到原序列",
-                                sequence.in_out.in_frame,
-                                sequence.in_out.out_frame,
+                                bounds.in_frame,
+                                bounds.out_frame,
                             )
             if result is not None and result.audio_metrics is not None:
                 self._session.state.requests.audio_metrics_id += 1
@@ -407,9 +424,5 @@ class TaskOperations(SessionCoordinator):
         self._reported_delivery_errors.add(key)
         self._session.updates.report_error(f"处理任务结果失败，将自动重试：{error}")
 
-    def active_workflow(self):
-        return (
-            self._session.state.binding.require_current().active_workflow()
-            if self._session.state.binding.current
-            else None
-        )
+    def active_workflow(self) -> WorkflowRun | None:
+        return self._active_workflow if self._active_workflow_loaded else None

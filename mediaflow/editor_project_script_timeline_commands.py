@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mediaflow.application.transcript_editing import TranscriptEditingService
+from mediaflow.application.transcript_editing import (
+    ScriptTimelineEditOutcome,
+    TranscriptEditingService,
+)
 
 if TYPE_CHECKING:
     from mediaflow.application.timeline_editor import TimelineEditor
@@ -22,7 +25,7 @@ class EditorProjectScriptTimelineCommands:
         *,
         position: int,
         expected_content_revision: int,
-    ):
+    ) -> ScriptTimelineEditOutcome:
         return self._transcript_editing.move_script_segment(
             sequence_id,
             document_id,
@@ -39,7 +42,7 @@ class EditorProjectScriptTimelineCommands:
         segment_id: str,
         *,
         expected_content_revision: int,
-    ):
+    ) -> ScriptTimelineEditOutcome:
         return self._transcript_editing.close_script_gap(
             sequence_id,
             document_id,

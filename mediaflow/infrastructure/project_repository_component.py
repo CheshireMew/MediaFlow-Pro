@@ -15,7 +15,6 @@ class ProjectRepositoryComponent:
 
     def __init__(self, database: ProjectDatabaseSession):
         self._database = database
-        self._relations = database.relations
 
     @property
     def project_dir(self) -> Path:

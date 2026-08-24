@@ -6,10 +6,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mediaflow.domain.collaboration import (
-    ActorIdentity,
-    project_write_paths_overlap,
-)
+from mediaflow.application.project_changes import project_path_segment
+from mediaflow.domain.collaboration import ActorIdentity, project_write_paths_overlap
 
 from .client import EditorServiceRpcError, call_sync
 from .codec import decode_transport, encode_transport
@@ -59,6 +57,7 @@ REVISION_CACHED_PROJECT_READS = frozenset(
         "list_sequences",
         "list_subtitle_documents",
         "list_subtitle_placements",
+        "list_subtitle_placements_for_segments",
         "list_subtitle_segments",
         "list_subtitle_words",
         "list_versions",
@@ -67,6 +66,20 @@ REVISION_CACHED_PROJECT_READS = frozenset(
         "subtitle_segment_summary",
     }
 )
+
+
+def project_write_affects_timeline(write_set: list[str], sequence_id: str) -> bool:
+    sequence_root = f"/sequences/{project_path_segment(sequence_id)}"
+    return any(
+        path == "/project"
+        or path.startswith("/project/")
+        or path == "/sequences"
+        or path == sequence_root
+        or path.startswith(f"{sequence_root}/")
+        or path == "/web/clips"
+        or path.startswith("/web/clips/")
+        for path in write_set
+    )
 
 
 class _RemoteProjectMethod:
@@ -117,6 +130,7 @@ class RemoteEditorProject(_ProjectCommandSurface):
         self._read_cache_revision = self.known_content_revision
         self._pending_write: _PendingDesktopWrite | None = None
         self._closed = False
+        self._close_lock = threading.Lock()
 
     @property
     def known_content_revision(self) -> int:
@@ -301,18 +315,21 @@ class RemoteEditorProject(_ProjectCommandSurface):
         )
 
     def close(self, *, timeout: float | None = None) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._events.close()
-        call_sync(
-            "project.close",
-            {
-                "project": str(self.project_dir),
-                "client_id": self._actor.id,
-                "timeout_seconds": 5.0 if timeout is None else float(timeout),
-            },
-        )
+        with self._close_lock:
+            if self._closed:
+                return
+            close_timeout = 5.0 if timeout is None else float(timeout)
+            call_sync(
+                "project.close",
+                {
+                    "project": str(self.project_dir),
+                    "client_id": self._actor.id,
+                    "timeout_seconds": close_timeout,
+                },
+                timeout_seconds=max(1.0, close_timeout + 2.0),
+            )
+            self._closed = True
+            self._events.close()
 
     def _call(
         self,
@@ -323,11 +340,13 @@ class RemoteEditorProject(_ProjectCommandSurface):
         **kwargs: Any,
     ) -> Any:
         definition = desktop_command(target, command)
+        request = definition.validate_request(list(args), kwargs)
+        arguments = definition.request_arguments(request)
         cache_key = ""
         if target == "project" and command in REVISION_CACHED_PROJECT_READS:
             self._ensure_read_cache_revision()
             cache_key = json.dumps(
-                [command, timeline_sequence_id, encode_transport(list(args)), encode_transport(kwargs)],
+                [command, timeline_sequence_id, encode_transport(arguments)],
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -340,8 +359,8 @@ class RemoteEditorProject(_ProjectCommandSurface):
         if definition.access == "write":
             write_set = definition.mutation_plan(
                 sequence_id=timeline_sequence_id,
-                args=list(args),
-                kwargs=kwargs,
+                args=[],
+                kwargs=arguments,
             ).conflict_set
             with self._draft_lock:
                 draft_revisions = [
@@ -352,11 +371,12 @@ class RemoteEditorProject(_ProjectCommandSurface):
             if draft_revisions:
                 base_revision = min(draft_revisions)
         request_id = f"desktop-{uuid.uuid4().hex}"
-        request = definition.validate_request(
-            encode_transport(list(args)),
-            encode_transport(kwargs),
-        )
         try:
+            rpc_timeout = None
+            if command == "wait_for_task":
+                requested_timeout = arguments.get("timeout")
+                requested_timeout = 3600.0 if requested_timeout is None else requested_timeout
+                rpc_timeout = float(requested_timeout) + 5.0
             response = call_sync(
                 "desktop.project.call",
                 {
@@ -364,12 +384,12 @@ class RemoteEditorProject(_ProjectCommandSurface):
                     "target": target,
                     "sequence_id": timeline_sequence_id,
                     "command": command,
-                    "args": request.args,
-                    "kwargs": request.kwargs,
+                    "arguments": encode_transport(arguments),
                     "base_revision": base_revision,
                     "request_id": request_id,
                     "actor": self._actor.model_dump(mode="json"),
                 },
+                timeout_seconds=rpc_timeout,
             )
         except EditorServiceRpcError as error:
             if isinstance(error.data, dict) and "current_revision" in error.data:
@@ -399,7 +419,7 @@ class RemoteEditorProject(_ProjectCommandSurface):
             self._known_content_revision,
             int(response.get("project_revision", self._known_content_revision)),
         )
-        result = decode_transport(definition.validate_result(response.get("value")))
+        result = definition.validate_result(decode_transport(response.get("value")))
         if definition.access == "write":
             history = response.get("history")
             if (
@@ -411,7 +431,9 @@ class RemoteEditorProject(_ProjectCommandSurface):
             self._can_undo = history["can_undo"]
             self._can_redo = history["can_redo"]
         if definition.access == "write" and self.known_content_revision != previous_revision:
-            self._invalidate_read_cache(invalidate_timelines=target != "timeline")
+            if target != "timeline":
+                self._synchronize_timeline_caches(write_set)
+            self._invalidate_read_cache(invalidate_timelines=False)
         elif cache_key:
             self._read_cache[cache_key] = result
         return result
@@ -426,6 +448,14 @@ class RemoteEditorProject(_ProjectCommandSurface):
         if invalidate_timelines:
             for editor in self._remote_timelines.values():
                 editor.invalidate()
+
+    def _synchronize_timeline_caches(self, write_set: list[str]) -> None:
+        revision = self.known_content_revision
+        for sequence_id, editor in self._remote_timelines.items():
+            if project_write_affects_timeline(write_set, sequence_id):
+                editor.invalidate()
+            else:
+                editor.advance_revision(revision)
 
 
 def _install_project_commands() -> None:

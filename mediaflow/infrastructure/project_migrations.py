@@ -61,6 +61,7 @@ from .project_migrations_v42_v49 import (
     migrate_v45_to_v46,
     migrate_v46_to_v47,
     migrate_v47_to_v48,
+    migrate_v48_to_v49,
 )
 
 
@@ -149,6 +150,7 @@ PROJECT_MIGRATIONS = (
     ),
     ProjectMigration(46, 47, migrate_v46_to_v47),
     ProjectMigration(47, 48, migrate_v47_to_v48),
+    ProjectMigration(48, 49, migrate_v48_to_v49),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

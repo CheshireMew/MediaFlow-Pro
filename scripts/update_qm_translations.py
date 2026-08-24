@@ -1723,7 +1723,6 @@ TRANSLATIONS.update(
         ),
         "运行时工具操作已完成": ("Runtime tool operation completed", "ランタイムツール操作が完了しました"),
         "错误详情已复制": ("Error details copied", "エラー詳細をコピーしました"),
-        "项目已保存": ("Project saved", "プロジェクトを保存しました"),
         "项目已关闭：%1": ("Project closed: %1", "プロジェクトを閉じました：%1"),
         "项目已创建": ("Project created", "プロジェクトを作成しました"),
         "项目已创建，正在下载视频": (
@@ -2504,7 +2503,6 @@ TRANSLATIONS.update(
             "Saved cookies will be permanently removed. Future downloads may require signing in and exporting cookies again.",
             "保存済み Cookie は完全に削除されます。今後のダウンロードでは再ログインして Cookie を再エクスポートする必要があります。",
         ),
-        "保存项目状态": ("Save project state", "プロジェクト状態を保存"),
         "全选 / 清除选择": ("Select all / clear selection", "すべて選択 / 選択解除"),
         "分割所选片段": ("Split selected clip", "選択クリップを分割"),
         "切换到软件编码器": ("Switch to software encoder", "ソフトウェアエンコーダーに切り替え"),
@@ -2677,6 +2675,190 @@ TRANSLATIONS.update(
         "错误记录 %1": ("Error history %1", "エラー履歴 %1"),
         "键盘快捷键": ("Keyboard shortcuts", "キーボードショートカット"),
         "项目与面板": ("Project and panels", "プロジェクトとパネル"),
+        "%1 项": ("%1 items", "%1 件"),
+        "LUT 已从资源库添加": (
+            "LUT added from the resource library",
+            "LUT をリソースライブラリから追加しました",
+        ),
+        "· 热门": ("· Popular", "· 人気"),
+        "保存名称": ("Save name", "名前を保存"),
+        "保存方式": ("Save method", "保存方法"),
+        "停止": ("Stop", "停止"),
+        "发现": ("Discover", "見つける"),
+        "取消收藏": ("Remove from favorites", "お気に入りから削除"),
+        "只读项目不会写入更改": (
+            "Read-only projects do not write changes",
+            "読み取り専用プロジェクトでは変更を書き込みません",
+        ),
+        "复制路径": ("Copy path", "パスをコピー"),
+        "导入并添加": ("Import and add", "読み込んで追加"),
+        "导出自动化操作": ("Export automation actions", "書き出しの自動化操作"),
+        "已取消收藏资源": ("Removed from favorites", "お気に入りから削除しました"),
+        "已收藏资源": ("Added to favorites", "お気に入りに追加しました"),
+        "所有更改自动保存": (
+            "All changes are saved automatically",
+            "すべての変更は自動保存されます",
+        ),
+        "换版提交自动化操作": (
+            "Rebind commit automation actions",
+            "再バインド確定の自動化操作",
+        ),
+        "换版检查自动化操作": (
+            "Rebind review automation actions",
+            "再バインド確認の自動化操作",
+        ),
+        "搜索名称、标签、用途或提供方": (
+            "Search names, tags, uses, or providers",
+            "名前、タグ、用途、提供元を検索",
+        ),
+        "收藏": ("Add to favorites", "お気に入りに追加"),
+        "每行填写一个 media-resource-catalog.json 的绝对路径。目录会校验素材哈希、许可声明与采用方式后出现在资源库。": (
+            "Enter one absolute media-resource-catalog.json path per line. Catalogs appear in the resource library after media hashes, license declarations, and adoption methods are validated.",
+            "1 行に 1 つ、media-resource-catalog.json の絶対パスを入力します。メディアのハッシュ、ライセンス表記、採用方法を検証したカタログがリソースライブラリに表示されます。",
+        ),
+        "没有匹配的资源": ("No matching resources", "一致するリソースがありません"),
+        "特效": ("Visual effects", "ビジュアルエフェクト"),
+        "编辑器": ("Editor", "エディター"),
+        "视觉效果已从资源库添加": (
+            "Visual effect added from the resource library",
+            "ビジュアルエフェクトをリソースライブラリから追加しました",
+        ),
+        "资源": ("Resources", "リソース"),
+        "资源库": ("Resource library", "リソースライブラリ"),
+        "资源库目录": ("Resource library catalogs", "リソースライブラリのカタログ"),
+        "转场已从资源库添加": (
+            "Transition added from the resource library",
+            "トランジションをリソースライブラリから追加しました",
+        ),
+        "转录自动化操作": (
+            "Transcription automation actions",
+            "文字起こしの自動化操作",
+        ),
+        "选择…": ("Choose…", "選択…"),
+        "重命名": ("Rename", "名前を変更"),
+        "重命名项目": ("Rename project", "プロジェクト名を変更"),
+        "音效": ("Sound effects", "サウンドエフェクト"),
+        "音频效果": ("Audio effects", "オーディオエフェクト"),
+        "音频效果已从资源库添加": (
+            "Audio effect added from the resource library",
+            "オーディオエフェクトをリソースライブラリから追加しました",
+        ),
+        "项目参数": ("Project details", "プロジェクト情報"),
+        "项目已重命名为“%1”": (
+            "Project renamed to “%1”",
+            "プロジェクト名を「%1」に変更しました",
+        ),
+        "项目路径已复制": ("Project path copied", "プロジェクトのパスをコピーしました"),
+        "等待首个视频": ("Waiting for the first video", "最初の動画を待機中"),
+        "Audio": ("Audio", "オーディオ"),
+        "Blend": ("Blend", "ブレンド"),
+        "Built-in": ("Built-in", "内蔵"),
+        "LUT": ("LUT", "LUT"),
+        "MG 动画": ("Motion graphics", "モーショングラフィックス"),
+        "Motion": ("Motion", "モーション"),
+        "两个镜头保持空间关系并一起向右移动。": (
+            "Both shots keep their spatial relationship and move right together.",
+            "2 つのショットの位置関係を保ったまま、右へ一緒に移動します。",
+        ),
+        "两个镜头保持空间关系并一起向左移动。": (
+            "Both shots keep their spatial relationship and move left together.",
+            "2 つのショットの位置関係を保ったまま、左へ一緒に移動します。",
+        ),
+        "亮度 / 对比度 / 饱和度": (
+            "Brightness / Contrast / Saturation",
+            "明るさ / コントラスト / 彩度",
+        ),
+        "例如 <资源目录>/catalog.json": (
+            "For example <resource directory>/catalog.json",
+            "例：<リソースフォルダー>/catalog.json",
+        ),
+        "全部": ("All", "すべて"),
+        "内置": ("Built-in", "内蔵"),
+        "前一个镜头逐渐让位于后一个镜头。": (
+            "Gradually transitions from the previous shot to the next.",
+            "前のショットから次のショットへ徐々に切り替えます。",
+        ),
+        "前后画面平滑叠化，适合大多数连续镜头。": (
+            "Smoothly blends adjacent shots; suitable for most continuous edits.",
+            "前後の映像を滑らかに重ね、連続したショットの多くに適しています。",
+        ),
+        "动效": ("Motion", "モーション"),
+        "叠加": ("Overlay", "オーバーレイ"),
+        "可编辑参数并进入片段视觉效果链。": (
+            "Adds editable parameters to the clip's visual effects chain.",
+            "編集可能なパラメーターとしてクリップのビジュアルエフェクトチェーンに追加します。",
+        ),
+        "应用到所选音频总线，并保留完整可编辑参数。": (
+            "Applies to the selected audio bus while keeping all parameters editable.",
+            "選択したオーディオバスに適用し、すべてのパラメーターを編集可能なまま保持します。",
+        ),
+        "当前时间轴还没有可转录的素材": (
+            "The current timeline has no media available for transcription",
+            "現在のタイムラインには文字起こし可能な素材がありません",
+        ),
+        "当前没有可转录的时间轴": (
+            "No timeline is available for transcription",
+            "文字起こし可能なタイムラインがありません",
+        ),
+        "文字": ("Text", "テキスト"),
+        "新画面从右向左擦入。": (
+            "The new shot wipes in from right to left.",
+            "新しいショットが右から左へワイプインします。",
+        ),
+        "新画面从左向右擦入。": (
+            "The new shot wipes in from left to right.",
+            "新しいショットが左から右へワイプインします。",
+        ),
+        "暗角": ("Vignette", "ビネット"),
+        "热门": ("Popular", "人気"),
+        "电影感": ("Cinematic", "シネマティック"),
+        "科技": ("Technology", "テクノロジー"),
+        "经过黑场连接两个镜头，适合段落分隔。": (
+            "Connects two shots through black; suitable for section breaks.",
+            "黒画面を挟んで 2 つのショットをつなぎ、セクションの区切りに適しています。",
+        ),
+        "进度": ("Progress", "進行状況"),
+        "通过中心缩放连接两个镜头。": (
+            "Connects two shots with a centered zoom.",
+            "中央を基準にズームして 2 つのショットをつなぎます。",
+        ),
+        "音效素材": ("Sound effects", "サウンドエフェクト"),
+        "高斯模糊": ("Gaussian Blur", "ガウスぼかし"),
+        "收藏夹": ("Favorites", "お気に入り"),
+        "3D-Speaker 模型大小不正确，请重新安装": (
+            "The 3D-Speaker model has the wrong size; reinstall it",
+            "3D-Speaker モデルのサイズが正しくありません。再インストールしてください",
+        ),
+        "CUDA 可用，检测到 %1 个设备": (
+            "CUDA is available; %1 device(s) detected",
+            "CUDA を利用できます。%1 台のデバイスを検出しました",
+        ),
+        "内置 faster-whisper 当前不能使用 CUDA，可继续使用 CPU": (
+            "The built-in faster-whisper cannot use CUDA; CPU remains available",
+            "内蔵 faster-whisper では CUDA を利用できません。CPU は引き続き利用できます",
+        ),
+        "尚未安装本地 3D-Speaker 音色模型": (
+            "The local 3D-Speaker voice model is not installed",
+            "ローカルの 3D-Speaker 音声モデルがインストールされていません",
+        ),
+        "探测失败：%1": ("Probe failed: %1", "検出に失敗しました：%1"),
+        "探测退出码 %1": ("Probe exit code %1", "検出の終了コード %1"),
+        "本地说话人识别探测失败：%1": (
+            "Local speaker-identification probe failed: %1",
+            "ローカル話者識別の検出に失敗しました：%1",
+        ),
+        "该可选组件没有当前平台的受支持构建": (
+            "This optional component has no supported build for the current platform",
+            "このオプションコンポーネントには現在のプラットフォーム向けの対応ビルドがありません",
+        ),
+        "运行环境不可用": (
+            "The runtime environment is unavailable",
+            "実行環境を利用できません",
+        ),
+        "项目目录不会改名，已有素材和外部引用不会受影响。": (
+            "The project folder will not be renamed, so existing media and external references are unaffected.",
+            "プロジェクトフォルダー名は変更しないため、既存のメディアや外部参照には影響しません。",
+        ),
     }
 )
 

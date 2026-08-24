@@ -68,20 +68,16 @@ Rectangle {
         if (!host)
             return;
         if (host.visibility === Window.FullScreen) {
-            host.visibility = visibilityBeforeFullscreen === Window.Maximized
-                ? Window.Maximized : Window.Windowed;
+            host.visibility = visibilityBeforeFullscreen === Window.Maximized ? Window.Maximized : Window.Windowed;
         } else {
-            visibilityBeforeFullscreen = host.visibility === Window.Maximized
-                ? Window.Maximized : Window.Windowed;
+            visibilityBeforeFullscreen = host.visibility === Window.Maximized ? Window.Maximized : Window.Windowed;
             host.visibility = Window.FullScreen;
         }
     }
 
     function boundedPlaybackFrame(frame) {
         const requestedFrame = Math.max(0, Math.round(frame));
-        return preview.duration > 0
-            ? Math.min(preview.duration - 1, requestedFrame)
-            : requestedFrame;
+        return preview.duration > 0 ? Math.min(preview.duration - 1, requestedFrame) : requestedFrame;
     }
 
     function clearPlaybackRange() {
@@ -99,14 +95,10 @@ Rectangle {
         if (pendingPlaybackMode === 0 || !preview.playing)
             return;
         const startFrame = boundedPlaybackFrame(pendingPlaybackFrame);
-        const boundary = pendingPlaybackMode === 2
-            ? Math.max(startFrame, playbackRangeEnd - 1)
-            : pendingPlaybackMode < 0 ? 0 : preview.duration - 1;
+        const boundary = pendingPlaybackMode === 2 ? Math.max(startFrame, playbackRangeEnd - 1) : pendingPlaybackMode < 0 ? 0 : preview.duration - 1;
         const available = Math.abs(boundary - startFrame);
         const required = Math.min(2, Math.max(1, available));
-        const progressed = pendingPlaybackMode < 0
-            ? startFrame - preview.position
-            : preview.position - startFrame;
+        const progressed = pendingPlaybackMode < 0 ? startFrame - preview.position : preview.position - startFrame;
         if (progressed >= required)
             cancelPendingPlayback();
     }
@@ -128,20 +120,15 @@ Rectangle {
             return;
         }
         if (pendingPlaybackMode === 2) {
-            playbackRangeStart = Math.max(
-                0,
-                Math.min(preview.duration - 1, playbackRangeStart));
-            playbackRangeEnd = Math.max(
-                playbackRangeStart + 1,
-                Math.min(preview.duration, playbackRangeEnd));
+            playbackRangeStart = Math.max(0, Math.min(preview.duration - 1, playbackRangeStart));
+            playbackRangeEnd = Math.max(playbackRangeStart + 1, Math.min(preview.duration, playbackRangeEnd));
         }
         const startFrame = boundedPlaybackFrame(pendingPlaybackFrame);
         if (pendingPlaybackMode > 0 && preview.playbackRate <= 0)
             preview.playbackRate = 1.0;
         else if (pendingPlaybackMode < 0 && preview.playbackRate >= 0)
             preview.playbackRate = -1.0;
-        if ((pendingPlaybackMode === 1 && startFrame >= preview.duration - 1)
-                || (pendingPlaybackMode === -1 && startFrame <= 0)) {
+        if ((pendingPlaybackMode === 1 && startFrame >= preview.duration - 1) || (pendingPlaybackMode === -1 && startFrame <= 0)) {
             cancelPendingPlayback();
             preview.seek(startFrame);
             preview.pause();
@@ -181,9 +168,7 @@ Rectangle {
 
     function playRequestedRange(startFrame, endFrame) {
         playbackRangeStart = Math.max(0, Math.round(startFrame));
-        playbackRangeEnd = Math.max(
-            playbackRangeStart + 1,
-            Math.round(endFrame));
+        playbackRangeEnd = Math.max(playbackRangeStart + 1, Math.round(endFrame));
         pendingPlaybackMode = 2;
         pendingPlaybackFrame = playbackRangeStart;
         pendingPlaybackAttempts = 0;
@@ -209,9 +194,7 @@ Rectangle {
             return;
         resumeAfterScrub = false;
         if (playbackRangeStart >= 0 && playbackRangeEnd > playbackRangeStart) {
-            pendingPlaybackFrame = Math.max(
-                playbackRangeStart,
-                Math.min(playbackRangeEnd - 1, scrubFrame));
+            pendingPlaybackFrame = Math.max(playbackRangeStart, Math.min(playbackRangeEnd - 1, scrubFrame));
             pendingPlaybackMode = 2;
             pendingPlaybackAttempts = 0;
             attemptPendingPlayback();
@@ -275,8 +258,14 @@ Rectangle {
         anchors.fill: parent
         gradient: Gradient {
             orientation: Gradient.Vertical
-            GradientStop { position: 0.0; color: Theme.window }
-            GradientStop { position: 1.0; color: Theme.surfaceSunken }
+            GradientStop {
+                position: 0.0
+                color: Theme.window
+            }
+            GradientStop {
+                position: 1.0
+                color: Theme.surfaceSunken
+            }
         }
     }
 
@@ -293,8 +282,7 @@ Rectangle {
         objectName: "previewSurface"
         anchors.centerIn: previewStage
         readonly property real targetAspectRatio: Math.max(1, root.profileWidth) / Math.max(1, root.profileHeight)
-        readonly property real maximumWidth: Math.max(
-            1, Math.min(previewStage.width - 72, 1080))
+        readonly property real maximumWidth: Math.max(1, Math.min(previewStage.width - 72, 1080))
         readonly property real maximumHeight: Math.max(1, previewStage.height - 44)
         width: Math.min(maximumWidth, maximumHeight * targetAspectRatio)
         height: width / targetAspectRatio
@@ -369,9 +357,7 @@ Rectangle {
             Text {
                 id: bufferingText
                 anchors.centerIn: parent
-                text: preview.bufferedFrames > 0
-                    ? qsTr("正在准备画面 · 已缓冲 %1 帧").arg(preview.bufferedFrames)
-                    : qsTr("正在准备画面")
+                text: preview.bufferedFrames > 0 ? qsTr("正在准备画面 · 已缓冲 %1 帧").arg(preview.bufferedFrames) : qsTr("正在准备画面")
                 color: Theme.textStrong
                 font.pixelSize: Theme.fontSizeCaption
             }
@@ -380,43 +366,18 @@ Rectangle {
         PreviewTransformOverlay {
             anchors.fill: parent
             previewPosition: preview.position
-            interactionVisible: root.transformInteractionEnabled
-                && !root.exportPreviewActive
+            interactionVisible: root.transformInteractionEnabled && !root.exportPreviewActive
         }
 
-        Image {
-            id: exportWatermarkPreview
-            objectName: "exportWatermarkPreview"
-            readonly property real widthRatio: Number(root.watermarkPreview.width_ratio || 0.2)
-            readonly property real heightRatio: Math.min(
-                1.0,
-                previewSurface.width * widthRatio * Math.max(1, implicitHeight)
-                    / (Math.max(1, implicitWidth) * previewSurface.height))
-            readonly property real marginX: root.profileHeight > root.profileWidth ? 0.045 : 0.03
-            readonly property real marginY: root.profileHeight > root.profileWidth ? 0.035 : 0.05
-            readonly property string placement: String(root.watermarkPreview.position || "TR")
-            readonly property real centerXRatio: root.watermarkPreview.position_x !== null
-                    && root.watermarkPreview.position_x !== undefined
-                ? Number(root.watermarkPreview.position_x)
-                : placement.indexOf("L") >= 0 ? marginX + widthRatio / 2
-                : placement.indexOf("R") >= 0 ? 1 - marginX - widthRatio / 2 : 0.5
-            readonly property real centerYRatio: root.watermarkPreview.position_y !== null
-                    && root.watermarkPreview.position_y !== undefined
-                ? Number(root.watermarkPreview.position_y)
-                : placement.indexOf("T") >= 0 ? marginY + heightRatio / 2
-                : placement.indexOf("B") >= 0 ? 1 - marginY - heightRatio / 2 : 0.5
-            visible: root.exportPreviewActive && source.toString().length > 0
-                && Boolean(root.watermarkPreview.enabled)
-            source: root.watermarkSource
-            width: previewSurface.width * widthRatio
-            height: previewSurface.height * heightRatio
-            x: Math.max(0, Math.min(previewSurface.width - width,
-                previewSurface.width * centerXRatio - width / 2))
-            y: Math.max(0, Math.min(previewSurface.height - height,
-                previewSurface.height * centerYRatio - height / 2))
-            opacity: Number(root.watermarkPreview.opacity ?? 1)
-            fillMode: Image.Stretch
-            smooth: true
+        PreviewExportOverlay {
+            anchors.fill: parent
+            active: root.exportPreviewActive
+            watermark: root.watermarkPreview
+            subtitleStyle: root.subtitlePreviewStyle
+            watermarkSource: root.watermarkSource
+            subtitleText: root.subtitleText
+            profileWidth: root.profileWidth
+            profileHeight: root.profileHeight
         }
 
         Text {
@@ -428,59 +389,6 @@ Rectangle {
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             width: Math.min(parent.width - 40, 520)
-        }
-
-        Item {
-            id: subtitlePreviewGeometry
-            objectName: "exportSubtitlePreview"
-            readonly property bool styled: root.exportPreviewActive
-            readonly property real positionX: Number(root.subtitlePreviewStyle.position_x ?? 0.5)
-            readonly property real positionY: Number(root.subtitlePreviewStyle.position_y ?? 0.88)
-            width: parent.width * 0.9
-            height: parent.height * 0.25
-            x: Math.max(0, Math.min(parent.width - width, parent.width * positionX - width / 2))
-            y: Math.max(0, Math.min(parent.height - height, parent.height * positionY - height / 2))
-            visible: root.subtitleText.length > 0
-
-            Rectangle {
-                anchors.fill: subtitlePreviewText
-                anchors.margins: -Math.max(0, Number(root.subtitlePreviewStyle.background_padding || 0))
-                    * previewSurface.height / 540
-                visible: subtitlePreviewGeometry.styled
-                    && Boolean(root.subtitlePreviewStyle.background_enabled)
-                color: root.subtitlePreviewStyle.background_color || "#000000"
-                opacity: Number(root.subtitlePreviewStyle.background_opacity || 0)
-                radius: 2
-            }
-            Text {
-                id: subtitlePreviewText
-                objectName: "exportSubtitlePreviewText"
-                anchors.fill: parent
-                text: root.subtitleText
-                color: subtitlePreviewGeometry.styled
-                    ? root.subtitlePreviewStyle.font_color || "#FFFFFF" : "white"
-                font.family: subtitlePreviewGeometry.styled
-                    ? root.subtitlePreviewStyle.font_family || "Microsoft YaHei UI" : "Microsoft YaHei UI"
-                font.pixelSize: subtitlePreviewGeometry.styled
-                    ? Math.max(8, Number(root.subtitlePreviewStyle.font_size || 24)
-                        * previewSurface.height / 540)
-                    : Math.max(18, previewSurface.height * 0.055)
-                font.weight: subtitlePreviewGeometry.styled
-                    && Boolean(root.subtitlePreviewStyle.bold) ? Font.Bold : Font.DemiBold
-                font.italic: subtitlePreviewGeometry.styled
-                    && Boolean(root.subtitlePreviewStyle.italic)
-                style: Text.Outline
-                styleColor: subtitlePreviewGeometry.styled
-                    ? root.subtitlePreviewStyle.outline_color || "#000000" : "black"
-                wrapMode: Text.WordWrap
-                horizontalAlignment: !subtitlePreviewGeometry.styled
-                    || root.subtitlePreviewStyle.alignment === "center" ? Text.AlignHCenter
-                    : root.subtitlePreviewStyle.alignment === "right" ? Text.AlignRight : Text.AlignLeft
-                verticalAlignment: !subtitlePreviewGeometry.styled
-                    || root.subtitlePreviewStyle.multiline_alignment === "center" ? Text.AlignVCenter
-                    : root.subtitlePreviewStyle.multiline_alignment === "bottom"
-                    ? Text.AlignBottom : Text.AlignTop
-            }
         }
 
         Rectangle {
@@ -502,183 +410,9 @@ Rectangle {
         }
     }
 
-    Rectangle {
+    PreviewTransportControls {
         id: previewControlBar
-        objectName: "previewControlBar"
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 44
-        color: Theme.surface
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: 1
-            color: Theme.divider
-        }
-    }
-
-    Flickable {
-        id: previewControlsFlick
-        objectName: "previewControlsScroll"
-        anchors.fill: previewControlBar
-        clip: true
-        contentWidth: Math.max(width, previewControls.implicitWidth + 24)
-        contentHeight: previewControls.implicitHeight
-        flickableDirection: Flickable.HorizontalFlick
-        boundsBehavior: Flickable.StopAtBounds
-        interactive: contentWidth > width
-        onWidthChanged: Qt.callLater(function () {
-            contentX = Math.max(0, Math.min(
-                contentX, Math.max(0, contentWidth - width)));
-        })
-        onContentWidthChanged: Qt.callLater(function () {
-            contentX = Math.max(0, Math.min(
-                contentX, Math.max(0, contentWidth - width)));
-        })
-        ScrollBar.horizontal: AppScrollBar {
-            policy: previewControlsFlick.contentWidth > previewControlsFlick.width
-                ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
-        }
-
-        RowLayout {
-            id: previewControls
-            x: Math.max(12, (previewControlsFlick.width - implicitWidth) / 2)
-            height: previewControlsFlick.height
-            spacing: 5
-        AppIconButton {
-            objectName: "previewPreviousButton"
-            iconName: "previous"
-            compact: true
-            flat: true
-            Accessible.name: qsTr("上一帧")
-            toolTipText: Accessible.name
-            enabled: preview.duration > 0
-            onClicked: preview.seek(Math.max(0, preview.position - 1))
-        }
-        AppIconButton {
-            objectName: "previewPlayButton"
-            iconName: preview.playing ? "pause" : "play"
-            compact: true
-            Accessible.name: preview.playing ? qsTr("暂停") : qsTr("播放")
-            toolTipText: Accessible.name + qsTr("（空格）")
-            primary: true
-            enabled: preview.duration > 0
-            onClicked: preview.playing || root.playbackRequested ? root.pause() : root.playPreview()
-        }
-        AppIconButton {
-            objectName: "previewStopButton"
-            iconName: "stop"
-            compact: true
-            flat: true
-            Accessible.name: qsTr("停止并回到开头")
-            toolTipText: Accessible.name
-            enabled: preview.duration > 0
-            onClicked: root.stopPreview()
-        }
-        Text {
-            text: preview.position + " / " + preview.duration
-            color: Theme.textMuted
-            font.family: Theme.monoFontFamily
-            font.pixelSize: Theme.fontSizeCaption
-        }
-        AppSlider {
-            objectName: "previewPositionSlider"
-            compact: true
-            Layout.preferredWidth: 128
-            from: 0
-            to: Math.max(0, preview.duration - 1)
-            value: preview.position
-            enabled: preview.duration > 0
-            onPressedChanged: pressed ? root.beginScrub() : root.endScrub()
-            onMoved: root.seek(Math.round(value))
-            Accessible.name: qsTr("播放位置")
-        }
-        AppComboBox {
-            Layout.preferredWidth: 70
-            textRole: "label"
-            valueRole: "value"
-            model: [
-                { label: "1×", value: 1.0 },
-                { label: "1.25×", value: 1.25 },
-                { label: "1.5×", value: 1.5 },
-                { label: "1.75×", value: 1.75 },
-                { label: "2×", value: 2.0 },
-                { label: "2.5×", value: 2.5 },
-                { label: "3×", value: 3.0 }
-            ]
-            onActivated: preview.playbackRate = Number(currentValue)
-            Accessible.name: qsTr("播放速度")
-        }
-        AppIconButton {
-            objectName: "previewMuteButton"
-            iconName: root.previewMuted || root.previewVolume <= 0 ? "mute" : "volume"
-            compact: true
-            flat: true
-            Accessible.name: root.previewMuted ? qsTr("取消静音") : qsTr("静音")
-            toolTipText: Accessible.name
-            onClicked: root.toggleMute()
-        }
-        AppSlider {
-            compact: true
-            Layout.preferredWidth: 72
-            from: 0
-            to: 1
-            stepSize: 0.01
-            value: root.previewMuted ? 0 : root.previewVolume
-            onMoved: {
-                root.previewVolume = value;
-                root.previewMuted = value <= 0;
-                if (value > 0)
-                    root.previewVolumeBeforeMute = value;
-            }
-            Accessible.name: qsTr("预览音量")
-        }
-        Text {
-            visible: preview.droppedFrames > 0
-            text: qsTr("掉帧 ") + preview.droppedFrames
-            color: Theme.warning
-            font.pixelSize: Theme.fontSizeCaption
-        }
-        AppIconButton {
-            objectName: "previewZoomOutButton"
-            iconName: "zoom-out"
-            compact: true
-            flat: true
-            Accessible.name: qsTr("缩小预览")
-            toolTipText: Accessible.name
-            onClicked: root.viewportZoom = Math.max(0.5, root.viewportZoom / 1.2)
-        }
-        AppButton {
-            objectName: "previewZoomReset"
-            text: Math.round(root.viewportZoom * 100) + "%"
-            compact: true
-            quiet: true
-            Accessible.name: qsTr("重置预览视图")
-            ToolTip.visible: hovered
-            ToolTip.text: Accessible.name
-            onClicked: root.resetViewport()
-        }
-        AppIconButton {
-            objectName: "previewZoomInButton"
-            iconName: "zoom-in"
-            compact: true
-            flat: true
-            Accessible.name: qsTr("放大预览")
-            toolTipText: Accessible.name
-            onClicked: root.viewportZoom = Math.min(4, root.viewportZoom * 1.2)
-        }
-        AppIconButton {
-            objectName: "previewFullscreenButton"
-            iconName: "fullscreen"
-            compact: true
-            flat: true
-            Accessible.name: qsTr("切换全屏")
-            toolTipText: Accessible.name + " (F11)"
-            onClicked: root.toggleFullscreen()
-        }
-        }
+        viewport: root
+        preview: preview
     }
 }

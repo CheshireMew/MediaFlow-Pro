@@ -86,9 +86,19 @@ class TimelineSnappingCoordinator:
             self._session.models.subtitle_placements.revision,
         )
 
-    def update_clips(self, clips: Iterable[object]) -> None:
+    def invalidate(self) -> None:
+        self._index.invalidate()
+
+    def update_clips(
+        self,
+        clips: Iterable[object],
+        removed_clip_ids: Iterable[str] = (),
+        *,
+        state: object | None = None,
+    ) -> None:
         if self._session.state.binding.timeline:
             self._index.update_clips(
-                self._session.state.binding.require_timeline().state,
+                state or self._session.state.binding.require_timeline().state,
                 clips,
+                removed_clip_ids,
             )

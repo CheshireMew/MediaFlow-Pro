@@ -13,7 +13,7 @@ AppDialog {
     anchors.centerIn: parent
     width: Math.min(780, parent ? parent.width - 48 : 780)
     height: Math.min(820, parent ? parent.height - 48 : 820)
-    property var llmProviderPresets: mediaflow.settingsController.llmProviderPresets
+    property var llmProviderPresets: mediaflow.languageSettingsController.llmProviderPresets
     property var settingsDraft: mediaflow.settingsController.settingsDraft
     property bool syncingFromController: false
     readonly property bool explicitDraftDirty: aiPage.providerDirty
@@ -39,7 +39,7 @@ AppDialog {
         return 0
     }
     function runtimeComponent(componentId) {
-        const status = mediaflow.settingsController.runtimeToolStatus || {}
+        const status = mediaflow.runtimeSettingsController.runtimeToolStatus || {}
         const components = status.components || {}
         return components[componentId] || {}
     }
@@ -51,6 +51,7 @@ AppDialog {
     function syncForm(data) {
         generalPage.sync(data)
         mediaPage.sync(data)
+        editorPage.sync(data)
         aiPage.sync(data)
     }
 
@@ -85,6 +86,7 @@ AppDialog {
         sequence: "Escape"
         enabled: root.opened && !discardDraftDialog.opened
             && !generalPage.modalOpen && !aiPage.modalOpen && !mediaPage.modalOpen
+            && !editorPage.modalOpen
         onActivated: root.requestClose()
     }
 
@@ -101,7 +103,7 @@ AppDialog {
     }
 
     Connections {
-        target: mediaflow.settingsController
+        target: mediaflow.languageSettingsController
         function onSelectionChanged() { root.loadLlmProvider() }
     }
     Connections {
@@ -121,6 +123,7 @@ AppDialog {
             Layout.fillWidth: true
             AppTabButton { text: qsTr("常规") }
             AppTabButton { text: qsTr("下载与媒体") }
+            AppTabButton { text: qsTr("编辑器") }
             AppTabButton { text: qsTr("AI") }
         }
 
@@ -135,6 +138,10 @@ AppDialog {
             }
             SettingsMediaPage {
                 id: mediaPage
+                settingsDialog: root
+            }
+            SettingsEditorPage {
+                id: editorPage
                 settingsDialog: root
             }
             SettingsAiPage {

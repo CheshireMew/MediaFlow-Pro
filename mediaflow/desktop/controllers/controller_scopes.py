@@ -85,15 +85,44 @@ class WorkspacePlaybackScope(ControllerScope):
 
 
 @dataclass(frozen=True, slots=True)
-class SettingsControllerScope(ControllerScope):
+class SettingsFormControllerScope(ControllerScope):
     state: DesktopSessionState
     models: SessionModels
     projectors: PresentationProjectors
+    settings_persistence: SettingsPersistence
+    _api: DesktopEditorApplication
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSettingsControllerScope(ControllerScope):
+    state: DesktopSessionState
     runtime_tools: RuntimeToolOperations
+    _api: DesktopEditorApplication
+    _set_status: Operation
+
+
+@dataclass(frozen=True, slots=True)
+class LanguageSettingsControllerScope(ControllerScope):
+    state: DesktopSessionState
+    models: SessionModels
+    settings_persistence: SettingsPersistence
+    _api: DesktopEditorApplication
+    _set_status: Operation
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadSettingsControllerScope(ControllerScope):
+    state: DesktopSessionState
     settings_persistence: SettingsPersistence
     _api: DesktopEditorApplication
     _local_path: Callable[[str], Path]
     _set_status: Operation
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSettingsControllerScope(ControllerScope):
+    state: DesktopSessionState
+    settings_persistence: SettingsPersistence
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +163,7 @@ class SubtitlePresentationScope(ControllerScope):
     state: DesktopSessionState
     events: SessionEvents
     models: SessionModels
+    background: BackgroundRequests
     projectors: PresentationProjectors
     settings_persistence: SettingsPersistence
     tasks: TaskOperations
@@ -182,6 +212,15 @@ class ExportControllerScope(ControllerScope):
 
 @dataclass(frozen=True, slots=True)
 class TaskControllerScope(ControllerScope):
+    state: DesktopSessionState
+    models: SessionModels
+    projectors: PresentationProjectors
+    _require_writable: Callable[[], None]
+    _set_status: Operation
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadControllerScope(ControllerScope):
     state: DesktopSessionState
     models: SessionModels
     background: BackgroundRequests
@@ -266,17 +305,54 @@ def workspace_playback_scope(session: ProjectSession) -> WorkspacePlaybackScope:
     )
 
 
-def settings_scope(session: ProjectSession) -> SettingsControllerScope:
-    return SettingsControllerScope(
+def settings_scope(session: ProjectSession) -> SettingsFormControllerScope:
+    return SettingsFormControllerScope(
         **_support(session),
         state=session.state,
         models=session.models,
         projectors=session.projectors,
+        settings_persistence=session.settings_persistence,
+        _api=session._api,
+    )
+
+
+def runtime_settings_scope(session: ProjectSession) -> RuntimeSettingsControllerScope:
+    return RuntimeSettingsControllerScope(
+        **_support(session),
+        state=session.state,
         runtime_tools=session.runtime_tools,
+        _api=session._api,
+        _set_status=session._set_status,
+    )
+
+
+def language_settings_scope(session: ProjectSession) -> LanguageSettingsControllerScope:
+    return LanguageSettingsControllerScope(
+        **_support(session),
+        state=session.state,
+        models=session.models,
+        settings_persistence=session.settings_persistence,
+        _api=session._api,
+        _set_status=session._set_status,
+    )
+
+
+def download_settings_scope(session: ProjectSession) -> DownloadSettingsControllerScope:
+    return DownloadSettingsControllerScope(
+        **_support(session),
+        state=session.state,
         settings_persistence=session.settings_persistence,
         _api=session._api,
         _local_path=session._local_path,
         _set_status=session._set_status,
+    )
+
+
+def workspace_settings_scope(session: ProjectSession) -> WorkspaceSettingsControllerScope:
+    return WorkspaceSettingsControllerScope(
+        **_support(session),
+        state=session.state,
+        settings_persistence=session.settings_persistence,
     )
 
 
@@ -323,6 +399,7 @@ def subtitle_scope(session: ProjectSession) -> SubtitlePresentationScope:
         state=session.state,
         events=session.events,
         models=session.models,
+        background=session.background,
         projectors=session.projectors,
         settings_persistence=session.settings_persistence,
         tasks=session.tasks,
@@ -378,6 +455,17 @@ def export_scope(session: ProjectSession) -> ExportControllerScope:
 
 def task_scope(session: ProjectSession) -> TaskControllerScope:
     return TaskControllerScope(
+        **_support(session),
+        state=session.state,
+        models=session.models,
+        projectors=session.projectors,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+    )
+
+
+def download_scope(session: ProjectSession) -> DownloadControllerScope:
+    return DownloadControllerScope(
         **_support(session),
         state=session.state,
         models=session.models,

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
 
 from mediaflow.domain.dubbing import (
     DubbingReference,
@@ -20,12 +21,34 @@ from mediaflow.domain.model_base import now_ms
 
 from .project_repository_component import ProjectRepositoryComponent
 
+if TYPE_CHECKING:
+    from .project_database_session import ProjectDatabaseSession
+    from .project_metadata_repository import ProjectMetadataRepository
+    from .sequence_catalog_repository import SequenceCatalogRepository
+    from .subtitle_repository import SubtitleRepository
+    from .timeline_repository import TimelineRepository
+
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 class DubbingRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        projects: Callable[[], ProjectMetadataRepository],
+        sequences: Callable[[], SequenceCatalogRepository],
+        subtitles: Callable[[], SubtitleRepository],
+        timeline: Callable[[], TimelineRepository],
+    ) -> None:
+        super().__init__(database)
+        self._projects = projects
+        self._sequences = sequences
+        self._subtitles = subtitles
+        self._timeline = timeline
+
     def create_session(self, session: DubbingSession) -> DubbingSession:
         if session.revision != 0:
             raise ValueError("New dubbing sessions must start at revision zero")
@@ -241,22 +264,22 @@ class DubbingRepository(ProjectRepositoryComponent):
         return [self.get_session(str(row["id"])) for row in rows]
 
     def _validate_session(self, session: DubbingSession) -> None:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if session.project_id != project.id:
             raise ValueError("Dubbing session belongs to another project")
-        self._relations.sequences.get_sequence(session.sequence_id)
-        source = self._relations.subtitles.get_subtitle_document(session.source_document_id)
+        self._sequences().get_sequence(session.sequence_id)
+        source = self._subtitles().get_subtitle_document(session.source_document_id)
         if source.project_id != project.id:
             raise ValueError("Dubbing source document belongs to another project")
         if source.sequence_id not in {None, session.sequence_id}:
             raise ValueError("Dubbing source document belongs to another sequence")
         if session.target_document_id:
-            target = self._relations.subtitles.get_subtitle_document(session.target_document_id)
+            target = self._subtitles().get_subtitle_document(session.target_document_id)
             if target.source_document_id != source.id:
                 raise ValueError("Dubbing target document is not a translation of its source")
             if target.sequence_id not in {None, session.sequence_id}:
                 raise ValueError("Dubbing target document belongs to another sequence")
-        state = self._relations.timeline.load_timeline(session.sequence_id)
+        state = self._timeline().load_timeline(session.sequence_id)
         track = next(
             (item for item in state.tracks if item.id == session.dialogue_track_id),
             None,

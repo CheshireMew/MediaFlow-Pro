@@ -27,6 +27,7 @@ Rectangle {
         || Boolean(highlightPanelLoader.item && highlightPanelLoader.item.modalOpen)
         || Boolean(transcriptPanelLoader.item && transcriptPanelLoader.item.modalOpen)
         || Boolean(exportPanelLoader.item && exportPanelLoader.item.modalOpen)
+        || inspectorPanel.modalOpen
         || timeline.modalOpen
         || Boolean(taskCenterPanelLoader.item
             && taskCenterPanelLoader.item.modalOpen)
@@ -92,7 +93,7 @@ Rectangle {
 
     function setWorkspaceLayoutPreset(preset) {
         root.maximizedPanel = "";
-        mediaflow.settingsController.setWorkspaceLayoutPreset(String(preset));
+        mediaflow.workspaceSettingsController.setWorkspaceLayoutPreset(String(preset));
     }
 
     function toggleWorkspacePanel(panel) {
@@ -114,7 +115,7 @@ Rectangle {
     Component.onCompleted: root.syncWorkspaceLayout()
 
     Connections {
-        target: mediaflow.settingsController
+        target: mediaflow.workspaceSettingsController
         function onSettingsChanged() { root.syncWorkspaceLayout(); }
     }
     function panelIndexForMode(modeKey) {
@@ -165,7 +166,7 @@ Rectangle {
     }
 
     function persistPanelLayout() {
-        mediaflow.settingsController.saveWorkspaceLayout(
+        mediaflow.workspaceSettingsController.saveWorkspaceLayout(
             root.layoutPreset,
             Math.round(toolPanelWidth),
             Math.round(inspectorPanelWidth),

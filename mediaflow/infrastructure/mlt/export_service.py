@@ -57,10 +57,12 @@ class ExportAttemptError(RuntimeError):
         return self.archived_outputs[-1] if self.archived_outputs else None
 
     @property
-    def is_retryable_process_crash(self) -> bool:
-        if os.name != "nt" or self.returncode is None:
+    def is_retryable_process_failure(self) -> bool:
+        if self.returncode is None:
             return False
-        return self.returncode & 0xFFFFFFFF == 0xC0000005
+        return self.returncode == 0 or (
+            os.name == "nt" and self.returncode & 0xFFFFFFFF == 0xC0000005
+        )
 
 
 class MltExportService:
@@ -377,7 +379,7 @@ class MltExportService:
             )
         except ExportAttemptError as error:
             if (
-                not error.is_retryable_process_crash
+                not error.is_retryable_process_failure
                 or is_hardware_codec(preset.video_codec)
             ):
                 raise
@@ -403,7 +405,7 @@ class MltExportService:
             )
         except ExportAttemptError as retry_failure:
             combined = (
-                "MLT process crash recovery failed.\n"
+                "MLT process recovery failed.\n"
                 f"First attempt:\n{first_failure.diagnostic}\n"
                 f"Recovery attempt:\n{retry_failure.diagnostic}"
             )

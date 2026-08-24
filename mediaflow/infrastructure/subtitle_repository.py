@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from bisect import bisect_left, bisect_right
+from collections.abc import Callable
 from fractions import Fraction
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from mediaflow.application.subtitle_placement_projection import (
+    clip_source_range,
+    follow_clip_placements,
+    offset_placements,
+    reconcile_placements,
+)
 from mediaflow.domain.asr import AsrResult, AsrSegment, AsrWord
 from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.model_base import new_id, now_ms
@@ -15,12 +21,31 @@ from mediaflow.domain.subtitles import (
     SubtitleSegment,
     SubtitleWord,
 )
-from mediaflow.domain.timebase import reframe_rate_interval, round_fraction
+from mediaflow.domain.timebase import reframe_rate_interval
 
 from .project_repository_component import ProjectRepositoryComponent
 
+if TYPE_CHECKING:
+    from .asset_catalog_repository import AssetCatalogRepository
+    from .project_database_session import ProjectDatabaseSession
+    from .project_metadata_repository import ProjectMetadataRepository
+    from .sequence_catalog_repository import SequenceCatalogRepository
+
 
 class SubtitleRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        projects: Callable[[], ProjectMetadataRepository],
+        assets: Callable[[], AssetCatalogRepository],
+        sequences: Callable[[], SequenceCatalogRepository],
+    ) -> None:
+        super().__init__(database)
+        self._projects = projects
+        self._assets = assets
+        self._sequences = sequences
+
     def create_subtitle_document(
         self,
         document: SubtitleDocument,
@@ -85,14 +110,14 @@ class SubtitleRepository(ProjectRepositoryComponent):
         return self.get_subtitle_document(document.id)
 
     def _validate_subtitle_document(self, document: SubtitleDocument) -> None:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if document.project_id != project.id:
             raise ValueError("Subtitle document belongs to another project")
-        self._relations.assets.get_asset(document.asset_id)
+        self._assets().get_asset(document.asset_id)
         if document.sequence_id:
-            self._relations.sequences.get_sequence(document.sequence_id)
+            self._sequences().get_sequence(document.sequence_id)
         if document.media_asset_id:
-            media_asset = self._relations.assets.get_asset(document.media_asset_id)
+            media_asset = self._assets().get_asset(document.media_asset_id)
             if media_asset.kind not in {AssetKind.VIDEO, AssetKind.AUDIO}:
                 raise ValueError("Subtitle media must be a video or audio asset")
         if document.source_document_id:
@@ -179,7 +204,7 @@ class SubtitleRepository(ProjectRepositoryComponent):
         signature: str,
         result: AsrResult,
     ) -> AsrResult:
-        self._relations.assets.get_asset(asset_id)
+        self._assets().get_asset(asset_id)
         payload = [
             {
                 "start_seconds": segment.start_seconds,
@@ -227,6 +252,19 @@ class SubtitleRepository(ProjectRepositoryComponent):
         )
         return [self.subtitle_segment_from_row(row) for row in rows]
 
+    def get_subtitle_segment(
+        self,
+        document_id: str,
+        segment_id: str,
+    ) -> SubtitleSegment:
+        row = self._fetchone(
+            "SELECT * FROM subtitle_segment WHERE document_id=? AND id=?",
+            (document_id, segment_id),
+        )
+        if row is None:
+            raise KeyError(segment_id)
+        return self.subtitle_segment_from_row(row)
+
     def subtitle_segment_summary(self, document_id: str) -> tuple[int, int, int]:
         self.get_subtitle_document(document_id)
         row = self._fetchone(
@@ -262,6 +300,112 @@ class SubtitleRepository(ProjectRepositoryComponent):
             (document_id,),
         )
         return [self.subtitle_word_from_row(row) for row in rows]
+
+    def list_subtitle_words_for_segment(
+        self,
+        document_id: str,
+        segment_id: str,
+        *,
+        include_excluded: bool = True,
+    ) -> list[SubtitleWord]:
+        exclusion = "" if include_excluded else " AND word.excluded=0"
+        rows = self._fetchall(
+            """SELECT word.* FROM subtitle_word AS word
+               JOIN subtitle_segment AS segment ON segment.id=word.segment_id
+               WHERE segment.document_id=? AND segment.id=?"""
+            + exclusion
+            + " ORDER BY word.position, word.id",
+            (document_id, segment_id),
+        )
+        if not rows:
+            self.get_subtitle_segment(document_id, segment_id)
+        return [self.subtitle_word_from_row(row) for row in rows]
+
+    def get_subtitle_word(
+        self,
+        document_id: str,
+        word_id: str,
+    ) -> SubtitleWord:
+        row = self._fetchone(
+            """SELECT word.* FROM subtitle_word AS word
+               JOIN subtitle_segment AS segment ON segment.id=word.segment_id
+               WHERE segment.document_id=? AND word.id=?""",
+            (document_id, word_id),
+        )
+        if row is None:
+            raise KeyError(word_id)
+        return self.subtitle_word_from_row(row)
+
+    def save_subtitle_segment_state(
+        self,
+        document_id: str,
+        segment: SubtitleSegment,
+        words: list[SubtitleWord],
+    ) -> None:
+        self.get_subtitle_document(document_id)
+        if segment.document_id != document_id:
+            raise ValueError("Subtitle segment belongs to another document")
+        if any(word.segment_id != segment.id for word in words):
+            raise ValueError("Subtitle word belongs to another segment")
+        word_ids = [word.id for word in words]
+        positions = [word.position for word in words]
+        if len(word_ids) != len(set(word_ids)):
+            raise ValueError("Subtitle word ids must be unique")
+        if len(positions) != len(set(positions)):
+            raise ValueError("Subtitle word positions must be unique within a segment")
+        with self.transaction() as connection:
+            conflict = connection.execute(
+                "SELECT document_id FROM subtitle_segment WHERE id=?",
+                (segment.id,),
+            ).fetchone()
+            if conflict is not None and conflict["document_id"] != document_id:
+                raise ValueError("Subtitle segment id belongs to another document")
+            connection.execute(
+                """INSERT INTO subtitle_segment(
+                       id, document_id, source_segment_id, start_frame, end_frame,
+                       text, speaker, confidence
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       source_segment_id=excluded.source_segment_id,
+                       start_frame=excluded.start_frame,
+                       end_frame=excluded.end_frame,
+                       text=excluded.text,
+                       speaker=excluded.speaker,
+                       confidence=excluded.confidence""",
+                (
+                    segment.id,
+                    segment.document_id,
+                    segment.source_segment_id,
+                    segment.start_frame,
+                    segment.end_frame,
+                    segment.text,
+                    segment.speaker,
+                    segment.confidence,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM subtitle_word WHERE segment_id=?",
+                (segment.id,),
+            )
+            for word in words:
+                self._insert_subtitle_word(connection, word)
+            sequence_ids = [
+                row["sequence_id"]
+                for row in connection.execute(
+                    """SELECT DISTINCT track.sequence_id
+                       FROM subtitle_track_document link
+                       JOIN track ON track.id=link.track_id
+                       WHERE link.document_id=?""",
+                    (document_id,),
+                ).fetchall()
+            ]
+            for sequence_id in sequence_ids:
+                self.sync_subtitle_placements(
+                    connection,
+                    sequence_id,
+                    segment_ids={segment.id},
+                )
+            self._touch_project(connection)
 
     def save_subtitle_words(
         self,
@@ -433,6 +577,27 @@ class SubtitleRepository(ProjectRepositoryComponent):
         )
         return [self.subtitle_placement_from_row(row) for row in rows]
 
+    def list_subtitle_placements_for_segments(
+        self,
+        sequence_id: str,
+        segment_ids: list[str],
+    ) -> list[SubtitlePlacement]:
+        if not segment_ids:
+            return []
+        if len(segment_ids) != len(set(segment_ids)):
+            raise ValueError("Subtitle segment ids must be unique")
+        placeholders = ",".join("?" for _ in segment_ids)
+        rows = self._fetchall(
+            f"""SELECT placement.*
+                  FROM subtitle_placement AS placement
+                  JOIN track ON track.id=placement.track_id
+                 WHERE track.sequence_id=?
+                   AND placement.segment_id IN ({placeholders})
+                 ORDER BY track.position, placement.start_frame, placement.id""",
+            (sequence_id, *segment_ids),
+        )
+        return [self.subtitle_placement_from_row(row) for row in rows]
+
     def get_subtitle_placement(self, placement_id: str) -> SubtitlePlacement:
         row = self._fetchone("SELECT * FROM subtitle_placement WHERE id=?", (placement_id,))
         if row is None:
@@ -569,8 +734,11 @@ class SubtitleRepository(ProjectRepositoryComponent):
         sequence_id: str,
         *,
         clip_ids: set[str] | None = None,
+        segment_ids: set[str] | None = None,
     ) -> None:
         """Compile track/document links into clip-aware, editable placements."""
+        if clip_ids is not None and segment_ids is not None:
+            raise ValueError("Subtitle placement sync accepts one delta boundary")
         project_row = connection.execute("SELECT main_sequence_id FROM project LIMIT 1").fetchone()
         if project_row is None:
             return
@@ -621,12 +789,16 @@ class SubtitleRepository(ProjectRepositoryComponent):
 
             segment_sql = "SELECT * FROM subtitle_segment WHERE document_id=?"
             segment_parameters: list[Any] = [link["document_id"]]
+            if segment_ids is not None:
+                placeholders = ",".join("?" for _ in segment_ids)
+                segment_sql += f" AND id IN ({placeholders})"
+                segment_parameters.extend(sorted(segment_ids))
             if clip_ids is not None and clips:
                 target_to_main = Fraction(
                     main_profile["fps_numerator"] * target_profile["fps_denominator"],
                     main_profile["fps_denominator"] * target_profile["fps_numerator"],
                 )
-                ranges = [self._clip_source_range(clip) for clip in clips]
+                ranges = [clip_source_range(clip) for clip in clips]
                 main_start = min(item[0] for item in ranges) * target_to_main
                 main_end = max(item[1] for item in ranges) * target_to_main
                 lower = main_start.numerator // main_start.denominator - 1
@@ -650,38 +822,15 @@ class SubtitleRepository(ProjectRepositoryComponent):
                 )
                 converted_segments.append((segment, source_start, source_end))
 
-            desired: dict[tuple[str, str | None], tuple[int, int]] = {}
             if bool(link["follow_clips"]):
-                starts = [item[1] for item in converted_segments]
-                maximum_end = -1
-                prefix_maximum_ends: list[int] = []
-                for _, _, source_end in converted_segments:
-                    maximum_end = max(maximum_end, source_end)
-                    prefix_maximum_ends.append(maximum_end)
-                for clip in clips:
-                    clip_start, clip_end = self._clip_source_range(clip)
-                    first = bisect_right(prefix_maximum_ends, clip_start)
-                    last = bisect_left(starts, clip_end)
-                    for segment, source_start, source_end in converted_segments[first:last]:
-                        mapped = self._map_segment_to_clip(source_start, source_end, clip)
-                        if mapped is not None:
-                            desired[(segment["id"], clip["id"])] = mapped
+                desired = follow_clip_placements(converted_segments, clips)
             else:
-                for segment, source_start, source_end in converted_segments:
-                    start = source_start
-                    end = source_end
-                    if link["source_start_frame"] is not None:
-                        if end <= link["source_start_frame"]:
-                            continue
-                        start = max(start, link["source_start_frame"])
-                    if link["source_end_frame"] is not None:
-                        if start >= link["source_end_frame"]:
-                            continue
-                        end = min(end, link["source_end_frame"])
-                    start += link["offset_frames"]
-                    end += link["offset_frames"]
-                    if end > 0:
-                        desired[(segment["id"], None)] = (max(0, start), max(1, end))
+                desired = offset_placements(
+                    converted_segments,
+                    source_start_frame=link["source_start_frame"],
+                    source_end_frame=link["source_end_frame"],
+                    offset_frames=link["offset_frames"],
+                )
 
             placement_filter = ""
             placement_parameters: list[Any] = [link["track_id"], link["document_id"]]
@@ -689,6 +838,10 @@ class SubtitleRepository(ProjectRepositoryComponent):
                 placeholders = ",".join("?" for _ in clip_ids)
                 placement_filter = f" AND placement.clip_id IN ({placeholders})"
                 placement_parameters.extend(sorted(clip_ids))
+            elif segment_ids is not None:
+                placeholders = ",".join("?" for _ in segment_ids)
+                placement_filter = f" AND placement.segment_id IN ({placeholders})"
+                placement_parameters.extend(sorted(segment_ids))
             existing_rows = connection.execute(
                 """SELECT placement.*
                    FROM subtitle_placement placement
@@ -698,40 +851,33 @@ class SubtitleRepository(ProjectRepositoryComponent):
                 + " ORDER BY placement.id",
                 placement_parameters,
             ).fetchall()
-            existing: dict[tuple[str, str | None], sqlite3.Row] = {}
-            duplicate_ids: list[str] = []
-            for row in existing_rows:
-                key = (row["segment_id"], row["clip_id"])
-                if key in existing:
-                    duplicate_ids.append(row["id"])
-                else:
-                    existing[key] = row
-            stale_ids = duplicate_ids + [row["id"] for key, row in existing.items() if key not in desired]
-            if stale_ids:
-                placeholders = ",".join("?" for _ in stale_ids)
+            reconciliation = reconcile_placements(existing_rows, desired)
+            if reconciliation.stale_ids:
+                placeholders = ",".join("?" for _ in reconciliation.stale_ids)
                 connection.execute(
                     f"DELETE FROM subtitle_placement WHERE id IN ({placeholders})",
-                    stale_ids,
+                    reconciliation.stale_ids,
                 )
-            for key, (start, end) in desired.items():
-                row = existing.get(key)
-                if row is not None:
-                    if (
-                        not bool(row["timing_overridden"])
-                        and (row["start_frame"] != start or row["end_frame"] != end)
-                    ):
-                        connection.execute(
-                            "UPDATE subtitle_placement SET start_frame=?, end_frame=? WHERE id=?",
-                            (start, end, row["id"]),
-                        )
-                else:
-                    connection.execute(
-                        """INSERT INTO subtitle_placement(
-                               id, track_id, segment_id, clip_id,
-                               start_frame, end_frame, text_override, timing_overridden
-                           ) VALUES (?, ?, ?, ?, ?, ?, NULL, 0)""",
-                        (new_id(), link["track_id"], key[0], key[1], start, end),
-                    )
+            for update in reconciliation.updates:
+                connection.execute(
+                    "UPDATE subtitle_placement SET start_frame=?, end_frame=? WHERE id=?",
+                    (update.start_frame, update.end_frame, update.placement_id),
+                )
+            for item in reconciliation.inserts:
+                connection.execute(
+                    """INSERT INTO subtitle_placement(
+                           id, track_id, segment_id, clip_id,
+                           start_frame, end_frame, text_override, timing_overridden
+                       ) VALUES (?, ?, ?, ?, ?, ?, NULL, 0)""",
+                    (
+                        new_id(),
+                        link["track_id"],
+                        item.segment_id,
+                        item.clip_id,
+                        item.start_frame,
+                        item.end_frame,
+                    ),
+                )
 
     @staticmethod
     def subtitle_placement_from_row(row: sqlite3.Row) -> SubtitlePlacement:
@@ -745,48 +891,6 @@ class SubtitleRepository(ProjectRepositoryComponent):
             text_override=row["text_override"],
             timing_overridden=bool(row["timing_overridden"]),
         )
-
-    @staticmethod
-    def _clip_source_range(clip: sqlite3.Row) -> tuple[Fraction, Fraction]:
-        speed = Fraction(abs(clip["speed_numerator"]), clip["speed_denominator"])
-        source_in = Fraction(clip["source_in"])
-        consumed = Fraction(clip["duration"]) * speed
-        if clip["speed_numerator"] > 0:
-            return source_in, source_in + consumed
-        return source_in - consumed, source_in
-
-    def _map_segment_to_clip(
-        self,
-        segment_start: int,
-        segment_end: int,
-        clip: sqlite3.Row,
-    ) -> tuple[int, int] | None:
-        speed = Fraction(abs(clip["speed_numerator"]), clip["speed_denominator"])
-        source_in = Fraction(clip["source_in"])
-        consumed = Fraction(clip["duration"]) * speed
-        if clip["speed_numerator"] > 0:
-            start = max(Fraction(segment_start), source_in)
-            end = min(Fraction(segment_end), source_in + consumed)
-            if end <= start:
-                return None
-            timeline_start = clip["timeline_start"] + round_fraction((start - source_in) / speed)
-            timeline_end = clip["timeline_start"] + round_fraction((end - source_in) / speed)
-        else:
-            start = max(Fraction(segment_start), source_in - consumed)
-            end = min(Fraction(segment_end), source_in)
-            if end <= start:
-                return None
-            timeline_start = clip["timeline_start"] + round_fraction((source_in - end) / speed)
-            timeline_end = clip["timeline_start"] + round_fraction((source_in - start) / speed)
-        timeline_start = max(
-            clip["timeline_start"],
-            min(clip["timeline_start"] + clip["duration"] - 1, timeline_start),
-        )
-        timeline_end = max(
-            timeline_start + 1,
-            min(clip["timeline_start"] + clip["duration"], timeline_end),
-        )
-        return timeline_start, timeline_end
 
     @staticmethod
     def _insert_subtitle_segment(

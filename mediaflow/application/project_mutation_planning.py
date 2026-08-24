@@ -158,6 +158,8 @@ def _desktop_only_change_scopes(
         return [f"/subtitles/documents/{_path(arguments.get('document_id'))}"]
     if operation == "project.adopt_main_profile_from_video":
         return ["/project"]
+    if operation == "project.rename_project":
+        return ["/project/name"]
     if operation == "project.populate_sample_project":
         return ["/project"]
     if operation == "project.set_workflow_mode":

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from mediaflow.domain.enums import (
     WorkflowStage,
@@ -17,8 +19,24 @@ from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
 from .project_serialization import model_json as _model_json
 
+if TYPE_CHECKING:
+    from .asset_catalog_repository import AssetCatalogRepository
+    from .project_database_session import ProjectDatabaseSession
+    from .sequence_catalog_repository import SequenceCatalogRepository
+
 
 class ProjectMetadataRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        sequences: Callable[[], SequenceCatalogRepository],
+        assets: Callable[[], AssetCatalogRepository],
+    ) -> None:
+        super().__init__(database)
+        self._sequences = sequences
+        self._assets = assets
+
     def get_project(self) -> Project:
         row = self._fetchone("SELECT * FROM project LIMIT 1")
         if row is None:
@@ -34,6 +52,24 @@ class ProjectMetadataRepository(ProjectRepositoryComponent):
             updated_at=row["updated_at"],
         )
 
+    def rename_project(self, name: str) -> Project:
+        current = self.get_project()
+        candidate = Project.model_validate(
+            {
+                **current.model_dump(mode="python", exclude_computed_fields=True),
+                "name": name,
+            }
+        )
+        if candidate.name == current.name:
+            return current
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE project SET name=?",
+                (candidate.name,),
+            )
+            self._touch_project(connection)
+        return self.get_project()
+
     def set_workflow_auto_continue(self, value: bool | None) -> Project:
         stored = -1 if value is None else int(value)
         with self.transaction() as connection:
@@ -48,9 +84,9 @@ class ProjectMetadataRepository(ProjectRepositoryComponent):
         project = self.get_project()
         if run.project_id != project.id:
             raise ValueError("Workflow run belongs to another project")
-        self._relations.sequences.get_sequence(run.sequence_id)
+        self._sequences().get_sequence(run.sequence_id)
         if any(
-            self._relations.assets.get_asset(asset_id).project_id != project.id for asset_id in run.asset_ids
+            self._assets().get_asset(asset_id).project_id != project.id for asset_id in run.asset_ids
         ):
             raise ValueError("Workflow run contains an asset from another project")
         with self.transaction() as connection:

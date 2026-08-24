@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
+import math
 import subprocess
 import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any
 
@@ -27,10 +31,66 @@ class EditorServiceRpcError(RuntimeError):
         self.data = data
 
 
+class EditorServiceTimeout(EditorServiceUnavailable, TimeoutError):
+    pass
+
+
 _started_processes: dict[int, subprocess.Popen[bytes]] = {}
 _started_processes_lock = threading.Lock()
 SERVICE_PROCESS_EXIT_TIMEOUT_SECONDS = 15.0
 SERVICE_PROCESS_TERMINATE_TIMEOUT_SECONDS = 5.0
+DEFAULT_RPC_TIMEOUT_SECONDS = 120.0
+MAX_RPC_TIMEOUT_SECONDS = 7_200.0
+DEFAULT_SERVICE_STARTUP_TIMEOUT_SECONDS = 60.0
+MAX_SERVICE_STARTUP_TIMEOUT_SECONDS = 300.0
+SYNC_TRANSPORT_MARGIN_SECONDS = 1.0
+SyncFutureWaiter = Callable[[Future[Any], float], Any]
+_sync_future_waiter: SyncFutureWaiter | None = None
+_sync_future_waiter_lock = threading.Lock()
+
+
+def install_sync_future_waiter(waiter: SyncFutureWaiter) -> None:
+    """Install the host event-loop adapter used while a synchronous facade waits.
+
+    The service package stays independent of Qt. Desktop startup installs a Qt
+    adapter so legacy synchronous command surfaces keep painting and delivering
+    queued results while the actual HTTP request runs on the transport thread.
+    """
+
+    global _sync_future_waiter
+    with _sync_future_waiter_lock:
+        _sync_future_waiter = waiter
+
+
+def _wait_for_sync_future(future: Future[Any], timeout_seconds: float) -> Any:
+    with _sync_future_waiter_lock:
+        waiter = _sync_future_waiter
+    if waiter is None:
+        return future.result(timeout=timeout_seconds)
+    return waiter(future, timeout_seconds)
+
+
+def _validated_rpc_timeout(value: float | None) -> float:
+    timeout = DEFAULT_RPC_TIMEOUT_SECONDS if value is None else float(value)
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > MAX_RPC_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"RPC timeout must be greater than 0 and at most {MAX_RPC_TIMEOUT_SECONDS:g} seconds"
+        )
+    return timeout
+
+
+def _validated_service_startup_timeout(value: float) -> float:
+    timeout = float(value)
+    if (
+        not math.isfinite(timeout)
+        or timeout <= 0
+        or timeout > MAX_SERVICE_STARTUP_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "Service startup timeout must be greater than 0 and at most "
+            f"{MAX_SERVICE_STARTUP_TIMEOUT_SECONDS:g} seconds"
+        )
+    return timeout
 
 
 def _started_process_exit(pid: int) -> int | None:
@@ -104,11 +164,13 @@ class EditorServiceClient:
         *,
         paths: ServicePaths | None = None,
         start_if_needed: bool = True,
-        startup_timeout: float = 15.0,
+        startup_timeout: float = DEFAULT_SERVICE_STARTUP_TIMEOUT_SECONDS,
         session: ClientSession | None = None,
     ) -> EditorServiceClient:
         selected = paths or ServicePaths.discover()
-        deadline = time.monotonic() + startup_timeout
+        deadline = time.monotonic() + _validated_service_startup_timeout(
+            startup_timeout
+        )
         started = False
         replacement_requested_pid: int | None = None
         last_error: EditorServiceUnavailable | None = None
@@ -117,7 +179,12 @@ class EditorServiceClient:
             if discovery is not None:
                 client = cls(discovery)
                 try:
-                    hello = await client.call("system.hello", session=session)
+                    remaining = max(0.05, deadline - time.monotonic())
+                    hello = await client.call(
+                        "system.hello",
+                        session=session,
+                        timeout_seconds=min(5.0, remaining),
+                    )
                 except EditorServiceUnavailable as error:
                     # A service that just acknowledged shutdown can remain a
                     # live process for a few scheduler turns. Wait for its lock
@@ -138,7 +205,12 @@ class EditorServiceClient:
                         raise last_error
                     if replacement_requested_pid != discovery.pid:
                         try:
-                            await client.call("service.shutdown", session=session)
+                            remaining = max(0.05, deadline - time.monotonic())
+                            await client.call(
+                                "service.shutdown",
+                                session=session,
+                                timeout_seconds=min(5.0, remaining),
+                            )
                         except EditorServiceUnavailable:
                             pass
                         replacement_requested_pid = discovery.pid
@@ -159,6 +231,7 @@ class EditorServiceClient:
         params: dict[str, Any] | None = None,
         *,
         session: ClientSession | None = None,
+        timeout_seconds: float | None = None,
     ) -> Any:
         request = {
             "jsonrpc": "2.0",
@@ -166,13 +239,23 @@ class EditorServiceClient:
             "method": method,
             "params": params or {},
         }
-        timeout = ClientTimeout(total=None, connect=5, sock_connect=5, sock_read=None)
+        deadline = _validated_rpc_timeout(timeout_seconds)
+        timeout = ClientTimeout(
+            total=deadline,
+            connect=min(5.0, deadline),
+            sock_connect=min(5.0, deadline),
+            sock_read=deadline,
+        )
         try:
             if session is None:
                 async with ClientSession(timeout=timeout) as owned_session:
-                    payload = await self._post(owned_session, request)
+                    payload = await self._post(owned_session, request, timeout=timeout)
             else:
-                payload = await self._post(session, request)
+                payload = await self._post(session, request, timeout=timeout)
+        except TimeoutError as timeout_error:
+            raise EditorServiceTimeout(
+                f"Editor Service request {method!r} exceeded its {deadline:g}-second deadline"
+            ) from timeout_error
         except (ClientConnectorError, OSError) as connection_error:
             exit_code = _started_process_exit(self.discovery.pid)
             detail = str(connection_error)
@@ -195,11 +278,14 @@ class EditorServiceClient:
         self,
         session: ClientSession,
         request: dict[str, Any],
+        *,
+        timeout: ClientTimeout,
     ) -> Any:
         async with session.post(
             f"{self.discovery.base_url}/rpc",
             headers={"Authorization": f"Bearer {self.discovery.token}"},
             json=request,
+            timeout=timeout,
         ) as response:
             return await response.json(loads=json.loads)
 
@@ -241,11 +327,13 @@ def call_sync(
     params: dict[str, Any] | None = None,
     *,
     start_if_needed: bool = True,
+    timeout_seconds: float | None = None,
 ) -> Any:
     return _sync_transport.call(
         method,
         params,
         start_if_needed=start_if_needed,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -295,16 +383,32 @@ class _SyncEditorServiceTransport:
         params: dict[str, Any] | None,
         *,
         start_if_needed: bool = True,
+        timeout_seconds: float | None = None,
     ) -> Any:
+        deadline = _validated_rpc_timeout(timeout_seconds)
         self._start()
         loop = self._loop
         if loop is None or not loop.is_running():
             raise EditorServiceUnavailable("Editor Service client transport is not running")
         future = asyncio.run_coroutine_threadsafe(
-            self._call_async(method, params, start_if_needed=start_if_needed),
+            self._call_async(
+                method,
+                params,
+                start_if_needed=start_if_needed,
+                timeout_seconds=deadline,
+            ),
             loop,
         )
-        return future.result()
+        try:
+            return _wait_for_sync_future(
+                future,
+                deadline + SYNC_TRANSPORT_MARGIN_SECONDS,
+            )
+        except FutureTimeoutError as timeout_error:
+            future.cancel()
+            raise EditorServiceTimeout(
+                f"Editor Service request {method!r} exceeded its {deadline:g}-second deadline"
+            ) from timeout_error
 
     async def _call_async(
         self,
@@ -312,6 +416,7 @@ class _SyncEditorServiceTransport:
         params: dict[str, Any] | None,
         *,
         start_if_needed: bool,
+        timeout_seconds: float,
     ) -> Any:
         selected = ServicePaths.discover()
         lock = self._lock
@@ -324,10 +429,10 @@ class _SyncEditorServiceTransport:
             if self._session is None or self._session.closed:
                 self._session = ClientSession(
                     timeout=ClientTimeout(
-                        total=None,
+                        total=DEFAULT_RPC_TIMEOUT_SECONDS,
                         connect=5,
                         sock_connect=5,
-                        sock_read=None,
+                        sock_read=DEFAULT_RPC_TIMEOUT_SECONDS,
                     ),
                     connector=TCPConnector(limit=32, limit_per_host=32, keepalive_timeout=30),
                 )
@@ -341,7 +446,12 @@ class _SyncEditorServiceTransport:
             client = self._client
             session = self._session
         try:
-            return await client.call(method, params, session=session)
+            return await client.call(
+                method,
+                params,
+                session=session,
+                timeout_seconds=timeout_seconds,
+            )
         finally:
             if method == "service.shutdown":
                 async with lock:

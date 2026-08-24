@@ -33,7 +33,6 @@ AppDialog {
         {category: qsTr("时间线编辑"), action: qsTr("适配整个时间线"), keys: "\\"},
         {category: qsTr("项目与面板"), action: qsTr("导入素材"), keys: "Ctrl+I"},
         {category: qsTr("项目与面板"), action: qsTr("打开导出页"), keys: "Ctrl+M"},
-        {category: qsTr("项目与面板"), action: qsTr("保存项目状态"), keys: "Ctrl+S"},
         {category: qsTr("项目与面板"), action: qsTr("标准 / 媒体 / 竖屏布局"), keys: "Ctrl+Alt+1 / 2 / 3"},
         {category: qsTr("项目与面板"), action: qsTr("最大化播放器 / 时间线"), keys: "Ctrl+Alt+P / T"},
         {category: qsTr("项目与面板"), action: qsTr("退出面板最大化 / 清除选择"), keys: "Ctrl+Alt+0 / Esc"},

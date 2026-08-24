@@ -333,6 +333,76 @@ def test_timeline_and_subtitle_edits_share_one_chronological_undo_history(tmp_pa
         assert repository.subtitles.list_subtitle_segments(document.id)[0].text == "After"
 
 
+def test_single_subtitle_edit_uses_segment_scoped_storage_and_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "single-edit.srt"
+    source.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nBefore\n\n"
+        "2\n00:00:01,200 --> 00:00:02,000\nUnchanged\n",
+        encoding="utf-8-sig",
+    )
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        history = ProjectEditHistory()
+        acquisition, editing, _publication = _build_subtitle_components(
+            repository,
+            history,
+        )
+        document = acquisition.import_subtitle_file(
+            source,
+            AssetService(repository, _media_probe()),
+        )
+        segment = repository.subtitles.list_subtitle_segments(document.id)[0]
+        checkpoint = history.checkpoint()
+        exact_saves = 0
+        original_exact_save = repository.subtitles.save_subtitle_segment_state
+
+        def save_exact(document_id, value, words):
+            nonlocal exact_saves
+            exact_saves += 1
+            return original_exact_save(document_id, value, words)
+
+        monkeypatch.setattr(
+            repository.subtitles,
+            "save_subtitle_segment_state",
+            save_exact,
+        )
+        monkeypatch.setattr(
+            repository.subtitles,
+            "save_subtitle_segments",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("single edit rewrote every subtitle segment")
+            ),
+        )
+        monkeypatch.setattr(
+            repository.subtitles,
+            "save_subtitle_words",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("single edit rewrote every subtitle word")
+            ),
+        )
+
+        updated = editing.update_segment(
+            document.id,
+            segment.id,
+            start_frame=segment.start_frame,
+            end_frame=segment.end_frame,
+            text="After",
+        )
+        change_set = history.change_set_since(checkpoint)
+
+        assert updated.text == "After"
+        assert exact_saves == 1
+        assert f"/subtitles/documents/{document.id}/segments/{segment.id}/text" in (
+            change_set.write_set
+        )
+        assert all(
+            path != f"/subtitles/documents/{document.id}/segments"
+            for path in change_set.write_set
+        )
+
+
 def test_word_delete_updates_timeline_transcript_srt_and_shared_undo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

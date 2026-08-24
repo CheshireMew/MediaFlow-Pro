@@ -35,7 +35,7 @@ Item {
         y: 7
         text: qsTr("场景时间")
         color: Theme.textMuted
-        font.pixelSize: 10
+        font.pixelSize: Theme.fontSizeCaption
     }
 
     Repeater {
@@ -56,7 +56,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: Math.round(index * root.durationMs / 400) / 10 + "s"
                 color: Theme.textMuted
-                font.pixelSize: 9
+                font.pixelSize: Theme.fontSizeCaption
             }
         }
     }
@@ -98,7 +98,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 text: String(intervalRow.modelData.label)
                 color: Theme.textMuted
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontSizeCaption
                 elide: Text.ElideRight
             }
 
@@ -245,7 +245,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             text: qsTr("关键帧")
             color: Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: Theme.fontSizeCaption
         }
         Repeater {
             model: root.keyframes

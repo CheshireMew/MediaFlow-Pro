@@ -34,7 +34,7 @@ class WebController(ControllerFacet[WebControllerScope]):
         self._web_entry_url = ""
         self._web_manifest: dict = {}
         self._web_state: dict = {}
-        self._runtime_web_state: dict = {}
+        self._runtime_web_state: dict[str, object] = {}
         self._edit_document: dict = {}
         self._active_variant_id = ""
         self._active_scene_id = ""
@@ -488,7 +488,10 @@ class WebController(ControllerFacet[WebControllerScope]):
                 self._session.state.binding.active_sequence_id,
                 self._web_clip_id,
             )
-            self._active_variant_id = str((self._runtime_web_state.get("variant") or {}).get("id") or "")
+            variant = self._runtime_web_state.get("variant")
+            self._active_variant_id = str(
+                (variant.get("id") if isinstance(variant, dict) else "") or ""
+            )
             known_scenes = {item.get("id") for item in self._web_manifest.get("scenes", [])}
             if self._active_scene_id not in known_scenes:
                 self._active_scene_id = str(self._runtime_web_state.get("scene_id") or "")
@@ -537,23 +540,21 @@ class WebController(ControllerFacet[WebControllerScope]):
             and self._session.state.selection.clip_ids
         ):
             clip_id = self._session.state.selection.clip_ids[-1]
-            clip = next(
-                (
-                    item
-                    for item in self._session.state.binding.require_timeline().state.clips
-                    if item.id == clip_id
-                ),
-                None,
-            )
-            if clip is not None:
-                asset = self._session.state.binding.require_current().get_asset(clip.asset_id)
-                if asset.kind == AssetKind.WEB:
-                    spec = self._session.state.binding.require_current().get_web_asset_spec(asset.id)
-                    state = self._session.state.binding.require_timeline().state.web_states[clip.id]
-                    self._web_clip_id = clip.id
-                    self._web_asset_id = asset.id
+            clips_model = self._session.models.clips
+            clip_row = clips_model.get(clips_model.findRow("clipId", clip_id))
+            if clip_row and clip_row["assetKind"] == AssetKind.WEB.value:
+                state = self._session.state.binding.require_timeline().state.web_states.get(
+                    clip_id
+                )
+                if state is not None:
+                    asset_id = str(clip_row["assetId"])
+                    spec = self._session.state.binding.require_current().get_web_asset_spec(
+                        asset_id
+                    )
+                    self._web_clip_id = clip_id
+                    self._web_asset_id = asset_id
                     self._web_entry_url = self._session.state.binding.require_current().web_editor_entry_url(
-                        asset.id
+                        asset_id
                     )
                     self._web_manifest = spec.manifest.model_dump(mode="json")
                     self._web_state = state.model_dump(mode="json")
@@ -589,7 +590,12 @@ class WebController(ControllerFacet[WebControllerScope]):
         self.webStateChanged.emit()
 
     def _refresh_layers(self) -> None:
-        runtime_scene = (self._runtime_web_state.get("scenes") or {}).get(self._active_scene_id, {}) or {}
+        runtime_scenes = self._runtime_web_state.get("scenes")
+        runtime_scene = (
+            runtime_scenes.get(self._active_scene_id, {})
+            if isinstance(runtime_scenes, dict)
+            else {}
+        ) or {}
         persistent_scene = (self._web_state.get("scenes") or {}).get(self._active_scene_id, {}) or {}
         overrides = runtime_scene.get("layers", {})
         locks = persistent_scene.get("locks", {})

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
-from mediaflow.desktop.models import MediaResourceListModel
+from mediaflow.desktop.asset_list_models import MediaResourceListModel
+from mediaflow.desktop.presentation_resources import (
+    builtin_media_resource_tags,
+    builtin_media_resource_text,
+    media_resource_ui_label,
+)
 from mediaflow.desktop.session_state import TimelinePlacement
 from mediaflow.domain.audio import AudioEffect
 from mediaflow.domain.enums import (
@@ -57,19 +62,22 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
 
     @Property(list, notify=resourcesChanged)
     def categoryOptions(self) -> list[dict[str, str]]:
-        return [{"value": "", "label": "全部"}] + [
-            {"value": value, "label": self._CATEGORY_LABELS.get(value, value)}
+        return [{"value": "", "label": media_resource_ui_label("全部")}] + [
+            {
+                "value": value,
+                "label": media_resource_ui_label(self._CATEGORY_LABELS.get(value, value)),
+            }
             for value in self._CATEGORY_LABELS
             if value in self._available_categories
         ]
 
     @Property(list, notify=resourcesChanged)
     def collectionOptions(self) -> list[dict[str, str]]:
-        options = [{"value": "favorites", "label": "收藏"}]
+        options = [{"value": "favorites", "label": media_resource_ui_label("收藏夹")}]
         if self._featured_count:
-            options.append({"value": "featured", "label": "热门"})
+            options.append({"value": "featured", "label": media_resource_ui_label("热门")})
         options.extend(
-            {"value": f"tag:{tag}", "label": label}
+            {"value": f"tag:{tag}", "label": media_resource_ui_label(label)}
             for tag, label in self._SEMANTIC_COLLECTIONS
             if tag in self._available_tags
         )
@@ -100,11 +108,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
             if self._session.state.binding.timeline is not None
             else ColorMode.SDR_BT709
         )
-        required_tags = (
-            [collection.removeprefix("tag:")]
-            if collection.startswith("tag:")
-            else []
-        )
+        required_tags = [collection.removeprefix("tag:")] if collection.startswith("tag:") else []
         result = self._session._api.search_media_resources(
             color_mode=color_mode.value,
             category=category or None,
@@ -115,23 +119,18 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         if not isinstance(items, list):
             raise RuntimeError("资源目录返回了无效的资源列表")
         categories = result.get("categories", [])
-        self._available_categories = [
-            str(value) for value in categories if isinstance(value, str)
-        ]
+        self._available_categories = [str(value) for value in categories if isinstance(value, str)]
         tags = result.get("tags", [])
-        self._available_tags = {
-            str(value) for value in tags if isinstance(value, str)
-        }
+        self._available_tags = {str(value) for value in tags if isinstance(value, str)}
         self._featured_count = int(result.get("featured_count") or 0)
-        favorites = set(
-            self._session.state.desktop_settings.ui.favorite_resource_keys
-        )
+        favorites = set(self._session.state.desktop_settings.ui.favorite_resource_keys)
         rows = []
         entries: dict[str, dict] = {}
         for raw in items:
             if not isinstance(raw, dict):
                 continue
             resource_key = str(raw.get("resource_key") or "")
+            catalog_id = str(raw.get("catalog_id") or "")
             featured_rank_value = raw.get("featured_rank")
             is_favorite = resource_key in favorites
             if collection == "favorites" and not is_favorite:
@@ -146,22 +145,23 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
             rights = rights_value if isinstance(rights_value, dict) else {}
             adoption_path = str(raw.get("adoption_path") or "")
             preview_path = str(raw.get("preview_path") or "")
-            preview_url = (
-                QUrl.fromLocalFile(preview_path).toString() if preview_path else ""
-            )
+            preview_url = QUrl.fromLocalFile(preview_path).toString() if preview_path else ""
             adoption_type = str(adoption.get("type") or "")
             can_adopt = adoption_type == "editor-preset" or (
-                adoption_type in {"editable-media-package", "media-file"}
-                and bool(adoption_path)
+                adoption_type in {"editable-media-package", "media-file"} and bool(adoption_path)
             )
             rows.append(
                 {
                     "resourceKey": resource_key,
                     "category": str(raw.get("category") or ""),
-                    "name": str(raw.get("name") or ""),
-                    "description": str(raw.get("description") or ""),
+                    "name": builtin_media_resource_text(
+                        catalog_id, str(raw.get("name") or "")
+                    ),
+                    "description": builtin_media_resource_text(
+                        catalog_id, str(raw.get("description") or "")
+                    ),
                     "provider": str(raw.get("provider") or ""),
-                    "tags": list(raw.get("tags") or []),
+                    "tags": builtin_media_resource_tags(catalog_id, raw.get("tags") or []),
                     "capabilities": list(raw.get("capabilities") or []),
                     "previewType": str(preview.get("type") or "none"),
                     "previewUrl": preview_url,
@@ -172,11 +172,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
                     "parameters": dict(adoption.get("parameters") or {}),
                     "defaultDurationFrames": int(adoption.get("default_duration_frames") or 0),
                     "adoptionPath": adoption_path,
-                    "featuredRank": (
-                        int(featured_rank_value)
-                        if featured_rank_value is not None
-                        else -1
-                    ),
+                    "featuredRank": (int(featured_rank_value) if featured_rank_value is not None else -1),
                     "isFavorite": is_favorite,
                     "canAdopt": can_adopt,
                 }
@@ -186,9 +182,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         self._model.set_items(rows)
         sources = result.get("sources", [])
         self._source_errors = [
-            str(source.get("error"))
-            for source in sources
-            if isinstance(source, dict) and source.get("error")
+            str(source.get("error")) for source in sources if isinstance(source, dict) and source.get("error")
         ]
         self.resourcesChanged.emit()
 
@@ -241,9 +235,9 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         if str(adoption.get("media_type") or "") == "lut":
             self._adopt_lut(adoption_path)
             return
-        force_new_track = adoption_type == "editable-media-package" or str(
-            adoption.get("placement") or ""
-        ) == "overlay"
+        force_new_track = (
+            adoption_type == "editable-media-package" or str(adoption.get("placement") or "") == "overlay"
+        )
         self._session.timeline_assets.import_media_paths(
             [QUrl.fromLocalFile(adoption_path)],
             placement=TimelinePlacement(
@@ -338,9 +332,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
 
     def _adopt_audio_effect(self, preset_id: str, adoption: dict) -> None:
         project = self._session.state.binding.require_current()
-        buses = project.list_audio_buses(
-            self._session.state.binding.active_sequence_id
-        )
+        buses = project.list_audio_buses(self._session.state.binding.active_sequence_id)
         selected_bus_id = self._session.state.selection.audio_bus_id
         bus = next((item for item in buses if item.id == selected_bus_id), None)
         if bus is None:
@@ -357,9 +349,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
                     "true_peak_db": self._session.state.service_settings.audio.true_peak_db,
                 }
             )
-        elif effect_kind == AudioEffectKind.DUCKING and not parameters.get(
-            "driver_bus_id"
-        ):
+        elif effect_kind == AudioEffectKind.DUCKING and not parameters.get("driver_bus_id"):
             parameters["driver_bus_id"] = next(
                 (item.id for item in buses if item.name in {"对白", "Dialogue"}),
                 "",

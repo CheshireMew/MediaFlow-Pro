@@ -26,7 +26,7 @@ LANGUAGES = ("zh_CN", "en", "ja")
 SCALES = ("1", "1.5", "2")
 HOME_SIZES = ((1280, 720), (1600, 980))
 SIZES = ((1280, 720), (1920, 1080), (3840, 2160))
-SETTINGS_TABS = ("general", "download", "ai")
+SETTINGS_TABS = ("general", "download", "editor", "ai")
 UI_MATRIX_WORKERS = 3
 
 
@@ -82,6 +82,25 @@ def probe(root: Path, language: str, scale: str) -> dict:
         origin = item.mapToItem(ancestor, QPointF(0, 0))
         return origin.x(), origin.x() + float(item.property("width"))
 
+    def assert_english_surface_translated(surface: str) -> None:
+        if language != "en":
+            return
+        violations: set[str] = set()
+        content_item = quick_window.contentItem()
+        for item in (content_item, *visual_items(content_item)):
+            if not item.isVisible():
+                continue
+            for property_name in ("text", "placeholderText"):
+                value = item.property(property_name)
+                if isinstance(value, str) and any(
+                    "\u4e00" <= char <= "\u9fff" for char in value
+                ):
+                    violations.add(value)
+        if violations:
+            raise RuntimeError(
+                f"English {surface} still exposes Chinese system text: {sorted(violations)!r}"
+            )
+
     results = []
     try:
         window = engine.rootObjects()[0]
@@ -129,6 +148,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 float(create_hero.property("y")) + float(create_hero.property("height"))
             ):
                 raise RuntimeError("Home page creation and recent-project sections are not vertical")
+            assert_english_surface_translated("home")
             home_image = quick_window.grabWindow()
             home_screenshot = root / (f"{language}-{scale}x-home-{home_width}x{home_height}.png")
             if home_image.isNull() or not home_image.save(str(home_screenshot)):
@@ -168,6 +188,16 @@ def probe(root: Path, language: str, scale: str) -> dict:
         if main_sequence.get("displayName") != expected_sequence_name[language]:
             raise RuntimeError(
                 f"System sequence name did not use the active translation catalog: {main_sequence!r}"
+            )
+        expected_profile_label = {
+            "zh_CN": "等待首个视频",
+            "en": "Waiting for the first video",
+            "ja": "最初の動画を待機中",
+        }
+        if workspace_controller.profileLabel != expected_profile_label[language]:
+            raise RuntimeError(
+                "Pending sequence profile did not use the active translation catalog: "
+                f"{workspace_controller.profileLabel!r}"
             )
         for width, height in SIZES:
             window.setWidth(width)
@@ -305,6 +335,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             # QQuickWindow.grabWindow() captures the entire scene at device-pixel
             # resolution. QScreen.grabWindow() only returned the top-left physical
             # portion of a high-DPI offscreen window and could hide real clipping.
+            assert_english_surface_translated(f"workspace {width}x{height}")
             image = quick_window.grabWindow()
             screenshot = root / f"{language}-{scale}x-{width}x{height}.png"
             if image.isNull() or not image.save(str(screenshot)):
@@ -353,9 +384,24 @@ def probe(root: Path, language: str, scale: str) -> dict:
         source_insert = workspace.findChild(QObject, "sourceInsertRangeButton")
         source_menu = workspace.findChild(QObject, "sourceActionsMenuButton")
         workflow_banner = workspace.findChild(QObject, "workflowBanner")
+        workflow_summary = workspace.findChild(QObject, "workflowCompactSummary")
         workflow_menu = workspace.findChild(QObject, "workflowCompactMenuButton")
-        if any(item is None for item in (source_insert, source_menu, workflow_banner, workflow_menu)):
+        if any(
+            item is None
+            for item in (
+                source_insert,
+                source_menu,
+                workflow_banner,
+                workflow_summary,
+                workflow_menu,
+            )
+        ):
             raise RuntimeError("Responsive dynamic-state controls were not created")
+        if not workflow_summary.isVisible() or (
+            bool(workflow_banner.property("compactLayout"))
+            and " · " not in str(workflow_summary.property("text"))
+        ):
+            raise RuntimeError("Compact workflow state lost its stage or explanatory message")
         for item, ancestor, label in (
             (source_insert, preview_panel, "source insert action"),
             (source_menu, preview_panel, "source overflow action"),
@@ -364,6 +410,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             left, right = horizontal_bounds(item, ancestor)
             if not item.isVisible() or left < -1 or right > float(ancestor.property("width")) + 1:
                 raise RuntimeError(f"{label} is unreachable at 1280x720: {left:.1f}..{right:.1f}")
+        assert_english_surface_translated("compact workflow")
         dynamic_image = quick_window.grabWindow()
         dynamic_screenshot = root / f"{language}-{scale}x-dynamic-source-workflow-1280x720.png"
         if dynamic_image.isNull() or not dynamic_image.save(str(dynamic_screenshot)):
@@ -427,6 +474,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
                 advanced_open = bool(advanced_section.property("visible"))
                 if not advanced_open:
                     raise RuntimeError("Export advanced settings did not open")
+            assert_english_surface_translated(f"{mode} workspace")
             image = quick_window.grabWindow()
             screenshot = root / f"{language}-{scale}x-mode-{mode}.png"
             if image.isNull() or not image.save(str(screenshot)):
@@ -475,6 +523,7 @@ def probe(root: Path, language: str, scale: str) -> dict:
             for _ in range(8):
                 QCoreApplication.processEvents()
                 time.sleep(0.02)
+            assert_english_surface_translated(f"{tab_name} settings")
             image = quick_window.grabWindow()
             screenshot = root / f"{language}-{scale}x-settings-{tab_name}.png"
             if image.isNull() or not image.save(str(screenshot)):

@@ -155,6 +155,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
                 )
             ]
         self._invalidate_preview_index()
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows(
             list(selected_ids),
             clips=changed_clips,
@@ -177,7 +178,11 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
         self._invalidate_preview_index()
         self._session.state.selection.clip_ids = [copied.id]
         self._session.state.selection.compound_id = ""
-        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.refresh_known_clip_membership(
+            [copied],
+            removed_clip_ids=set(),
+            row_templates={copied.id: source},
+        )
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
 
@@ -185,11 +190,17 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def splitClip(self, clip_id: str, frame: int) -> None:
         self._session._require_writable()
-        _, right = self._session.state.binding.require_timeline().split_clip(clip_id, frame)
+        model = self._session.models.clips
+        source = model.get(model.findRow("clipId", clip_id))
+        left, right = self._session.state.binding.require_timeline().split_clip(clip_id, frame)
         self._invalidate_preview_index()
         self._session.state.selection.clip_ids = [right.id]
         self._session.state.selection.compound_id = ""
-        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.refresh_known_clip_membership(
+            [left, right],
+            removed_clip_ids=set(),
+            row_templates={left.id: source, right.id: source},
+        )
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
 
@@ -201,7 +212,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
         self._invalidate_preview_index()
         self._session.state.selection.clip_ids = [video.id]
         self._session.state.selection.compound_id = ""
-        self._session.projectors.timeline.refresh_timeline()
+        self._session.projectors.timeline.refresh_clip_structure()
         self._session.projectors.timeline.schedule_preview_graph()
         self.exclusiveSelectionRequested.emit()
         self._session.updates.commit(selection=True)
@@ -214,13 +225,21 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
         self._session._require_writable()
         if not self._session.state.selection.clip_ids:
             return
+        removed_ids = set(self._session.state.selection.clip_ids)
         self._session.state.binding.require_timeline().delete_clips(
-            self._session.state.selection.clip_ids, ripple=ripple
+            removed_ids, ripple=ripple
         )
         self._invalidate_preview_index()
         self._session.state.selection.clip_ids = []
         self._session.state.selection.compound_id = ""
-        self._session.projectors.timeline.refresh_timeline()
+        if ripple:
+            self._session.projectors.timeline.refresh_timeline()
+        else:
+            self._session.projectors.timeline.refresh_known_clip_membership(
+                [],
+                removed_clip_ids=removed_ids,
+                row_templates={},
+            )
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
 
@@ -237,6 +256,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
             duration=max(1, duration),
         )
         self._invalidate_preview_index()
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows([clip_id], clips=[changed])
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
@@ -271,6 +291,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
             duration=max(1, duration),
         )
         self._invalidate_preview_index()
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows([clip_id], clips=[changed])
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
@@ -288,6 +309,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
             speed_denominator=fraction.denominator,
             pitch_compensation=pitch_compensation,
         )
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows(
             [clip_id],
             clips=[changed],
@@ -356,6 +378,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
                 fade_out_frames=max(0, fade_out_frames),
             ),
         )
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows(
             [clip_id],
             clips=[changed],
@@ -375,6 +398,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
             clip_id,
             asset_id,
         )
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows([clip_id], clips=[changed])
         self._session.projectors.timeline.schedule_preview_graph()
         self._session.updates.commit(selection=True)
@@ -400,6 +424,7 @@ class TimelineClipController(ControllerFacet[TimelinePresentationScope]):
             fade_out_frames=max(0, fade_out_frames),
             opacity=max(0.0, min(1.0, opacity)),
         )
+        self._session.projectors.audio.invalidate_audio_metrics()
         self._session.projectors.timeline.refresh_clip_rows(
             list(self._session.state.selection.clip_ids),
             clips=changed,

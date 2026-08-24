@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,14 +28,13 @@ from .project_database_session import ProjectDatabaseSession
 from .project_lock import ProcessFileLock
 from .project_migration_runner import ProjectSchemaMigrator
 from .project_repository_assembly import assemble_project_repositories
-from .project_repository_relations import ProjectRepositoryRelations
 from .project_schema_definition import (
     MANAGED_DIRECTORIES,
     PROJECT_FILE_NAME,
     PROJECT_SCHEMA_VERSION,
     SCHEMA_SQL,
 )
-from .sqlite_uri import read_only_database_uri
+from .sqlite_connections import open_project_database
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +61,7 @@ class ProjectRepository:
         self._task_preparation_state = threading.local()
         self._mutation_gate: Any | None = None
         self._transaction_depth = 0
+        self._transaction_observes_project = True
         self._revision_coalescing_depth = 0
         self._revision_dirty = False
         self._savepoint_serial = 0
@@ -69,12 +69,10 @@ class ProjectRepository:
         self.read_only = read_only
         self._write_lock = write_lock
         self._known_content_revision: int | None = None
-        relations = ProjectRepositoryRelations()
         self._database = ProjectDatabaseSession(
             project_dir=self.project_dir,
             database_path=self.database_path,
             read_only=self.read_only,
-            relations=relations,
             connection=self._connection,
             connection_lock=self._connection_lock,
             transaction_factory=lambda: self.transaction(),
@@ -94,6 +92,7 @@ class ProjectRepository:
         self.history = components.history
         self.operations = components.operations
         self.timeline = components.timeline
+        self.frame_clock = components.frame_clock
         self.audio = components.audio
         self.dubbing = components.dubbing
         self.subtitles = components.subtitles
@@ -153,7 +152,12 @@ class ProjectRepository:
         repository: ProjectRepository | None = None
         published = False
         try:
-            connection = cls._connect(temporary_path, read_only=False)
+            connection = open_project_database(
+                temporary_path,
+                read_only=False,
+                check_same_thread=False,
+                durable_writes=True,
+            )
             repository = cls(
                 root,
                 connection,
@@ -180,7 +184,12 @@ class ProjectRepository:
                 raise FileExistsError(f"Project already exists: {database_path}")
             temporary_path.rename(database_path)
             published = True
-            final_connection = cls._connect(database_path, read_only=False)
+            final_connection = open_project_database(
+                database_path,
+                read_only=False,
+                check_same_thread=False,
+                durable_writes=True,
+            )
             repository = cls(
                 root,
                 final_connection,
@@ -238,9 +247,11 @@ class ProjectRepository:
         connection: sqlite3.Connection | None = None
         repository: ProjectRepository | None = None
         try:
-            connection = cls._connect(
+            connection = open_project_database(
                 database_path,
                 read_only=read_only,
+                check_same_thread=False,
+                durable_writes=not read_only,
             )
             repository = cls(
                 root,
@@ -291,35 +302,6 @@ class ProjectRepository:
         revision = self.content_revision()
         self._known_content_revision = revision
         return revision
-
-    @staticmethod
-    def _connect(database_path: Path, *, read_only: bool) -> sqlite3.Connection:
-        connection: sqlite3.Connection | None = None
-        try:
-            if read_only:
-                connection = sqlite3.connect(
-                    read_only_database_uri(database_path),
-                    uri=True,
-                    timeout=5.0,
-                    check_same_thread=False,
-                )
-            else:
-                connection = sqlite3.connect(
-                    database_path,
-                    timeout=5.0,
-                    check_same_thread=False,
-                )
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA busy_timeout=5000")
-            if not read_only:
-                connection.execute("PRAGMA journal_mode=DELETE")
-                connection.execute("PRAGMA synchronous=FULL")
-            return connection
-        except BaseException:
-            if connection is not None:
-                connection.close()
-            raise
 
     def _initialize(
         self,
@@ -391,11 +373,15 @@ class ProjectRepository:
                 self.audio.insert_bus_record(connection, bus)
 
     @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
+    def transaction(self, *, observe_project: bool = True) -> Iterator[sqlite3.Connection]:
         if self.read_only:
             raise PermissionError("Project is open read-only")
         with self._mutation_gate or nullcontext(), self._connection_lock:
             if self._transaction_depth:
+                if observe_project and not self._transaction_observes_project:
+                    raise RuntimeError(
+                        "Project content cannot be changed inside a task-state transaction"
+                    )
                 publication_start = len(self._transaction_publications)
                 self._savepoint_serial += 1
                 savepoint = f"mediaflow_nested_{self._transaction_depth}_{self._savepoint_serial}"
@@ -423,9 +409,14 @@ class ProjectRepository:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 self._transaction_depth = 1
+                self._transaction_observes_project = observe_project
                 transaction_base_revision = self._content_revision_if_available()
                 fallback_observation = None
-                if transaction_base_revision is not None and not self.events.has_change_scope():
+                if (
+                    observe_project
+                    and transaction_base_revision is not None
+                    and not self.events.has_change_scope()
+                ):
                     fallback_observation = (
                         self.observations.capture(["/project"])
                         if self._schema_is_current()
@@ -438,12 +429,22 @@ class ProjectRepository:
                             "Project content changed in another process; reload before editing"
                         )
                 yield self._connection
-                self.events.append_implicit_change(
-                    transaction_base_revision,
-                    fallback_observation,
+                if observe_project:
+                    self.events.append_implicit_change(
+                        transaction_base_revision,
+                        fallback_observation,
+                    )
+                final_content_revision = (
+                    self._content_revision_if_available()
+                    if observe_project
+                    else transaction_base_revision
                 )
                 self._connection.commit()
-                self._known_content_revision = self._content_revision_if_available()
+                # The mutation gate and the project process lock exclude another
+                # writer between the in-transaction read and this commit. Reuse
+                # that value instead of forcing a second durable-file read after
+                # every command.
+                self._known_content_revision = final_content_revision
             except BaseException as error:
                 try:
                     self._connection.rollback()
@@ -461,7 +462,13 @@ class ProjectRepository:
                 self._commit_publications()
             finally:
                 self._transaction_depth = 0
+                self._transaction_observes_project = True
                 self._transaction_publications.clear()
+
+    def task_transaction(self) -> AbstractContextManager[sqlite3.Connection]:
+        """Persist task lifecycle state without observing or revising project content."""
+
+        return self.transaction(observe_project=False)
 
     def enlist_transaction_publication(
         self,
@@ -542,11 +549,20 @@ class ProjectRepository:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _fetchone(self, sql: str, parameters: tuple | list = ()) -> sqlite3.Row | None:
+    def _fetchone(
+        self,
+        sql: str,
+        parameters: tuple[Any, ...] | list[Any] = (),
+    ) -> sqlite3.Row | None:
         with self._connection_lock:
-            return self._connection.execute(sql, parameters).fetchone()
+            row: sqlite3.Row | None = self._connection.execute(sql, parameters).fetchone()
+            return row
 
-    def _fetchall(self, sql: str, parameters: tuple | list = ()) -> list[sqlite3.Row]:
+    def _fetchall(
+        self,
+        sql: str,
+        parameters: tuple[Any, ...] | list[Any] = (),
+    ) -> list[sqlite3.Row]:
         with self._connection_lock:
             return self._connection.execute(sql, parameters).fetchall()
 
@@ -569,6 +585,8 @@ class ProjectRepository:
         return row is not None and int(row["version"]) == PROJECT_SCHEMA_VERSION
 
     def _touch_project(self, connection: sqlite3.Connection) -> None:
+        if not self._transaction_observes_project:
+            raise RuntimeError("Task-state transactions cannot change project content")
         task_id = getattr(self._task_preparation_state, "task_id", None)
         if task_id is not None:
             raise RuntimeError(f"后台任务准备阶段不能直接修改项目；任务 {task_id} 必须延迟到完成命令提交")

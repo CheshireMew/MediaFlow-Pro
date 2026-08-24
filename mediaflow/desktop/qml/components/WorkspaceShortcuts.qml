@@ -206,11 +206,6 @@ Item {
         onActivated: shortcuts.timelineView.fitTimeline()
     }
     Shortcut {
-        sequence: "Ctrl+S"
-        enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
-        onActivated: mediaflow.workspaceSequenceController.saveProject()
-    }
-    Shortcut {
         sequence: "M"
         enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
         onActivated: mediaflow.timelineStructureController.addTimelineMarker(shortcuts.preview.position)

@@ -36,7 +36,11 @@ class AssetProjector(Projector):
         transcript_terms: dict[str, list[str]] = {}
         for document in documents:
             text = " ".join(segment.text for segment in segments_by_document[document.id])
-            for asset_id in {document.asset_id, document.media_asset_id} - {None}:
+            for asset_id in {
+                value
+                for value in (document.asset_id, document.media_asset_id)
+                if value is not None
+            }:
                 transcript_terms.setdefault(asset_id, []).append(text)
         self._session.models.filtered_assets.set_extra_search_text(
             {asset_id: " ".join(values) for asset_id, values in transcript_terms.items()}

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from mediaflow.domain.web_manifest import (
     WebAssetSpec,
@@ -11,10 +13,23 @@ from mediaflow.domain.web_state import WebClipState
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
 
+if TYPE_CHECKING:
+    from .asset_catalog_repository import AssetCatalogRepository
+    from .project_database_session import ProjectDatabaseSession
+
 
 class WebMediaRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        assets: Callable[[], AssetCatalogRepository],
+    ) -> None:
+        super().__init__(database)
+        self._assets = assets
+
     def save_web_asset_spec(self, spec: WebAssetSpec) -> WebAssetSpec:
-        asset = self._relations.assets.get_asset(spec.asset_id)
+        asset = self._assets().get_asset(spec.asset_id)
         if asset.kind.value != "web":
             raise ValueError("Editable media metadata can only belong to a web asset")
         with self.transaction() as connection:

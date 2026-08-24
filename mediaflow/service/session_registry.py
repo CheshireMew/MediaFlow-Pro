@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mediaflow.application.events import TaskEvent
 from mediaflow.application.project_command_queue import ProjectCommandQueue
 from mediaflow.application.project_revision_policy import resolve_project_revision
 from mediaflow.automation.contracts import AutomationRequest
@@ -35,6 +37,7 @@ class ProjectSession:
     write_lock: ProjectCommandQueue
     task_subscription: int
     active_calls: int = 0
+    closing: bool = False
 
 
 class ProjectSessionRegistry:
@@ -45,7 +48,12 @@ class ProjectSessionRegistry:
         self.events = events
         self._sessions: dict[Path, ProjectSession] = {}
         self._desktop_clients: dict[Path, set[str]] = {}
+        self._root_locks: dict[Path, threading.RLock] = {}
         self._sessions_lock = threading.RLock()
+
+    def _root_lifecycle_lock(self, root: Path) -> threading.RLock:
+        with self._sessions_lock:
+            return self._root_locks.setdefault(root, threading.RLock())
 
     @contextmanager
     def leased_session(
@@ -58,9 +66,10 @@ class ProjectSessionRegistry:
         # Session lookup and lifetime acquisition are one boundary. The
         # lifetime lease prevents release without forcing long-running task
         # admission handlers to hold the foreground project write gate.
-        with self._sessions_lock:
+        root = path.expanduser().resolve()
+        with self._root_lifecycle_lock(root):
             session = self.open_session(
-                path,
+                root,
                 allow_upgrade=allow_upgrade,
                 require_writable=require_writable,
             )
@@ -79,7 +88,13 @@ class ProjectSessionRegistry:
         self,
         envelope: AutomationRequest,
     ) -> Iterator[ProjectSession]:
-        with self._sessions_lock:
+        root = safe_child_path(
+            default_project_root(),
+            str(envelope.arguments["directory_name"]),
+            max_path_utf16_units=PROJECT_ROOT_PATH_UTF16_LIMIT,
+            max_component_utf16_units=PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
+        ).resolve()
+        with self._root_lifecycle_lock(root):
             session = self._create_session(envelope)
             with session.lifetime_condition:
                 session.active_calls += 1
@@ -115,12 +130,14 @@ class ProjectSessionRegistry:
         require_writable: bool = True,
     ) -> ProjectSession:
         root = path.expanduser().resolve()
-        with self._sessions_lock:
-            session = self._sessions.get(root)
+        with self._root_lifecycle_lock(root):
+            with self._sessions_lock:
+                session = self._sessions.get(root)
             if session is not None:
                 if not require_writable or session.project.owns_project_writer:
                     return session
-                self._sessions.pop(root)
+                with self._sessions_lock:
+                    self._sessions.pop(root, None)
                 self._close_bound_session(session)
             if not allow_upgrade:
                 try:
@@ -134,7 +151,8 @@ class ProjectSessionRegistry:
                     project.close(timeout=0)
                     raise RuntimeError(f"Editor Service could not own the project writer lock: {root}")
             session = self._bind_session(project)
-            self._sessions[root] = session
+            with self._sessions_lock:
+                self._sessions[root] = session
             return session
 
     def create_desktop_project(
@@ -150,8 +168,9 @@ class ProjectSessionRegistry:
         profile = decode_transport(profile_value)
         if not isinstance(profile, ProjectProfile):
             profile = ProjectProfile.model_validate(profile)
-        with self._sessions_lock:
-            session = self._sessions.get(root)
+        with self._root_lifecycle_lock(root):
+            with self._sessions_lock:
+                session = self._sessions.get(root)
             if session is None:
                 if (root / "project.mfp").is_file():
                     project = self.application.open_project(root, writable=True)
@@ -171,21 +190,24 @@ class ProjectSessionRegistry:
                         profile if profile_confirmed else None,
                     )
                 session = self._bind_session(project)
-                self._sessions[root] = session
-            self._desktop_clients.setdefault(root, set()).add(client_id)
+                with self._sessions_lock:
+                    self._sessions[root] = session
+            with self._sessions_lock:
+                self._desktop_clients.setdefault(root, set()).add(client_id)
             with session.write_lock:
                 return self._desktop_descriptor(session)
 
     def open_desktop_project(self, path: Path, client_id: str) -> dict[str, Any]:
         root = path.expanduser().resolve()
         client_id = _required_desktop_client_id(client_id)
-        with self._sessions_lock:
+        with self._root_lifecycle_lock(root):
             session = self.open_session(
                 root,
                 allow_upgrade=True,
                 require_writable=False,
             )
-            self._desktop_clients.setdefault(root, set()).add(client_id)
+            with self._sessions_lock:
+                self._desktop_clients.setdefault(root, set()).add(client_id)
             with session.write_lock:
                 return self._desktop_descriptor(session)
 
@@ -199,23 +221,49 @@ class ProjectSessionRegistry:
         client_id = _required_desktop_client_id(client_id)
         if not math.isfinite(timeout_seconds) or not 0 <= timeout_seconds <= 60:
             raise ValueError("timeout_seconds must be between 0 and 60")
-        with self._sessions_lock:
-            clients = self._desktop_clients.get(root)
-            if clients is None or client_id not in clients:
-                return {"released": False, "retained_for_tasks": False}
-            clients.remove(client_id)
-            if clients:
-                return {"released": True, "retained_for_tasks": False}
-            self._desktop_clients.pop(root, None)
-            session = self._sessions.get(root)
+        deadline = time.monotonic() + timeout_seconds
+        with self._root_lifecycle_lock(root):
+            with self._sessions_lock:
+                clients = self._desktop_clients.get(root)
+                if clients is None or client_id not in clients:
+                    return {"released": False, "retained_for_tasks": False}
+                if len(clients) > 1:
+                    clients.remove(client_id)
+                    return {"released": True, "retained_for_tasks": False}
+                session = self._sessions.get(root)
             if session is None:
+                with self._sessions_lock:
+                    clients.remove(client_id)
+                    if not clients:
+                        self._desktop_clients.pop(root, None)
                 return {"released": True, "retained_for_tasks": False}
-            self._wait_for_session_calls(session)
-            with session.write_lock:
+            with session.lifetime_condition:
+                session.closing = True
+            try:
+                self._wait_for_session_calls(session, deadline=deadline)
                 if self._session_has_active_tasks(session):
+                    with self._sessions_lock:
+                        clients.remove(client_id)
+                        if not clients:
+                            self._desktop_clients.pop(root, None)
+                    with session.lifetime_condition:
+                        session.closing = False
+                        session.lifetime_condition.notify_all()
                     return {"released": True, "retained_for_tasks": True}
-                self._sessions.pop(root, None)
-                self._close_bound_session(session, timeout_seconds=timeout_seconds)
+                remaining = max(0.0, deadline - time.monotonic())
+                with session.write_lock:
+                    self._close_bound_session(session, timeout_seconds=remaining)
+                with self._sessions_lock:
+                    if self._sessions.get(root) is session:
+                        self._sessions.pop(root, None)
+                    clients.remove(client_id)
+                    if not clients:
+                        self._desktop_clients.pop(root, None)
+            except BaseException:
+                with session.lifetime_condition:
+                    session.closing = False
+                    session.lifetime_condition.notify_all()
+                raise
             return {"released": True, "retained_for_tasks": False}
 
     def service_status(self) -> dict[str, Any]:
@@ -266,13 +314,29 @@ class ProjectSessionRegistry:
 
     def close(self) -> None:
         with self._sessions_lock:
-            sessions = tuple(self._sessions.values())
-            self._sessions.clear()
-            self._desktop_clients.clear()
-            for session in sessions:
-                self._wait_for_session_calls(session)
-                with session.write_lock:
-                    self._close_bound_session(session)
+            sessions = tuple(self._sessions.items())
+        first_error: BaseException | None = None
+        for root, session in sessions:
+            try:
+                with self._root_lifecycle_lock(root):
+                    deadline = time.monotonic() + 5.0
+                    with session.lifetime_condition:
+                        session.closing = True
+                    self._wait_for_session_calls(session, deadline=deadline)
+                    with session.write_lock:
+                        self._close_bound_session(session)
+                    with self._sessions_lock:
+                        if self._sessions.get(root) is session:
+                            self._sessions.pop(root, None)
+                        self._desktop_clients.pop(root, None)
+            except BaseException as error:
+                with session.lifetime_condition:
+                    session.closing = False
+                    session.lifetime_condition.notify_all()
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     @staticmethod
     def _desktop_descriptor(session: ProjectSession) -> dict[str, Any]:
@@ -297,12 +361,14 @@ class ProjectSessionRegistry:
             max_path_utf16_units=PROJECT_ROOT_PATH_UTF16_LIMIT,
             max_component_utf16_units=PROJECT_DIRECTORY_COMPONENT_UTF16_LIMIT,
         ).resolve()
-        with self._sessions_lock:
-            existing = self._sessions.get(root)
+        with self._root_lifecycle_lock(root):
+            with self._sessions_lock:
+                existing = self._sessions.get(root)
             if existing is not None:
                 if existing.project.owns_project_writer:
                     return existing
-                self._sessions.pop(root)
+                with self._sessions_lock:
+                    self._sessions.pop(root, None)
                 self._close_bound_session(existing)
             if (root / "project.mfp").is_file():
                 project = self.application.open_project(root, writable=True)
@@ -322,14 +388,15 @@ class ProjectSessionRegistry:
                     ProjectProfile.model_validate(envelope.arguments["profile"]),
                 )
             session = self._bind_session(project)
-            self._sessions[root] = session
+            with self._sessions_lock:
+                self._sessions[root] = session
             return session
 
     def _bind_session(self, project: EditorProject) -> ProjectSession:
         project_path_value = str(project.project_dir)
         project.observe_implicit_project_events(self.publish_project_event)
 
-        def observe_task(event) -> None:
+        def observe_task(event: TaskEvent) -> None:
             self.events.publish_from_worker(
                 ServiceEvent(
                     "task.changed",
@@ -349,10 +416,15 @@ class ProjectSessionRegistry:
         )
 
     @staticmethod
-    def _wait_for_session_calls(session: ProjectSession) -> None:
+    def _wait_for_session_calls(session: ProjectSession, *, deadline: float) -> None:
         with session.lifetime_condition:
             while session.active_calls:
-                session.lifetime_condition.wait()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out waiting for {session.active_calls} active project calls"
+                    )
+                session.lifetime_condition.wait(timeout=remaining)
 
     @staticmethod
     def _close_bound_session(
@@ -360,15 +432,18 @@ class ProjectSessionRegistry:
         *,
         timeout_seconds: float = 5.0,
     ) -> None:
-        session.project.unsubscribe_task_events(session.task_subscription)
         session.project.close(timeout=timeout_seconds)
+        session.project.unsubscribe_task_events(session.task_subscription)
 
     @staticmethod
     def _session_has_active_tasks(session: ProjectSession) -> bool:
         return any(task.status.is_active for task in session.project.list_tasks())
 
     @staticmethod
-    def task_event_document(project_path_value: str, event) -> dict[str, Any]:
+    def task_event_document(
+        project_path_value: str,
+        event: TaskEvent,
+    ) -> dict[str, Any]:
         document = asdict(event)
         document["task_revision"] = document.pop("revision")
         document["project_path"] = project_path_value

@@ -26,6 +26,7 @@ from mediaflow.desktop.runtime_directory_management import (
     set_saved_runtime_directory,
 )
 from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.environment import DESKTOP_SETTINGS_PATH_VARIABLE
 from mediaflow.infrastructure.application_logging import (
     configure_application_logging,
     shutdown_application_logging,
@@ -43,6 +44,8 @@ from mediaflow.service.desktop_application_proxy import (
     DesktopEditorApplication,
     create_desktop_editor_application,
 )
+
+from .service_wait import install_desktop_service_waiter
 
 STARTUP_READY_PATH_ENV = "MEDIAFLOW_STARTUP_READY_PATH"
 STARTUP_READY_SCHEMA_VERSION = 2
@@ -95,6 +98,7 @@ def create_engine(
     *,
     startup_phases: dict[str, int] | None = None,
 ) -> tuple[QQmlApplicationEngine, EditorControllers]:
+    install_desktop_service_waiter()
     engine = QQmlApplicationEngine(app)
     qml_errors: list[str] = []
     engine.warnings.connect(lambda warnings: qml_errors.extend(item.toString() for item in warnings))
@@ -225,7 +229,7 @@ def _saved_runtime_directory() -> Path | None:
 
 
 def startup_settings_path() -> Path | None:
-    configured_settings = os.environ.get("MEDIAFLOW_DESKTOP_SETTINGS_PATH")
+    configured_settings = os.environ.get(DESKTOP_SETTINGS_PATH_VARIABLE)
     if configured_settings:
         return Path(configured_settings).expanduser().resolve()
     selected_runtime = configured_runtime_directory() or _saved_runtime_directory()
@@ -296,6 +300,7 @@ def main() -> int:
         )
     QtWebEngineQuick.initialize()
     app = create_desktop_application()
+    install_desktop_service_waiter()
     if not ensure_runtime_directory():
         return 2
     runtime_ready_at_ns = time.time_ns()

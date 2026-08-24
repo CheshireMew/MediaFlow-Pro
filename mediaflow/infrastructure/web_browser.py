@@ -17,9 +17,13 @@ from mediaflow.domain.web_manifest import (
 )
 from mediaflow.domain.web_media_sources import WebMediaSourcesManifest
 
+from .editable_media_page import (
+    EDITABLE_MEDIA_PAGE_TIMEOUT_MS,
+    open_editable_media_page,
+)
+
 logger = logging.getLogger(__name__)
 BROWSER_VALIDATION_ATTEMPTS = 2
-WEB_RUNTIME_READY_TIMEOUT_MS = 15_000
 
 SEEK_WEB_FRAME_SCRIPT = """
 async seconds => {
@@ -211,17 +215,9 @@ def _validate_runtime_manifests(
             && typeof window.__hf.resolveFrame === 'function'
             && typeof window.__hf.rejectFrame === 'function'
             && window.__hf.duration > 0""",
-        timeout=WEB_RUNTIME_READY_TIMEOUT_MS,
+        timeout=EDITABLE_MEDIA_PAGE_TIMEOUT_MS,
     )
     page.evaluate("() => window.editableMedia.ready")
-    page.evaluate(
-        """async () => {
-            await document.fonts.ready;
-            await Promise.all(
-                Array.from(document.images).map(image => image.decode())
-            );
-        }"""
-    )
     runtime_manifest = page.evaluate("() => window.editableMedia.getManifest()")
     if parse_editable_media_manifest(runtime_manifest, contract) != manifest:
         raise ValueError("window.editableMedia.getManifest() must expose the imported v6 manifest")
@@ -504,31 +500,9 @@ class BrowserWebPackageValidator(WebPackageValidatorPort):
                         args=["--disable-gpu"],
                     )
                     try:
-                        context = browser.new_context(
-                            viewport={
-                                "width": manifest.default_variant.canvas.width,
-                                "height": manifest.default_variant.canvas.height,
-                            },
-                            device_scale_factor=1,
-                        )
-                        context.on(
-                            "request",
-                            # The context is closed before the next attempt can
-                            # replace this attempt-local collection.
-                            lambda request: requested_urls.append(request.url),  # noqa: B023
-                        )
-                        context.route(
-                            "http://**/*",
-                            lambda route: (
-                                route.continue_()
-                                if current_preview.owns_url(route.request.url)
-                                else route.abort()
-                            ),
-                        )
-                        context.route("https://**/*", lambda route: route.abort())
-                        page = context.new_page()
-                        page.goto(
-                            current_preview.url_for(
+                        context, page, _cdp = open_editable_media_page(
+                            browser,
+                            url=current_preview.url_for(
                                 manifest.entry,
                                 query=(
                                     "capture=1&"
@@ -536,8 +510,14 @@ class BrowserWebPackageValidator(WebPackageValidatorPort):
                                     f"scene={manifest.scenes[0].id}"
                                 ),
                             ),
-                            wait_until="load",
-                            timeout=15000,
+                            width=manifest.default_variant.canvas.width,
+                            height=manifest.default_variant.canvas.height,
+                            owns_url=current_preview.owns_url,
+                            # The context is closed before the next attempt can
+                            # replace this attempt-local collection.
+                            on_request=lambda request: requested_urls.append(  # noqa: B023
+                                request.url
+                            ),
                         )
                         try:
                             validate_editable_media_page(

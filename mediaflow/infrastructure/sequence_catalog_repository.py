@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from mediaflow.domain.audio import AudioBus
 from mediaflow.domain.enums import (
@@ -20,8 +22,24 @@ from mediaflow.domain.timeline import TimelineRevisionConflict
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import model_json as _model_json
 
+if TYPE_CHECKING:
+    from .audio_repository import AudioRepository
+    from .project_database_session import ProjectDatabaseSession
+    from .project_metadata_repository import ProjectMetadataRepository
+
 
 class SequenceCatalogRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        projects: Callable[[], ProjectMetadataRepository],
+        audio: Callable[[], AudioRepository],
+    ) -> None:
+        super().__init__(database)
+        self._projects = projects
+        self._audio = audio
+
     def list_sequences(self, *, include_archived: bool = False) -> list[Sequence]:
         rows = self._fetchall(
             "SELECT * FROM sequence "
@@ -70,7 +88,7 @@ class SequenceCatalogRepository(ProjectRepositoryComponent):
         name: str,
         profile: ProjectProfile | None = None,
     ) -> Sequence:
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         main_profile = self.get_sequence(project.main_sequence_id).profile
         position = len(self.list_sequences())
         return Sequence(
@@ -109,13 +127,13 @@ class SequenceCatalogRepository(ProjectRepositoryComponent):
         with self.transaction() as connection:
             self._insert_sequence_record(connection, sequence)
             for bus in (master, dialogue, music, effects):
-                self._relations.audio.insert_bus_record(connection, bus)
+                self._audio().insert_bus_record(connection, bus)
             self._touch_project(connection)
         return sequence
 
     def archive_short_sequence(self, sequence_id: str) -> Sequence:
         sequence = self.get_sequence(sequence_id)
-        project = self._relations.projects.get_project()
+        project = self._projects().get_project()
         if sequence.id == project.main_sequence_id or sequence.kind != SequenceKind.SHORT:
             raise ValueError("主序列不能删除")
         if sequence.archived:

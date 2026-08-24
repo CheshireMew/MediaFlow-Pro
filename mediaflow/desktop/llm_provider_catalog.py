@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QCoreApplication
+from mediaflow.desktop.presentation_llm import llm_provider_label, llm_reasoning_label
 
 LLM_PROVIDER_CATALOG = (
     Path(__file__).resolve().parents[1]
@@ -25,23 +25,13 @@ class LlmProviderPreset:
     custom: bool = False
 
     def presentation(self) -> dict[str, object]:
-        label = self.label or QCoreApplication.translate(
-            "LlmProviderCatalog",
-            "自定义 / 本地",
-        )
-        reasoning_label = ""
-        if self.reasoning_model:
-            reasoning_label = QCoreApplication.translate(
-                "LlmProviderCatalog",
-                "推理模式（%1）",
-            ).replace("%1", self.reasoning_model)
         return {
-            "text": label,
+            "text": llm_provider_label(self.label),
             "value": self.id,
             "baseUrl": self.base_url,
             "standardModel": self.standard_model,
             "reasoningModel": self.reasoning_model,
-            "reasoningLabel": reasoning_label,
+            "reasoningLabel": llm_reasoning_label(self.reasoning_model),
             "custom": self.custom,
         }
 

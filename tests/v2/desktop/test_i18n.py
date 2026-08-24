@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -13,16 +16,22 @@ from mediaflow.desktop.presentation_catalogs import (
     asr_language_options,
     asr_model_options,
     asr_parallel_options,
+    builtin_media_resource_tags,
+    builtin_media_resource_text,
     encoder_label,
     export_recovery_configuration_label,
     llm_provider_presets,
+    localized_runtime_tool_status,
+    media_resource_ui_label,
     no_subtitle_burn_label,
+    pending_profile_label,
     status_message,
     system_name,
     task_message_label,
     task_status_label,
     task_title,
     transcription_configuration_label,
+    transcription_plan_error_label,
 )
 from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.settings import AsrSettings
@@ -33,6 +42,44 @@ from mediaflow.domain.tasks import (
     ExportTaskOutcome,
     Task,
 )
+
+
+def _catalog_keys(path: Path) -> set[tuple[str, str]]:
+    tree = ET.parse(path)
+    return {
+        (context.findtext("name") or "", message.findtext("source") or "")
+        for context in tree.findall("./context")
+        for message in context.findall("message")
+    }
+
+
+def test_translation_catalogs_cover_current_qml_and_presentation_sources(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[3]
+    desktop = root / "mediaflow" / "desktop"
+    generated = tmp_path / "current-sources.ts"
+    executable_name = "pyside6-lupdate.exe" if sys.platform == "win32" else "pyside6-lupdate"
+    lupdate = Path(sys.executable).with_name(executable_name)
+    if not lupdate.is_file():
+        located = shutil.which("pyside6-lupdate")
+        assert located is not None
+        lupdate = Path(located)
+    subprocess.run(
+        [
+            str(lupdate),
+            str(desktop / "qml"),
+            *(str(path) for path in sorted(desktop.glob("presentation_*.py"))),
+            "-no-obsolete",
+            "-ts",
+            str(generated),
+        ],
+        check=True,
+    )
+    source_keys = _catalog_keys(generated)
+    i18n = root / "mediaflow" / "resources" / "i18n"
+    assert _catalog_keys(i18n / "mediaflow_en.ts") == source_keys
+    assert _catalog_keys(i18n / "mediaflow_ja.ts") == source_keys
 
 
 def test_llm_provider_presets_publish_model_variants_from_one_catalog() -> None:
@@ -102,6 +149,45 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         assert QCoreApplication.translate("HomeView", "新建项目") == translations[0]
         assert QCoreApplication.translate("InspectorPanel", "音频") == translations[1]
         assert QCoreApplication.translate("ExportFileDialogs", "导出序列") == translations[2]
+        assert pending_profile_label() == (
+            "Waiting for the first video" if language == "en" else "最初の動画を待機中"
+        )
+        assert media_resource_ui_label("全部") == (
+            "All" if language == "en" else "すべて"
+        )
+        assert builtin_media_resource_text("mediaflow-builtins", "交叉溶解") == (
+            "Cross Dissolve" if language == "en" else "クロスディゾルブ"
+        )
+        assert builtin_media_resource_tags(
+            "mediaflow-builtins", ["blend", "builtin"]
+        ) == (
+            ["Blend", "Built-in"] if language == "en" else ["ブレンド", "内蔵"]
+        )
+        assert (
+            builtin_media_resource_text("external-catalog", "交叉溶解")
+            == "交叉溶解"
+        )
+        assert transcription_plan_error_label("当前时间轴还没有可转录的素材") == (
+            "The current timeline has no media available for transcription"
+            if language == "en"
+            else "現在のタイムラインには文字起こし可能な素材がありません"
+        )
+        localized_runtime = localized_runtime_tool_status(
+            {
+                "cudaSummary": "尚未检测 CUDA",
+                "components": {"tool": {"reason": "尚未安装或选择本地目录"}},
+                "speakerClustering": {
+                    "reason": "尚未安装本地 3D-Speaker 音色模型"
+                },
+            }
+        )
+        assert localized_runtime["cudaSummary"] == (
+            "CUDA has not been checked" if language == "en" else "CUDAは未確認です"
+        )
+        custom_provider = next(item for item in llm_provider_presets() if item["custom"])
+        assert custom_provider["text"] == (
+            "Custom / Local" if language == "en" else "カスタム / ローカル"
+        )
         technical_labels = expected_technical_labels[language]
         assert QCoreApplication.translate("SettingsMediaPage", "Cookie JSON") == technical_labels[0]
         assert QCoreApplication.translate("SettingsAiPage", "API 密钥") == technical_labels[1]

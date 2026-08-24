@@ -11,7 +11,7 @@ AppScrollView {
     contentWidth: availableWidth
     property var taskData: ({})
     property var resultData: ({})
-    property var planData: ({})
+    property var planData: mediaflow.subtitleTranscriptionController.transcriptionPlanSummary
     readonly property bool taskActive: taskData.status === "pending"
         || taskData.status === "running" || taskData.status === "paused"
     signal modeRequested(string mode)
@@ -68,7 +68,6 @@ AppScrollView {
         const sequenceId = String(mediaflow.workspaceViewController.activeSequenceId || "");
         taskData = mediaflow.taskController.latestTask("transcribe", sequenceId);
         resultData = mediaflow.subtitleTranscriptionController.sequenceTranscriptionSummary(sequenceId);
-        planData = mediaflow.subtitleTranscriptionController.transcriptionPlanSummary;
     }
 
     Component.onCompleted: {
@@ -83,7 +82,6 @@ AppScrollView {
     Connections {
         target: mediaflow.workspaceViewController
         function onProjectStateChanged() { transcriptScroll.refreshContext(); }
-        function onHistoryChanged() { transcriptScroll.refreshContext(); }
     }
     Connections {
         target: mediaflow.settingsController
@@ -220,32 +218,46 @@ AppScrollView {
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                 }
-                AppButton {
-                    objectName: "transcribeTimelineButton"
+                RowLayout {
                     Layout.fillWidth: true
-                    primary: true
-                    text: transcriptScroll.taskActive
-                        ? qsTr("正在转录…") : qsTr("转录当前时间轴")
-                    enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
-                        && !transcriptScroll.taskActive
-                        && Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
-                    onClicked: mediaflow.subtitleTranscriptionController.transcribeCurrentSequence(
-                        String(asrModelSelect.currentValue || ""),
-                        String(asrDeviceSelect.currentValue || "auto"),
-                        String(asrLanguageSelect.currentValue || "auto"),
-                        Number(asrParallelSelect.currentValue || 0))
-                }
-                AppButton {
-                    objectName: "copyTranscriptionCliRequestButton"
-                    Layout.fillWidth: true
-                    text: qsTr("复制当前转录为 CLI 请求")
-                    enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
-                        && !transcriptScroll.taskActive
-                    onClicked: mediaflow.automationController.copyCurrentTranscriptionRequest(
-                        String(asrModelSelect.currentValue || ""),
-                        String(asrDeviceSelect.currentValue || "auto"),
-                        String(asrLanguageSelect.currentValue || "auto"),
-                        Number(asrParallelSelect.currentValue || 0))
+                    AppButton {
+                        objectName: "transcribeTimelineButton"
+                        Layout.fillWidth: true
+                        primary: true
+                        text: transcriptScroll.taskActive
+                            ? qsTr("正在转录…") : qsTr("转录当前时间轴")
+                        enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
+                            && !transcriptScroll.taskActive
+                            && Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
+                        onClicked: mediaflow.subtitleTranscriptionController.transcribeCurrentSequence(
+                            String(asrModelSelect.currentValue || ""),
+                            String(asrDeviceSelect.currentValue || "auto"),
+                            String(asrLanguageSelect.currentValue || "auto"),
+                            Number(asrParallelSelect.currentValue || 0))
+                    }
+                    AppIconButton {
+                        id: transcriptionAutomationButton
+                        objectName: "transcriptionAutomationButton"
+                        iconName: "more"
+                        Accessible.name: qsTr("转录自动化操作")
+                        toolTipText: Accessible.name
+                        enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
+                            && !transcriptScroll.taskActive
+                        AppMenu {
+                            id: transcriptionAutomationMenu
+                            y: transcriptionAutomationButton.height + 4
+                            AppMenuItem {
+                                objectName: "copyTranscriptionCliRequestButton"
+                                text: qsTr("复制当前转录为 CLI 请求")
+                                onTriggered: mediaflow.automationController.copyCurrentTranscriptionRequest(
+                                    String(asrModelSelect.currentValue || ""),
+                                    String(asrDeviceSelect.currentValue || "auto"),
+                                    String(asrLanguageSelect.currentValue || "auto"),
+                                    Number(asrParallelSelect.currentValue || 0))
+                            }
+                        }
+                        onClicked: transcriptionAutomationMenu.open()
+                    }
                 }
                 Text {
                     Layout.fillWidth: true

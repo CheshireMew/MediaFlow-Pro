@@ -84,7 +84,7 @@ Item {
     function cycleViewMode() {
         const nextMode = viewMode === "list" ? "thumbnails"
             : viewMode === "thumbnails" ? "large_thumbnails" : "list";
-        mediaflow.settingsController.setAssetViewMode(nextMode);
+        mediaflow.workspaceSettingsController.setAssetViewMode(nextMode);
     }
 
     Component.onCompleted: refreshTask()
@@ -317,19 +317,19 @@ Item {
                 onAccepted: {
                     const value = text.trim();
                     if (value.length > 0
-                            && !mediaflow.taskController.downloadAnalysisBusy)
-                        mediaflow.taskController.analyzeDownloadUrl(value);
+                            && !mediaflow.downloadController.downloadAnalysisBusy)
+                        mediaflow.downloadController.analyzeDownloadUrl(value);
                 }
             }
             AppButton {
                 objectName: "workspaceAnalyzeDownloadButton"
-                text: mediaflow.taskController.downloadAnalysisBusy
+                text: mediaflow.downloadController.downloadAnalysisBusy
                     ? qsTr("分析中…") : qsTr("下载")
                 enabled:
                     mediaflow.workspaceViewController.actionCapabilities.canStartTasks
                     && workspaceDownloadUrl.text.trim().length > 0
-                    && !mediaflow.taskController.downloadAnalysisBusy
-                onClicked: mediaflow.taskController.analyzeDownloadUrl(
+                    && !mediaflow.downloadController.downloadAnalysisBusy
+                onClicked: mediaflow.downloadController.analyzeDownloadUrl(
                     workspaceDownloadUrl.text.trim())
             }
         }

@@ -202,6 +202,7 @@ class ProjectCollaboration:
                     request_id=batch_id,
                     undo_group_id=batch_id,
                     write_set=batch_scopes,
+                    capture_implicit_baseline=False,
                 ),
                 self._repository.transaction(),
             ):
@@ -358,6 +359,7 @@ class ProjectCollaboration:
                     request_id=request_id,
                     undo_group_id=undo_group_id or request_id,
                     write_set=mutation_plan.change_scopes,
+                    capture_implicit_baseline=not reversible,
                 ),
                 self._repository.transaction(),
             ):
@@ -375,14 +377,22 @@ class ProjectCollaboration:
                     raise RuntimeError(
                         f"Project revision conflict: expected {base_revision}, current {before_revision}"
                     )
-                before_observation = self._repository.observations.capture(mutation_plan.change_scopes)
+                before_observation = (
+                    None
+                    if reversible
+                    else self._repository.observations.capture(mutation_plan.change_scopes)
+                )
                 result = action(False)
                 command = self._history.combined_since(history_checkpoint) if reversible else None
                 history_change_set = (
                     self._history.change_set_since(history_checkpoint) if reversible else ProjectChangeSet()
                 )
-                observed_change_set = before_observation.changes_to(
-                    self._repository.observations.capture(mutation_plan.change_scopes)
+                observed_change_set = (
+                    ProjectChangeSet()
+                    if before_observation is None
+                    else before_observation.changes_to(
+                        self._repository.observations.capture(mutation_plan.change_scopes)
+                    )
                 )
                 change_set = history_change_set if reversible else observed_change_set
                 stored = self._repository.operations.save_result(
@@ -406,7 +416,11 @@ class ProjectCollaboration:
                         mutation_plan.change_scopes,
                         change_set,
                     )
-                if after_revision != before_revision and not observed_change_set.changes:
+                if (
+                    not reversible
+                    and after_revision != before_revision
+                    and not observed_change_set.changes
+                ):
                     raise RuntimeError(
                         f"Operation {operation!r} advanced the project revision without an observable change"
                     )

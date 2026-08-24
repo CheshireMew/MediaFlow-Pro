@@ -210,8 +210,8 @@ def test_waveform_storage_budget_blocks_before_cache_or_decoder_write(
             block_storage,
         )
         monkeypatch.setattr(
-            waveform_service_module.FfmpegRunner,
-            "open_output_pipe",
+            waveform_service_module.av,
+            "open",
             fail_if_decoder_starts,
         )
 

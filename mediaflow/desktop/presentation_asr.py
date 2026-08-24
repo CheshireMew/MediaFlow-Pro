@@ -5,6 +5,18 @@ from PySide6.QtCore import QCoreApplication
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
 
 
+def transcription_plan_error_label(source: str) -> str:
+    if source == "当前没有可转录的时间轴":
+        return QCoreApplication.translate(
+            "TranscriptionPlanCatalog", "当前没有可转录的时间轴"
+        )
+    if source == "当前时间轴还没有可转录的素材":
+        return QCoreApplication.translate(
+            "TranscriptionPlanCatalog", "当前时间轴还没有可转录的素材"
+        )
+    return source
+
+
 def asr_model_options(
     current: str = "",
     *,

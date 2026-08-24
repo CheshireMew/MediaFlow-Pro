@@ -65,7 +65,7 @@ Panel {
                                 : qsTr("发现 %1 个问题 · %2 个提醒")
                                     .arg(modelData.failureCount).arg(modelData.warningCount)
                             color: modelData.qualityPassed ? Theme.success : Theme.danger
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontSizeCaption
                             elide: Text.ElideRight
                         }
                         Text {
@@ -75,7 +75,7 @@ Panel {
                                 .arg(modelData.requestedVideoCodec)
                                 .arg(modelData.actualVideoCodec)
                             color: Theme.warning
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontSizeCaption
                             elide: Text.ElideRight
                         }
                     }

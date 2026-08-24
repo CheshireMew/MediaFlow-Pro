@@ -14,7 +14,7 @@ from mediaflow.domain.model_base import now_ms
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.tasks import Task, TaskStopRequest
 from mediaflow.infrastructure.project_schema_definition import PROJECT_FILE_NAME
-from mediaflow.infrastructure.sqlite_uri import read_only_database_uri
+from mediaflow.infrastructure.sqlite_connections import open_project_database
 
 
 class TaskRepository:
@@ -34,20 +34,13 @@ class TaskRepository:
     @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
         with closing(
-            sqlite3.connect(
-                read_only_database_uri(self.database_path),
-                uri=True,
-                timeout=5.0,
-            )
+            open_project_database(self.database_path, read_only=True)
         ) as connection:
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA busy_timeout=5000")
             yield connection
 
     @contextmanager
     def _write_connection(self) -> Iterator[sqlite3.Connection]:
-        with self._project.transaction() as connection:
+        with self._project.task_transaction() as connection:
             yield connection
 
     def create(self, task: Task, *, event_type: str = "created") -> Task:
@@ -454,13 +447,19 @@ class TaskRepository:
 
     def list_claimable(self, at_ms: int) -> builtins.list[Task]:
         with self._read_connection() as connection:
-            rows = connection.execute(
+            pending_rows = connection.execute(
                 """SELECT * FROM task
-                   WHERE (status='pending' AND execution_owner_id IS NULL)
-                      OR (status='running' AND lease_expires_at<=?)
-                   ORDER BY created_at, id""",
+                   WHERE status='pending' AND execution_owner_id IS NULL"""
+            ).fetchall()
+            expired_rows = connection.execute(
+                """SELECT * FROM task
+                   WHERE status='running' AND lease_expires_at<=?""",
                 (at_ms,),
             ).fetchall()
+            rows = sorted(
+                (*pending_rows, *expired_rows),
+                key=lambda row: (int(row["created_at"]), str(row["id"])),
+            )
         return [self._from_row(row) for row in rows]
 
     def delete(self, task_id: str, *, event_type: str = "deleted") -> None:

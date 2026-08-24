@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.product_identity import PRODUCT_NAME
+from mediaflow.environment import RUNTIME_DIRECTORY_VARIABLE
 from mediaflow.infrastructure.runtime_contract import load_runtime_contract
 from mediaflow.infrastructure.runtime_paths import RuntimePaths, runtime_directory
 
@@ -91,7 +92,7 @@ def runtime_directory_is_managed_externally() -> bool:
 
 
 def configure_runtime_environment(path: Path, *, source: str) -> None:
-    os.environ["MEDIAFLOW_RUNTIME_DIR"] = str(path.expanduser().resolve())
+    os.environ[RUNTIME_DIRECTORY_VARIABLE] = str(path.expanduser().resolve())
     os.environ[RUNTIME_DIRECTORY_SOURCE_ENV] = source
 
 

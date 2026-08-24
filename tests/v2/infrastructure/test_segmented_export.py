@@ -11,12 +11,26 @@ import pytest
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.composition import EditorProject
-from mediaflow.domain.enums import ExportFormat, TaskStatus, TrackKind
+from mediaflow.domain.enums import (
+    ClipMediaKind,
+    ExportFormat,
+    SequenceKind,
+    TaskStatus,
+    TrackKind,
+)
 from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.project import Sequence
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import BuildSequenceCommand, SequenceBuildUnit
 from mediaflow.domain.tasks import SequenceBuildTaskOutcome
-from mediaflow.domain.timeline import ClipAddRequest, ClipAudio, ClipTransform
+from mediaflow.domain.timeline import (
+    Clip,
+    ClipAddRequest,
+    ClipAudio,
+    ClipTransform,
+    TimelineState,
+    Track,
+)
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
@@ -39,6 +53,57 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def test_ordinary_thirty_second_first_export_stays_monolithic() -> None:
+    sequence = Sequence(
+        project_id="project",
+        name="First export policy",
+        kind=SequenceKind.MAIN,
+    )
+    track = Track(
+        sequence_id=sequence.id,
+        name="Video",
+        kind=TrackKind.VIDEO,
+        position=0,
+    )
+    state = TimelineState(
+        sequence=sequence,
+        tracks=[track],
+        clips=[
+            Clip(
+                track_id=track.id,
+                asset_id="asset",
+                timeline_start=0,
+                source_in=0,
+                duration=round(sequence.profile.fps * 30),
+                media_kind=ClipMediaKind.VIDEO_ONLY,
+            )
+        ],
+    )
+    preset = ExportPreset(
+        name="First export H.264",
+        format=ExportFormat.H264,
+        container="mp4",
+        encoder_policy={"mode": "software"},
+        audio_codec="aac",
+        pixel_format="yuv420p",
+    )
+
+    assert len(SegmentedExportService.automatic_units(state)) == 1
+    assert not SegmentedExportService.can_build_automatically(state, preset)
+
+    long_state = state.model_copy(
+        update={
+            "clips": [
+                state.clips[0].model_copy(
+                    update={"duration": round(sequence.profile.fps * 120)}
+                )
+            ]
+        }
+    )
+    assert len(SegmentedExportService.automatic_units(long_state)) == 2
+    assert SegmentedExportService.can_build_automatically(long_state, preset)
 
 
 def _generate_clip(

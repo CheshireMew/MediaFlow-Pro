@@ -21,6 +21,9 @@ def _requirements(**overrides: object) -> bool:
         "parallel_workers": 2,
         "parallel_fast_capture_workers": 2,
         "parallel_capture_backend": "drawelement",
+        "serial_frame_time_p95_ms": 95.0,
+        "parallel_frame_time_p95_ms": 90.0,
+        "expected_parallel_workers": 2,
         "slow_modulo_seconds": 10.0,
         "slow_dynamic_seconds": 7.0,
     }
@@ -61,6 +64,18 @@ def test_web_render_contract_rejects_screenshot_backend_regression() -> None:
 
 def test_web_render_contract_rejects_partial_fast_worker_consensus() -> None:
     assert not _requirements(parallel_fast_capture_workers=1)
+
+
+def test_web_render_contract_rejects_unbalanced_worker_count() -> None:
+    assert not _requirements(parallel_workers=3, parallel_fast_capture_workers=3)
+
+
+def test_web_render_contract_rejects_p95_latency_regression() -> None:
+    assert not _requirements(parallel_frame_time_p95_ms=111.0)
+
+
+def test_web_render_contract_rejects_tail_latency_worse_than_serial() -> None:
+    assert not _requirements(parallel_frame_time_p95_ms=96.0)
 
 
 def test_web_render_contract_rejects_insufficient_slow_frame_improvement() -> None:

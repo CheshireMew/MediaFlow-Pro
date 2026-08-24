@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.enums import AudioEffectKind
@@ -9,8 +11,21 @@ from mediaflow.domain.enums import AudioEffectKind
 from .project_repository_component import ProjectRepositoryComponent
 from .project_serialization import json_value as _json
 
+if TYPE_CHECKING:
+    from .project_database_session import ProjectDatabaseSession
+    from .sequence_catalog_repository import SequenceCatalogRepository
+
 
 class AudioRepository(ProjectRepositoryComponent):
+    def __init__(
+        self,
+        database: ProjectDatabaseSession,
+        *,
+        sequences: Callable[[], SequenceCatalogRepository],
+    ) -> None:
+        super().__init__(database)
+        self._sequences = sequences
+
     def list_audio_buses(self, sequence_id: str) -> list[AudioBus]:
         rows = self._fetchall(
             "SELECT * FROM audio_bus WHERE sequence_id=? ORDER BY position, id",
@@ -32,7 +47,7 @@ class AudioRepository(ProjectRepositoryComponent):
         ]
 
     def save_audio_bus(self, bus: AudioBus) -> AudioBus:
-        sequence = self._relations.sequences.get_sequence(bus.sequence_id)
+        sequence = self._sequences().get_sequence(bus.sequence_id)
         del sequence
         buses = {item.id: item for item in self.list_audio_buses(bus.sequence_id)}
         if bus.parent_bus_id == bus.id:
@@ -82,7 +97,7 @@ class AudioRepository(ProjectRepositoryComponent):
     ) -> None:
         """Replace one sequence's complete routing graph inside the caller transaction."""
 
-        self._relations.sequences.get_sequence(sequence_id)
+        self._sequences().get_sequence(sequence_id)
         by_id = {bus.id: bus for bus in buses}
         if not buses or len(by_id) != len(buses):
             raise ValueError("Audio graph buses must be non-empty and unique")

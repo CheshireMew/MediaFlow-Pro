@@ -811,15 +811,12 @@ def _preflight_project_web_assets(
 def reconcile_editable_media_v4_archives(workspace: Any) -> None:
     if workspace.read_only:
         return
-    try:
-        rows = workspace._fetchall(
-            """SELECT upgrade.asset_id, upgrade.old_package_path,
-                      upgrade.archive_package_path
-               FROM editable_media_upgrade AS upgrade
-               ORDER BY upgrade.asset_id"""
-        )
-    except Exception:
-        return
+    rows = workspace._fetchall(
+        """SELECT upgrade.asset_id, upgrade.old_package_path,
+                  upgrade.archive_package_path
+           FROM editable_media_upgrade AS upgrade
+           ORDER BY upgrade.asset_id"""
+    )
     project_dir = Path(workspace.project_dir).resolve()
     for row in rows:
         package = _managed_asset_path(

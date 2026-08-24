@@ -27,8 +27,11 @@ WorkflowTaskSpec = tuple[TaskCommand, list[str]]
 
 
 class ProxyDecision(Protocol):
-    required: bool
-    reasons: tuple[str, ...]
+    @property
+    def required(self) -> bool: ...
+
+    @property
+    def reasons(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)

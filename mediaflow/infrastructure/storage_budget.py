@@ -16,8 +16,13 @@ from mediaflow.atomic_file import atomic_write_text
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 
 GIB = 1024**3
+MIB = 1024**2
 PROJECT_CACHE_OWNER_FILENAME = ".mediaflow-storage-owner.json"
 PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS = 15.0
+PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA = "mediaflow-project-cache-reservations/v2"
+PROJECT_CACHE_RESERVATION_LEDGER_FILENAME = ".mediaflow-project-cache-reservations.json"
+PROJECT_CACHE_DEFERRED_RESERVATION_MAX_BYTES = 64 * MIB
+PROJECT_CACHE_DEFERRED_RESERVATION_LIMIT_DIVISOR = 1024
 PROJECT_CACHE_MAX_BYTES_VARIABLE = "MEDIAFLOW_PROJECT_CACHE_MAX_BYTES"
 PROJECT_CACHES_MAX_BYTES_VARIABLE = "MEDIAFLOW_PROJECT_CACHES_MAX_BYTES"
 TEST_ARTIFACT_MAX_BYTES_VARIABLE = "MEDIAFLOW_TEST_ARTIFACT_MAX_BYTES"
@@ -769,13 +774,176 @@ def require_project_cache_budget(
     policy = load_storage_policy()
     selected = Path(root).expanduser().resolve()
     projects_root = selected.parent
-    all_projects_inventory = directory_inventory(projects_root)
-    project_category = all_projects_inventory["categories"].get(
+    ledger_path = projects_root.parent / PROJECT_CACHE_RESERVATION_LEDGER_FILENAME
+    ledger_lock = ProcessFileLock(ledger_path.with_suffix(f"{ledger_path.suffix}.lock"))
+    if not ledger_lock.acquire_until(timeout_seconds=PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS):
+        raise RuntimeError(f"Timed out reserving project cache capacity: {ledger_path}")
+    try:
+        observed_bytes, pending_bytes, ledger_is_valid = (
+            _project_cache_reservation_state(
+                ledger_path,
+                projects_root,
+            )
+        )
+        deferred_limit = min(
+            PROJECT_CACHE_DEFERRED_RESERVATION_MAX_BYTES,
+            max(
+                1,
+                policy.project_caches_max_bytes
+                // PROJECT_CACHE_DEFERRED_RESERVATION_LIMIT_DIVISOR,
+            ),
+        )
+        can_defer_global_inventory = (
+            ledger_is_valid
+            and pending_bytes + expected_new_bytes <= deferred_limit
+        )
+        usage = shutil.disk_usage(_existing_volume_path(projects_root))
+        if can_defer_global_inventory:
+            project_inventory = directory_inventory(selected)
+            project_report = _require_storage_budget_from_inventory(
+                selected,
+                inventory=project_inventory,
+                usage=usage,
+                # Pending writes may belong to this project. Charging all of
+                # them here is deliberately conservative and keeps the
+                # per-project cap safe without a per-project reservation map.
+                expected_new_bytes=pending_bytes + expected_new_bytes,
+                maximum_managed_bytes=policy.project_cache_max_bytes,
+                minimum_free_bytes=policy.minimum_free_bytes,
+                label=label,
+            )
+            next_pending_bytes = pending_bytes + expected_new_bytes
+            all_projects_report = _require_storage_budget_from_inventory(
+                projects_root,
+                inventory={
+                    "bytes": observed_bytes,
+                    "cleanup_candidates": [],
+                },
+                usage=usage,
+                expected_new_bytes=next_pending_bytes,
+                maximum_managed_bytes=policy.project_caches_max_bytes,
+                minimum_free_bytes=policy.minimum_free_bytes,
+                label="MediaFlow all project-derived caches",
+            )
+            _write_project_cache_pending_reservations(
+                ledger_path,
+                projects_root,
+                observed_bytes=observed_bytes,
+                pending_bytes=next_pending_bytes,
+            )
+            return {
+                "project": project_report,
+                "all_projects": _deferred_project_caches_report(
+                    report=all_projects_report,
+                    expected_new_bytes=expected_new_bytes,
+                    pending_bytes=next_pending_bytes,
+                    deferred_limit=deferred_limit,
+                ),
+            }
+
+        all_projects_inventory = directory_inventory(projects_root)
+        current_observed_bytes = int(all_projects_inventory["bytes"])
+        observed_growth = (
+            max(0, current_observed_bytes - observed_bytes)
+            if ledger_is_valid
+            else 0
+        )
+        remaining_pending_bytes = (
+            max(0, pending_bytes - observed_growth) if ledger_is_valid else 0
+        )
+        reserved_new_bytes = remaining_pending_bytes + expected_new_bytes
+        project_inventory = _project_inventory_from_aggregate(
+            selected,
+            all_projects_inventory,
+        )
+        result = {
+            "project": _require_storage_budget_from_inventory(
+                selected,
+                inventory=project_inventory,
+                usage=usage,
+                expected_new_bytes=reserved_new_bytes,
+                maximum_managed_bytes=policy.project_cache_max_bytes,
+                minimum_free_bytes=policy.minimum_free_bytes,
+                label=label,
+            ),
+            "all_projects": _require_storage_budget_from_inventory(
+                projects_root,
+                inventory=all_projects_inventory,
+                usage=usage,
+                expected_new_bytes=reserved_new_bytes,
+                maximum_managed_bytes=policy.project_caches_max_bytes,
+                minimum_free_bytes=policy.minimum_free_bytes,
+                label="MediaFlow all project-derived caches",
+            ),
+        }
+        _write_project_cache_pending_reservations(
+            ledger_path,
+            projects_root,
+            observed_bytes=current_observed_bytes,
+            pending_bytes=reserved_new_bytes,
+        )
+        return result
+    finally:
+        ledger_lock.release()
+
+
+def _project_cache_reservation_state(
+    ledger_path: Path,
+    projects_root: Path,
+) -> tuple[int, int, bool]:
+    if not ledger_path.is_file():
+        return 0, 0, False
+    try:
+        payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return 0, 0, False
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA
+        or payload.get("projects_root") != str(projects_root)
+        or type(payload.get("observed_bytes")) is not int
+        or int(payload["observed_bytes"]) < 0
+        or type(payload.get("pending_bytes")) is not int
+        or int(payload["pending_bytes"]) < 0
+    ):
+        return 0, 0, False
+    return int(payload["observed_bytes"]), int(payload["pending_bytes"]), True
+
+
+def _write_project_cache_pending_reservations(
+    ledger_path: Path,
+    projects_root: Path,
+    *,
+    observed_bytes: int,
+    pending_bytes: int,
+) -> None:
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(
+        ledger_path,
+        json.dumps(
+            {
+                "schema": PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA,
+                "projects_root": str(projects_root),
+                "observed_bytes": observed_bytes,
+                "pending_bytes": pending_bytes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        durable=True,
+    )
+
+
+def _project_inventory_from_aggregate(
+    selected: Path,
+    aggregate: dict[str, Any],
+) -> dict[str, Any]:
+    project_category = aggregate["categories"].get(
         selected.name,
         {"bytes": 0, "files": 0},
     )
     cleanup_prefix = f"{selected.name}/"
-    project_inventory = {
+    return {
         "bytes": project_category["bytes"],
         "files": project_category["files"],
         "cleanup_candidates": [
@@ -783,30 +951,25 @@ def require_project_cache_budget(
                 **candidate,
                 "path": str(candidate["path"])[len(cleanup_prefix) :],
             }
-            for candidate in all_projects_inventory["cleanup_candidates"]
+            for candidate in aggregate["cleanup_candidates"]
             if str(candidate["path"]).startswith(cleanup_prefix)
         ],
     }
-    usage = shutil.disk_usage(_existing_volume_path(projects_root))
+
+
+def _deferred_project_caches_report(
+    *,
+    report: dict[str, Any],
+    expected_new_bytes: int,
+    pending_bytes: int,
+    deferred_limit: int,
+) -> dict[str, Any]:
     return {
-        "project": _require_storage_budget_from_inventory(
-            selected,
-            inventory=project_inventory,
-            usage=usage,
-            expected_new_bytes=expected_new_bytes,
-            maximum_managed_bytes=policy.project_cache_max_bytes,
-            minimum_free_bytes=policy.minimum_free_bytes,
-            label=label,
-        ),
-        "all_projects": _require_storage_budget_from_inventory(
-            projects_root,
-            inventory=all_projects_inventory,
-            usage=usage,
-            expected_new_bytes=expected_new_bytes,
-            maximum_managed_bytes=policy.project_caches_max_bytes,
-            minimum_free_bytes=policy.minimum_free_bytes,
-            label="MediaFlow all project-derived caches",
-        ),
+        **report,
+        "inventory_mode": "bounded-deferred-global-inventory",
+        "requested_new_bytes": expected_new_bytes,
+        "pending_reservation_bytes": pending_bytes,
+        "deferred_reservation_limit_bytes": deferred_limit,
     }
 
 

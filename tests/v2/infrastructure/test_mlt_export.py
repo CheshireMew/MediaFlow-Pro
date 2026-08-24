@@ -64,9 +64,11 @@ from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from tests.v2.real_media import generate_real_media
 
 
-def test_mlt_access_violation_gets_one_bounded_recovery_attempt(
+@pytest.mark.parametrize("returncode", [-1073741819, 0])
+def test_mlt_incomplete_process_attempt_gets_one_bounded_recovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
 ) -> None:
     service = object.__new__(MltExportService)
     archived = tmp_path / "first-crash.mp4"
@@ -76,9 +78,9 @@ def test_mlt_access_violation_gets_one_bounded_recovery_attempt(
         attempts.append(attempt_label)
         if len(attempts) == 1:
             raise ExportAttemptError(
-                "melt exited with code -1073741819",
+                f"melt exited with code {returncode}",
                 archived_output=archived,
-                returncode=-1073741819,
+                returncode=returncode,
             )
         return {"format": {"duration": "1.0"}}
 
@@ -101,7 +103,7 @@ def test_mlt_access_violation_gets_one_bounded_recovery_attempt(
         "ordinary encoder failure",
         archived_output=None,
         returncode=1,
-    ).is_retryable_process_crash
+    ).is_retryable_process_failure
 
 
 def test_sequence_export_refuses_to_overwrite_without_explicit_permission(

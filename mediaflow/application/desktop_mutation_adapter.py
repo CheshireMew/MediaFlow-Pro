@@ -34,6 +34,7 @@ _OPERATION_ALIASES: dict[tuple[DesktopMutationTarget, str], str] = {
     ("project", "set_web_parameter_keyframe"): "web.clip.parameter.keyframe.set",
     ("project", "set_web_parameter_lock"): "web.clip.parameter.lock.update",
     ("project", "update_subtitle_segment"): "subtitle.segment.update",
+    ("project", "update_translation_segment_text"): "subtitle.segment.update",
     ("project", "update_web_clip"): "web.clip.update",
     ("project", "update_web_data"): "web.clip.data.update",
     ("project", "update_web_data_from_file"): "web.clip.data.snapshot",
@@ -158,7 +159,7 @@ def _desktop_arguments(
     arguments.setdefault("sequence_id", sequence_id)
     if command == "commit_web_asset_rebind":
         _bind_positional(("asset_id", "source", "plan_digest", "resolutions"), args, arguments)
-    elif command == "update_subtitle_segment":
+    elif command in {"update_subtitle_segment", "update_translation_segment_text"}:
         _bind_positional(("document_id", "segment_id"), args, arguments)
     elif command.startswith(
         (

@@ -270,7 +270,7 @@ class AssetService:
         if probe.suggested_profile is None:
             raise ValueError("The video does not provide a usable project profile")
         project = self.repository.projects.get_project()
-        source_snapshot = self.repository.timeline.capture_main_frame_clock(
+        source_snapshot = self.repository.frame_clock.capture_main_frame_clock(
             project.main_sequence_id
         )
         state = source_snapshot.timeline
@@ -311,7 +311,7 @@ class AssetService:
             allow_locked_changes=True,
             assets={item.id: item for item in change.assets},
         )
-        self.repository.timeline.change_main_frame_clock(
+        self.repository.frame_clock.change_main_frame_clock(
             source_snapshot,
             change.state,
             list(change.assets),

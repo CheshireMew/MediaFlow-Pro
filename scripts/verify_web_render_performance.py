@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -28,6 +29,7 @@ MIN_PARALLEL_SPEEDUP = 1.35
 MIN_FRAME_PSNR_DB = 60.0
 MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT = 0.20
 MAX_BALANCED_BASELINE_REGRESSION = 0.10
+MAX_FRAME_TIME_P95_MS = 110.0
 
 
 class RenderResult(TypedDict):
@@ -73,6 +75,9 @@ def web_render_requirements_met(
     parallel_workers: int,
     parallel_fast_capture_workers: int,
     parallel_capture_backend: str,
+    serial_frame_time_p95_ms: float,
+    parallel_frame_time_p95_ms: float,
+    expected_parallel_workers: int,
     slow_modulo_seconds: float,
     slow_dynamic_seconds: float,
 ) -> bool:
@@ -86,8 +91,11 @@ def web_render_requirements_met(
         and identical_frames == frame_count
         and minimum_frame_psnr_db >= MIN_FRAME_PSNR_DB
         and parallel_workers > 1
+        and parallel_workers == expected_parallel_workers
         and parallel_fast_capture_workers == parallel_workers
         and parallel_capture_backend == "drawelement"
+        and parallel_frame_time_p95_ms <= MAX_FRAME_TIME_P95_MS
+        and parallel_frame_time_p95_ms <= serial_frame_time_p95_ms
         and slow_modulo_seconds > 0
         and slow_dynamic_seconds > 0
         and 1 - slow_dynamic_seconds / slow_modulo_seconds >= MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT
@@ -427,6 +435,7 @@ def verify(
     if frame_count < 151:
         raise ValueError("Web render verification needs at least 151 frames")
     from mediaflow.infrastructure.runtime_context import RuntimeContext
+    from mediaflow.infrastructure.web_capture_scheduler import _MIN_FRAMES_PER_WORKER
 
     run_dir = _new_run_dir(run_root)
     script = Path(__file__).resolve()
@@ -444,6 +453,10 @@ def verify(
         parallel_cache,
     )
     slow_scheduler = _slow_frame_scheduler_benchmark()
+    expected_parallel_workers = min(
+        4,
+        max(1, math.ceil(frame_count / _MIN_FRAMES_PER_WORKER)),
+    )
     baseline = (
         _balanced_baseline_comparison(
             baseline_report.resolve(strict=True),
@@ -464,6 +477,9 @@ def verify(
         parallel_workers=int(parallel["worker_count"]),
         parallel_fast_capture_workers=int(parallel["fast_capture_workers"]),
         parallel_capture_backend=parallel["capture_backend"],
+        serial_frame_time_p95_ms=float(serial["frame_time_p95_ms"]),
+        parallel_frame_time_p95_ms=float(parallel["frame_time_p95_ms"]),
+        expected_parallel_workers=expected_parallel_workers,
         slow_modulo_seconds=float(slow_scheduler["modulo_seconds"]),
         slow_dynamic_seconds=float(slow_scheduler["dynamic_seconds"]),
     ) and (baseline is None or baseline["passed"] is True)
@@ -479,6 +495,8 @@ def verify(
         "parallel": parallel,
         "speedup": float(serial["seconds"]) / float(parallel["seconds"]),
         "minimum_speedup": MIN_PARALLEL_SPEEDUP,
+        "expected_parallel_workers": expected_parallel_workers,
+        "maximum_frame_time_p95_ms": MAX_FRAME_TIME_P95_MS,
         "required_minimum_frame_psnr_db": MIN_FRAME_PSNR_DB,
         "slow_frame_scheduler": slow_scheduler,
         "minimum_slow_frame_improvement": MIN_SLOW_FRAME_SCHEDULER_IMPROVEMENT,

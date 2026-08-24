@@ -71,6 +71,8 @@ class TaskProjectAccess(Protocol):
 
     def transaction(self) -> AbstractContextManager[Any]: ...
 
+    def task_transaction(self) -> AbstractContextManager[Any]: ...
+
 
 class ProjectAccess(Protocol):
     """Project storage context and unit-of-work boundary."""
@@ -98,6 +100,7 @@ class ProjectRecordsDocuments(Protocol):
 
 class ProjectMetadataDocuments(Protocol):
     def get_project(self) -> Project: ...
+    def rename_project(self, name: str) -> Project: ...
 
 
 class WorkflowDocuments(Protocol):
@@ -184,6 +187,17 @@ class TimelineDocuments(Protocol):
     def list_timeline_ranges(self, sequence_id: str) -> list[TimelineRange]: ...
     def save_timeline(self, state: TimelineState) -> int: ...
     def save_clip_changes(self, state: TimelineState, clip_ids: set[str]) -> int: ...
+    def save_clip_set_changes(
+        self,
+        state: TimelineState,
+        *,
+        changed_clip_ids: set[str],
+        removed_clip_ids: set[str],
+        changed_web_state_ids: set[str],
+    ) -> int: ...
+
+
+class FrameClockDocuments(Protocol):
     def capture_main_frame_clock(self, sequence_id: str) -> MainFrameClockSnapshot: ...
     def change_main_frame_clock(
         self,
@@ -259,6 +273,11 @@ class SubtitleDocuments(Protocol):
         sequence_id: str | None = None,
     ) -> list[SubtitleDocument]: ...
     def list_subtitle_segments(self, document_id: str) -> list[SubtitleSegment]: ...
+    def get_subtitle_segment(
+        self,
+        document_id: str,
+        segment_id: str,
+    ) -> SubtitleSegment: ...
     def subtitle_segment_summary(self, document_id: str) -> tuple[int, int, int]: ...
     def save_subtitle_segments(
         self,
@@ -271,6 +290,24 @@ class SubtitleDocuments(Protocol):
         *,
         include_excluded: bool = True,
     ) -> list[SubtitleWord]: ...
+    def list_subtitle_words_for_segment(
+        self,
+        document_id: str,
+        segment_id: str,
+        *,
+        include_excluded: bool = True,
+    ) -> list[SubtitleWord]: ...
+    def get_subtitle_word(
+        self,
+        document_id: str,
+        word_id: str,
+    ) -> SubtitleWord: ...
+    def save_subtitle_segment_state(
+        self,
+        document_id: str,
+        segment: SubtitleSegment,
+        words: list[SubtitleWord],
+    ) -> None: ...
     def save_subtitle_words(
         self,
         document_id: str,
@@ -287,6 +324,11 @@ class SubtitleDocuments(Protocol):
         follow_clips: bool | None = None,
     ) -> list[SubtitlePlacement]: ...
     def list_subtitle_placements(self, track_id: str) -> list[SubtitlePlacement]: ...
+    def list_subtitle_placements_for_segments(
+        self,
+        sequence_id: str,
+        segment_ids: list[str],
+    ) -> list[SubtitlePlacement]: ...
     def get_subtitle_placement(self, placement_id: str) -> SubtitlePlacement: ...
     def update_subtitle_placement_text(
         self,
