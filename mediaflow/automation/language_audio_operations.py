@@ -5,6 +5,7 @@ from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.audio import AudioEffect
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings
+from mediaflow.domain.speech_review import SpeechReviewRules, review_transcript
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.domain.timebase import reframe_interval
 from mediaflow.domain.transcript_edits import (
@@ -218,6 +219,11 @@ def transcribe_sequence(context: OperationContext) -> dict:
         {asset.id: asset for asset in context.project.list_assets()},
         asr,
         project_profile=context.project.get_sequence(project.main_sequence_id).profile,
+        dialogue_track_id=(
+            str(context.arguments["dialogue_track_id"])
+            if context.arguments.get("dialogue_track_id")
+            else None
+        ),
         start_frame=start,
         end_frame=end,
     )
@@ -231,6 +237,42 @@ def transcribe_sequence(context: OperationContext) -> dict:
             idempotency_key=context.task_idempotency(),
         )
     )
+
+
+def inspect_speech_review(context: OperationContext) -> dict:
+    sequence_id = context.sequence_id()
+    snapshot = context.project.inspect_transcript(
+        sequence_id,
+        document_id=(
+            str(context.arguments["document_id"])
+            if context.arguments.get("document_id")
+            else None
+        ),
+    )
+    project = context.project.get_project()
+    main_profile = context.project.get_sequence(project.main_sequence_id).profile
+    state = context.project.timeline(sequence_id).state
+    sequence_profile = state.sequence.profile
+    timeline_duration_seconds = (
+        state.duration_frames
+        * sequence_profile.fps_denominator
+        / sequence_profile.fps_numerator
+    )
+    review = review_transcript(
+        snapshot,
+        SpeechReviewRules.model_validate(context.arguments.get("rules", {})),
+        frame_profile=main_profile,
+        timeline_duration_seconds=timeline_duration_seconds,
+    )
+    return {
+        "sequence_id": sequence_id,
+        "document_id": snapshot.document.id,
+        "content_revision": snapshot.content_revision,
+        "timeline_duration_seconds": timeline_duration_seconds,
+        "recognized_word_count": snapshot.recognized_word_count,
+        "estimated_word_count": snapshot.estimated_word_count,
+        "review": review,
+    }
 
 
 def preview_transcript_edit(context: OperationContext) -> dict:

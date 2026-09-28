@@ -97,6 +97,8 @@ def _copy_state(state: TimelineState) -> TimelineState:
             "transitions": list(state.transitions),
             "markers": list(state.markers),
             "ranges": list(state.ranges),
+            "review_threads": list(state.review_threads),
+            "multicam_groups": list(state.multicam_groups),
             "web_states": dict(state.web_states),
         }
     )
@@ -111,6 +113,11 @@ def canonical_timeline_state(state: TimelineState) -> TimelineState:
             "transitions": sorted(state.transitions, key=lambda item: item.id),
             "markers": sorted(state.markers, key=lambda item: (item.frame, item.id)),
             "ranges": sorted(state.ranges, key=lambda item: (item.start_frame, item.id)),
+            "review_threads": sorted(
+                state.review_threads,
+                key=lambda item: (item.start_frame, item.id),
+            ),
+            "multicam_groups": sorted(state.multicam_groups, key=lambda item: item.id),
             "web_states": dict(sorted(state.web_states.items())),
         }
     )

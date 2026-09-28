@@ -20,6 +20,7 @@ from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.infrastructure.project_migration_runner import (
     ProjectUpgradeRequiredError,
 )
+from mediaflow.production_runner import run_production_bundle
 from mediaflow.service.client import (
     EditorServiceRpcError,
     EditorServiceUnavailable,
@@ -70,6 +71,15 @@ def _parser() -> argparse.ArgumentParser:
         "--request",
         required=True,
         help="Read {batch_id, label, requests} from a file, or '-' for stdin.",
+    )
+    produce = commands.add_parser(
+        "produce",
+        help="Preflight, create, import, export, and verify one production bundle",
+    )
+    produce.add_argument(
+        "--request",
+        required=True,
+        help="Read one mediaflow-production-bundle JSON object from a file, or '-' for stdin.",
     )
     service = commands.add_parser("service", help="Inspect or explicitly stop the Editor Service")
     service.add_argument("action", choices=("status", "shutdown"))
@@ -136,6 +146,11 @@ def _execute_from_args(args: argparse.Namespace) -> tuple[str | None, dict]:
         if not isinstance(result, dict):
             raise RuntimeError("Editor Service batch returned an invalid result")
         return batch_id, result
+    if args.subcommand == "produce":
+        document = _request_from_args(args)
+        request_id = str(document.get("request_id") or "").strip() or None
+        result = run_production_bundle(document)
+        return request_id, result
     request = _request_from_args(args)
     envelope = AutomationRequest.model_validate(request)
     result = (

@@ -56,6 +56,14 @@ def compact_timeline_change(
         source.ranges,
         destination.ranges,
     )
+    source_reviews, destination_reviews = _changed_entities(
+        source.review_threads,
+        destination.review_threads,
+    )
+    source_multicam, destination_multicam = _changed_entities(
+        source.multicam_groups,
+        destination.multicam_groups,
+    )
     changed_web_state_ids = {
         item_id
         for item_id in set(source.web_states) | set(destination.web_states)
@@ -70,6 +78,8 @@ def compact_timeline_change(
                 "transitions": source_transitions,
                 "markers": source_markers,
                 "ranges": source_ranges,
+                "review_threads": source_reviews,
+                "multicam_groups": source_multicam,
                 "web_states": {
                     item_id: value
                     for item_id, value in source.web_states.items()
@@ -85,6 +95,8 @@ def compact_timeline_change(
                 "transitions": destination_transitions,
                 "markers": destination_markers,
                 "ranges": destination_ranges,
+                "review_threads": destination_reviews,
+                "multicam_groups": destination_multicam,
                 "web_states": {
                     item_id: value
                     for item_id, value in destination.web_states.items()

@@ -4,10 +4,12 @@ import QtQuick.Layouts
 import ".."
 
 Panel {
+    id: root
     objectName: "exportHistoryPanel"
     Layout.fillWidth: true
     implicitHeight: content.implicitHeight + 22
-    visible: mediaflow.exportController.exportHistory.length > 0
+    readonly property var historySnapshot: mediaflow.exportController.exportHistorySnapshot
+    visible: historySnapshot.count > 0
     ColumnLayout {
         id: content
         anchors.left: parent.left
@@ -25,13 +27,13 @@ Panel {
                 font.weight: Font.DemiBold
             }
             Text {
-                text: qsTr("%1 次").arg(mediaflow.exportController.exportHistory.length)
+                text: qsTr("%1 次").arg(root.historySnapshot.count)
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
             }
         }
         Repeater {
-            model: mediaflow.exportController.exportHistory.slice(0, 5)
+            model: root.historySnapshot.recent
             Rectangle {
                 required property var modelData
                 objectName: "exportHistoryItem_" + modelData.recordId

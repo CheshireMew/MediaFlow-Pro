@@ -34,6 +34,7 @@ from mediaflow.infrastructure.mlt.export_types import (
 from mediaflow.infrastructure.output_reservation import output_set_transaction
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.storage_budget import (
+    ProjectCacheReservation,
     estimate_video_cache_bytes,
     reserve_project_cache,
 )
@@ -93,53 +94,56 @@ class SegmentedExportService:
         progress=None,
         check_cancelled=None,
     ) -> SequenceBuildResult:
-        total_frames = self._prepare_build(state, preset, units)
-        check = check_cancelled or (lambda: None)
-        video_preset = preset.model_copy(
-            update={
-                "name": f"{preset.name} / cached visual unit",
-                "audio_codec": None,
-                "audio_bitrate": preset.audio_bitrate,
-            }
-        )
-        prepared = [self._prepare_visual_unit(state, video_preset, unit) for unit in units]
-        unit_results = self._build_visual_units(
-            prepared,
-            video_preset,
-            progress=progress,
-            check_cancelled=check,
-        )
-        audio_result = self._build_audio_master(
-            state,
-            preset,
-            progress=progress,
-            check_cancelled=check,
-        )
-        check()
-        assembly = self._prepare_assembly(
-            state,
-            preset,
-            unit_results,
-            audio_result,
-            total_frames,
-            check_cancelled=check,
-        )
-        output, final_probe = self._publish_assembly(
-            state,
-            preset,
-            assembly,
-            output_path,
-            total_frames,
-            overwrite=overwrite,
-        )
-        return self._build_result(
-            output,
-            final_probe,
-            assembly,
-            unit_results,
-            audio_result,
-            total_frames,
-        )
+        total_frames, reservation = self._prepare_build(state, preset, units)
+        with reservation:
+            check = check_cancelled or (lambda: None)
+            video_preset = preset.model_copy(
+                update={
+                    "name": f"{preset.name} / cached visual unit",
+                    "audio_codec": None,
+                    "audio_bitrate": preset.audio_bitrate,
+                }
+            )
+            prepared = [
+                self._prepare_visual_unit(state, video_preset, unit) for unit in units
+            ]
+            unit_results = self._build_visual_units(
+                prepared,
+                video_preset,
+                progress=progress,
+                check_cancelled=check,
+            )
+            audio_result = self._build_audio_master(
+                state,
+                preset,
+                progress=progress,
+                check_cancelled=check,
+            )
+            check()
+            assembly = self._prepare_assembly(
+                state,
+                preset,
+                unit_results,
+                audio_result,
+                total_frames,
+                check_cancelled=check,
+            )
+            output, final_probe = self._publish_assembly(
+                state,
+                preset,
+                assembly,
+                output_path,
+                total_frames,
+                overwrite=overwrite,
+            )
+            return self._build_result(
+                output,
+                final_probe,
+                assembly,
+                unit_results,
+                audio_result,
+                total_frames,
+            )
 
     @staticmethod
     def automatic_units(state: TimelineState) -> list[SequenceBuildUnit]:
@@ -208,24 +212,26 @@ class SegmentedExportService:
         state: TimelineState,
         preset: ExportPreset,
         units: list[SequenceBuildUnit],
-    ) -> int:
+    ) -> tuple[int, ProjectCacheReservation]:
         if preset.format == ExportFormat.AUDIO:
             raise ValueError("Segmented export requires a video preset")
         self._validate_units(state, units)
         total_frames = sum(unit.end_frame - unit.start_frame for unit in units)
         project_cache = self.paths.project_cache_dir(self.documents.project_dir)
-        reserve_project_cache(
-            project_cache,
-            self.documents.project_dir,
-            expected_new_bytes=estimate_video_cache_bytes(
-                state.sequence.profile.width,
-                state.sequence.profile.height,
-                total_frames,
+        return (
+            total_frames,
+            reserve_project_cache(
+                project_cache,
+                self.documents.project_dir,
+                expected_new_bytes=estimate_video_cache_bytes(
+                    state.sequence.profile.width,
+                    state.sequence.profile.height,
+                    total_frames,
+                ),
+                label="MediaFlow segmented export cache",
+                case_sensitive_paths=self.paths.target.case_sensitive_paths,
             ),
-            label="MediaFlow segmented export cache",
-            case_sensitive_paths=self.paths.target.case_sensitive_paths,
         )
-        return total_frames
 
     def _prepare_assembly(
         self,

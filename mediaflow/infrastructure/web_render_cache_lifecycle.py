@@ -12,7 +12,11 @@ from mediaflow.domain.web_rendering import WebRenderActualCapture, WebRenderPlan
 from .file_fingerprint import fingerprint_matches
 from .project_lock import ProcessFileLock
 from .runtime_paths import RuntimePaths
-from .storage_budget import estimate_video_cache_bytes, reserve_project_cache
+from .storage_budget import (
+    ProjectCacheReservation,
+    estimate_video_cache_bytes,
+    reserve_project_cache,
+)
 from .web_render_target import (
     WEB_CACHE_MANIFEST_SCHEMA,
     WEB_RENDERER_VERSION,
@@ -218,9 +222,14 @@ class WebRenderCacheLifecycle:
             return False
         return True
 
-    def reserve(self, target: WebRenderTarget, *, label: str) -> None:
+    def reserve(
+        self,
+        target: WebRenderTarget,
+        *,
+        label: str,
+    ) -> ProjectCacheReservation:
         cache_root = self.paths.project_cache_dir(self.documents.project_dir)
-        reserve_project_cache(
+        return reserve_project_cache(
             cache_root,
             self.documents.project_dir,
             expected_new_bytes=estimate_video_cache_bytes(

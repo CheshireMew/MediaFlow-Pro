@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any, cast
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Property, Signal, Slot
 
 from mediaflow.desktop.session_state import TimelinePlacement
 from mediaflow.domain.enums import ColorMode
 from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.sequence_variants import SequenceVariantSpec, VariantReframeMode
 
 from .controller_facet import ControllerFacet, report_ui_errors
 from .controller_scopes import WorkspaceSequenceScope
@@ -14,6 +16,34 @@ from .controller_scopes import WorkspaceSequenceScope
 
 class WorkspaceSequenceController(ControllerFacet[WorkspaceSequenceScope]):
     """Active-sequence selection, profile, preview, and placement commands."""
+
+    variantPlanChanged = Signal()
+
+    def __init__(self, scope: WorkspaceSequenceScope) -> None:
+        super().__init__(scope)
+        self._variant_plan: dict[str, Any] = {}
+
+    @Property(dict, notify=variantPlanChanged)
+    def variantPlan(self) -> dict[str, Any]:
+        return dict(self._variant_plan)
+
+    @Slot("QVariantList", str)
+    @report_ui_errors
+    def planDeliveryVariants(
+        self,
+        preset_ids: list[object],
+        reframe_mode: str,
+    ) -> None:
+        source_id, specs = self._delivery_variant_specs(preset_ids, reframe_mode)
+        plan = self._session.state.binding.require_current().plan_sequence_variants(
+            source_id, specs
+        )
+        self._variant_plan = plan.model_dump(mode="json")
+        self.variantPlanChanged.emit()
+        conflict_count = sum(len(item.conflicts) for item in plan.items)
+        self._session._set_status(
+            "交付版本变更计划已生成，%1 个冲突", conflict_count
+        )
 
     @Slot(str)
     @report_ui_errors
@@ -52,6 +82,71 @@ class WorkspaceSequenceController(ControllerFacet[WorkspaceSequenceScope]):
         )
         self._session.projectors.refresh_active_sequence(refresh_sequences=True)
         self._session._set_status("短视频序列已创建")
+
+    @Slot("QVariantList", str, bool)
+    @report_ui_errors
+    def generateDeliveryVariants(
+        self,
+        preset_ids: list[object],
+        reframe_mode: str,
+        force: bool,
+    ) -> None:
+        self._session._require_writable()
+        source_id, specs = self._delivery_variant_specs(preset_ids, reframe_mode)
+        result = self._session.state.binding.require_current().generate_sequence_variants(
+            source_id,
+            specs,
+            force=force,
+        )
+        self._variant_plan = {
+            "source_sequence_id": source_id,
+            "items": [item.model_dump(mode="json") for item in result.plans],
+        }
+        self.variantPlanChanged.emit()
+        self._session.projectors.timeline.refresh_sequences()
+        self._session.updates.commit(project=True, history=True)
+        created = len(result.created_sequence_ids)
+        refreshed = len(result.refreshed_sequence_ids)
+        reused = len(result.reused_sequence_ids)
+        if created or refreshed:
+            self._session._set_status(
+                "已新建 %1 个、同步 %2 个交付版本", created, refreshed
+            )
+        else:
+            self._session._set_status("%1 个交付版本已是最新，无需重复生成", reused)
+
+    def _delivery_variant_specs(
+        self,
+        preset_ids: list[object],
+        reframe_mode: str,
+    ) -> tuple[str, list[SequenceVariantSpec]]:
+        presets = {
+            "landscape_16_9": ("横屏 16:9", 1920, 1080),
+            "portrait_9_16": ("竖屏 9:16", 1080, 1920),
+            "square_1_1": ("方形 1:1", 1080, 1080),
+            "portrait_4_5": ("竖屏 4:5", 1080, 1350),
+        }
+        selected = [str(item) for item in preset_ids]
+        if not selected:
+            raise ValueError("请至少选择一个交付版本")
+        unknown = [item for item in selected if item not in presets]
+        if unknown:
+            raise ValueError(f"未知的交付版本：{', '.join(unknown)}")
+        if reframe_mode not in {"fit", "center_fill"}:
+            raise ValueError("未知的画面适配方式")
+        source_id = self._session.state.binding.active_sequence_id
+        source = self._session.state.binding.require_current().get_sequence(source_id)
+        specs = [
+            SequenceVariantSpec(
+                preset_id=preset_id,
+                name=f"{source.name} · {presets[preset_id][0]}",
+                width=presets[preset_id][1],
+                height=presets[preset_id][2],
+                reframe_mode=cast(VariantReframeMode, reframe_mode),
+            )
+            for preset_id in selected
+        ]
+        return source_id, specs
 
     @Slot()
     @report_ui_errors

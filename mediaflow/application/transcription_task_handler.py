@@ -128,6 +128,7 @@ class TranscriptionTaskHandler(ProjectTaskHandler):
                 self.documents.projects,
                 self.documents.sequences,
             ),
+            dialogue_track_id=plan.dialogue_track_id,
             start_frame=plan.timeline_start_frame,
             end_frame=plan.timeline_end_frame,
         )
@@ -136,6 +137,7 @@ class TranscriptionTaskHandler(ProjectTaskHandler):
         selection = select_dialogue_transcription_sources(
             state,
             assets,
+            dialogue_track_id=plan.dialogue_track_id,
             start_frame=plan.timeline_start_frame,
             end_frame=plan.timeline_end_frame,
         )
@@ -297,6 +299,7 @@ class TranscriptionTaskHandler(ProjectTaskHandler):
                 self.documents.projects,
                 self.documents.sequences,
             ),
+            dialogue_track_id=plan.dialogue_track_id,
             start_frame=plan.timeline_start_frame,
             end_frame=plan.timeline_end_frame,
         )
@@ -406,10 +409,10 @@ class TranscriptionTaskHandler(ProjectTaskHandler):
             "fingerprint": fingerprint,
             "start_frame": start_frame,
             "end_frame": end_frame,
-            "pipeline": 2,
+            "pipeline": 3,
             "asr": settings.model_dump(
                 mode="json",
-                exclude={"smart_split_limit", "parallel_chunks"},
+                exclude={"smart_split_limit"},
             ),
         }
         return hashlib.sha256(

@@ -83,10 +83,45 @@ def validate_timeline_integrity(
         raise ValueError("Marker references another sequence")
     if any(item.sequence_id != state.sequence.id for item in state.ranges):
         raise ValueError("Range references another sequence")
+    if any(item.sequence_id != state.sequence.id for item in state.review_threads):
+        raise ValueError("Review thread references another sequence")
     if len({marker.id for marker in state.markers}) != len(state.markers):
         raise ValueError("Marker identifiers must be unique")
     if len({item.id for item in state.ranges}) != len(state.ranges):
         raise ValueError("Range identifiers must be unique")
+    if len({item.id for item in state.review_threads}) != len(state.review_threads):
+        raise ValueError("Review thread identifiers must be unique")
+    if len({item.id for item in state.multicam_groups}) != len(state.multicam_groups):
+        raise ValueError("Multicam group identifiers must be unique")
+    multicam_program_members: set[str] = set()
+    for group in state.multicam_groups:
+        if group.sequence_id != state.sequence.id:
+            raise ValueError("Multicam group references another sequence")
+        program_track = tracks.get(group.program_track_id)
+        if program_track is None or program_track.kind != TrackKind.VIDEO:
+            raise ValueError("Multicam program must use a video track")
+        if any(angle.asset_id not in assets for angle in group.angles):
+            raise ValueError("Multicam angle references an unknown asset")
+        if any(assets[angle.asset_id].kind != AssetKind.VIDEO for angle in group.angles):
+            raise ValueError("Multicam angles must use video assets")
+        if multicam_program_members.intersection(group.program_clip_ids):
+            raise ValueError("A program clip cannot belong to multiple multicam groups")
+        multicam_program_members.update(group.program_clip_ids)
+        members = [clips_by_id.get(clip_id) for clip_id in group.program_clip_ids]
+        if any(clip is None for clip in members):
+            raise ValueError("Multicam group references a missing program clip")
+        resolved_members = [clip for clip in members if clip is not None]
+        if any(clip.track_id != group.program_track_id for clip in resolved_members):
+            raise ValueError("Multicam program clip is on the wrong track")
+        if resolved_members[0].timeline_start != group.timeline_start:
+            raise ValueError("Multicam program must start at the group boundary")
+        if resolved_members[-1].timeline_end != group.timeline_start + group.duration:
+            raise ValueError("Multicam program must end at the group boundary")
+        if any(
+            left.timeline_end != right.timeline_start
+            for left, right in zip(resolved_members, resolved_members[1:], strict=False)
+        ):
+            raise ValueError("Multicam program clips must be adjacent")
 
     compound_members: set[str] = set()
     for compound in state.compounds:
@@ -97,10 +132,10 @@ def validate_timeline_integrity(
         if compound_members.intersection(compound.clip_ids):
             raise ValueError("A clip cannot belong to more than one compound clip")
         compound_members.update(compound.clip_ids)
-        members = [clips_by_id[clip_id] for clip_id in compound.clip_ids]
-        if len({clip.track_id for clip in members}) != 1:
+        compound_clips = [clips_by_id[clip_id] for clip_id in compound.clip_ids]
+        if len({clip.track_id for clip in compound_clips}) != 1:
             raise ValueError("Compound clip members must be on one track")
-        ordered = sorted(members, key=lambda clip: (clip.timeline_start, clip.id))
+        ordered = sorted(compound_clips, key=lambda clip: (clip.timeline_start, clip.id))
         if [clip.id for clip in ordered] != compound.clip_ids:
             raise ValueError("Compound clip members must be stored in timeline order")
         if any(

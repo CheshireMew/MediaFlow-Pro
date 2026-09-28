@@ -13,6 +13,7 @@ from mediaflow.application.project_changes import (
     project_path_segment,
 )
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
+from mediaflow.application.subtitle_segmentation import split_for_readability
 from mediaflow.application.subtitle_word_timing import estimate_subtitle_words
 from mediaflow.domain.collaboration import (
     ProjectChangeSet,
@@ -323,13 +324,6 @@ class SubtitleEditingService:
 
     @recorded_subtitle_edit("智能拆分字幕")
     def smart_split_document(self, document_id: str, *, text_limit: int = 24) -> int:
-        limit = max(1, int(text_limit))
-        project = self.repository.projects.get_project()
-        profile = self.repository.sequences.get_sequence(project.main_sequence_id).profile
-        minimum_duration = max(
-            2,
-            seconds_to_frames(1.6, profile.fps_numerator, profile.fps_denominator),
-        )
         segments = self.repository.subtitles.list_subtitle_segments(document_id)
         document_words = self.repository.subtitles.list_subtitle_words(document_id)
         words_by_segment: dict[str, list[SubtitleWord]] = {}
@@ -339,48 +333,13 @@ class SubtitleEditingService:
         updated_words: list[SubtitleWord] = []
         split_count = 0
         for segment in segments:
-            text = segment.text.strip()
-            cjk = bool(re.search(r"[\u3000-\u303f\u3040-\u30ff\uff00-\uffef\u3400-\u9fff]", text))
-            latin_limit = max(1, round(limit * 56 / 24))
-            word_limit = max(1, round(limit * 11 / 24))
-            long_enough = (
-                len(text) >= limit if cjk else (len(text) >= latin_limit or len(text.split()) >= word_limit)
+            parts = split_for_readability(
+                segment, words_by_segment.get(segment.id, []), text_limit=text_limit,
             )
-            if segment.end_frame - segment.start_frame < minimum_duration or not long_enough:
-                updated.append(segment)
-                updated_words.extend(words_by_segment.get(segment.id, []))
-                continue
-            try:
-                first, second = self._split(segment)
-            except ValueError:
-                updated.append(segment)
-                updated_words.extend(words_by_segment.get(segment.id, []))
-            else:
-                updated.extend((first, second))
-                source_words = words_by_segment.get(segment.id, [])
-                for target, target_words in (
-                    (
-                        first,
-                        [
-                            word
-                            for word in source_words
-                            if (word.start_frame + word.end_frame) / 2 < first.end_frame
-                        ],
-                    ),
-                    (
-                        second,
-                        [
-                            word
-                            for word in source_words
-                            if (word.start_frame + word.end_frame) / 2 >= first.end_frame
-                        ],
-                    ),
-                ):
-                    updated_words.extend(
-                        word.model_copy(update={"segment_id": target.id, "position": position})
-                        for position, word in enumerate(target_words)
-                    )
-                split_count += 1
+            split_count += int(len(parts) > 1)
+            for part, words in parts:
+                updated.append(part)
+                updated_words.extend(words)
         if split_count:
             self._save_segments(document_id, updated, words=updated_words)
         return split_count

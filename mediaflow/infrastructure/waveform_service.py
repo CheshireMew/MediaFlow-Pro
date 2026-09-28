@@ -54,24 +54,31 @@ class WaveformService:
             raise FileNotFoundError(source)
         source = require_windows_interop_path(source)
         project_cache = self.paths.project_cache_dir(self.repository.project_dir)
-        reserve_project_cache(
+        reservation = reserve_project_cache(
             project_cache,
             self.repository.project_dir,
             expected_new_bytes=self._estimated_peak_bytes(duration_seconds),
             label="MediaFlow waveform cache",
             case_sensitive_paths=self.paths.target.case_sensitive_paths,
         )
-        output_dir = project_cache / "waveforms"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output = output_dir / f"{asset.id}-{self._cache_key(asset, source)}{WAVEFORM_CACHE_SUFFIX}"
-        fragments = {
-            block_size: unique_temporary_sibling(
-                output_dir / f"{asset.id}-{block_size}.peaks",
-                label="waveform",
+        try:
+            output_dir = project_cache / "waveforms"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output = (
+                output_dir
+                / f"{asset.id}-{self._cache_key(asset, source)}{WAVEFORM_CACHE_SUFFIX}"
             )
-            for block_size in self.BLOCK_SIZES
-        }
-        temporary_output = unique_temporary_sibling(output, label="waveform")
+            fragments = {
+                block_size: unique_temporary_sibling(
+                    output_dir / f"{asset.id}-{block_size}.peaks",
+                    label="waveform",
+                )
+                for block_size in self.BLOCK_SIZES
+            }
+            temporary_output = unique_temporary_sibling(output, label="waveform")
+        except BaseException:
+            reservation.release()
+            raise
         try:
             if progress:
                 progress(OperationProgress.indeterminate("waveform_decoding"))
@@ -277,6 +284,7 @@ class WaveformService:
             temporary_output.unlink(missing_ok=True)
             for path in fragments.values():
                 path.unlink(missing_ok=True)
+            reservation.release()
 
     def generate(
         self,

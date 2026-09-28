@@ -46,6 +46,7 @@ class MediaResourceListModel(DictListModel):
                 "description",
                 "provider",
                 "tags",
+                "tagLabels",
                 "capabilities",
                 "previewType",
                 "previewUrl",

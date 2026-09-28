@@ -3,15 +3,12 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import wave
-import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.progress import OperationProgress
@@ -20,10 +17,11 @@ from mediaflow.domain.settings import ServiceSettings
 from mediaflow.file_digest import sha256_file
 
 from .asr_engine import FasterWhisperCliEngine
-from .resumable_download import DownloadSizeError, DownloadTransferError, download_with_resume
+from .resumable_download import download_with_resume
 from .runtime_components import RuntimeComponentService
 from .runtime_paths import RuntimePaths
 from .subprocess_runner import run_cancellable_streaming
+from .ytdlp_installer import PYPI_EJS_URL, install_ytdlp
 
 ToolProgress = Callable[[OperationProgress], None]
 
@@ -51,6 +49,7 @@ def prepare_ytdlp_import(paths: RuntimePaths) -> Path | None:
     value = str(package_root)
     if value not in sys.path:
         sys.path.insert(0, value)
+        importlib.invalidate_caches()
     return package_root
 
 
@@ -61,11 +60,13 @@ class RuntimeToolService:
         paths: RuntimePaths,
         *,
         ytdlp_metadata_url: str = PYPI_YTDLP_URL,
+        ejs_metadata_url: str = PYPI_EJS_URL,
         component_catalog_path: str | Path | None = None,
     ):
         self.settings = settings
         self.paths = paths
         self.ytdlp_metadata_url = ytdlp_metadata_url
+        self.ejs_metadata_url = ejs_metadata_url
         self.components = (
             RuntimeComponentService(settings, self.paths)
             if component_catalog_path is None
@@ -223,64 +224,13 @@ class RuntimeToolService:
         progress: ToolProgress | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> dict:
-        if progress:
-            progress(OperationProgress.indeterminate("ytdlp_update_checking"))
-        with urlopen(
-            Request(self.ytdlp_metadata_url, headers={"User-Agent": "MediaFlow Pro setup"}),
-            timeout=60,
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        version = str(payload.get("info", {}).get("version") or "")
-        wheel = next(
-            (
-                item
-                for item in payload.get("urls", [])
-                if str(item.get("filename") or "").endswith(".whl")
-                and item.get("packagetype") == "bdist_wheel"
-            ),
-            None,
+        result = install_ytdlp(
+            self.paths.runtime_dir, self.ytdlp_metadata_url,
+            ejs_metadata_url=self.ejs_metadata_url,
+            progress=progress, check_cancelled=check_cancelled,
         )
-        if not version or wheel is None:
-            raise RuntimeError("PyPI 没有返回可安装的 yt-dlp wheel")
-        downloads = self.paths.runtime_dir / "downloads"
-        wheel_path = downloads / str(wheel["filename"])
-
-        def report_download(completed: int, total: int) -> None:
-            if progress:
-                progress(
-                    OperationProgress.determinate(
-                        "runtime_tool_downloading",
-                        completed=completed,
-                        total=total,
-                        unit="bytes",
-                    )
-                )
-
-        try:
-            download_with_resume(
-                str(wheel["url"]),
-                wheel_path,
-                int(wheel.get("size") or 0),
-                progress=report_download,
-                check_cancelled=check_cancelled,
-            )
-        except DownloadSizeError as error:
-            raise RuntimeError(f"运行时工具下载不完整：{error.actual} / {error.expected}") from error
-        except DownloadTransferError as error:
-            raise RuntimeError(f"运行时工具下载失败：{error}") from error
-        if progress:
-            progress(OperationProgress.indeterminate("ytdlp_update_installing"))
-        target = self.paths.runtime_dir / "tools" / "python" / f"yt-dlp-{version}"
-        target.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(wheel_path) as archive:
-            for member in archive.infolist():
-                if member.filename.startswith("yt_dlp/") or (
-                    member.filename.startswith("yt_dlp-") and ".dist-info/" in member.filename
-                ):
-                    archive.extract(member, target)
-        pointer = self.paths.runtime_dir / "tools" / "yt-dlp-active.json"
-        self._write_json(pointer, {"version": version, "path": str(target.resolve())})
-        return {"version": version, "path": str(target.resolve())}
+        # Do not hot-reload modules while another task may be downloading.
+        return {**result, "restart_required": "yt_dlp" in sys.modules}
 
     def install_components(
         self,
@@ -415,42 +365,21 @@ class RuntimeToolService:
                 output.setsampwidth(2)
                 output.setframerate(16_000)
                 output.writeframes(b"\0\0" * 16_000)
-        output_dir = (
-            self.paths.runtime_dir
-            / "cache"
-            / "asr-cli"
-            / "prewarm"
-            / f"{self.settings.asr.model}-{self.settings.asr.device}"
-        )
-        output_dir.mkdir(parents=True, exist_ok=True)
         settings = self.settings.asr.model_copy(update={"cli_path": str(cli_path)})
-        command = FasterWhisperCliEngine(settings, self.paths).build_command(audio, output_dir)
         if progress:
             progress(OperationProgress.indeterminate("asr_cli_prewarming"))
 
-        def observe(line: str) -> None:
-            match = re.search(r"(?<![\d.])(\d{1,3})%", line)
-            if match and progress:
-                progress(
-                    OperationProgress.determinate(
-                        "asr_cli_prewarming",
-                        completed=min(100, int(match.group(1))),
-                        total=100,
-                        unit="percent",
-                    )
-                )
+        def report(value: OperationProgress) -> None:
+            if progress:
+                if value.message_code in {"transcribing", "asr_cli_starting", "loading_asr_model"}:
+                    value = value.model_copy(update={"message_code": "asr_cli_prewarming"})
+                progress(value)
 
-        result = run_cancellable_streaming(
-            command,
-            on_stdout_line=observe,
-            on_stderr_line=observe,
-            check_cancelled=check_cancelled,
-            encoding="utf-8",
-            errors="replace",
-            timeout=600,
-        )
-        if result.returncode != 0:
-            raise RuntimeError((result.stdout or result.stderr or "CLI 预热失败").strip())
+        # Use the same resource lock, precision, cancellation and error handling
+        # as a real transcription, including valid empty output for silence.
+        FasterWhisperCliEngine(
+            settings, self.paths, check_cancelled=check_cancelled,
+        ).transcribe(audio, progress=report)
         return cli_path
 
     @staticmethod

@@ -8,8 +8,11 @@ from typing import TYPE_CHECKING, Any, Literal
 import mediaflow.automation.operation_delivery_models as delivery_models
 import mediaflow.automation.operation_language_models as language_models
 import mediaflow.automation.operation_model_common as common_models
+import mediaflow.automation.operation_production_models as production_models
 import mediaflow.automation.operation_project_models as project_models
+import mediaflow.automation.operation_review_models as review_models
 import mediaflow.automation.operation_timeline_models as timeline_models
+import mediaflow.automation.operation_voiceover_models as voiceover_models
 import mediaflow.automation.operation_web_models as web_models
 from mediaflow.application.project_mutation_planning import plan_automation_project_mutation
 from mediaflow.automation.operation_context import OperationContext
@@ -58,12 +61,15 @@ diagnostics = _LazyOperationModule("mediaflow.automation.diagnostics_operations"
 dubbing = _LazyOperationModule("mediaflow.automation.dubbing_operations")
 language_audio = _LazyOperationModule("mediaflow.automation.language_audio_operations")
 media_quality = _LazyOperationModule("mediaflow.automation.media_quality_operations")
+production = _LazyOperationModule("mediaflow.automation.production_operations")
 project = _LazyOperationModule("mediaflow.automation.project_operations")
 resources = _LazyOperationModule("mediaflow.automation.resource_operations")
+review = _LazyOperationModule("mediaflow.automation.review_operations")
 runtime = _LazyOperationModule("mediaflow.automation.runtime_operations")
 speech = _LazyOperationModule("mediaflow.automation.speech_operations")
 tasks = _LazyOperationModule("mediaflow.automation.task_operations")
 timeline = _LazyOperationModule("mediaflow.automation.timeline_operations")
+voiceover = _LazyOperationModule("mediaflow.automation.voiceover_operations")
 web = _LazyOperationModule("mediaflow.automation.web_operations")
 
 
@@ -211,6 +217,13 @@ OPERATIONS: dict[str, OperationDefinition] = {
         media_quality.compare_reference,
         capabilities=("reference-video-comparison", "ffmpeg", "ffprobe"),
     ),
+    "production.bundle.inspect": _operation(
+        production_models.ProductionBundleInspectArguments,
+        production_models.ProductionBundleInspectResult,
+        "none",
+        production.inspect_bundle,
+        capabilities=(),
+    ),
     "project.create": _operation(
         project_models.ProjectCreateArguments,
         project_models.ProjectSnapshotResult,
@@ -278,15 +291,98 @@ OPERATIONS: dict[str, OperationDefinition] = {
         task_backed=True,
         capabilities=("project-editing", "ffprobe", "ffmpeg"),
     ),
+    "project.collection.preview": _read(
+        project_models.ProjectCollectionArguments,
+        project_models.ProjectCollectionPreviewResult,
+        project.preview_project_collection,
+        capabilities=("project-editing", "project-collection"),
+    ),
+    "project.collection.list": _read(
+        common_models.EmptyArguments,
+        project_models.ProjectCollectionListResult,
+        project.list_project_collections,
+        capabilities=("project-editing", "project-collection"),
+    ),
+    "project.collection.apply": _write(
+        project_models.ProjectCollectionArguments,
+        project_models.ProjectCollectionApplyResult,
+        project.collect_project_assets,
+        capabilities=("project-editing", "project-collection"),
+        reversible=True,
+    ),
+    "project.collection.state.set": _write(
+        project_models.ProjectCollectionStateArguments,
+        project_models.ProjectCollectionApplyResult,
+        project.set_project_collection_state,
+        capabilities=("project-editing", "project-collection"),
+        reversible=True,
+    ),
+    "project.archive.create": _write(
+        project_models.ProjectArchiveCreateArguments,
+        project_models.ProjectArchiveCreateResult,
+        project.create_project_archive,
+        capabilities=("project-editing", "project-collection"),
+    ),
     "sequence.short.create": _write(
         project_models.SequenceShortCreateArguments,
         project_models.SequenceResult,
         project.create_short_sequence,
     ),
+    "sequence.variant.list": _read(
+        project_models.SequenceVariantListArguments,
+        project_models.SequenceVariantListResult,
+        project.list_sequence_variants,
+        capabilities=("project-editing", "sequence-delivery-variants"),
+    ),
+    "sequence.variant.plan": _read(
+        project_models.SequenceVariantPlanArguments,
+        project_models.SequenceVariantPlanResult,
+        project.plan_sequence_variants,
+        capabilities=("project-editing", "sequence-delivery-variants"),
+    ),
+    "sequence.variant.generate": _write(
+        project_models.SequenceVariantGenerateArguments,
+        project_models.SequenceVariantGenerateResult,
+        project.generate_sequence_variants,
+        capabilities=("project-editing", "sequence-delivery-variants"),
+        reversible=True,
+    ),
     "timeline.get": _read(
         common_models.SequenceArguments,
         timeline_models.TimelineResult,
         timeline.get_timeline,
+    ),
+    "multicam.list": _read(
+        common_models.SequenceArguments,
+        timeline_models.MulticamGroupListResult,
+        timeline.list_multicam_groups,
+        capabilities=("project-editing", "multicam-editing"),
+    ),
+    "multicam.sync.analyze": _read(
+        timeline_models.MulticamSyncAnalyzeArguments,
+        timeline_models.MulticamSyncAnalyzeResult,
+        timeline.analyze_multicam_sync,
+        capabilities=("project-editing", "multicam-editing"),
+    ),
+    "multicam.group.create": _write(
+        timeline_models.MulticamGroupCreateArguments,
+        timeline_models.MulticamGroupResult,
+        timeline.create_multicam_group,
+        capabilities=("project-editing", "multicam-editing"),
+        reversible=True,
+    ),
+    "multicam.angle.switch": _write(
+        timeline_models.MulticamAngleSwitchArguments,
+        timeline_models.MulticamGroupResult,
+        timeline.switch_multicam_angle,
+        capabilities=("project-editing", "multicam-editing"),
+        reversible=True,
+    ),
+    "color.scope.analyze": _read(
+        timeline_models.ColorScopeAnalyzeArguments,
+        timeline_models.ColorScopeAnalyzeResult,
+        timeline.analyze_color_scopes,
+        capabilities=("project-editing", "color-scopes", "mlt"),
     ),
     "timeline.portable.inspect": _read(
         timeline_models.PortableTimelineArguments,
@@ -304,6 +400,105 @@ OPERATIONS: dict[str, OperationDefinition] = {
             "ffmpeg",
             "ffprobe",
         ),
+    ),
+    "timeline.interchange.inspect": _read(
+        timeline_models.InterchangeTimelineArguments,
+        timeline_models.InterchangeTimelineInspectResult,
+        timeline.inspect_interchange_timeline,
+        capabilities=("project-editing", "interchange-import"),
+    ),
+    "timeline.interchange.import": _write(
+        timeline_models.InterchangeTimelineImportArguments,
+        timeline_models.InterchangeTimelineImportResult,
+        timeline.import_interchange_timeline,
+        capabilities=("project-editing", "interchange-import", "ffmpeg", "ffprobe"),
+        reversible=True,
+    ),
+    "voiceover.cue.list": _read(
+        voiceover_models.VoiceoverCueListArguments,
+        voiceover_models.VoiceoverCueListResult,
+        voiceover.list_cues,
+        capabilities=("project-editing", "voiceover-adr"),
+    ),
+    "voiceover.cue.create": _write(
+        voiceover_models.VoiceoverCueCreateArguments,
+        voiceover_models.VoiceoverCueResult,
+        voiceover.create_cue,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.cue.update": _write(
+        voiceover_models.VoiceoverCueUpdateArguments,
+        voiceover_models.VoiceoverCueResult,
+        voiceover.update_cue,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.cue.archive": _write(
+        voiceover_models.VoiceoverCueArchiveArguments,
+        voiceover_models.VoiceoverCueResult,
+        voiceover.archive_cue,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.take.add": _write(
+        voiceover_models.VoiceoverTakeAddArguments,
+        voiceover_models.VoiceoverTakeResult,
+        voiceover.add_take,
+        capabilities=("project-editing", "voiceover-adr", "ffprobe"),
+        reversible=True,
+    ),
+    "voiceover.take.update": _write(
+        voiceover_models.VoiceoverTakeUpdateArguments,
+        voiceover_models.VoiceoverTakeUpdateResult,
+        voiceover.update_take,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.take.select": _write(
+        voiceover_models.VoiceoverTakeSelectArguments,
+        voiceover_models.VoiceoverCueResult,
+        voiceover.select_take,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.take.archive": _write(
+        voiceover_models.VoiceoverTakeArchiveArguments,
+        voiceover_models.VoiceoverTakeResult,
+        voiceover.archive_take,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.take.place": _write(
+        voiceover_models.VoiceoverTakePlaceArguments,
+        voiceover_models.VoiceoverCueResult,
+        voiceover.place_take,
+        capabilities=("project-editing", "voiceover-adr"),
+        reversible=True,
+    ),
+    "voiceover.latency.list": _read(
+        voiceover_models.VoiceoverLatencyCalibrationListArguments,
+        voiceover_models.VoiceoverLatencyCalibrationListResult,
+        voiceover.list_latency_calibrations,
+        capabilities=("project-editing", "voiceover-adr"),
+    ),
+    "voiceover.latency.get": _read(
+        voiceover_models.VoiceoverLatencyCalibrationGetArguments,
+        voiceover_models.VoiceoverLatencyCalibrationResult,
+        voiceover.get_latency_calibration,
+        capabilities=("project-editing", "voiceover-adr"),
+    ),
+    "voiceover.latency.set": _write(
+        voiceover_models.VoiceoverLatencyCalibrationSetArguments,
+        voiceover_models.VoiceoverLatencyCalibrationResult,
+        voiceover.set_latency_calibration,
+        capabilities=("project-editing", "voiceover-adr"),
+    ),
+    "voiceover.latency.analyze": _write(
+        voiceover_models.VoiceoverLatencyCalibrationAnalyzeArguments,
+        voiceover_models.VoiceoverLatencyCalibrationResult,
+        voiceover.analyze_latency_calibration,
+        capabilities=("project-editing", "voiceover-adr"),
     ),
     "timeline.track.add": _write(
         timeline_models.TimelineTrackAddArguments,
@@ -405,6 +600,30 @@ OPERATIONS: dict[str, OperationDefinition] = {
         timeline.transform_clip,
         reversible=True,
     ),
+    "timeline.clip.transform.keyframe.set": _write(
+        timeline_models.TimelineClipTransformKeyframeSetArguments,
+        timeline_models.ClipResult,
+        timeline.set_clip_transform_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.transform.keyframe.remove": _write(
+        timeline_models.TimelineClipTransformKeyframeRemoveArguments,
+        timeline_models.ClipResult,
+        timeline.remove_clip_transform_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.transform.keyframe.move": _write(
+        timeline_models.TimelineClipTransformKeyframeMoveArguments,
+        timeline_models.ClipResult,
+        timeline.move_clip_transform_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.transform.keyframe.retime": _write(
+        timeline_models.TimelineClipTransformKeyframeRetimeArguments,
+        timeline_models.ClipResult,
+        timeline.retime_clip_transform_keyframes,
+        reversible=True,
+    ),
     "timeline.clip.audio": _write(
         timeline_models.TimelineClipAudioArguments,
         timeline_models.ClipResult,
@@ -439,6 +658,169 @@ OPERATIONS: dict[str, OperationDefinition] = {
         timeline_models.TimelineClipVisualEffectRemoveArguments,
         timeline_models.ClipResult,
         timeline.remove_clip_visual_effect,
+        reversible=True,
+    ),
+    "timeline.clip.effect.keyframe.set": _write(
+        timeline_models.TimelineClipVisualEffectKeyframeSetArguments,
+        timeline_models.ClipResult,
+        timeline.set_clip_effect_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.effect.keyframe.remove": _write(
+        timeline_models.TimelineClipVisualEffectKeyframeRemoveArguments,
+        timeline_models.ClipResult,
+        timeline.remove_clip_effect_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.effect.keyframe.move": _write(
+        timeline_models.TimelineClipVisualEffectKeyframeMoveArguments,
+        timeline_models.ClipResult,
+        timeline.move_clip_effect_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.effect.keyframe.retime": _write(
+        timeline_models.TimelineClipVisualEffectKeyframeRetimeArguments,
+        timeline_models.ClipResult,
+        timeline.retime_clip_effect_keyframes,
+        reversible=True,
+    ),
+    "timeline.clip.effect.mask.assign": _write(
+        timeline_models.TimelineClipVisualEffectMaskAssignArguments,
+        timeline_models.ClipResult,
+        timeline.assign_clip_effect_mask,
+        reversible=True,
+    ),
+    "timeline.clip.mask.add": _write(
+        timeline_models.TimelineClipMaskAddArguments,
+        timeline_models.ClipResult,
+        timeline.add_clip_mask,
+        reversible=True,
+    ),
+    "timeline.clip.mask.update": _write(
+        timeline_models.TimelineClipMaskUpdateArguments,
+        timeline_models.ClipResult,
+        timeline.update_clip_mask,
+        reversible=True,
+    ),
+    "timeline.clip.mask.move": _write(
+        timeline_models.TimelineClipMaskMoveArguments,
+        timeline_models.ClipResult,
+        timeline.move_clip_mask,
+        reversible=True,
+    ),
+    "timeline.clip.mask.remove": _write(
+        timeline_models.TimelineClipMaskRemoveArguments,
+        timeline_models.ClipResult,
+        timeline.remove_clip_mask,
+        reversible=True,
+    ),
+    "timeline.clip.mask.keyframe.set": _write(
+        timeline_models.TimelineClipMaskKeyframeSetArguments,
+        timeline_models.ClipResult,
+        timeline.set_clip_mask_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.mask.keyframe.remove": _write(
+        timeline_models.TimelineClipMaskKeyframeRemoveArguments,
+        timeline_models.ClipResult,
+        timeline.remove_clip_mask_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.mask.keyframe.move": _write(
+        timeline_models.TimelineClipMaskKeyframeMoveArguments,
+        timeline_models.ClipResult,
+        timeline.move_clip_mask_keyframe,
+        reversible=True,
+    ),
+    "timeline.clip.mask.keyframe.retime": _write(
+        timeline_models.TimelineClipMaskKeyframeRetimeArguments,
+        timeline_models.ClipResult,
+        timeline.retime_clip_mask_keyframes,
+        reversible=True,
+    ),
+    "review.list": _read(
+        review_models.ReviewListArguments,
+        review_models.ReviewThreadListResult,
+        review.list_threads,
+    ),
+    "review.summary": _read(
+        common_models.SequenceArguments,
+        review_models.ReviewSummaryResult,
+        review.summarize,
+    ),
+    "review.thread.create": _write(
+        review_models.ReviewThreadCreateArguments,
+        review_models.ReviewThreadResult,
+        review.create_thread,
+        reversible=True,
+    ),
+    "review.thread.reply": _write(
+        review_models.ReviewThreadReplyArguments,
+        review_models.ReviewThreadResult,
+        review.reply_thread,
+        reversible=True,
+    ),
+    "review.message.edit": _write(
+        review_models.ReviewMessageEditArguments,
+        review_models.ReviewThreadResult,
+        review.edit_message,
+        reversible=True,
+    ),
+    "review.thread.update": _write(
+        review_models.ReviewThreadUpdateArguments,
+        review_models.ReviewThreadResult,
+        review.update_thread,
+        reversible=True,
+    ),
+    "review.thread.resolve": _write(
+        review_models.ReviewThreadArguments,
+        review_models.ReviewThreadResult,
+        review.resolve_thread,
+        reversible=True,
+    ),
+    "review.thread.reopen": _write(
+        review_models.ReviewThreadArguments,
+        review_models.ReviewThreadResult,
+        review.reopen_thread,
+        reversible=True,
+    ),
+    "review.thread.archive": _write(
+        review_models.ReviewThreadArguments,
+        review_models.ReviewThreadResult,
+        review.archive_thread,
+        reversible=True,
+    ),
+    "review.thread.restore": _write(
+        review_models.ReviewThreadArguments,
+        review_models.ReviewThreadResult,
+        review.restore_thread,
+        reversible=True,
+    ),
+    "review.snapshot.capture": _write(
+        review_models.ReviewSnapshotCaptureArguments,
+        review_models.ReviewSnapshotResult,
+        review.capture_snapshot,
+        capabilities=("project-editing", "review-collaboration"),
+        reversible=True,
+    ),
+    "review.snapshot.markup.set": _write(
+        review_models.ReviewSnapshotMarkupArguments,
+        review_models.ReviewSnapshotResult,
+        review.set_snapshot_markup,
+        capabilities=("project-editing", "review-collaboration"),
+        reversible=True,
+    ),
+    "review.package.export": _write(
+        review_models.ReviewPackageExportArguments,
+        review_models.ReviewPackageOperationResult,
+        review.export_package,
+        capabilities=("project-editing", "review-collaboration"),
+    ),
+    "review.package.import": _write(
+        review_models.ReviewPackageImportArguments,
+        review_models.ReviewPackageOperationResult,
+        review.import_package,
+        capabilities=("project-editing", "review-collaboration"),
         reversible=True,
     ),
     "subtitle.list": _read(
@@ -556,6 +938,12 @@ OPERATIONS: dict[str, OperationDefinition] = {
         language_audio.transcribe_sequence,
         task_backed=True,
         capabilities=("project-editing", "faster-whisper-xxl"),
+    ),
+    "speech.review.inspect": _read(
+        language_models.SpeechReviewInspectArguments,
+        language_models.SpeechReviewInspectResult,
+        language_audio.inspect_speech_review,
+        capabilities=("project-editing", "transcript-edit-plans"),
     ),
     "transcript.edit.preview": _read(
         language_models.TranscriptEditPreviewArguments,

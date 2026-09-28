@@ -8,6 +8,7 @@ from mediaflow.domain.dubbing import DubbingSession, DubbingSettings
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.project_records import ProjectVersionRecord
 from mediaflow.domain.settings import AsrSettings
+from mediaflow.domain.speech_review import ProjectSpeechReviewInspection, SpeechReviewRules
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.domain.transcript_edits import (
     TranscriptEditPlan,
@@ -20,6 +21,7 @@ from .operation_model_common import SequenceArguments
 
 
 class TranscriptSequenceTranscribeArguments(SequenceArguments):
+    dialogue_track_id: str | None = Field(default=None, min_length=1)
     asr: AsrSettings | None = None
     start_frame: int | None = Field(default=None, ge=0)
     end_frame: int | None = Field(default=None, gt=0)
@@ -29,6 +31,14 @@ class TranscriptSequenceTranscribeArguments(SequenceArguments):
         if self.start_frame is not None and self.end_frame is not None and self.end_frame <= self.start_frame:
             raise ValueError("end_frame must be after start_frame")
         return self
+
+
+class SpeechReviewInspectArguments(SequenceArguments):
+    document_id: str | None = Field(default=None, min_length=1)
+    rules: SpeechReviewRules = Field(default_factory=SpeechReviewRules)
+
+
+SpeechReviewInspectResult = ProjectSpeechReviewInspection
 
 
 class SubtitleSegmentUpdateArguments(DomainModel):

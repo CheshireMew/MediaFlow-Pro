@@ -15,6 +15,8 @@ _PROJECT_REQUEST_KINDS = frozenset(
     {
         "asset_thumbnails",
         "audio_metrics",
+        "color_scopes",
+        "interchange_timeline",
         "timeline_filmstrip",
         "project_close",
         "waveform",
@@ -89,6 +91,25 @@ class BackgroundRequests(SessionCoordinator):
         on_result: Callable[[object | None], None],
         on_error: Callable[[BaseException], None],
     ) -> Future[object] | None:
+        return self.submit_callback(
+            kind,
+            request_id,
+            operation,
+            on_result=on_result,
+            on_error=on_error,
+            executor=self._project_executor,
+        )
+
+    def submit_callback(
+        self,
+        kind: str,
+        request_id: object,
+        operation: Callable[[], object],
+        *,
+        on_result: Callable[[object | None], None],
+        on_error: Callable[[BaseException], None],
+        executor: ThreadPoolExecutor | None = None,
+    ) -> Future[object] | None:
         key = (kind, request_id)
         if key in self._callbacks:
             raise RuntimeError(f"Duplicate desktop background request: {kind} {request_id!r}")
@@ -97,7 +118,7 @@ class BackgroundRequests(SessionCoordinator):
             kind,
             request_id,
             operation,
-            executor=self._project_executor,
+            executor=executor,
         )
         if future is None:
             self._callbacks.pop(key, None)

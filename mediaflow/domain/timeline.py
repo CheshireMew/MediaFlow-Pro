@@ -7,8 +7,12 @@ from pydantic import Field, computed_field, field_validator, model_validator
 
 from .enums import AssetKind, ClipMediaKind, TrackKind, TransitionKind
 from .exports import SubtitleStyle
+from .keyframes import KeyframeCurve
+from .masks import ClipMask
 from .model_base import DomainModel, new_id
+from .multicam import MulticamGroup
 from .project import Sequence
+from .review import ReviewThread
 from .visual_effects import ClipVisualEffect
 from .web_state import WebClipState
 
@@ -147,6 +151,7 @@ class ClipTransformKeyframe(DomainModel):
     transform: ClipTransform
     source: Literal["manual", "auto_reframe", "subject_tracking"] = "manual"
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    curve: KeyframeCurve = Field(default_factory=KeyframeCurve)
 
     @model_validator(mode="after")
     def one_time_anchor(self) -> ClipTransformKeyframe:
@@ -173,6 +178,7 @@ class Clip(DomainModel):
     transform_keyframes: list[ClipTransformKeyframe] = Field(default_factory=list)
     audio: ClipAudio = Field(default_factory=ClipAudio)
     visual_effects: list[ClipVisualEffect] = Field(default_factory=list)
+    masks: list[ClipMask] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_clip(self) -> Clip:
@@ -212,6 +218,33 @@ class Clip(DomainModel):
             raise ValueError("Clip visual effect positions must be contiguous and ordered")
         if len({item.id for item in self.visual_effects}) != len(self.visual_effects):
             raise ValueError("Clip visual effects must have unique identifiers")
+        if any(
+            keyframe.timeline_offset >= self.duration
+            for effect in self.visual_effects
+            for keyframes in effect.parameter_keyframes.values()
+            for keyframe in keyframes
+        ):
+            raise ValueError("Visual effect keyframes must stay inside the clip")
+        mask_positions = [item.position for item in self.masks]
+        if mask_positions != list(range(len(self.masks))):
+            raise ValueError("Clip mask positions must be contiguous and ordered")
+        mask_ids = {item.id for item in self.masks}
+        if len(mask_ids) != len(self.masks):
+            raise ValueError("Clip masks must have unique identifiers")
+        if any(
+            keyframe.timeline_offset is not None
+            and keyframe.timeline_offset >= self.duration
+            for mask in self.masks
+            for keyframe in mask.keyframes
+        ):
+            raise ValueError("Timeline-anchored mask keyframes must stay inside the clip")
+        missing_mask_ids = {
+            effect.mask_id
+            for effect in self.visual_effects
+            if effect.mask_id is not None and effect.mask_id not in mask_ids
+        }
+        if missing_mask_ids:
+            raise ValueError("Visual effects cannot reference missing clip masks")
         return self
 
     @computed_field
@@ -324,6 +357,8 @@ class TimelineState(DomainModel):
     transitions: list[Transition] = Field(default_factory=list)
     markers: list[TimelineMarker] = Field(default_factory=list)
     ranges: list[TimelineRange] = Field(default_factory=list)
+    review_threads: list[ReviewThread] = Field(default_factory=list)
+    multicam_groups: list[MulticamGroup] = Field(default_factory=list)
     web_states: dict[str, WebClipState] = Field(default_factory=dict)
 
     @property

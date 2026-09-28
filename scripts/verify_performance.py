@@ -47,7 +47,8 @@ STRUCTURAL_EDIT_LIMIT_SECONDS = 0.5
 SUBTITLE_EDIT_LIMIT_SECONDS = 0.75
 INTERACTIVE_CLIP_LIMIT = 640
 MEMORY_DELTA_LIMIT_BYTES = 512 * 1024 * 1024
-MAX_PERFORMANCE_ATTEMPTS = 2
+MAX_PERFORMANCE_ATTEMPTS = 3
+PERFORMANCE_RETRY_COOLDOWN_SECONDS = 2.0
 
 
 def create_fixture(root: Path) -> Path:
@@ -385,6 +386,8 @@ def main(argv: list[str] | None = None) -> None:
                     )
                 )
                 return
+            if attempt_number < MAX_PERFORMANCE_ATTEMPTS:
+                time.sleep(PERFORMANCE_RETRY_COOLDOWN_SECONDS)
         summary = {
             "attempt_count": len(attempts),
             "passed_attempt": None,

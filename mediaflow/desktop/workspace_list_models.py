@@ -10,7 +10,17 @@ from .list_model_base import DictListModel
 class SequenceListModel(DictListModel):
     def __init__(self, parent: QObject | None = None):
         super().__init__(
-            ["sequenceId", "name", "displayName", "kind", "profile", "colorMode"],
+            [
+                "sequenceId",
+                "name",
+                "displayName",
+                "kind",
+                "profile",
+                "colorMode",
+                "sourceSequenceId",
+                "variantPreset",
+                "variantStale",
+            ],
             parent,
         )
 

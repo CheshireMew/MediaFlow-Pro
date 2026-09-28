@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from mediaflow.infrastructure.sequence_catalog_repository import SequenceCatalogRepository
     from mediaflow.infrastructure.subtitle_repository import SubtitleRepository
     from mediaflow.infrastructure.timeline_repository import TimelineRepository
+    from mediaflow.infrastructure.voiceover_repository import VoiceoverRepository
     from mediaflow.infrastructure.web_media_repository import WebMediaRepository
 
 
@@ -28,6 +29,7 @@ class ProjectObservationSources:
     timeline: TimelineRepository
     audio: AudioRepository
     dubbing: DubbingRepository
+    voiceover: VoiceoverRepository
     subtitles: SubtitleRepository
     highlights: HighlightRepository
     web: WebMediaRepository

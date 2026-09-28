@@ -21,6 +21,7 @@ from mediaflow.domain.task_commands import (
     AnalyzeLoudnessCommand,
     AnalyzeScenesCommand,
     AnalyzeSequenceBoundsCommand,
+    TrackMaskCommand,
     TrackSubjectCommand,
 )
 from mediaflow.domain.tasks import (
@@ -71,6 +72,8 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
             return self._detect_scenes(context, command)
         if isinstance(command, TrackSubjectCommand):
             return self._track_subject(context, command)
+        if isinstance(command, TrackMaskCommand):
+            return self._track_mask(context, command)
         raise TypeError(f"Unexpected analysis command: {type(command).__name__}")
 
     def _detect_scenes(
@@ -148,6 +151,49 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
                 "type": command.mode,
                 "sequence_id": command.sequence_id,
                 "clip_id": clip.id,
+                "keyframes": [item.model_dump(mode="json") for item in keyframes],
+            },
+            apply_result=apply_result,
+        )
+        return self.completion(result_path)
+
+    def _track_mask(
+        self,
+        context: TaskContext,
+        command: TrackMaskCommand,
+    ) -> TaskCompletion:
+        state = self.documents.timeline.load_timeline(command.sequence_id)
+        clip = next(item for item in state.clips if item.id == command.clip_id)
+        mask = next(item for item in clip.masks if item.id == command.mask_id)
+        asset = self.documents.assets.get_asset(clip.asset_id)
+        if asset.kind != AssetKind.VIDEO:
+            raise ValueError("蒙版跟踪只适用于视频片段")
+        context.report(OperationProgress.indeterminate("mask_tracking_preparing"))
+        keyframes = self.runtime.track_mask(
+            self.documents.assets.resolve_asset_path(asset),
+            clip,
+            mask,
+            state.sequence.profile,
+            check_cancelled=context.cancellation.raise_if_requested,
+            progress=context.report,
+        )
+
+        def apply_result() -> None:
+            self.timeline_provider(command.sequence_id).set_clip_mask_keyframes(
+                clip.id,
+                mask.id,
+                keyframes,
+                expected_clip=clip,
+            )
+
+        result_path = self._publish_visual_analysis(
+            context,
+            message_code="mask_tracking_saving",
+            payload={
+                "type": "mask_tracking",
+                "sequence_id": command.sequence_id,
+                "clip_id": clip.id,
+                "mask_id": mask.id,
                 "keyframes": [item.model_dump(mode="json") for item in keyframes],
             },
             apply_result=apply_result,

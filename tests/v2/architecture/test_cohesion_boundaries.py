@@ -588,10 +588,9 @@ def test_shared_algorithms_have_one_implementation_and_explicit_consumers() -> N
             "mediaflow/infrastructure/runtime_components.py",
             "mediaflow/infrastructure/runtime_tools.py",
         },
-        "project_clip_transform_points": {
-            "mediaflow/infrastructure/fcpxml_export.py",
-            "mediaflow/infrastructure/mlt/clip_graph.py",
-        },
+            "project_clip_transform_points": {
+                "mediaflow/infrastructure/fcpxml_export.py",
+            },
         "resolve_media_bindings": {
             "mediaflow/infrastructure/web_native_media.py",
         },

@@ -312,7 +312,7 @@ AppScrollView {
                             mediaflow.runtimeSettingsController.installRuntimeComponents(selected)
                         }
                     }
-                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.runtimeSettingsController.runtimeToolStatus.busy && page.settingsDialog.runtimeComponent("faster-whisper-xxl").ready; text: qsTr("预热 XXL"); onClicked: mediaflow.runtimeSettingsController.prewarmAsrCli() }
+                    AppButton { Layout.fillWidth: true; enabled: !mediaflow.runtimeSettingsController.runtimeToolStatus.busy && page.settingsDialog.runtimeComponent("faster-whisper-xxl").ready === true; text: qsTr("预热 XXL"); onClicked: mediaflow.runtimeSettingsController.prewarmAsrCli() }
                     AppButton { visible: mediaflow.runtimeSettingsController.runtimeToolStatus.busy; danger: true; text: qsTr("取消"); onClicked: mediaflow.runtimeSettingsController.cancelRuntimeToolOperation() }
                 }
             }
@@ -417,7 +417,7 @@ AppScrollView {
         }
         RowLayout {
             Layout.fillWidth: true
-            Text { text: qsTr("长音频并行分块"); color: Theme.textMuted; Layout.preferredWidth: 180 }
+            Text { text: qsTr("长音频单模型批量"); color: Theme.textMuted; Layout.preferredWidth: 180 }
             AppComboBox {
                 id: asrParallelChunks
                 Layout.fillWidth: true

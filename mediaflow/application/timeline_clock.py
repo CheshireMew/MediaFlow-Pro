@@ -190,6 +190,41 @@ def reframe_timeline_clock(
         transitions=reframed_transitions,
         markers=[marker.model_copy(update={"frame": reframe(marker.frame)}) for marker in state.markers],
         ranges=reframed_ranges,
+        review_threads=[
+            item.model_copy(
+                update={
+                    "start_frame": reframe(item.start_frame),
+                    "end_frame": (
+                        reframe(item.end_frame)
+                        if item.end_frame is not None
+                        else None
+                    ),
+                }
+            )
+            for item in state.review_threads
+        ],
+        multicam_groups=[
+            item.model_copy(
+                update={
+                    "timeline_start": reframe(item.timeline_start),
+                    "duration": max(
+                        1,
+                        reframe(item.timeline_start + item.duration)
+                        - reframe(item.timeline_start),
+                    ),
+                    "sync_offset": reframe(item.sync_offset),
+                    "angles": [
+                        angle.model_copy(update={"source_in": reframe(angle.source_in)})
+                        for angle in item.angles
+                    ],
+                    "cuts": [
+                        cut.model_copy(update={"frame": reframe(cut.frame)})
+                        for cut in item.cuts
+                    ],
+                }
+            )
+            for item in state.multicam_groups
+        ],
         web_states=dict(state.web_states),
     )
     TimelineRules.normalize_compounds(reframed)

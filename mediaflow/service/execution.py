@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 ServiceWorkload = Literal[
     "control",
+    "snapshot",
     "project",
     "wait",
     "runtime",
@@ -32,6 +33,7 @@ class _PoolConfiguration:
 
 _POOL_CONFIGURATIONS: dict[ServiceWorkload, _PoolConfiguration] = {
     "control": _PoolConfiguration(workers=2, max_waiters=16, admission_timeout=0.5),
+    "snapshot": _PoolConfiguration(workers=2, max_waiters=16, admission_timeout=0.5),
     "project": _PoolConfiguration(workers=8, max_waiters=64, admission_timeout=2.0),
     "wait": _PoolConfiguration(workers=8, max_waiters=64, admission_timeout=0.5),
     "runtime": _PoolConfiguration(workers=4, max_waiters=32, admission_timeout=3.0),

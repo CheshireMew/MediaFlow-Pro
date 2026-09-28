@@ -105,6 +105,7 @@ class RuntimeSettingsControllerScope(ControllerScope):
 class LanguageSettingsControllerScope(ControllerScope):
     state: DesktopSessionState
     models: SessionModels
+    background: BackgroundRequests
     settings_persistence: SettingsPersistence
     _api: DesktopEditorApplication
     _set_status: Operation
@@ -129,6 +130,7 @@ class WorkspaceSettingsControllerScope(ControllerScope):
 class MediaControllerScope(ControllerScope):
     state: DesktopSessionState
     models: SessionModels
+    background: BackgroundRequests
     projectors: PresentationProjectors
     timeline_assets: TimelineAssetOperations
     settings_persistence: SettingsPersistence
@@ -331,6 +333,7 @@ def language_settings_scope(session: ProjectSession) -> LanguageSettingsControll
         **_support(session),
         state=session.state,
         models=session.models,
+        background=session.background,
         settings_persistence=session.settings_persistence,
         _api=session._api,
         _set_status=session._set_status,
@@ -361,6 +364,7 @@ def media_scope(session: ProjectSession) -> MediaControllerScope:
         **_support(session),
         state=session.state,
         models=session.models,
+        background=session.background,
         projectors=session.projectors,
         timeline_assets=session.timeline_assets,
         settings_persistence=session.settings_persistence,

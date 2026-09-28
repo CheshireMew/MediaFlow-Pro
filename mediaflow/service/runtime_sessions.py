@@ -2,41 +2,16 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from types import MappingProxyType
 from typing import Any
+
+from pydantic import JsonValue
 
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.settings import ServiceSettings
 
+from .application_commands import application_command
 from .codec import decode_transport, encode_transport
 from .events import EventHub, ServiceEvent
-from .execution import ServiceWorkload
-
-_APPLICATION_COMMAND_WORKLOADS: dict[str, ServiceWorkload] = {
-    "analyze_download_url": "tool",
-    "asset_thumbnail_paths": "preview",
-    "cancel_timeline_filmstrip_requests": "control",
-    "timeline_filmstrip_paths": "preview",
-    "default_media_directory": "runtime",
-    "discover_encoder_policy_options": "runtime",
-    "installed_asr_models": "runtime",
-    "recent_projects": "runtime",
-    "search_media_resources": "runtime",
-    "cancel_runtime_tool": "control",
-    "runtime_tool_status": "runtime",
-    "run_runtime_tool": "tool",
-    "test_llm_provider": "tool",
-    "write_asset_preview_snapshot": "preview",
-    "write_preview_snapshot": "preview",
-}
-APPLICATION_COMMAND_WORKLOADS = MappingProxyType(_APPLICATION_COMMAND_WORKLOADS)
-
-
-def application_command_workload(command: str) -> ServiceWorkload:
-    try:
-        return APPLICATION_COMMAND_WORKLOADS[command]
-    except KeyError as error:
-        raise ValueError(f"Unknown desktop application command: {command}") from error
 
 
 class ApplicationRuntimeOperations:
@@ -76,6 +51,7 @@ class ApplicationRuntimeOperations:
             "runtime_descriptor": self.desktop_runtime_descriptor(),
             "settings": self.application_settings(),
             "runtime_tool_status": encode_transport(runtime_status),
+            "default_media_directory": self.application.default_media_directory,
         }
 
     def replace_application_settings(self, value: Any) -> Any:
@@ -86,46 +62,15 @@ class ApplicationRuntimeOperations:
         self._update_project_settings()
         return encode_transport(self.application.service_settings)
 
-    def cookie_command(self, command: str, args_value: Any) -> Any:
-        if command not in {"status", "save", "clear"}:
-            raise ValueError(f"Unknown managed-cookie command: {command}")
-        args = decode_transport(args_value)
-        if not isinstance(args, list):
-            raise ValueError("Managed-cookie args must decode to an array")
-        return encode_transport(getattr(self.application.cookies, command)(*args))
-
     def execute_application_command(
         self,
         command: str,
-        args_value: Any,
-        kwargs_value: Any,
+        arguments_value: Any,
     ) -> Any:
-        application_command_workload(command)
-        args = decode_transport(args_value)
-        kwargs = decode_transport(kwargs_value)
-        if not isinstance(args, list) or not isinstance(kwargs, dict):
-            raise ValueError("Application command args and kwargs must decode correctly")
-        if command == "default_media_directory":
-            if args or kwargs:
-                raise ValueError("default_media_directory does not accept arguments")
-            return encode_transport(self.application.default_media_directory)
-        if command == "cancel_runtime_tool":
-            if args or kwargs:
-                raise ValueError("cancel_runtime_tool does not accept arguments")
-            return encode_transport(self.cancel_runtime_tool())
-        if command == "run_runtime_tool":
-            return encode_transport(self._run_runtime_tool(args, kwargs))
-        return encode_transport(getattr(self.application, command)(*args, **kwargs))
+        definition = application_command(command)
+        return encode_transport(definition.invoke(self, decode_transport(arguments_value)))
 
-    def _run_runtime_tool(self, args: list[Any], kwargs: dict[str, Any]) -> object:
-        if len(args) != 1 or not isinstance(args[0], str) or not args[0].strip():
-            raise ValueError("run_runtime_tool requires one operation argument")
-        if set(kwargs) - {"arguments"}:
-            raise ValueError("run_runtime_tool only accepts the arguments keyword")
-        arguments = kwargs.get("arguments", {})
-        if not isinstance(arguments, dict):
-            raise ValueError("run_runtime_tool arguments must be an object")
-        operation = args[0].strip()
+    def _run_runtime_tool(self, operation: str, arguments: dict[str, JsonValue]) -> object:
         if not self._operation_lock.acquire(blocking=False):
             with self._state_lock:
                 active = self._operation
@@ -162,6 +107,7 @@ class ApplicationRuntimeOperations:
                 check_cancelled=check_cancelled,
             )
             check_cancelled()
+            result = application_command("run_runtime_tool").validate_result(result)
             self._publish_runtime_event(operation, "completed", result=result)
             return result
         except BaseException as error:

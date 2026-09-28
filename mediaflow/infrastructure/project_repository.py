@@ -95,6 +95,7 @@ class ProjectRepository:
         self.frame_clock = components.frame_clock
         self.audio = components.audio
         self.dubbing = components.dubbing
+        self.voiceover = components.voiceover
         self.subtitles = components.subtitles
         self.highlights = components.highlights
         self.web = components.web

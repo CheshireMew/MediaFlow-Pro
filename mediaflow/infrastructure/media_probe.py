@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -76,6 +77,7 @@ class MediaProbe:
             else 0
         )
         format_info = payload.get("format") or {}
+        timecode = self._timecode_value(video, format_info)
         metadata = MediaMetadata(
             duration_frames=duration_frames,
             width=int(video["width"]) if video and video.get("width") else None,
@@ -92,6 +94,11 @@ class MediaProbe:
             variable_frame_rate=bool(native_rate and real_rate and native_rate != real_rate),
             has_video=video is not None,
             has_audio=audio is not None,
+            start_timecode_frame=self._timecode_frame(
+                timecode,
+                native_rate,
+                profile,
+            ),
         )
         return ProbeResult(kind=kind, metadata=metadata, suggested_profile=suggested_profile)
 
@@ -148,3 +155,54 @@ class MediaProbe:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _timecode_value(video: dict | None, format_info: dict) -> str | None:
+        for container in (
+            video.get("tags") if video else None,
+            format_info.get("tags"),
+        ):
+            if not isinstance(container, dict):
+                continue
+            for key, value in container.items():
+                if str(key).lower() == "timecode" and value:
+                    return str(value)
+        return None
+
+    @staticmethod
+    def _timecode_frame(
+        value: str | None,
+        native_rate: Fraction | None,
+        profile: ProjectProfile | None,
+    ) -> int | None:
+        if value is None or native_rate is None or profile is None:
+            return None
+        match = re.fullmatch(r"(\d{1,2}):(\d{2}):(\d{2})([:;])(\d{2})", value.strip())
+        if match is None:
+            return None
+        hours, minutes, seconds, separator, frames = match.groups()
+        nominal_rate = round(float(native_rate))
+        frame_value = int(frames)
+        if frame_value >= nominal_rate or int(minutes) >= 60 or int(seconds) >= 60:
+            return None
+        total_minutes = int(hours) * 60 + int(minutes)
+        native_frame = (
+            (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * nominal_rate
+            + frame_value
+        )
+        if separator == ";":
+            if nominal_rate not in {30, 60}:
+                return None
+            dropped_per_minute = 2 if nominal_rate == 30 else 4
+            native_frame -= dropped_per_minute * (
+                total_minutes - total_minutes // 10
+            )
+        seconds_value = Fraction(
+            native_frame * native_rate.denominator,
+            native_rate.numerator,
+        )
+        return seconds_to_frames(
+            seconds_value,
+            profile.fps_numerator,
+            profile.fps_denominator,
+        )

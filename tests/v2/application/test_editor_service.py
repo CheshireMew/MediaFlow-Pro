@@ -94,6 +94,7 @@ def test_desktop_startup_bootstraps_runtime_settings_and_workspace_in_one_rpc(
     runtime_descriptor = RuntimeContext.discover().desktop_descriptor()
     service_settings = ServiceSettings()
     runtime_tool_status = {"operation": None, "revision": 7}
+    default_media_directory = "D:/MediaFlow/Media"
 
     def bootstrap_call(method: str, params: dict, **_kwargs):
         calls.append((method, params))
@@ -101,6 +102,7 @@ def test_desktop_startup_bootstraps_runtime_settings_and_workspace_in_one_rpc(
             "runtime_descriptor": runtime_descriptor.model_dump(mode="json"),
             "settings": encode_transport(service_settings),
             "runtime_tool_status": encode_transport(runtime_tool_status),
+            "default_media_directory": default_media_directory,
             "workspace": {"workspace_session_id": "workspace-one-rpc"},
         }
 
@@ -119,6 +121,8 @@ def test_desktop_startup_bootstraps_runtime_settings_and_workspace_in_one_rpc(
     assert application.workspace_session_id == "workspace-one-rpc"
     assert application.service_settings == service_settings
     assert application.initial_runtime_tool_status == runtime_tool_status
+    assert application.default_media_directory == default_media_directory
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -497,12 +501,19 @@ async def test_service_subscription_receives_real_runtime_tool_events(
                 subscribed = await websocket.receive_json()
                 assert subscribed["type"] == "service.subscribed"
 
+                with pytest.raises(EditorServiceRpcError):
+                    await client.call(
+                        "desktop.application.call",
+                        {
+                            "command": "recent_projects",
+                            "arguments": encode_transport({"paths": 12}),
+                        },
+                    )
                 result = await client.call(
                     "desktop.application.call",
                     {
                         "command": "run_runtime_tool",
-                        "args": encode_transport(["inspect"]),
-                        "kwargs": encode_transport({"arguments": {}}),
+                        "arguments": encode_transport({"operation": "inspect", "arguments": {}}),
                     },
                 )
                 assert isinstance(decode_transport(result), dict)
@@ -1003,8 +1014,7 @@ async def test_runtime_work_cannot_starve_runtime_cancellation_control() -> None
         def execute_application_command(
             self,
             command: str,
-            _args: object,
-            _kwargs: object,
+            _arguments: object,
         ) -> dict[str, object]:
             nonlocal started
             if command == "run_runtime_tool":
@@ -1028,8 +1038,7 @@ async def test_runtime_work_cannot_starve_runtime_cancellation_control() -> None
     )
     runtime_params = {
         "command": "run_runtime_tool",
-        "args": encode_transport(["inspect"]),
-        "kwargs": encode_transport({"arguments": {}}),
+        "arguments": encode_transport({"operation": "inspect", "arguments": {}}),
     }
     active = [
         asyncio.create_task(dispatcher.dispatch("desktop.application.call", runtime_params)) for _ in range(2)
@@ -1041,8 +1050,7 @@ async def test_runtime_work_cannot_starve_runtime_cancellation_control() -> None
                 "desktop.application.call",
                 {
                     "command": "cancel_runtime_tool",
-                    "args": encode_transport([]),
-                    "kwargs": encode_transport({}),
+                    "arguments": encode_transport({}),
                 },
             ),
             timeout=1,
@@ -1094,6 +1102,82 @@ async def test_preview_and_long_running_tools_cannot_starve_home_runtime_queries
     finally:
         release.set()
         await asyncio.gather(*preview, *tools)
+        execution.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_work_cannot_starve_desktop_bootstrap_snapshot() -> None:
+    execution = ServiceExecutionPools()
+    release = threading.Event()
+    all_runtime_workers_started = threading.Event()
+    started = 0
+    started_lock = threading.Lock()
+
+    class RuntimeOperations:
+        def execute_application_command(
+            self,
+            command: str,
+            _arguments: object,
+        ) -> dict[str, object]:
+            nonlocal started
+            if command == "runtime_tool_status":
+                with started_lock:
+                    started += 1
+                    if started == 4:
+                        all_runtime_workers_started.set()
+                if not release.wait(5):
+                    raise TimeoutError("Test did not release the runtime workload")
+            return {"command": command}
+
+        @staticmethod
+        def desktop_bootstrap() -> dict[str, object]:
+            return {"default_media_directory": "D:/MediaFlow/Media"}
+
+    class Operations:
+        runtime = RuntimeOperations()
+
+    class Workspaces:
+        @staticmethod
+        def attach(*, client_id: str) -> dict[str, str]:
+            return {
+                "workspace_session_id": "bootstrap-under-runtime-load",
+                "client_id": client_id,
+            }
+
+    dispatcher = ServiceRequestDispatcher(
+        Operations(),  # type: ignore[arg-type]
+        Workspaces(),  # type: ignore[arg-type]
+        None,
+        lambda: None,
+        execution,
+    )
+    runtime_params = {
+        "command": "runtime_tool_status",
+        "arguments": encode_transport({}),
+    }
+    active = [
+        asyncio.create_task(dispatcher.dispatch("desktop.application.call", runtime_params))
+        for _ in range(4)
+    ]
+    try:
+        assert await asyncio.to_thread(all_runtime_workers_started.wait, 2)
+        bootstrap = await asyncio.wait_for(
+            dispatcher.dispatch(
+                "desktop.bootstrap",
+                {"client_id": "desktop-under-runtime-load"},
+            ),
+            timeout=1,
+        )
+        assert bootstrap == {
+            "default_media_directory": "D:/MediaFlow/Media",
+            "workspace": {
+                "workspace_session_id": "bootstrap-under-runtime-load",
+                "client_id": "desktop-under-runtime-load",
+            },
+        }
+    finally:
+        release.set()
+        await asyncio.gather(*active)
         execution.close()
 
 

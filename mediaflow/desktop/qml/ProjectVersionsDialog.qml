@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import "."
 import "components"
@@ -14,8 +15,19 @@ AppDialog {
     width: Math.min(560, parent ? parent.width - 48 : 560)
     height: Math.min(620, parent ? parent.height - 48 : 620)
     modal: true
-    title: qsTr("命名版本")
+    title: qsTr("版本与归档")
     standardButtons: Dialog.Close
+
+    FolderDialog {
+        id: archiveFolderDialog
+        title: qsTr("选择可迁移项目的存放位置")
+        onAccepted: mediaflow.workspaceProjectController.createPortableProjectArchive(
+            selectedFolder.toString())
+    }
+
+    InterchangeImportDialog {
+        id: interchangeImportDialog
+    }
 
     contentItem: ColumnLayout {
         spacing: 10
@@ -74,6 +86,55 @@ AppDialog {
                     enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
                     onClicked: mediaflow.automationController.createDiagnosticsBundle(
                         mediaflow.automationController.diagnosticsDefaultPath, false)
+                }
+            }
+        }
+        Panel {
+            Layout.fillWidth: true
+            implicitHeight: collectionActions.implicitHeight + 18
+            ColumnLayout {
+                id: collectionActions
+                anchors.fill: parent
+                anchors.margins: 9
+                spacing: 7
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("迁移前先把外部素材归集到项目目录。归集和路径切换都可撤销；归档会生成经过哈希校验、可直接重开的独立项目目录。")
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSizeCaption
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    AppButton {
+                        objectName: "openInterchangeImportButton"
+                        Layout.fillWidth: true
+                        text: qsTr("导入 FCPXML / EDL")
+                        enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+                        onClicked: interchangeImportDialog.open()
+                    }
+                    AppButton {
+                        objectName: "collectProjectAssetsButton"
+                        Layout.fillWidth: true
+                        text: qsTr("归集外部素材")
+                        enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+                        onClicked: mediaflow.workspaceProjectController.collectProjectAssets()
+                    }
+                    AppButton {
+                        objectName: "restoreCollectionPathsButton"
+                        Layout.fillWidth: true
+                        text: qsTr("恢复归集前路径")
+                        enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canEdit)
+                        onClicked: mediaflow.workspaceProjectController.useLatestProjectCollection(false)
+                    }
+                    AppButton {
+                        objectName: "createPortableArchiveButton"
+                        Layout.fillWidth: true
+                        primary: true
+                        text: qsTr("创建可迁移项目")
+                        enabled: Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
+                        onClicked: archiveFolderDialog.open()
+                    }
                 }
             }
         }

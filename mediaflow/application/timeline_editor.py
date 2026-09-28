@@ -8,19 +8,36 @@ from mediaflow.application.timeline_change_session import TimelineChangeSession
 from mediaflow.application.timeline_clock import asset_in_timeline_clock
 from mediaflow.application.timeline_diff import TimelineDiff
 from mediaflow.application.timeline_marker_editing import TimelineMarkerRangeEditing
+from mediaflow.application.timeline_multicam_editing import TimelineMulticamEditing
+from mediaflow.application.timeline_review_editing import TimelineReviewEditing
 from mediaflow.application.timeline_ripple import RippleDeletePolicy
 from mediaflow.application.timeline_rules import TimelineRules
 from mediaflow.application.timeline_snapping import snap_frame
 from mediaflow.application.timeline_structure_editing import TimelineStructureEditing
 from mediaflow.application.timeline_track_editing import TimelineTrackEditing
 from mediaflow.application.timeline_visual_editing import TimelineVisualEditing
+from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.enums import (
     AssetKind,
     ClipMediaKind,
+    MaskShapeKind,
     TrackKind,
     VisualEffectKind,
 )
+from mediaflow.domain.keyframes import KeyframeCurve
+from mediaflow.domain.masks import ClipMask, MaskGeometry, MaskKeyframe
 from mediaflow.domain.model_base import new_id
+from mediaflow.domain.multicam import (
+    MulticamAngleSyncSpec,
+    MulticamGroup,
+    MulticamSyncAnalysis,
+)
+from mediaflow.domain.review import (
+    ReviewMarkupShape,
+    ReviewPriority,
+    ReviewSnapshot,
+    ReviewThread,
+)
 from mediaflow.domain.timebase import (
     source_frame_at_timeline_offset,
     source_frames_for_timeline_frames,
@@ -40,7 +57,7 @@ from mediaflow.domain.timeline import (
     Transition,
     default_clip_media_kind,
 )
-from mediaflow.domain.visual_effects import ClipVisualEffect
+from mediaflow.domain.visual_effects import ClipVisualEffect, VisualEffectParameterKeyframe
 from mediaflow.domain.web_state import WebClipState
 
 
@@ -66,6 +83,16 @@ class TimelineEditor(
             lambda: self.state,
             self._commit,
         )
+        self._review_editing = TimelineReviewEditing(
+            lambda: self.state,
+            self._commit,
+            repository.content_revision,
+        )
+        self._multicam_editing = TimelineMulticamEditing(
+            repository,
+            lambda: self.state,
+            self._commit,
+        )
 
     @property
     def state(self) -> TimelineState:
@@ -87,6 +114,49 @@ class TimelineEditor(
 
     def reload(self) -> TimelineState:
         return self._changes.reload()
+
+    def create_multicam_group(
+        self,
+        name: str,
+        angles: list[MulticamAngleSyncSpec],
+        *,
+        timeline_start: int,
+        duration: int,
+        sync_offset: int = 0,
+        initial_angle_id: str | None = None,
+        sync_method: str = "manual",
+        sync_confidence: float | None = None,
+        audio_strategy: str = "follow_video",
+        master_audio_angle_id: str | None = None,
+    ) -> MulticamGroup:
+        return self._multicam_editing.create_group(
+            name,
+            angles,
+            timeline_start=timeline_start,
+            duration=duration,
+            sync_offset=sync_offset,
+            initial_angle_id=initial_angle_id,
+            sync_method=sync_method,
+            sync_confidence=sync_confidence,
+            audio_strategy=audio_strategy,
+            master_audio_angle_id=master_audio_angle_id,
+        )
+
+    def analyze_multicam_sync(
+        self, asset_ids: list[str], method: str
+    ) -> MulticamSyncAnalysis:
+        return self._multicam_editing.analyze_sync(asset_ids, method)
+
+    def switch_multicam_angle(
+        self,
+        group_id: str,
+        angle_id: str,
+        timeline_frame: int,
+    ) -> MulticamGroup:
+        return self._multicam_editing.switch_angle(group_id, angle_id, timeline_frame)
+
+    def list_multicam_groups(self) -> list[MulticamGroup]:
+        return self._multicam_editing.list_groups()
 
     def restore_snapshot(
         self,
@@ -573,6 +643,366 @@ class TimelineEditor(
 
     def remove_clip_visual_effect(self, clip_id: str, effect_id: str) -> None:
         self._visual_editing.remove_effect(clip_id, effect_id)
+
+    def assign_clip_visual_effect_mask(
+        self,
+        clip_id: str,
+        effect_id: str,
+        mask_id: str | None,
+    ) -> ClipVisualEffect:
+        return self._visual_editing.assign_effect_mask(clip_id, effect_id, mask_id)
+
+    def add_clip_mask(
+        self,
+        clip_id: str,
+        kind: MaskShapeKind,
+        *,
+        name: str,
+        geometry: MaskGeometry,
+        combine_mode: str = "replace",
+    ) -> ClipMask:
+        return self._visual_editing.add_mask(
+            clip_id,
+            kind,
+            name=name,
+            geometry=geometry,
+            combine_mode=combine_mode,
+        )
+
+    def update_clip_mask(
+        self,
+        clip_id: str,
+        mask_id: str,
+        *,
+        name: str,
+        enabled: bool,
+        inverted: bool,
+        feather: int,
+        feather_passes: int,
+        opacity: float,
+        geometry: MaskGeometry,
+        combine_mode: str = "replace",
+    ) -> ClipMask:
+        return self._visual_editing.update_mask(
+            clip_id,
+            mask_id,
+            name=name,
+            enabled=enabled,
+            combine_mode=combine_mode,
+            inverted=inverted,
+            feather=feather,
+            feather_passes=feather_passes,
+            opacity=opacity,
+            geometry=geometry,
+        )
+
+    def move_clip_mask(self, clip_id: str, mask_id: str, position: int) -> ClipMask:
+        return self._visual_editing.move_mask(clip_id, mask_id, position)
+
+    def remove_clip_mask(self, clip_id: str, mask_id: str) -> None:
+        self._visual_editing.remove_mask(clip_id, mask_id)
+
+    def upsert_clip_mask_keyframe(
+        self,
+        clip_id: str,
+        mask_id: str,
+        timeline_offset: int,
+        geometry: MaskGeometry,
+        *,
+        curve: KeyframeCurve | None = None,
+    ) -> ClipMask:
+        return self._visual_editing.upsert_mask_keyframe(
+            clip_id,
+            mask_id,
+            timeline_offset,
+            geometry,
+            curve=curve,
+        )
+
+    def remove_clip_mask_keyframe(
+        self,
+        clip_id: str,
+        mask_id: str,
+        timeline_offset: int,
+    ) -> ClipMask:
+        return self._visual_editing.remove_mask_keyframe(
+            clip_id,
+            mask_id,
+            timeline_offset,
+        )
+
+    def move_clip_mask_keyframe(
+        self,
+        clip_id: str,
+        mask_id: str,
+        old_timeline_offset: int,
+        new_timeline_offset: int,
+    ) -> ClipMask:
+        return self._visual_editing.move_mask_keyframe(
+            clip_id,
+            mask_id,
+            old_timeline_offset,
+            new_timeline_offset,
+        )
+
+    def retime_clip_mask_keyframes(
+        self,
+        clip_id: str,
+        mask_id: str,
+        timeline_offsets: list[int],
+        *,
+        anchor_offset: int,
+        scale: float,
+    ) -> ClipMask:
+        return self._visual_editing.retime_mask_keyframes(
+            clip_id,
+            mask_id,
+            timeline_offsets,
+            anchor_offset=anchor_offset,
+            scale=scale,
+        )
+
+    def set_clip_mask_keyframes(
+        self,
+        clip_id: str,
+        mask_id: str,
+        keyframes: list[MaskKeyframe],
+        *,
+        expected_clip: Clip | None = None,
+    ) -> ClipMask:
+        return self._visual_editing.set_mask_keyframes(
+            clip_id,
+            mask_id,
+            keyframes,
+            expected_clip=expected_clip,
+        )
+
+    def add_review_thread(
+        self,
+        start_frame: int,
+        body: str,
+        author: ActorIdentity,
+        *,
+        end_frame: int | None = None,
+        clip_id: str | None = None,
+        subject: str = "",
+        priority: ReviewPriority = "normal",
+    ) -> ReviewThread:
+        return self._review_editing.add_thread(
+            start_frame,
+            body,
+            author,
+            end_frame=end_frame,
+            clip_id=clip_id,
+            subject=subject,
+            priority=priority,
+        )
+
+    def reply_review_thread(
+        self,
+        thread_id: str,
+        body: str,
+        author: ActorIdentity,
+    ) -> ReviewThread:
+        return self._review_editing.reply(thread_id, body, author)
+
+    def add_review_snapshot(
+        self, thread_id: str, snapshot: ReviewSnapshot
+    ) -> ReviewThread:
+        return self._review_editing.add_snapshot(thread_id, snapshot)
+
+    def set_review_snapshot_markup(
+        self,
+        thread_id: str,
+        snapshot_id: str,
+        markup: list[ReviewMarkupShape],
+    ) -> ReviewThread:
+        return self._review_editing.set_snapshot_markup(
+            thread_id, snapshot_id, markup
+        )
+
+    def import_review_threads(
+        self, threads: list[ReviewThread]
+    ) -> list[ReviewThread]:
+        return self._review_editing.import_threads(threads)
+
+    def edit_review_message(
+        self,
+        thread_id: str,
+        message_id: str,
+        body: str,
+        actor: ActorIdentity,
+    ) -> ReviewThread:
+        return self._review_editing.edit_message(thread_id, message_id, body, actor)
+
+    def update_review_thread(
+        self,
+        thread_id: str,
+        *,
+        start_frame: int,
+        end_frame: int | None,
+        clip_id: str | None,
+        subject: str,
+        priority: ReviewPriority,
+    ) -> ReviewThread:
+        return self._review_editing.update_thread(
+            thread_id,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            clip_id=clip_id,
+            subject=subject,
+            priority=priority,
+        )
+
+    def resolve_review_thread(
+        self,
+        thread_id: str,
+        actor: ActorIdentity,
+    ) -> ReviewThread:
+        return self._review_editing.resolve(thread_id, actor)
+
+    def reopen_review_thread(self, thread_id: str) -> ReviewThread:
+        return self._review_editing.reopen(thread_id)
+
+    def archive_review_thread(self, thread_id: str) -> ReviewThread:
+        return self._review_editing.archive(thread_id)
+
+    def restore_review_thread(self, thread_id: str) -> ReviewThread:
+        return self._review_editing.restore(thread_id)
+
+    def upsert_clip_transform_keyframe(
+        self,
+        clip_id: str,
+        timeline_offset: int,
+        transform: ClipTransform,
+        *,
+        curve: KeyframeCurve | None = None,
+    ) -> Clip:
+        return self._visual_editing.upsert_transform_keyframe(
+            clip_id,
+            timeline_offset,
+            transform,
+            curve=curve,
+        )
+
+    def remove_clip_transform_keyframe(
+        self,
+        clip_id: str,
+        timeline_offset: int,
+    ) -> Clip:
+        return self._visual_editing.remove_transform_keyframe(
+            clip_id,
+            timeline_offset,
+        )
+
+    def move_clip_transform_keyframe(
+        self,
+        clip_id: str,
+        old_timeline_offset: int,
+        new_timeline_offset: int,
+    ) -> Clip:
+        return self._visual_editing.move_transform_keyframe(
+            clip_id,
+            old_timeline_offset,
+            new_timeline_offset,
+        )
+
+    def retime_clip_transform_keyframes(
+        self,
+        clip_id: str,
+        timeline_offsets: list[int],
+        *,
+        anchor_offset: int,
+        scale: float,
+    ) -> Clip:
+        return self._visual_editing.retime_transform_keyframes(
+            clip_id,
+            timeline_offsets,
+            anchor_offset=anchor_offset,
+            scale=scale,
+        )
+
+    def upsert_clip_effect_parameter_keyframe(
+        self,
+        clip_id: str,
+        effect_id: str,
+        field_id: str,
+        timeline_offset: int,
+        value: float,
+        *,
+        curve: KeyframeCurve | None = None,
+    ) -> ClipVisualEffect:
+        return self._visual_editing.upsert_effect_parameter_keyframe(
+            clip_id,
+            effect_id,
+            field_id,
+            timeline_offset,
+            value,
+            curve=curve,
+        )
+
+    def set_clip_effect_parameter_keyframes(
+        self,
+        clip_id: str,
+        effect_id: str,
+        field_id: str,
+        keyframes: list[VisualEffectParameterKeyframe],
+    ) -> ClipVisualEffect:
+        return self._visual_editing.set_effect_parameter_keyframes(
+            clip_id,
+            effect_id,
+            field_id,
+            keyframes,
+        )
+
+    def remove_clip_effect_parameter_keyframe(
+        self,
+        clip_id: str,
+        effect_id: str,
+        field_id: str,
+        timeline_offset: int,
+    ) -> ClipVisualEffect:
+        return self._visual_editing.remove_effect_parameter_keyframe(
+            clip_id,
+            effect_id,
+            field_id,
+            timeline_offset,
+        )
+
+    def move_clip_effect_parameter_keyframe(
+        self,
+        clip_id: str,
+        effect_id: str,
+        field_id: str,
+        old_timeline_offset: int,
+        new_timeline_offset: int,
+    ) -> ClipVisualEffect:
+        return self._visual_editing.move_effect_parameter_keyframe(
+            clip_id,
+            effect_id,
+            field_id,
+            old_timeline_offset,
+            new_timeline_offset,
+        )
+
+    def retime_clip_effect_parameter_keyframes(
+        self,
+        clip_id: str,
+        effect_id: str,
+        field_id: str,
+        timeline_offsets: list[int],
+        *,
+        anchor_offset: int,
+        scale: float,
+    ) -> ClipVisualEffect:
+        return self._visual_editing.retime_effect_parameter_keyframes(
+            clip_id,
+            effect_id,
+            field_id,
+            timeline_offsets,
+            anchor_offset=anchor_offset,
+            scale=scale,
+        )
 
     def set_clip_transform_keyframes(
         self,

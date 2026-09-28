@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from mediaflow.desktop.asset_list_models import MediaResourceListModel
@@ -109,12 +111,44 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
             else ColorMode.SDR_BT709
         )
         required_tags = [collection.removeprefix("tag:")] if collection.startswith("tag:") else []
-        result = self._session._api.search_media_resources(
-            color_mode=color_mode.value,
-            category=category or None,
-            query=query,
-            tags=required_tags,
+        self._session.state.requests.media_resources_id += 1
+        request_id = self._session.state.requests.media_resources_id
+        request_identity = (request_id, color_mode.value, category, query, collection)
+        previous = self._session.state.requests.media_resources_future
+        if previous is not None and not previous.done():
+            previous.cancel()
+
+        def accept_result(result: object | None) -> None:
+            if request_id != self._session.state.requests.media_resources_id:
+                return
+            if not isinstance(result, dict):
+                raise TypeError("资源目录返回了无效的结果")
+            self._apply_refresh_result(result, collection, request_id=request_id)
+
+        def report_error(error: BaseException) -> None:
+            if request_id == self._session.state.requests.media_resources_id:
+                self._session.updates.report_error(f"读取资源目录失败：{error}")
+
+        self._session.state.requests.media_resources_future = self._session.background.submit_callback(
+            "media_resources",
+            request_identity,
+            lambda: self._session._api.search_media_resources(
+                color_mode=color_mode.value,
+                category=category or None,
+                query=query,
+                tags=required_tags,
+            ),
+            on_result=accept_result,
+            on_error=report_error,
         )
+
+    def _apply_refresh_result(
+        self,
+        result: dict[str, Any],
+        collection: str,
+        *,
+        request_id: int,
+    ) -> None:
         items = result.get("items", [])
         if not isinstance(items, list):
             raise RuntimeError("资源目录返回了无效的资源列表")
@@ -147,6 +181,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
             preview_path = str(raw.get("preview_path") or "")
             preview_url = QUrl.fromLocalFile(preview_path).toString() if preview_path else ""
             adoption_type = str(adoption.get("type") or "")
+            stable_tags = [str(tag) for tag in raw.get("tags") or []]
             can_adopt = adoption_type == "editor-preset" or (
                 adoption_type in {"editable-media-package", "media-file"} and bool(adoption_path)
             )
@@ -161,7 +196,8 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
                         catalog_id, str(raw.get("description") or "")
                     ),
                     "provider": str(raw.get("provider") or ""),
-                    "tags": builtin_media_resource_tags(catalog_id, raw.get("tags") or []),
+                    "tags": stable_tags,
+                    "tagLabels": builtin_media_resource_tags(catalog_id, stable_tags),
                     "capabilities": list(raw.get("capabilities") or []),
                     "previewType": str(preview.get("type") or "none"),
                     "previewUrl": preview_url,
@@ -184,6 +220,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         self._source_errors = [
             str(source.get("error")) for source in sources if isinstance(source, dict) and source.get("error")
         ]
+        self._session.state.requests.media_resources_applied_id = request_id
         self.resourcesChanged.emit()
 
     @Slot(str)

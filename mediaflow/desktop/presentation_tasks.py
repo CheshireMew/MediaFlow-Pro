@@ -19,6 +19,7 @@ from mediaflow.domain.task_commands import (
     PrepareDubbingCommand,
     RenderWebClipCommand,
     SynthesizeDubbingCommand,
+    TrackMaskCommand,
     TrackSubjectCommand,
     TranscribeSequenceCommand,
     TranslateDocumentCommand,
@@ -77,6 +78,8 @@ def task_title(task: Task) -> str:
     if isinstance(command, TrackSubjectCommand):
         label = "自动构图" if command.mode == "auto_reframe" else "主体跟踪"
         return QCoreApplication.translate("TaskCatalog", label)
+    if isinstance(command, TrackMaskCommand):
+        return QCoreApplication.translate("TaskCatalog", "蒙版跟踪")
     raise TypeError(f"Unknown task command: {type(command).__name__}")
 
 
@@ -143,7 +146,13 @@ def task_message_label(code: str) -> str:
         "transcribing": QCoreApplication.translate("TaskMessageCatalog", "正在转录"),
         "asr_silence_detection": QCoreApplication.translate("TaskMessageCatalog", "正在检测长音频静音位置"),
         "asr_chunk_extracting": QCoreApplication.translate("TaskMessageCatalog", "正在生成长音频分块"),
-        "asr_chunks_transcribing": QCoreApplication.translate("TaskMessageCatalog", "正在并行转录长音频分块"),
+        "asr_chunks_transcribing": QCoreApplication.translate("TaskMessageCatalog", "正在转录长音频分块"),
+        "asr_waiting_for_model": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在等待其它转录或预热释放模型"
+        ),
+        "asr_batch_reduced": QCoreApplication.translate(
+            "TaskMessageCatalog", "内存或显存不足，正在缩小批量重试"
+        ),
         "asr_cuda_cpu_fallback": QCoreApplication.translate(
             "TaskMessageCatalog", "CUDA 不可用，正在切换到 CPU"
         ),
@@ -211,6 +220,15 @@ def task_message_label(code: str) -> str:
         "subject_tracking_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在准备画面分析"),
         "subject_tracking_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在跟踪画面主体"),
         "subject_tracking_saving": QCoreApplication.translate("TaskMessageCatalog", "正在保存画面跟踪结果"),
+        "mask_tracking_preparing": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在准备蒙版跟踪"
+        ),
+        "mask_tracking_analyzing": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在跟踪蒙版区域"
+        ),
+        "mask_tracking_saving": QCoreApplication.translate(
+            "TaskMessageCatalog", "正在保存蒙版跟踪结果"
+        ),
         "clip_export_items": QCoreApplication.translate("TaskMessageCatalog", "正在导出短视频"),
         "download_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在分析下载链接"),
         "download_analysis_saving": QCoreApplication.translate("TaskMessageCatalog", "正在保存下载分析结果"),

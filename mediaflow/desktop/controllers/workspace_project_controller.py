@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Signal, Slot
@@ -164,6 +165,59 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
         self._session.projectors.timeline.schedule_preview_graph()
         self._session.updates.commit(project=True, selection=True, history=True)
         self._session._set_status("已恢复命名版本“%1”", record.name)
+
+    @Slot()
+    @report_ui_errors
+    def collectProjectAssets(self) -> None:
+        self._session._require_writable()
+        self._require_no_active_tasks("归集项目素材")
+        result = self._session.state.binding.require_current().collect_project_assets()
+        self._session.projectors.assets.refresh_assets()
+        self._session.updates.commit(project=True, history=True)
+        self._session._set_status(
+            "已归集 %1 个外部素材，共 %2 字节",
+            len(result.assets),
+            result.record.total_bytes,
+        )
+
+    @Slot(bool)
+    @report_ui_errors
+    def useLatestProjectCollection(self, using_collected: bool) -> None:
+        self._session._require_writable()
+        self._require_no_active_tasks("切换归集素材路径")
+        current = self._session.state.binding.require_current()
+        records = current.list_project_collections()
+        if not records:
+            raise RuntimeError("项目还没有归集记录")
+        result = current.set_project_collection_state(
+            records[0].id,
+            using_collected=using_collected,
+        )
+        self._session.projectors.assets.refresh_assets()
+        self._session.updates.commit(project=True, history=True)
+        if result.using_collected_files:
+            self._session._set_status("已使用归集副本")
+        else:
+            self._session._set_status("已恢复归集前的素材路径")
+
+    @Slot(str)
+    @report_ui_errors
+    def createPortableProjectArchive(self, parent_url: str) -> None:
+        self._require_no_active_tasks("创建可迁移项目归档")
+        current = self._session.state.binding.require_current()
+        parent = self._session._local_path(parent_url)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destination = parent / f"{current.project_dir.name}-archive-{stamp}"
+        result = current.create_project_archive(destination)
+        self._session._set_status(
+            "可迁移项目已归档：%1（%2 个文件）",
+            result.destination,
+            result.file_count,
+        )
+
+    def _require_no_active_tasks(self, operation: str) -> None:
+        if any(not task.status.is_terminal for task in self._session.state.tasks.items.values()):
+            raise RuntimeError(f"请等待当前任务完成后再{operation}")
 
     @Slot()
     def shutdown(self) -> None:

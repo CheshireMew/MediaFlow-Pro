@@ -18,9 +18,23 @@ _OPERATION_ALIASES: dict[tuple[DesktopMutationTarget, str], str] = {
     ("project", "close_script_gap"): "script.gap.close",
     ("project", "commit_web_asset_rebind"): "web.asset.rebind.commit",
     ("project", "create_short_sequence"): "sequence.short.create",
+    ("project", "collect_project_assets"): "project.collection.apply",
+    ("project", "generate_sequence_variants"): "sequence.variant.generate",
+    ("project", "set_project_collection_state"): "project.collection.state.set",
     ("project", "create_version"): "project.version.create",
     ("project", "create_web_variants"): "web.batch.create",
     ("project", "import_web_package"): "web.import",
+    ("project", "import_interchange_timeline"): "timeline.interchange.import",
+    ("project", "create_voiceover_cue"): "voiceover.cue.create",
+    ("project", "update_voiceover_cue"): "voiceover.cue.update",
+    ("project", "archive_voiceover_cue"): "voiceover.cue.archive",
+    ("project", "add_voiceover_take"): "voiceover.take.add",
+    ("project", "update_voiceover_take"): "voiceover.take.update",
+    ("project", "select_voiceover_take"): "voiceover.take.select",
+    ("project", "archive_voiceover_take"): "voiceover.take.archive",
+    ("project", "place_voiceover_take"): "voiceover.take.place",
+    ("project", "set_voiceover_latency_calibration"): "voiceover.latency.set",
+    ("project", "analyze_voiceover_latency_calibration"): "voiceover.latency.analyze",
     ("project", "move_script_segment"): "script.segment.move",
     ("project", "remove_audio_effect"): "audio.effect.remove",
     ("project", "remove_web_keyframe"): "web.clip.keyframe.remove",
@@ -43,6 +57,17 @@ _OPERATION_ALIASES: dict[tuple[DesktopMutationTarget, str], str] = {
     ("timeline", "add_clip"): "timeline.clip.add",
     ("timeline", "add_clips"): "timeline.clip.batch.add",
     ("timeline", "add_clip_visual_effect"): "timeline.clip.effect.add",
+    ("timeline", "add_clip_mask"): "timeline.clip.mask.add",
+    ("timeline", "add_review_thread"): "review.thread.create",
+    ("timeline", "create_multicam_group"): "multicam.group.create",
+    ("timeline", "switch_multicam_angle"): "multicam.angle.switch",
+    ("timeline", "archive_review_thread"): "review.thread.archive",
+    ("timeline", "assign_clip_visual_effect_mask"): "timeline.clip.effect.mask.assign",
+    ("timeline", "upsert_clip_effect_parameter_keyframe"): "timeline.clip.effect.keyframe.set",
+    ("timeline", "remove_clip_effect_parameter_keyframe"): "timeline.clip.effect.keyframe.remove",
+    ("timeline", "move_clip_effect_parameter_keyframe"): "timeline.clip.effect.keyframe.move",
+    ("timeline", "retime_clip_effect_parameter_keyframes"): "timeline.clip.effect.keyframe.retime",
+    ("timeline", "retime_clip_mask_keyframes"): "timeline.clip.mask.keyframe.retime",
     ("timeline", "add_marker"): "timeline.marker.add",
     ("timeline", "add_track"): "timeline.track.add",
     ("timeline", "copy_clip"): "timeline.clip.copy",
@@ -50,17 +75,33 @@ _OPERATION_ALIASES: dict[tuple[DesktopMutationTarget, str], str] = {
     ("timeline", "delete_clip"): "timeline.clip.delete",
     ("timeline", "move_clip"): "timeline.clip.move",
     ("timeline", "move_clip_visual_effect"): "timeline.clip.effect.move",
+    ("timeline", "move_clip_mask_keyframe"): "timeline.clip.mask.keyframe.move",
+    ("timeline", "move_clip_mask"): "timeline.clip.mask.move",
     ("timeline", "remove_clip_visual_effect"): "timeline.clip.effect.remove",
+    ("timeline", "remove_clip_mask"): "timeline.clip.mask.remove",
+    ("timeline", "remove_clip_mask_keyframe"): "timeline.clip.mask.keyframe.remove",
     ("timeline", "remove_marker"): "timeline.marker.remove",
     ("timeline", "remove_transition"): "timeline.transition.remove",
+    ("timeline", "reopen_review_thread"): "review.thread.reopen",
+    ("timeline", "reply_review_thread"): "review.thread.reply",
+    ("timeline", "resolve_review_thread"): "review.thread.resolve",
+    ("timeline", "restore_review_thread"): "review.thread.restore",
     ("timeline", "replace_clip_source"): "timeline.clip.source.replace",
     ("timeline", "set_clip_audio"): "timeline.clip.audio",
     ("timeline", "set_clip_transform"): "timeline.clip.transform",
+    ("timeline", "upsert_clip_mask_keyframe"): "timeline.clip.mask.keyframe.set",
+    ("timeline", "upsert_clip_transform_keyframe"): "timeline.clip.transform.keyframe.set",
+    ("timeline", "remove_clip_transform_keyframe"): "timeline.clip.transform.keyframe.remove",
+    ("timeline", "move_clip_transform_keyframe"): "timeline.clip.transform.keyframe.move",
+    ("timeline", "retime_clip_transform_keyframes"): "timeline.clip.transform.keyframe.retime",
     ("timeline", "set_subtitle_track_style"): "subtitle.track.style.update",
     ("timeline", "split_clip"): "timeline.clip.split",
     ("timeline", "update_clip_visual_effect"): "timeline.clip.effect.update",
+    ("timeline", "update_clip_mask"): "timeline.clip.mask.update",
     ("timeline", "update_marker"): "timeline.marker.update",
     ("timeline", "update_transition"): "timeline.transition.update",
+    ("timeline", "update_review_thread"): "review.thread.update",
+    ("timeline", "edit_review_message"): "review.message.edit",
 }
 
 _WEB_ARGUMENTS: dict[str, tuple[str, ...]] = {
@@ -199,6 +240,12 @@ def _desktop_arguments(
         _bind_positional(("sequence_id", "clip_id"), args, arguments)
     elif command in {"apply_transcript_edit", "create_short_sequence"}:
         arguments.setdefault("sequence_id", sequence_id)
+    elif command == "generate_sequence_variants":
+        _bind_positional(("source_sequence_id", "specs"), args, arguments)
+    elif command == "collect_project_assets":
+        _bind_positional(("asset_ids",), args, arguments)
+    elif command == "set_project_collection_state":
+        _bind_positional(("collection_id",), args, arguments)
     return arguments
 
 
@@ -219,6 +266,11 @@ def _bind_timeline_arguments(command: str, args: list[Any], arguments: dict[str,
         "set_clip_speed",
         "set_clip_transform",
         "set_clip_transform_keyframes",
+        "upsert_clip_transform_keyframe",
+        "remove_clip_transform_keyframe",
+        "move_clip_transform_keyframe",
+        "retime_clip_transform_keyframes",
+        "add_clip_mask",
         "split_clip",
         "trim_clip",
     }:
@@ -229,8 +281,25 @@ def _bind_timeline_arguments(command: str, args: list[Any], arguments: dict[str,
         "move_clip_visual_effect",
         "remove_clip_visual_effect",
         "update_clip_visual_effect",
+        "upsert_clip_effect_parameter_keyframe",
+        "remove_clip_effect_parameter_keyframe",
+        "move_clip_effect_parameter_keyframe",
+        "retime_clip_effect_parameter_keyframes",
+        "set_clip_effect_parameter_keyframes",
+        "assign_clip_visual_effect_mask",
     }:
         _bind_positional(("clip_id", "effect_id"), args, arguments)
+        return
+    if command in {
+        "update_clip_mask",
+        "remove_clip_mask",
+        "upsert_clip_mask_keyframe",
+        "remove_clip_mask_keyframe",
+        "move_clip_mask_keyframe",
+        "retime_clip_mask_keyframes",
+        "set_clip_mask_keyframes",
+    }:
+        _bind_positional(("clip_id", "mask_id"), args, arguments)
         return
     if command == "create_transition":
         _bind_positional(("left_clip_id", "right_clip_id"), args, arguments)
@@ -240,6 +309,23 @@ def _bind_timeline_arguments(command: str, args: list[Any], arguments: dict[str,
         return
     if command in {"update_marker", "remove_marker"}:
         _bind_positional(("marker_id",), args, arguments)
+        return
+    if command == "create_multicam_group":
+        _bind_positional(("name", "angles"), args, arguments)
+        return
+    if command == "switch_multicam_angle":
+        _bind_positional(("group_id", "angle_id", "timeline_frame"), args, arguments)
+        return
+    if command in {
+        "archive_review_thread",
+        "edit_review_message",
+        "reopen_review_thread",
+        "reply_review_thread",
+        "resolve_review_thread",
+        "restore_review_thread",
+        "update_review_thread",
+    }:
+        _bind_positional(("thread_id",), args, arguments)
         return
     if command in {"update_range", "remove_range"}:
         _bind_positional(("range_id",), args, arguments)

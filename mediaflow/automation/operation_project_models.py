@@ -15,12 +15,24 @@ from mediaflow.domain.media_resources import (
 )
 from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.project import Asset, Project, ProjectProfile, Sequence
+from mediaflow.domain.project_archive import ProjectArchiveResult
+from mediaflow.domain.project_collection import (
+    ProjectCollectionPreview,
+    ProjectCollectionRecord,
+    ProjectCollectionResult,
+)
 from mediaflow.domain.project_records import ExportHistoryRecord, ProjectVersionRecord
 from mediaflow.domain.reference_comparison import (
     ReferenceComparisonAcceptance,
     ReferenceComparisonResult,
 )
 from mediaflow.domain.runtime_capabilities import RuntimeInspection
+from mediaflow.domain.sequence_variants import (
+    SequenceVariantGeneration,
+    SequenceVariantPlan,
+    SequenceVariantRecord,
+    SequenceVariantSpec,
+)
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import (
     TimelineState,
@@ -73,6 +85,45 @@ class ProjectVersionRestoreArguments(DomainModel):
     version_id: str = Field(min_length=1)
 
 
+class ProjectCollectionArguments(DomainModel):
+    asset_ids: list[str] | None = None
+
+    @model_validator(mode="after")
+    def unique_asset_ids(self) -> ProjectCollectionArguments:
+        if self.asset_ids is not None:
+            if not self.asset_ids:
+                raise ValueError("asset_ids cannot be empty when provided")
+            if len(self.asset_ids) != len(set(self.asset_ids)):
+                raise ValueError("asset_ids must be unique")
+        return self
+
+
+class ProjectCollectionStateArguments(DomainModel):
+    collection_id: str = Field(min_length=1)
+    using_collected: bool
+
+
+class ProjectCollectionListResult(DomainModel):
+    collections: list[ProjectCollectionRecord]
+
+
+ProjectCollectionPreviewResult = ProjectCollectionPreview
+ProjectCollectionApplyResult = ProjectCollectionResult
+
+
+class ProjectArchiveCreateArguments(DomainModel):
+    destination: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def absolute_destination(self) -> ProjectArchiveCreateArguments:
+        if not Path(self.destination).is_absolute():
+            raise ValueError("destination must be absolute")
+        return self
+
+
+ProjectArchiveCreateResult = ProjectArchiveResult
+
+
 class ProjectChangesListArguments(DomainModel):
     since_revision: int = Field(ge=0)
     actor_kind: Literal["human", "agent", "automation", "system"] | None = None
@@ -104,6 +155,39 @@ class SequenceShortCreateArguments(DomainModel):
         if self.end_frame <= self.start_frame:
             raise ValueError("end_frame must be after start_frame")
         return self
+
+
+class SequenceVariantListArguments(DomainModel):
+    source_sequence_id: str | None = None
+    include_archived: bool = False
+
+
+class SequenceVariantGenerateArguments(DomainModel):
+    source_sequence_id: str = Field(min_length=1)
+    specs: list[SequenceVariantSpec] = Field(min_length=1, max_length=8)
+    force: bool = False
+    conflict_resolutions: dict[str, Literal["keep_local", "take_source"]] = Field(
+        default_factory=dict
+    )
+
+
+class SequenceVariantPlanArguments(DomainModel):
+    source_sequence_id: str = Field(min_length=1)
+    specs: list[SequenceVariantSpec] = Field(min_length=1, max_length=8)
+
+
+class SequenceVariantStatus(DomainModel):
+    record: SequenceVariantRecord
+    sequence: Sequence
+    stale: bool
+
+
+class SequenceVariantListResult(DomainModel):
+    variants: list[SequenceVariantStatus]
+
+
+SequenceVariantGenerateResult = SequenceVariantGeneration
+SequenceVariantPlanResult = SequenceVariantPlan
 
 
 class DiagnosticsBundleArguments(DomainModel):

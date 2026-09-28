@@ -106,16 +106,27 @@ def select_dialogue_transcription_sources(
     state: TimelineState,
     assets: dict[str, Asset],
     *,
+    dialogue_track_id: str | None = None,
     start_frame: int = 0,
     end_frame: int | None = None,
 ) -> DialogueTranscriptionSelection:
-    """Select source clips from the sequence's one designated dialogue track."""
-    primary_tracks = [track for track in state.tracks if track.primary_dialogue]
-    if len(primary_tracks) != 1:
-        raise ValueError("请先指定一条主要对白轨")
-    track = primary_tracks[0]
+    """Select source clips from an explicit or project-designated dialogue track."""
+    if dialogue_track_id is not None:
+        track = next(
+            (item for item in state.tracks if item.id == dialogue_track_id),
+            None,
+        )
+        if track is None:
+            raise ValueError(f"找不到指定的对白轨：{dialogue_track_id}")
+    else:
+        primary_tracks = [track for track in state.tracks if track.primary_dialogue]
+        if len(primary_tracks) != 1:
+            raise ValueError("请指定 dialogue_track_id，或先设置一条主要对白轨")
+        track = primary_tracks[0]
     if track.kind != TrackKind.AUDIO:
-        raise ValueError("主要对白轨必须是音频轨")
+        raise ValueError("对白轨必须是音频轨")
+    if not track.enabled or track.muted:
+        raise ValueError("对白轨当前未启用或已静音")
 
     start = max(0, int(start_frame))
     end = state.duration_frames if end_frame is None else min(
@@ -140,6 +151,7 @@ def build_dialogue_transcription_plan(
     asr: AsrSettings,
     *,
     project_profile: ProjectProfile,
+    dialogue_track_id: str | None = None,
     start_frame: int = 0,
     end_frame: int | None = None,
 ) -> TranscriptionPlan:
@@ -150,6 +162,7 @@ def build_dialogue_transcription_plan(
     selection = select_dialogue_transcription_sources(
         state,
         assets,
+        dialogue_track_id=dialogue_track_id,
         start_frame=start_frame,
         end_frame=end_frame,
     )
@@ -337,12 +350,16 @@ def project_dialogue_transcript(
                         fps_numerator,
                         fps_denominator,
                     )
+                    word_start = max(source_start, min(source_end - 1, word_start))
                     word_end = max(
                         word_start + 1,
-                        seconds_to_frames(
-                            word.end_seconds,
-                            fps_numerator,
-                            fps_denominator,
+                        min(
+                            source_end,
+                            seconds_to_frames(
+                                word.end_seconds,
+                                fps_numerator,
+                                fps_denominator,
+                            ),
                         ),
                     )
                     mapped = _map_source_range_to_clip(

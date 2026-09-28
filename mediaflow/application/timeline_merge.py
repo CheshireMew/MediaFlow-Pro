@@ -65,6 +65,18 @@ class TimelineMergePolicy:
                     destination.ranges,
                     current.ranges,
                 ),
+                "review_threads": cls._merge_entity_list(
+                    "review thread",
+                    source.review_threads,
+                    destination.review_threads,
+                    current.review_threads,
+                ),
+                "multicam_groups": cls._merge_entity_list(
+                    "multicam group",
+                    source.multicam_groups,
+                    destination.multicam_groups,
+                    current.multicam_groups,
+                ),
                 "web_states": cls._merge_entity_map(
                     "web state",
                     source.web_states,

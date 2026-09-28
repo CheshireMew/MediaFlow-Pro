@@ -145,8 +145,29 @@ class LanguageSettingsController(ControllerFacet[LanguageSettingsControllerScope
         provider = next(
             item for item in self._session.state.service_settings.llm_providers if item.id == provider_id
         )
-        self._session._api.test_llm_provider(provider)
-        self._session._set_status("%1 连接测试成功", provider.name)
+        self._session.state.requests.llm_provider_test_id += 1
+        request_id = self._session.state.requests.llm_provider_test_id
+        previous = self._session.state.requests.llm_provider_test_future
+        if previous is not None and not previous.done():
+            previous.cancel()
+
+        def accept_result(_result: object | None) -> None:
+            if request_id == self._session.state.requests.llm_provider_test_id:
+                self._session._set_status("%1 连接测试成功", provider.name)
+
+        def report_error(error: BaseException) -> None:
+            if request_id == self._session.state.requests.llm_provider_test_id:
+                self._session.updates.report_error(f"LLM 连接测试失败：{error}")
+
+        self._session.state.requests.llm_provider_test_future = (
+            self._session.background.submit_callback(
+                "llm_provider_test",
+                (request_id, provider.id),
+                lambda: self._session._api.test_llm_provider(provider),
+                on_result=accept_result,
+                on_error=report_error,
+            )
+        )
 
     @Slot(str)
     def selectGlossaryTerm(self, term_id: str) -> None:

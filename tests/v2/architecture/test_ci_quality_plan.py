@@ -28,9 +28,15 @@ from scripts.ci.test_shard import (
     partition_test_nodes,
     source_file_for_node,
 )
+from scripts.verify_ui_matrix import recommended_ui_matrix_workers
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
+
+
+def test_ui_matrix_serializes_complete_qt_quick_scenarios_on_windows() -> None:
+    assert recommended_ui_matrix_workers("win32") == 1
+    assert recommended_ui_matrix_workers("linux") == 3
 
 
 @pytest.mark.parametrize(
@@ -249,13 +255,19 @@ def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
         "interactive-qml",
         "interactive-chains",
         "offline-preflight",
-        "offline-parallel",
+        "offline-rendering",
         "offline-final",
     ]
     assert next(stage for stage in core if stage.name == "core").max_workers == 2
     runtime = next(stage for stage in full if stage.name == "runtime")
     assert runtime.max_workers == 2
     assert len(runtime.commands) == 4
+    assert all(
+        "tests/v2/desktop/test_qml_smoke.py::"
+        "test_transcript_button_runs_real_timeline_chain_and_opens_generated_subtitles"
+        in command.arguments
+        for command in runtime.commands
+    )
     runtime_serial = next(stage for stage in full if stage.name == "runtime-serial")
     assert runtime_serial.max_workers == 1
     assert [command.name for command in runtime_serial.commands] == [
@@ -266,9 +278,18 @@ def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
     ].index("runtime")
     interactive_qml = next(stage for stage in full if stage.name == "interactive-qml")
     assert interactive_qml.max_workers == 1
-    assert [command.name for command in interactive_qml.commands] == ["qml-project-chain"]
+    assert [command.name for command in interactive_qml.commands] == [
+        "qml-project-chain",
+        "qml-transcript-chain",
+        "web-editor-import",
+    ]
     assert next(stage for stage in full if stage.name == "interactive-chains").max_workers == 2
-    assert next(stage for stage in full if stage.name == "offline-parallel").max_workers == 2
+    offline_rendering = next(stage for stage in full if stage.name == "offline-rendering")
+    assert offline_rendering.max_workers == 1
+    assert [command.name for command in offline_rendering.commands] == [
+        "ui-matrix",
+        "reference-comparison",
+    ]
     command_lines = [command.arguments for stage in full for command in stage.commands]
     assert not any(
         arguments[:4]

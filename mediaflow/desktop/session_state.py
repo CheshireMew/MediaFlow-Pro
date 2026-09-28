@@ -141,6 +141,7 @@ class PresentationState:
     ] = field(default_factory=dict)
     audio_metrics: dict = field(default_factory=dict)
     encoder_policy_options: list[dict] = field(default_factory=list)
+    installed_asr_models: frozenset[str] = frozenset()
     home_summary: dict = field(
         default_factory=lambda: {
             "runningTaskCount": 0,
@@ -217,6 +218,15 @@ class RuntimeToolState:
 @dataclass(slots=True)
 class AsyncRequestState:
     recent_id: int = 0
+    runtime_status_id: int = 0
+    runtime_status_future: Future | None = None
+    installed_asr_models_id: int = 0
+    installed_asr_models_future: Future | None = None
+    llm_provider_test_id: int = 0
+    llm_provider_test_future: Future | None = None
+    media_resources_id: int = 0
+    media_resources_applied_id: int = 0
+    media_resources_future: Future | None = None
     preview_id: int = 0
     preview_future: Future | None = None
     encoder_id: int = 0

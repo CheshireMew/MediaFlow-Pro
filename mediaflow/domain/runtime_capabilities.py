@@ -127,6 +127,21 @@ CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
         description="Export timelines only when their editing semantics can be preserved in FCPXML.",
     ),
     CapabilityDefinition(
+        id="interchange-import",
+        availability="built-in",
+        description=(
+            "Inspect and import FCPXML or CMX 3600 EDL documents as new native, editable sequences."
+        ),
+    ),
+    CapabilityDefinition(
+        id="voiceover-adr",
+        availability="built-in",
+        description=(
+            "Plan voiceover or ADR cues, calibrate recording-device latency, capture and compare "
+            "takes, and place compensated audio."
+        ),
+    ),
+    CapabilityDefinition(
         id="reference-video-comparison",
         availability="built-in",
         description="Compare decoded reference and candidate video frames and publish reproducible evidence.",
@@ -165,6 +180,46 @@ CAPABILITY_CATALOG: tuple[CapabilityDefinition, ...] = (
         id="gpt-sovits-v2pro",
         availability="runtime-inspected",
         description="The optional GPT-SoVITS v2Pro runtime used for reference-voice synthesis.",
+    ),
+    CapabilityDefinition(
+        id="sequence-delivery-variants",
+        availability="built-in",
+        description=(
+            "Generate recoverable landscape, portrait, square, and custom delivery sequences "
+            "from one master."
+        ),
+    ),
+    CapabilityDefinition(
+        id="project-collection",
+        availability="built-in",
+        description=(
+            "Copy external project media into verified managed storage while preserving recoverable "
+            "original-path records."
+        ),
+    ),
+    CapabilityDefinition(
+        id="review-collaboration",
+        availability="built-in",
+        description=(
+            "Bind review threads to project revisions, capture rendered proof frames, "
+            "draw vector markup, and exchange verified review packages."
+        ),
+    ),
+    CapabilityDefinition(
+        id="multicam-editing",
+        availability="built-in",
+        description=(
+            "Synchronize camera sources around a shared source event and rebuild a real program "
+            "track from recoverable angle cuts."
+        ),
+    ),
+    CapabilityDefinition(
+        id="color-scopes",
+        availability="built-in",
+        description=(
+            "Analyze rendered timeline frames as RGB histograms, luma waveforms, clipping "
+            "statistics, and chroma vectorscopes."
+        ),
     ),
     CapabilityDefinition(
         id="speaker-diarization",

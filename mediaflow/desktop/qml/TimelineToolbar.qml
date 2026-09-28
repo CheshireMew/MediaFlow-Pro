@@ -47,6 +47,7 @@ Rectangle {
                     if (view.canEdit)
                         mediaflow.workspaceSequenceController.createShortSequence("");
                 }
+                onCreateVariantsRequested: view.createVariantsRequested()
                 onEditProfileRequested: view.editProfileRequested()
             }
             AppButton {
@@ -136,6 +137,33 @@ Rectangle {
                 onClicked: view.snapEnabled = checked
                 ToolTip.visible: hovered
                 ToolTip.text: checked ? qsTr("吸附已开启（S）") : qsTr("吸附已关闭（S）")
+            }
+            AppButton {
+                objectName: "openMulticamButton"
+                text: qsTr("多机位")
+                compact: true
+                quiet: true
+                enabled: view.canEdit
+                onClicked: view.createMulticamRequested()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("同步多个机位并在播放头切换节目角度")
+            }
+            AppButton {
+                objectName: "openColorScopesButton"
+                text: qsTr("示波器")
+                compact: true
+                quiet: true
+                onClicked: view.openColorScopesRequested()
+            }
+            AppButton {
+                objectName: "openVoiceoverButton"
+                text: qsTr("旁白 / ADR")
+                compact: true
+                quiet: true
+                enabled: view.canEdit
+                onClicked: view.openVoiceoverRequested()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("创建台词提示、录音、比较 take 并放入时间线")
             }
             AppMenuButton {
                 id: timelineMoreButton

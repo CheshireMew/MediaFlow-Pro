@@ -99,18 +99,25 @@ class WebFilmstripRenderer:
             return target.path
         if self.cache_lifecycle.cache_is_ready(one_frame_target, render_plan):
             return one_frame_target.path
-        self.cache_lifecycle.reserve(
+        reservation = self.cache_lifecycle.reserve(
             one_frame_target,
             label="MediaFlow editable web filmstrip cache",
         )
-        one_frame_target.path.parent.mkdir(parents=True, exist_ok=True)
-        cache_lock = self.cache_lifecycle.acquire_lock(
-            one_frame_target.path.with_name(f"{one_frame_target.path.name}.lock"),
-            one_frame_target,
-            render_plan,
-            check_cancelled=check_cancelled,
-        )
+        try:
+            one_frame_target.path.parent.mkdir(parents=True, exist_ok=True)
+            cache_lock = self.cache_lifecycle.acquire_lock(
+                one_frame_target.path.with_name(
+                    f"{one_frame_target.path.name}.lock"
+                ),
+                one_frame_target,
+                render_plan,
+                check_cancelled=check_cancelled,
+            )
+        except BaseException:
+            reservation.release()
+            raise
         if cache_lock is None:
+            reservation.release()
             return one_frame_target.path
         try:
             if self.cache_lifecycle.cache_is_ready(target, full_render_plan):
@@ -132,3 +139,4 @@ class WebFilmstripRenderer:
             return one_frame_target.path
         finally:
             cache_lock.release()
+            reservation.release()

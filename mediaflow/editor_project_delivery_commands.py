@@ -4,31 +4,42 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from mediaflow.application.edit_history import ProjectEditHistory
+from mediaflow.application.interchange_import import InterchangeImportService
 from mediaflow.application.portable_timeline_import import PortableTimelineImportService
 from mediaflow.application.ports import StructuredFileReader
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
 from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.application.voiceover_editing import VoiceoverEditingService
 from mediaflow.domain.collaboration import (
     ProjectChange,
     ProjectChangeSet,
     ProjectEditAction,
     ProjectEditCommand,
 )
+from mediaflow.domain.interchange import LoadedInterchangeTimeline
 from mediaflow.domain.portable_timeline import LoadedPortableTimeline
-from mediaflow.domain.project import Asset
+from mediaflow.domain.project import Asset, ProjectProfile, Sequence
+from mediaflow.domain.project_archive import ProjectArchiveResult
 from mediaflow.domain.project_records import ProjectVersionRecord
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.task_commands import ImportAssetCommand, TaskCommand
 from mediaflow.domain.tasks import Task
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.domain.voiceover import (
+    VoiceoverCue,
+    VoiceoverCueStatus,
+    VoiceoverLatencyCalibration,
+    VoiceoverTake,
+)
 from mediaflow.infrastructure.fcpxml_export import FcpxmlExportService
 from mediaflow.infrastructure.mlt import (
     LoudnessAnalysisService,
     SequenceBoundaryAnalysisService,
     TimelineCompiler,
 )
+from mediaflow.infrastructure.project_archive_service import ProjectArchiveService
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyDecision, ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
@@ -40,6 +51,8 @@ class EditorProjectDeliveryCommands:
     _repository: ProjectRepository
     _paths: RuntimePaths
     _portable_timelines: PortableTimelineImportService
+    _interchange_timelines: InterchangeImportService
+    _voiceover: VoiceoverEditingService
     _subtitle_publication: SubtitlePublicationService
     _timelines: dict[str, TimelineEditor]
     _history: ProjectEditHistory
@@ -47,11 +60,13 @@ class EditorProjectDeliveryCommands:
     _tasks: TaskService
     _task_settlement: ProjectTaskSettlement
     _workflows: ProjectWorkflowService
+    _project_archives: ProjectArchiveService
     _settings: ServiceSettings
 
     if TYPE_CHECKING:
 
         def _require_writable(self) -> None: ...
+        def _reload_timelines(self) -> None: ...
 
     def inspect_portable_timeline(self, path: str | Path) -> LoadedPortableTimeline:
         return self._portable_timelines.inspect(path)
@@ -66,6 +81,217 @@ class EditorProjectDeliveryCommands:
         return self._portable_timelines.import_timeline(
             path,
             sequence_id=sequence_id,
+        )
+
+    def inspect_interchange_timeline(
+        self,
+        path: str | Path,
+        *,
+        sequence_id: str,
+        frame_rate: float | None = None,
+        media_mappings: dict[str, str] | None = None,
+    ) -> LoadedInterchangeTimeline:
+        default_profile = self._repository.sequences.get_sequence(sequence_id).profile
+        return self._interchange_timelines.inspect(
+            path,
+            default_profile=default_profile,
+            frame_rate=frame_rate,
+            media_mappings=media_mappings,
+        )
+
+    def import_interchange_timeline(
+        self,
+        path: str | Path,
+        *,
+        sequence_id: str,
+        name: str | None = None,
+        frame_rate: float | None = None,
+        media_mappings: dict[str, str] | None = None,
+    ) -> tuple[LoadedInterchangeTimeline, Sequence, TimelineState, dict[str, Asset], list[str]]:
+        self._require_writable()
+        default_profile: ProjectProfile = self._repository.sequences.get_sequence(sequence_id).profile
+        try:
+            return self._interchange_timelines.import_timeline(
+                path,
+                name=name,
+                default_profile=default_profile,
+                frame_rate=frame_rate,
+                media_mappings=media_mappings,
+            )
+        except BaseException:
+            self._reload_timelines()
+            raise
+
+    def list_voiceover_cues(
+        self,
+        sequence_id: str,
+        *,
+        include_archived: bool = False,
+    ) -> list[VoiceoverCue]:
+        return self._voiceover.list_cues(
+            sequence_id,
+            include_archived=include_archived,
+        )
+
+    def create_voiceover_cue(
+        self,
+        sequence_id: str,
+        *,
+        start_frame: int,
+        end_frame: int,
+        text: str,
+        speaker: str = "旁白",
+        notes: str = "",
+    ) -> VoiceoverCue:
+        self._require_writable()
+        return self._voiceover.create_cue(
+            sequence_id,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            text=text,
+            speaker=speaker,
+            notes=notes,
+        )
+
+    def update_voiceover_cue(
+        self,
+        cue_id: str,
+        *,
+        expected_revision: int,
+        start_frame: int,
+        end_frame: int,
+        text: str,
+        speaker: str,
+        notes: str,
+        status: VoiceoverCueStatus,
+    ) -> VoiceoverCue:
+        self._require_writable()
+        return self._voiceover.update_cue(
+            cue_id,
+            expected_revision=expected_revision,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            text=text,
+            speaker=speaker,
+            notes=notes,
+            status=status,
+        )
+
+    def archive_voiceover_cue(
+        self,
+        cue_id: str,
+        *,
+        expected_revision: int,
+    ) -> VoiceoverCue:
+        self._require_writable()
+        return self._voiceover.archive_cue(cue_id, expected_revision=expected_revision)
+
+    def add_voiceover_take(
+        self,
+        cue_id: str,
+        source: str | Path,
+        *,
+        name: str | None = None,
+        notes: str = "",
+        calibration_device_id: str | None = None,
+    ) -> tuple[VoiceoverCue, VoiceoverTake]:
+        self._require_writable()
+        return self._voiceover.add_take(
+            cue_id,
+            source,
+            name=name,
+            notes=notes,
+            calibration_device_id=calibration_device_id,
+        )
+
+    def get_voiceover_latency_calibration(
+        self,
+        device_id: str,
+    ) -> VoiceoverLatencyCalibration | None:
+        return self._voiceover.get_latency_calibration(device_id)
+
+    def list_voiceover_latency_calibrations(self) -> list[VoiceoverLatencyCalibration]:
+        return self._voiceover.list_latency_calibrations()
+
+    def set_voiceover_latency_calibration(
+        self,
+        *,
+        device_id: str,
+        device_name: str,
+        latency_samples: int,
+        sample_rate: int = 48_000,
+    ) -> VoiceoverLatencyCalibration:
+        self._require_writable()
+        return self._voiceover.set_latency_calibration(
+            device_id=device_id,
+            device_name=device_name,
+            latency_samples=latency_samples,
+            sample_rate=sample_rate,
+        )
+
+    def analyze_voiceover_latency_calibration(
+        self,
+        recording: str | Path,
+        *,
+        device_id: str,
+        device_name: str,
+        marker_offset_samples: int,
+    ) -> VoiceoverLatencyCalibration:
+        self._require_writable()
+        return self._voiceover.analyze_latency_calibration(
+            recording,
+            device_id=device_id,
+            device_name=device_name,
+            marker_offset_samples=marker_offset_samples,
+        )
+
+    def update_voiceover_take(
+        self,
+        take_id: str,
+        *,
+        name: str,
+        notes: str,
+        rating: int,
+    ) -> VoiceoverTake:
+        self._require_writable()
+        return self._voiceover.update_take(
+            take_id,
+            name=name,
+            notes=notes,
+            rating=rating,
+        )
+
+    def select_voiceover_take(
+        self,
+        cue_id: str,
+        take_id: str,
+        *,
+        expected_revision: int,
+    ) -> VoiceoverCue:
+        self._require_writable()
+        return self._voiceover.select_take(
+            cue_id,
+            take_id,
+            expected_revision=expected_revision,
+        )
+
+    def archive_voiceover_take(
+        self,
+        take_id: str,
+    ) -> tuple[VoiceoverCue, VoiceoverTake]:
+        self._require_writable()
+        return self._voiceover.archive_take(take_id)
+
+    def place_voiceover_take(
+        self,
+        cue_id: str,
+        *,
+        expected_revision: int,
+    ) -> VoiceoverCue:
+        self._require_writable()
+        return self._voiceover.place_selected_take(
+            cue_id,
+            expected_revision=expected_revision,
         )
 
     def create_version(self, name: str) -> ProjectVersionRecord:
@@ -91,6 +317,9 @@ class EditorProjectDeliveryCommands:
                 self._timelines.pop(sequence_id)
         self._history.clear()
         return record
+
+    def create_project_archive(self, destination: str | Path) -> ProjectArchiveResult:
+        return self._project_archives.create(destination)
 
     def export_fcpxml(
         self,

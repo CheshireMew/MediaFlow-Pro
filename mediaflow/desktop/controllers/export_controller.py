@@ -96,8 +96,7 @@ class ExportController(ControllerFacet[ExportControllerScope]):
     def canExportSequence(self) -> bool:
         return self._session._active_sequence_has_renderable_content()
 
-    @Property(list, notify=tasksChanged)
-    def exportHistory(self) -> list[dict]:
+    def _export_history_rows(self) -> list[dict]:
         if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
             return []
         values: list[dict] = []
@@ -138,6 +137,15 @@ class ExportController(ControllerFacet[ExportControllerScope]):
                 }
             )
         return values
+
+    @Property(list, notify=tasksChanged)
+    def exportHistory(self) -> list[dict]:
+        return self._export_history_rows()
+
+    @Property(dict, notify=tasksChanged)
+    def exportHistorySnapshot(self) -> dict:
+        values = self._export_history_rows()
+        return {"count": len(values), "recent": values[:5]}
 
     @Slot(str)
     @report_ui_errors

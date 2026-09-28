@@ -121,9 +121,14 @@ class RuntimeToolOperations(SessionCoordinator):
                 **dict(event.get("result") or {}),
             }
         self._session.projectors.workspace.refresh_runtime_tool_status(preserve_cuda=True)
+        self._session.projectors.workspace.refresh_installed_asr_models()
         if event_type == "failed":
             self._session.updates.report_error(str(event.get("error") or "运行时工具操作失败"))
         elif event_type == "cancelled":
             self._session._set_status("运行时工具操作已取消")
+        elif isinstance(event.get("result"), dict) and event["result"].get("restart_required"):
+            self._session._set_status(
+                "下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明"
+            )
         else:
             self._session._set_status("运行时工具操作已完成")

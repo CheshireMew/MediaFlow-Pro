@@ -69,7 +69,15 @@ class PortableTimelineImportService:
         *,
         sequence_id: str,
     ) -> tuple[LoadedPortableTimeline, TimelineState, dict[str, Asset], list[str]]:
-        loaded = self.inspect(path)
+        return self.import_loaded(self.inspect(path), sequence_id=sequence_id)
+
+    def import_loaded(
+        self,
+        loaded: LoadedPortableTimeline,
+        *,
+        sequence_id: str,
+    ) -> tuple[LoadedPortableTimeline, TimelineState, dict[str, Asset], list[str]]:
+        self._project_profile(loaded.document)
         editor = self.timeline_provider(sequence_id)
         existing_documents = self.repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
         if editor.state.tracks or editor.state.clips or existing_documents:

@@ -244,6 +244,13 @@ ApplicationWindow {
         assert forward_range_positions
         assert all(4 <= frame <= 8 for frame in forward_range_positions)
 
+        preview.seek(0)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and preview.property("position") != 0:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        assert preview.property("position") == 0
+
         preview.setProperty("playbackRate", -1.0)
         reverse_range_positions: list[int] = []
         preview.positionChanged.connect(

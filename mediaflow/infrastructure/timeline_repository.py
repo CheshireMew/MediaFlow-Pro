@@ -9,7 +9,10 @@ from mediaflow.application.timeline_clock import assets_in_timeline_clock
 from mediaflow.application.timeline_integrity import validate_timeline_integrity
 from mediaflow.domain.enums import TrackKind
 from mediaflow.domain.exports import SubtitleStyle
+from mediaflow.domain.masks import ClipMask
+from mediaflow.domain.multicam import MulticamGroup
 from mediaflow.domain.project import Asset
+from mediaflow.domain.review import ReviewThread
 from mediaflow.domain.timeline import (
     Clip,
     ClipAudio,
@@ -64,6 +67,8 @@ class TimelineRepository(ProjectRepositoryComponent):
                 sequence=sequence,
                 markers=self.list_timeline_markers(sequence_id),
                 ranges=self.list_timeline_ranges(sequence_id),
+                review_threads=self.list_review_threads(sequence_id),
+                multicam_groups=self.list_multicam_groups(sequence_id),
                 web_states=self._web().list_web_clip_states(sequence_id),
             )
         placeholders = ",".join("?" for _ in track_ids)
@@ -90,6 +95,8 @@ class TimelineRepository(ProjectRepositoryComponent):
             transitions=self.list_transitions(sequence_id),
             markers=self.list_timeline_markers(sequence_id),
             ranges=self.list_timeline_ranges(sequence_id),
+            review_threads=self.list_review_threads(sequence_id),
+            multicam_groups=self.list_multicam_groups(sequence_id),
             web_states=self._web().list_web_clip_states(sequence_id),
         )
 
@@ -160,6 +167,29 @@ class TimelineRepository(ProjectRepositoryComponent):
             )
         ]
 
+    def list_review_threads(self, sequence_id: str) -> list[ReviewThread]:
+        self._sequences().get_sequence(sequence_id)
+        return [
+            ReviewThread.model_validate(json.loads(row["thread_json"]))
+            for row in self._fetchall(
+                """SELECT thread_json FROM review_thread
+                   WHERE sequence_id=? ORDER BY start_frame, id""",
+                (sequence_id,),
+            )
+        ]
+
+    def list_multicam_groups(self, sequence_id: str) -> list[MulticamGroup]:
+        row = self._fetchone(
+            "SELECT multicam_groups_json FROM sequence WHERE id=?",
+            (sequence_id,),
+        )
+        if row is None:
+            raise KeyError(sequence_id)
+        return [
+            MulticamGroup.model_validate(item)
+            for item in json.loads(row["multicam_groups_json"])
+        ]
+
     def save_timeline(self, state: TimelineState) -> int:
         existing = self._sequences().get_sequence(state.sequence.id)
         project = self._projects().get_project()
@@ -194,6 +224,13 @@ class TimelineRepository(ProjectRepositoryComponent):
             next_revision = self._sequences().update_sequence_record(
                 connection,
                 state.sequence,
+            )
+            connection.execute(
+                "UPDATE sequence SET multicam_groups_json=? WHERE id=?",
+                (
+                    _json([item.model_dump(mode="json") for item in state.multicam_groups]),
+                    state.sequence.id,
+                ),
             )
             existing_track_ids = {
                 row["id"]
@@ -298,6 +335,21 @@ class TimelineRepository(ProjectRepositoryComponent):
                 self._upsert_timeline_marker(connection, marker)
             for item in state.ranges:
                 self._upsert_timeline_range(connection, item)
+            self._delete_missing(
+                connection,
+                "review_thread",
+                "id",
+                {
+                    row["id"]
+                    for row in connection.execute(
+                        "SELECT id FROM review_thread WHERE sequence_id=?",
+                        (state.sequence.id,),
+                    ).fetchall()
+                },
+                {item.id for item in state.review_threads},
+            )
+            for thread in state.review_threads:
+                self._upsert_review_thread(connection, thread)
             self._sequences().store_sequence_export_preset(
                 connection,
                 state.sequence,
@@ -386,6 +438,7 @@ class TimelineRepository(ProjectRepositoryComponent):
             visual_effects=[
                 ClipVisualEffect.model_validate(item) for item in json.loads(row["visual_effects_json"])
             ],
+            masks=[ClipMask.model_validate(item) for item in json.loads(row["masks_json"])],
         )
 
     @staticmethod
@@ -396,8 +449,8 @@ class TimelineRepository(ProjectRepositoryComponent):
                 speed_numerator, speed_denominator, pitch_compensation,
                 freeze_source_frame,
                 transform_json, transform_keyframes_json, audio_json,
-                visual_effects_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                visual_effects_json, masks_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 track_id=excluded.track_id, asset_id=excluded.asset_id,
                 timeline_start=excluded.timeline_start, source_in=excluded.source_in,
@@ -409,7 +462,8 @@ class TimelineRepository(ProjectRepositoryComponent):
                 transform_json=excluded.transform_json,
                 transform_keyframes_json=excluded.transform_keyframes_json,
                 audio_json=excluded.audio_json,
-                visual_effects_json=excluded.visual_effects_json""",
+                visual_effects_json=excluded.visual_effects_json,
+                masks_json=excluded.masks_json""",
             (
                 clip.id,
                 clip.track_id,
@@ -426,6 +480,7 @@ class TimelineRepository(ProjectRepositoryComponent):
                 _json([item.model_dump(mode="json") for item in clip.transform_keyframes]),
                 _model_json(clip.audio),
                 _json([item.model_dump(mode="json") for item in clip.visual_effects]),
+                _json([item.model_dump(mode="json") for item in clip.masks]),
             ),
         )
 
@@ -505,6 +560,29 @@ class TimelineRepository(ProjectRepositoryComponent):
                 item.end_frame,
                 item.name,
                 item.color,
+            ),
+        )
+
+    @staticmethod
+    def _upsert_review_thread(
+        connection: sqlite3.Connection,
+        thread: ReviewThread,
+    ) -> None:
+        connection.execute(
+            """INSERT INTO review_thread(
+                   id, sequence_id, start_frame, status, thread_json
+               ) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   sequence_id=excluded.sequence_id,
+                   start_frame=excluded.start_frame,
+                   status=excluded.status,
+                   thread_json=excluded.thread_json""",
+            (
+                thread.id,
+                thread.sequence_id,
+                thread.start_frame,
+                thread.status,
+                _model_json(thread),
             ),
         )
 

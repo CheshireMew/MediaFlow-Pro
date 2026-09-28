@@ -54,7 +54,9 @@ REVISION_CACHED_PROJECT_READS = frozenset(
         "list_dubbing_sessions",
         "list_export_history",
         "list_highlights",
+        "list_project_collections",
         "list_sequences",
+        "list_sequence_variants",
         "list_subtitle_documents",
         "list_subtitle_placements",
         "list_subtitle_placements_for_segments",
@@ -448,6 +450,9 @@ class RemoteEditorProject(_ProjectCommandSurface):
         if invalidate_timelines:
             for editor in self._remote_timelines.values():
                 editor.invalidate()
+
+    def invalidate_task_result_cache(self) -> None:
+        self._invalidate_read_cache(invalidate_timelines=False)
 
     def _synchronize_timeline_caches(self, write_set: list[str]) -> None:
         revision = self.known_content_revision

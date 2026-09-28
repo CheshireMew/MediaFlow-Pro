@@ -205,7 +205,7 @@ AppScrollView {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("并行分块会同时加载多份模型；自动模式会根据 CPU、内存和显存决定是否并行。")
+                    text: qsTr("超过 15 分钟的音频会按停顿切成最长 30 秒的语音段，共用一份模型批量识别。内存或显存不足时会自动缩小批量。")
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSizeCaption
                     wrapMode: Text.WordWrap
@@ -226,7 +226,7 @@ AppScrollView {
                         primary: true
                         text: transcriptScroll.taskActive
                             ? qsTr("正在转录…") : qsTr("转录当前时间轴")
-                        enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
+                        enabled: Boolean(transcriptScroll.planData.available)
                             && !transcriptScroll.taskActive
                             && Boolean(mediaflow.workspaceViewController.actionCapabilities.canStartTasks)
                         onClicked: mediaflow.subtitleTranscriptionController.transcribeCurrentSequence(
@@ -241,7 +241,7 @@ AppScrollView {
                         iconName: "more"
                         Accessible.name: qsTr("转录自动化操作")
                         toolTipText: Accessible.name
-                        enabled: mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
+                        enabled: Boolean(transcriptScroll.planData.available)
                             && !transcriptScroll.taskActive
                         AppMenu {
                             id: transcriptionAutomationMenu
@@ -261,7 +261,7 @@ AppScrollView {
                 }
                 Text {
                     Layout.fillWidth: true
-                    visible: !mediaflow.subtitleTranscriptionController.canTranscribeCurrentSequence
+                    visible: !Boolean(transcriptScroll.planData.available)
                     text: qsTr("请先在时间轴把一条音频轨设为“对白”，并确认当前范围内有对白素材。")
                     color: Theme.warning
                     font.pixelSize: Theme.fontSizeCaption

@@ -51,6 +51,7 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.project import MediaMetadata, ProjectProfile, SequenceInOut
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
+from mediaflow.domain.settings import LlmProviderSettings
 from mediaflow.domain.storage_names import (
     DEFAULT_HIGHLIGHT_EXPORT_RELATIVE_DIRECTORY,
     OUTPUT_WORKSPACE_COMPONENT_RESERVE_UTF16_UNITS,
@@ -70,7 +71,7 @@ from mediaflow.domain.task_commands import (
     ImportAssetCommand,
     TrackSubjectCommand,
 )
-from mediaflow.domain.tasks import SequenceBoundaryTaskOutcome, Task
+from mediaflow.domain.tasks import ImportedAssetTaskOutcome, SequenceBoundaryTaskOutcome, Task
 from mediaflow.domain.workflows import WorkflowPayload
 from mediaflow.infrastructure.platform_media import PlatformMediaResolver
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -853,6 +854,54 @@ def test_paused_import_keeps_pending_timeline_drop_until_terminal_state(
         controllers.shutdown()
 
 
+def test_timeline_drop_recovers_when_import_finishes_before_batch_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Fast Import")
+        session = controllers.session
+        current = session.state.binding.require_current()
+        source = tmp_path / "fast-import.wav"
+        source.write_bytes(b"completed before desktop registration")
+        asset = current._repository.assets.import_external_asset(source, AssetKind.AUDIO)
+        completed = Task(
+            project_id=current.get_project().id,
+            sequence_id=session.state.binding.active_sequence_id,
+            command=ImportAssetCommand(source_path=str(source)),
+            status=TaskStatus.COMPLETED,
+            outcome=ImportedAssetTaskOutcome(asset_id=asset.id, purpose="media"),
+            revision=3,
+        )
+
+        def complete_before_registration(_source: Path) -> Task:
+            session.state.tasks.items[completed.id] = completed
+            session.state.tasks.revisions[completed.id] = completed.revision
+            return completed
+
+        placed: list[str] = []
+        monkeypatch.setattr(session.timeline_assets, "start_media_import", complete_before_registration)
+        monkeypatch.setattr(
+            session.timeline_assets,
+            "queue_for_timeline",
+            lambda asset_ids, _placement=None: placed.extend(asset_ids),
+        )
+
+        session.timeline_assets.import_media_paths(
+            [source],
+            placement=TimelinePlacement(start_frame=0),
+        )
+
+        assert placed == [asset.id]
+        assert session.state.assets.pending_import_tasks == {}
+        assert session.state.assets.pending_import_batches == {}
+    finally:
+        controllers.shutdown()
+
+
 def test_workspace_action_capabilities_share_one_read_only_and_closing_boundary() -> None:
     controllers = EditorControllers()
     session = controllers.session
@@ -901,6 +950,120 @@ def test_settings_form_save_merges_user_changes_with_async_runtime_updates(
         assert session.state.desktop_settings.ui.theme == "high_contrast"
         assert session.state.service_settings.asr.cli_path == str(installed_path)
         assert ServiceSettingsRepository().load().asr.cli_path == str(installed_path)
+    finally:
+        controllers.shutdown()
+
+
+def test_runtime_status_refresh_is_submitted_without_blocking_the_ui_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers()
+    submitted: list[tuple[str, object, object]] = []
+    try:
+        session = controllers.session
+
+        def fail_if_called_on_ui_thread() -> dict:
+            raise AssertionError("runtime status ran synchronously on the UI thread")
+
+        def record_submit(kind: str, request_id: object, operation, **_kwargs):
+            submitted.append((kind, request_id, operation))
+            return None
+
+        monkeypatch.setattr(session._api, "runtime_tool_status", fail_if_called_on_ui_thread)
+        monkeypatch.setattr(session.background, "submit", record_submit)
+
+        session.projectors.workspace.refresh_runtime_tool_status(preserve_cuda=True)
+
+        assert len(submitted) == 1
+        kind, request_id, operation = submitted[0]
+        assert kind == "runtime_status"
+        assert request_id == (1, True)
+        assert operation is fail_if_called_on_ui_thread
+    finally:
+        controllers.shutdown()
+
+
+def test_asr_model_options_read_the_latest_background_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers()
+    try:
+        session = controllers.session
+        session.state.presentation.installed_asr_models = frozenset({"small"})
+
+        def fail_if_scanned_from_qml() -> frozenset[str]:
+            raise AssertionError("ASR model storage was scanned from a QML property getter")
+
+        monkeypatch.setattr(session._api, "installed_asr_models", fail_if_scanned_from_qml)
+
+        options = controllers.settings.asrModelOptions
+
+        small = next(item for item in options if item["value"] == "small")
+        assert small["installed"] is True
+    finally:
+        controllers.shutdown()
+
+
+def test_llm_provider_connection_test_is_submitted_off_the_ui_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers()
+    submitted: list[tuple[str, object, object]] = []
+    try:
+        session = controllers.session
+        provider = LlmProviderSettings(
+            name="Background provider",
+            base_url="https://example.invalid/v1",
+            model="test-model",
+        )
+        session.state.service_settings.llm_providers = [provider]
+
+        def fail_if_called_on_ui_thread(_provider: LlmProviderSettings) -> None:
+            raise AssertionError("LLM connection test ran synchronously on the UI thread")
+
+        def record_submit(kind: str, request_id: object, operation, **_kwargs):
+            submitted.append((kind, request_id, operation))
+            return None
+
+        monkeypatch.setattr(session._api, "test_llm_provider", fail_if_called_on_ui_thread)
+        monkeypatch.setattr(session.background, "submit_callback", record_submit, raising=False)
+
+        controllers.language_settings.testLlmProvider(provider.id)
+
+        assert len(submitted) == 1
+        kind, request_id, operation = submitted[0]
+        assert kind == "llm_provider_test"
+        assert request_id == (1, provider.id)
+        assert callable(operation)
+    finally:
+        controllers.shutdown()
+
+
+def test_resource_library_refresh_is_submitted_off_the_ui_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers()
+    submitted: list[tuple[str, object, object]] = []
+    try:
+        session = controllers.session
+
+        def fail_if_read_on_ui_thread(**_kwargs) -> dict[str, object]:
+            raise AssertionError("resource catalogs were read synchronously on the UI thread")
+
+        def record_submit(kind: str, request_id: object, operation, **_kwargs):
+            submitted.append((kind, request_id, operation))
+            return None
+
+        monkeypatch.setattr(session._api, "search_media_resources", fail_if_read_on_ui_thread)
+        monkeypatch.setattr(session.background, "submit_callback", record_submit)
+
+        controllers.resources.refresh("transition", "fade", "")
+
+        assert len(submitted) == 1
+        kind, request_id, operation = submitted[0]
+        assert kind == "media_resources"
+        assert request_id == (1, "sdr_bt709", "transition", "fade", "")
+        assert callable(operation)
     finally:
         controllers.shutdown()
 
@@ -1056,6 +1219,9 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
                 "kind": "main",
                 "profile": "1920×1080",
                 "colorMode": "sdr_bt709",
+                "sourceSequenceId": "",
+                "variantPreset": "",
+                "variantStale": False,
             },
             {
                 "sequenceId": "short-a",
@@ -1064,6 +1230,9 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
                 "kind": "short",
                 "profile": "1080×1920",
                 "colorMode": "sdr_bt709",
+                "sourceSequenceId": "main",
+                "variantPreset": "portrait-9x16",
+                "variantStale": False,
             },
         ]
     )
@@ -1076,6 +1245,9 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
                 "kind": "short",
                 "profile": "1080×1920",
                 "colorMode": "sdr_bt709",
+                "sourceSequenceId": "main",
+                "variantPreset": "portrait-9x16",
+                "variantStale": True,
             },
             {
                 "sequenceId": "main",
@@ -1084,6 +1256,9 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
                 "kind": "main",
                 "profile": "1920×1080",
                 "colorMode": "sdr_bt709",
+                "sourceSequenceId": "",
+                "variantPreset": "",
+                "variantStale": False,
             },
             {
                 "sequenceId": "short-b",
@@ -1092,6 +1267,9 @@ def test_dict_list_model_applies_structural_and_value_changes_incrementally() ->
                 "kind": "short",
                 "profile": "1080×1920",
                 "colorMode": "sdr_bt709",
+                "sourceSequenceId": "main",
+                "variantPreset": "portrait-9x16",
+                "variantStale": False,
             },
         ]
     )
@@ -1626,6 +1804,166 @@ def test_open_desktop_consumes_persisted_task_events_from_project_service(
         controllers.shutdown()
 
 
+def test_desktop_timer_repairs_a_missed_fast_terminal_task_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QCoreApplication,
+) -> None:
+    assert qapp is QCoreApplication.instance()
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Missed Task Event")
+        session = controllers.session
+        current = session.state.binding.current
+        monkeypatch.setattr(session.tasks, "publish", lambda _event: None)
+
+        started = session.tasks.create(
+            AnalyzeDownloadCommand(url="https://example.invalid/media")
+        )
+        completed = current.wait_for_task(started.id, timeout=5)
+        assert completed.status == TaskStatus.FAILED
+        assert session.state.tasks.items[started.id].status.is_active
+        assert session.tasks._reconciliation_timer.isActive()
+
+        session.tasks._reconcile_timer_tick()
+
+        assert session.state.tasks.items[started.id].status == TaskStatus.FAILED
+        projected = next(
+            controllers.tasks.tasksModel.get(index)
+            for index in range(controllers.tasks.tasksModel.rowCount())
+            if controllers.tasks.tasksModel.get(index)["taskId"] == started.id
+        )
+        assert projected["status"] == "failed"
+        assert not session.tasks._reconciliation_timer.isActive()
+    finally:
+        controllers.shutdown()
+
+
+def test_desktop_task_creation_does_not_overwrite_a_reentrant_newer_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Reentrant Task Event")
+        session = controllers.session
+        current = session.state.binding.require_current()
+        command = AnalyzeDownloadCommand(url="https://example.invalid/media")
+        pending = Task(
+            id="fast-task",
+            project_id=current.get_project().id,
+            sequence_id=session.state.binding.active_sequence_id,
+            command=command,
+        )
+        completed = pending.model_copy(
+            update={
+                "status": TaskStatus.FAILED,
+                "revision": 3,
+                "error": "fixture failure",
+            }
+        )
+
+        def complete_while_start_waits(*_args, **_kwargs) -> Task:
+            session.state.tasks.items[completed.id] = completed
+            session.state.tasks.revisions[completed.id] = completed.revision
+            session.projectors.tasks.refresh_tasks()
+            return pending
+
+        monkeypatch.setattr(current, "start_task", complete_while_start_waits)
+
+        returned = session.tasks.create(command)
+
+        assert returned == pending
+        assert session.state.tasks.items[pending.id] == completed
+        row = controllers.tasks.tasksModel.get(0)
+        assert row["taskId"] == pending.id
+        assert row["status"] == "failed"
+    finally:
+        controllers.shutdown()
+
+
+def test_desktop_reconciliation_repairs_task_state_at_an_already_seen_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Stale Task Projection")
+        session = controllers.session
+        current = session.state.binding.require_current()
+        pending = Task(
+            id="stale-task",
+            project_id=current.get_project().id,
+            command=AnalyzeDownloadCommand(url="https://example.invalid/media"),
+        )
+        completed = pending.model_copy(
+            update={
+                "status": TaskStatus.FAILED,
+                "revision": 3,
+                "error": "fixture failure",
+            }
+        )
+        session.state.tasks.items[pending.id] = pending
+        session.state.tasks.revisions[pending.id] = completed.revision
+        monkeypatch.setattr(current, "list_tasks", lambda: [completed])
+
+        projected: list[Task] = []
+
+        def apply(task: Task) -> bool:
+            projected.append(task)
+            session.state.tasks.items[task.id] = task
+            return True
+
+        monkeypatch.setattr(session.tasks, "_apply_task_update", apply)
+
+        session.tasks.reconcile_committed_results()
+
+        assert projected == [completed]
+        assert session.state.tasks.items[pending.id] == completed
+    finally:
+        controllers.shutdown()
+
+
+def test_desktop_reconciliation_skips_an_already_projected_terminal_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controllers = EditorControllers(
+        application=DesktopPresentationApplication(EditorApplication())
+    )
+    try:
+        controllers.workspace_project.createProject(str(tmp_path), "Observed Task Event")
+        session = controllers.session
+        current = session.state.binding.current
+        started = session.tasks.create(
+            AnalyzeDownloadCommand(url="https://example.invalid/media")
+        )
+        completed = current.wait_for_task(started.id, timeout=5)
+        assert completed.status == TaskStatus.FAILED
+        session.lifecycle.reconcile_task_events()
+        assert session.state.tasks.revisions[completed.id] == completed.revision
+
+        projected_task_ids: list[str] = []
+        original_apply = session.tasks._apply_task_update
+
+        def record_projection(task: Task) -> bool:
+            projected_task_ids.append(task.id)
+            return original_apply(task)
+
+        monkeypatch.setattr(session.tasks, "_apply_task_update", record_projection)
+        session.tasks.reconcile_committed_results()
+
+        assert projected_task_ids == []
+    finally:
+        controllers.shutdown()
+
+
 def _create_completed_sequence_boundary_task(
     project,
     source: Path,
@@ -1727,6 +2065,7 @@ def test_open_desktop_projects_service_committed_terminal_task_state(
 def test_desktop_retries_terminal_task_projection_after_transient_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    qapp: QCoreApplication,
 ) -> None:
     controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     errors: list[str] = []
@@ -1755,10 +2094,12 @@ def test_desktop_retries_terminal_task_projection_after_transient_failure(
         controllers.session.lifecycle.reconcile_task_events()
         assert attempts == 2
         assert any("将自动重试" in message for message in errors)
+        assert controllers.session.state.tasks.items[task.id].status.is_active
 
         controllers.session.lifecycle.reconcile_task_events()
 
         assert attempts == 3
+        assert controllers.session.state.tasks.items[task.id].status == TaskStatus.COMPLETED
         assert current.load_timeline(sequence_id).sequence.in_out == (
             SequenceInOut(in_frame=10, out_frame=90)
         )

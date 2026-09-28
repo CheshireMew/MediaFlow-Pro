@@ -9,6 +9,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "正在等待其它转录或预热释放模型": ("Waiting for transcription or prewarm to release the model", "転写またはウォームアップによるモデルの解放を待機中"),
+    "内存或显存不足，正在缩小批量重试": ("Memory exhausted; retrying with a smaller batch", "メモリ不足のためバッチを縮小して再試行中"),
     "这项内容刚刚被其他协作者修改": (
         "This item was just changed by another collaborator",
         "この項目は別の共同編集者によって変更されました",
@@ -2052,10 +2054,7 @@ TRANSLATIONS.update(
             "Actual recognition: %1 media files · %2 source ranges · about %3",
             "実際の認識量：素材 %1 件 · ソース範囲 %2 件 · 約 %3",
         ),
-        "并行分块会同时加载多份模型；自动模式会根据 CPU、内存和显存决定是否并行。": (
-            "Parallel chunks load multiple model instances at once. Auto mode decides whether to run in parallel from the available CPU, RAM, and VRAM.",
-            "チャンクを並列処理すると複数のモデルが同時に読み込まれます。自動モードでは CPU、メモリ、VRAM に応じて並列実行するかを決定します。",
-        ),
+        "超过 15 分钟的音频会按停顿切成最长 30 秒的语音段，共用一份模型批量识别。内存或显存不足时会自动缩小批量。": ("Audio over 15 minutes is split at pauses into speech segments up to 30 seconds and transcribed in batches using one model. Batches shrink automatically if RAM or VRAM runs out.", "15 分を超える音声は無音位置で最大 30 秒の区間に分割し、1 つのモデルでバッチ認識します。メモリ不足時はバッチサイズを自動で縮小します。"),
         "引擎：Faster-Whisper XXL CLI": (
             "Engine: Faster-Whisper XXL CLI",
             "エンジン：Faster-Whisper XXL CLI",
@@ -2098,9 +2097,9 @@ TRANSLATIONS.update(
             "Language: Current code %1",
             "言語：現在のコード %1",
         ),
-        "长音频并行分块": ("Parallel Long-Audio Chunks", "長時間音声チャンクの並列処理"),
-        "自动并行": ("Automatic Parallelism", "自動並列処理"),
-        "%1 块并行": ("%1 chunks in parallel", "%1 チャンク並列"),
+        "长音频单模型批量": ("Single-Model Long-Audio Batching", "単一モデルの長時間音声バッチ"),
+        "自动批量": ("Automatic Batching", "自動バッチ"),
+        "每批 %1 段": ("%1 segments per batch", "バッチあたり %1 区間"),
         "推荐，质量与速度均衡": (
             "Recommended; balanced quality and speed",
             "推奨、品質と速度のバランス型",
@@ -2156,26 +2155,11 @@ TRANSLATIONS.update(
         "语言：德语": ("Language: German", "言語：ドイツ語"),
         "语言：西班牙语": ("Language: Spanish", "言語：スペイン語"),
         "语言：俄语": ("Language: Russian", "言語：ロシア語"),
-        "长音频分块：自动（根据内存和显存）": (
-            "Long-audio chunks: Auto (based on RAM and VRAM)",
-            "長時間音声チャンク：自動（メモリと VRAM に基づく）",
-        ),
-        "长音频分块：顺序转录": (
-            "Long-audio chunks: Sequential",
-            "長時間音声チャンク：順次処理",
-        ),
-        "长音频分块：同时转录 2 块": (
-            "Long-audio chunks: 2 at once",
-            "長時間音声チャンク：2 個を同時処理",
-        ),
-        "长音频分块：同时转录 3 块": (
-            "Long-audio chunks: 3 at once",
-            "長時間音声チャンク：3 個を同時処理",
-        ),
-        "长音频分块：同时转录 4 块": (
-            "Long-audio chunks: 4 at once",
-            "長時間音声チャンク：4 個を同時処理",
-        ),
+        "长音频批量：自动（GPU 4 段 / CPU 2 段）": ("Long-audio batch: Auto (GPU 4 / CPU 2 segments)", "長時間音声バッチ：自動（GPU 4 / CPU 2 区間）"),
+        "长音频批量：每批 1 段": ("Long-audio batch: 1 segment", "長時間音声バッチ：1 区間"),
+        "长音频批量：每批 2 段": ("Long-audio batch: 2 segments", "長時間音声バッチ：2 区間"),
+        "长音频批量：每批 3 段": ("Long-audio batch: 3 segments", "長時間音声バッチ：3 区間"),
+        "长音频批量：每批 4 段": ("Long-audio batch: 4 segments", "長時間音声バッチ：4 区間"),
         "media-sources.json 中的素材 ID": (
             "Media ID in media-sources.json",
             "media-sources.json 内の素材 ID",
@@ -2859,6 +2843,525 @@ TRANSLATIONS.update(
             "The project folder will not be renamed, so existing media and external references are unaffected.",
             "プロジェクトフォルダー名は変更しないため、既存のメディアや外部参照には影響しません。",
         ),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 个": ("%1", "%1 個"),
+        "%1 个参数关键帧": ("%1 parameter keyframes", "パラメーターキーフレーム %1 個"),
+        "%1 个蒙版关键帧": ("%1 mask keyframes", "マスクキーフレーム %1 個"),
+        "%1 条阻断": ("%1 blocking", "ブロッキング %1 件"),
+        "· %1–%2 帧": ("· frames %1–%2", "・%1～%2 フレーム"),
+        "中心 X": ("Center X", "中心 X"),
+        "中心 Y": ("Center Y", "中心 Y"),
+        "主题（可选）": ("Subject (optional)", "件名（任意）"),
+        "作用区域": ("Area of effect", "適用範囲"),
+        "保存蒙版": ("Save mask", "マスクを保存"),
+        "全画面": ("Full frame", "全画面"),
+        "全部时间缩放": ("Scale all timing", "すべての時間をスケール"),
+        "写下需要修改、确认或交付前处理的问题": (
+            "Describe what needs changing, confirmation, or attention before delivery",
+            "修正、確認、または納品前に対応が必要な内容を入力",
+        ),
+        "反转": ("Invert", "反転"),
+        "取当前帧": ("Use current frame", "現在のフレームを使用"),
+        "向前移动一帧": ("Move forward one frame", "1 フレーム進む"),
+        "向后移动一帧": ("Move back one frame", "1 フレーム戻る"),
+        "回复": ("Reply", "返信"),
+        "回复这条批注": ("Reply to this comment", "このコメントに返信"),
+        "在播放头保存": ("Save at playhead", "再生ヘッド位置に保存"),
+        "在播放头添加批注": ("Add comment at playhead", "再生ヘッド位置にコメントを追加"),
+        "复制": ("Copy", "コピー"),
+        "复制全部": ("Copy all", "すべてコピー"),
+        "多边形": ("Polygon", "多角形"),
+        "多边形点 JSON": ("Polygon points JSON", "多角形ポイント JSON"),
+        "审阅 · %1 条待处理": ("Review · %1 open", "レビュー・未対応 %1 件"),
+        "审阅回复已添加": ("Review reply added", "レビューへの返信を追加しました"),
+        "审阅批注已归档，可随时恢复": (
+            "Review comment archived and can be restored anytime",
+            "レビューコメントをアーカイブしました。いつでも復元できます",
+        ),
+        "审阅批注已恢复": ("Review comment restored", "レビューコメントを復元しました"),
+        "审阅批注已添加": ("Review comment added", "レビューコメントを追加しました"),
+        "审阅批注已解决": ("Review comment resolved", "レビューコメントを解決済みにしました"),
+        "审阅批注已重新打开": ("Review comment reopened", "レビューコメントを再度開きました"),
+        "已复制 %1 个画面关键帧": (
+            "Copied %1 picture keyframes",
+            "映像キーフレームを %1 個コピーしました",
+        ),
+        "已复制 %1 个视觉效果关键帧": (
+            "Copied %1 visual-effect keyframes",
+            "ビジュアルエフェクトのキーフレームを %1 個コピーしました",
+        ),
+        "已归档": ("Archived", "アーカイブ済み"),
+        "已粘贴画面关键帧": ("Picture keyframes pasted", "映像キーフレームを貼り付けました"),
+        "已粘贴视觉效果关键帧": (
+            "Visual-effect keyframes pasted",
+            "ビジュアルエフェクトのキーフレームを貼り付けました",
+        ),
+        "已解决": ("Resolved", "解決済み"),
+        "帧 %1": ("Frame %1", "フレーム %1"),
+        "帧 %1–%2": ("Frames %1–%2", "フレーム %1～%2"),
+        "应用时间缩放": ("Apply timing scale", "時間スケールを適用"),
+        "归档": ("Archive", "アーカイブ"),
+        "当前筛选下没有批注。归档只会隐藏批注，不会删除内容。": (
+            "There are no comments in this filter. Archiving hides a comment without deleting it.",
+            "このフィルターに該当するコメントはありません。アーカイブはコメントを非表示にするだけで、削除はしません。",
+        ),
+        "效果蒙版已更新": ("Effect mask updated", "エフェクトマスクを更新しました"),
+        "手动": ("Manual", "手動"),
+        "播放头 %1": ("Playhead %1", "再生ヘッド %1"),
+        "无主题批注": ("Untitled comment", "件名なしのコメント"),
+        "时间倍率": ("Time scale", "時間倍率"),
+        "曲线按片段本地时间显示；贝塞尔控制点与导出使用同一合同。": (
+            "Curves use clip-local time; Bezier control points follow the same contract as export.",
+            "カーブはクリップローカル時間で表示され、ベジェ制御点は書き出しと同じ規約を使用します。",
+        ),
+        "椭圆": ("Ellipse", "楕円"),
+        "正在保存蒙版跟踪结果": (
+            "Saving mask tracking results",
+            "マスクトラッキング結果を保存中",
+        ),
+        "正在准备蒙版跟踪": ("Preparing mask tracking", "マスクトラッキングを準備中"),
+        "正在跟踪蒙版": ("Tracking mask", "マスクをトラッキング中"),
+        "正在跟踪蒙版区域": ("Tracking masked region", "マスク領域をトラッキング中"),
+        "添加蒙版后，可将任一视觉效果限制在蒙版区域内。": (
+            "Add a mask to limit any visual effect to that region.",
+            "マスクを追加すると、任意のビジュアルエフェクトをその領域内に限定できます。",
+        ),
+        "片段帧 %1": ("Clip frame %1", "クリップフレーム %1"),
+        "片段帧 %1 · %2": ("Clip frame %1 · %2", "クリップフレーム %1・%2"),
+        "画面关键帧与曲线": ("Picture keyframes and curves", "映像キーフレームとカーブ"),
+        "画面关键帧已保存": ("Picture keyframe saved", "映像キーフレームを保存しました"),
+        "画面关键帧已移动": ("Picture keyframe moved", "映像キーフレームを移動しました"),
+        "画面关键帧已移除": ("Picture keyframe removed", "映像キーフレームを削除しました"),
+        "画面关键帧时间已缩放": (
+            "Picture-keyframe timing scaled",
+            "映像キーフレームの時間をスケールしました",
+        ),
+        "矩形": ("Rectangle", "長方形"),
+        "移除参数关键帧": ("Remove parameter keyframe", "パラメーターキーフレームを削除"),
+        "移除蒙版": ("Remove mask", "マスクを削除"),
+        "移除蒙版关键帧": ("Remove mask keyframe", "マスクキーフレームを削除"),
+        "粘贴到播放头": ("Paste at playhead", "再生ヘッド位置に貼り付け"),
+        "结束帧（留空为单点）": (
+            "End frame (leave blank for a point)",
+            "終了フレーム（空欄なら単一点）",
+        ),
+        "缩放倍率": ("Scale factor", "スケール倍率"),
+        "缩放锚点（片段帧）": ("Scale anchor (clip frame)", "スケール基準（クリップフレーム）"),
+        "羽化像素": ("Feather pixels", "ぼかし幅（ピクセル）"),
+        "羽化次数": ("Feather passes", "ぼかし回数"),
+        "蒙版与局部效果": ("Masks and local effects", "マスクと部分エフェクト"),
+        "蒙版关键帧已保存": ("Mask keyframe saved", "マスクキーフレームを保存しました"),
+        "蒙版关键帧已移动": ("Mask keyframe moved", "マスクキーフレームを移動しました"),
+        "蒙版关键帧已移除": ("Mask keyframe removed", "マスクキーフレームを削除しました"),
+        "蒙版关键帧时间已缩放": (
+            "Mask-keyframe timing scaled",
+            "マスクキーフレームの時間をスケールしました",
+        ),
+        "蒙版已更新": ("Mask updated", "マスクを更新しました"),
+        "蒙版已添加": ("Mask added", "マスクを追加しました"),
+        "蒙版已移除": ("Mask removed", "マスクを削除しました"),
+        "蒙版跟踪": ("Mask tracking", "マスクトラッキング"),
+        "蒙版跟踪已应用": ("Mask tracking applied", "マスクトラッキングを適用しました"),
+        "视觉效果关键帧已保存": (
+            "Visual-effect keyframe saved",
+            "ビジュアルエフェクトのキーフレームを保存しました",
+        ),
+        "视觉效果关键帧已移动": (
+            "Visual-effect keyframe moved",
+            "ビジュアルエフェクトのキーフレームを移動しました",
+        ),
+        "视觉效果关键帧已移除": (
+            "Visual-effect keyframe removed",
+            "ビジュアルエフェクトのキーフレームを削除しました",
+        ),
+        "视觉效果关键帧时间已缩放": (
+            "Visual-effect keyframe timing scaled",
+            "ビジュアルエフェクトのキーフレーム時間をスケールしました",
+        ),
+        "跟踪": ("Track", "トラッキング"),
+        "跳到关键帧": ("Go to keyframe", "キーフレームへ移動"),
+        "重新打开": ("Reopen", "再度開く"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 个交付版本已是最新，无需重复生成": (
+            "%1 delivery versions are already current; nothing to regenerate",
+            "%1 個の納品バージョンは最新です。再生成の必要はありません",
+        ),
+        "从当前序列生成交付版本": (
+            "Generate delivery versions from current sequence",
+            "現在のシーケンスから納品バージョンを生成",
+        ),
+        "从母版生成交付版本": (
+            "Generate delivery versions from master",
+            "マスターから納品バージョンを生成",
+        ),
+        "创建可迁移项目": ("Create portable project", "ポータブルプロジェクトを作成"),
+        "即使母版未变化，也生成一个新版本": (
+            "Generate a new version even when the master is unchanged",
+            "マスターに変更がなくても新しいバージョンを生成",
+        ),
+        "可迁移项目已归档：%1（%2 个文件）": (
+            "Portable project archived: %1 (%2 files)",
+            "ポータブルプロジェクトをアーカイブしました：%1（%2 ファイル）",
+        ),
+        "完整适配 · 保留母版构图": (
+            "Fit · preserve master composition",
+            "全体表示・マスターの構図を維持",
+        ),
+        "居中铺满 · 自动裁掉多余边缘": (
+            "Fill from center · crop excess edges",
+            "中央から全面表示・余分な端を自動クロップ",
+        ),
+        "已使用归集副本": ("Using collected copy", "収集済みコピーを使用中"),
+        "已归集 %1 个外部素材，共 %2 字节": (
+            "Collected %1 external media files, %2 bytes total",
+            "外部メディア %1 件、合計 %2 バイトを収集しました",
+        ),
+        "已恢复归集前的素材路径": (
+            "Restored media paths from before collection",
+            "収集前のメディアパスを復元しました",
+        ),
+        "已新建 %1 个、同步 %2 个交付版本": (
+            "Created %1 and synchronized %2 delivery variants",
+            "交付バージョンを %1 件新規作成し、%2 件同期しました",
+        ),
+        "交付版本变更计划已生成，%1 个冲突": (
+            "Delivery variant change plan generated with %1 conflicts",
+            "交付バージョン変更計画を生成しました。競合 %1 件",
+        ),
+        "归集外部素材": ("Collect external media", "外部メディアを収集"),
+        "恢复归集前路径": ("Restore original paths", "収集前のパスを復元"),
+        "方形 1:1 · 1080×1080": ("Square 1:1 · 1080×1080", "正方形 1:1・1080×1080"),
+        "横屏 16:9 · 1920×1080": (
+            "Landscape 16:9 · 1920×1080",
+            "横長 16:9・1920×1080",
+        ),
+        "竖屏 4:5 · 1080×1350": ("Portrait 4:5 · 1080×1350", "縦長 4:5・1080×1350"),
+        "竖屏 9:16 · 1080×1920": (
+            "Portrait 9:16 · 1080×1920",
+            "縦長 9:16・1080×1920",
+        ),
+        "每个版本都是可继续编辑的完整序列。母版变化后再次生成时，旧版本会归档保留，不会覆盖人工调整。": (
+            "Each version is a complete editable sequence. Regenerating after master changes archives older versions without overwriting manual edits.",
+            "各バージョンは引き続き編集できる完全なシーケンスです。マスター変更後に再生成すると、手動調整を上書きせず旧バージョンをアーカイブします。",
+        ),
+        "版本与归档": ("Versions and archive", "バージョンとアーカイブ"),
+        "画面适配": ("Frame fitting", "画面フィット"),
+        "正在检查时间线和来源素材…": (
+            "Checking timeline and source media…",
+            "タイムラインとソースメディアを確認中…",
+        ),
+        "迁移前先把外部素材归集到项目目录。归集和路径切换都可撤销；归档会生成经过哈希校验、可直接重开的独立项目目录。": (
+            "Collect external media into the project before migration. Collection and path switching are undoable; archiving creates a hash-verified standalone project that can be reopened directly.",
+            "移行前に外部メディアをプロジェクトへ収集します。収集とパス切り替えは取り消し可能です。アーカイブではハッシュ検証済みで直接開ける独立プロジェクトを作成します。",
+        ),
+        "选择可迁移项目的存放位置": (
+            "Choose where to save the portable project",
+            "ポータブルプロジェクトの保存先を選択",
+        ),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 · %2×%3 · %4 fps · %5 个片段 · %6 个转场 · %7 条字幕": (
+            "%1 · %2×%3 · %4 fps · %5 clips · %6 transitions · %7 captions",
+            "%1・%2×%3・%4 fps・クリップ %5 件・トランジション %6 件・字幕 %7 件",
+        ),
+        "CMX 3600 EDL (*.edl)": ("CMX 3600 EDL (*.edl)", "CMX 3600 EDL (*.edl)"),
+        "EDL 帧率（可选）": ("EDL frame rate (optional)", "EDL フレームレート（任意）"),
+        "Final Cut Pro XML (*.fcpxml *.xml)": (
+            "Final Cut Pro XML (*.fcpxml *.xml)",
+            "Final Cut Pro XML (*.fcpxml *.xml)",
+        ),
+        "交换时间线 (*.fcpxml *.xml *.edl)": (
+            "Interchange timelines (*.fcpxml *.xml *.edl)",
+            "交換タイムライン (*.fcpxml *.xml *.edl)",
+        ),
+        "交换时间线已导入：%1": (
+            "Interchange timeline imported: %1",
+            "交換タイムラインを読み込みました：%1",
+        ),
+        "以下来源素材没有定位。逐项选择文件后再导入：": (
+            "The following source media could not be located. Choose each file before importing:",
+            "次のソースメディアが見つかりません。各ファイルを選択してから読み込んでください：",
+        ),
+        "先在素材面板多选两个或更多已探测时长的视频。把同一声画事件在各素材中的帧号填为同步帧；节目同步点表示该事件在节目内出现的位置。": (
+            "Select two or more videos with detected durations in the media panel. Enter the frame of the same audiovisual event in each source as its sync frame; the program sync point sets where that event occurs in the program.",
+            "素材パネルで長さを検出済みの動画を 2 本以上選択します。同じ映像・音声イベントの各素材内フレームを同期フレームとして入力し、番組同期点でそのイベントの番組内位置を指定します。",
+        ),
+        "创建新序列": ("Create new sequence", "新しいシーケンスを作成"),
+        "同步多个机位并在播放头切换节目角度": (
+            "Sync multiple cameras and switch program angles at the playhead",
+            "複数カメラを同期し、再生ヘッドで番組アングルを切り替え",
+        ),
+        "同步帧": ("Sync frame", "同期フレーム"),
+        "同步并创建节目轨": (
+            "Sync and create program track",
+            "同期して番組トラックを作成",
+        ),
+        "多机位": ("Multicam", "マルチカメラ"),
+        "多机位同步与切换": ("Multicam sync and switching", "マルチカメラ同期と切り替え"),
+        "多机位节目": ("Multicam program", "マルチカメラ番組"),
+        "多机位节目轨已创建": (
+            "Multicam program track created",
+            "マルチカメラ番組トラックを作成しました",
+        ),
+        "多机位角度已切换": (
+            "Multicam angle switched",
+            "マルチカメラアングルを切り替えました",
+        ),
+        "定位 %1": ("Locate %1", "%1 を指定"),
+        "导入 FCPXML / EDL": ("Import FCPXML / EDL", "FCPXML / EDL を読み込む"),
+        "导入中…": ("Importing…", "読み込み中…"),
+        "导入会创建新的原生可编辑序列，不覆盖当前时间线。FCPXML 使用文件内的精确配置；EDL 默认沿用当前序列配置，可按需要指定帧率。": (
+            "Import creates a new native editable sequence without overwriting the current timeline. FCPXML uses its exact file settings; EDL uses the current sequence settings by default, with an optional frame rate override.",
+            "読み込みでは現在のタイムラインを上書きせず、新しいネイティブ編集可能シーケンスを作成します。FCPXML はファイル内の正確な設定を使用し、EDL は既定で現在のシーケンス設定を使用します。必要に応じてフレームレートを指定できます。",
+        ),
+        "尚未选择时间线": ("No timeline selected", "タイムラインが選択されていません"),
+        "已有节目 · 在当前播放头切换角度": (
+            "Program exists · switch angle at current playhead",
+            "番組作成済み・現在の再生ヘッドでアングルを切り替え",
+        ),
+        "总长 %1 帧": ("Total %1 frames", "合計 %1 フレーム"),
+        "新序列名称": ("New sequence name", "新しいシーケンス名"),
+        "节目同步点": ("Program sync point", "番組同期点"),
+        "节目名称": ("Program name", "番組名"),
+        "节目时长": ("Program duration", "番組の長さ"),
+        "节目起点": ("Program start", "番組開始位置"),
+        "请先在素材面板多选至少两个视频素材。": (
+            "Select at least two video assets in the media panel first.",
+            "先に素材パネルで動画素材を 2 本以上選択してください。",
+        ),
+        "选择交换时间线": ("Choose interchange timeline", "交換タイムラインを選択"),
+        "选择文件": ("Choose file", "ファイルを選択"),
+        "选择文件后会先完成结构、帧率、素材路径和可保留语义检查。": (
+            "After choosing a file, its structure, frame rate, media paths, and preservable semantics are checked before import.",
+            "ファイル選択後、読み込み前に構造、フレームレート、メディアパス、保持可能な意味情報を確認します。",
+        ),
+        "未定位": ("Not located", "未指定"),
+        "重新检查": ("Check again", "再確認"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "RGB 直方图": ("RGB histogram", "RGB ヒストグラム"),
+        "亮度波形": ("Luma waveform", "輝度波形"),
+        "分析当前帧": ("Analyze current frame", "現在のフレームを解析"),
+        "分析的是预览与导出共同渲染出的实际画面": (
+            "Analysis uses the actual frame rendered by both preview and export",
+            "プレビューと書き出しで共通にレンダリングされる実際の画面を解析します",
+        ),
+        "平均亮度 %1% · 黑位裁切 %2% · 白位裁切 %3%": (
+            "Average luma %1% · black clipping %2% · white clipping %3%",
+            "平均輝度 %1%・黒クリップ %2%・白クリップ %3%",
+        ),
+        "矢量示波器": ("Vectorscope", "ベクトルスコープ"),
+        "示波器": ("Scopes", "スコープ"),
+        "视频示波器": ("Video scopes", "ビデオスコープ"),
+        "视频示波器已更新": ("Video scopes updated", "ビデオスコープを更新しました"),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 个 take": ("%1 takes", "テイク %1 件"),
+        "%1 帧": ("%1 frames", "%1 フレーム"),
+        "%1… 准备录音": ("%1… Get ready to record", "%1… 録音の準備"),
+        "3 秒后录音": ("Record in 3 seconds", "3 秒後に録音"),
+        "ADR 提示": ("ADR cue", "ADR キュー"),
+        "Takes": ("Takes", "テイク"),
+        "take 备注": ("Take notes", "テイクのメモ"),
+        "保存提示": ("Save cue", "キューを保存"),
+        "保存评分": ("Save rating", "評価を保存"),
+        "停止录音": ("Stop recording", "録音を停止"),
+        "创建台词提示、录音、比较 take 并放入时间线": (
+            "Create dialogue cues, record, compare takes, and place them on the timeline",
+            "台詞キューを作成し、録音、テイク比較、タイムライン配置を行います",
+        ),
+        "创建提示": ("Create cue", "キューを作成"),
+        "取消倒计时": ("Cancel countdown", "カウントダウンをキャンセル"),
+        "台词或 ADR 提示": ("Dialogue or ADR cue", "台詞または ADR キュー"),
+        "导入旁白或 ADR 音频": (
+            "Import voice-over or ADR audio",
+            "ナレーションまたは ADR 音声を読み込む",
+        ),
+        "导入音频": ("Import audio", "音声を読み込む"),
+        "已选": ("Selected", "選択済み"),
+        "已选择旁白 take": ("Voice-over take selected", "ナレーションテイクを選択しました"),
+        "已通过": ("Approved", "承認済み"),
+        "归档提示": ("Archive cue", "キューをアーカイブ"),
+        "录制中": ("Recording", "録音中"),
+        "录制中 · %1 秒": ("Recording · %1 sec", "録音中・%1 秒"),
+        "录音会在提示区间结束时自动停止，也可以手动停止。": (
+            "Recording stops automatically at the end of the cue range, or you can stop it manually.",
+            "録音はキュー範囲の終了時に自動停止します。手動で停止することもできます。",
+        ),
+        "待处理": ("Open", "未対応"),
+        "待审听": ("Needs review", "試聴待ち"),
+        "待录制": ("Ready to record", "録音待ち"),
+        "提示内容": ("Cue text", "キューテキスト"),
+        "放入时间线": ("Place on timeline", "タイムラインに配置"),
+        "新建提示": ("New cue", "新しいキュー"),
+        "旁白": ("Voice-over", "ナレーション"),
+        "旁白 / ADR": ("Voice-over / ADR", "ナレーション / ADR"),
+        "旁白 / ADR 提示已创建": (
+            "Voice-over / ADR cue created",
+            "ナレーション / ADR キューを作成しました",
+        ),
+        "旁白 / ADR 提示已归档": (
+            "Voice-over / ADR cue archived",
+            "ナレーション / ADR キューをアーカイブしました",
+        ),
+        "旁白 / ADR 提示已更新": (
+            "Voice-over / ADR cue updated",
+            "ナレーション / ADR キューを更新しました",
+        ),
+        "旁白 take 已导入": ("Voice-over take imported", "ナレーションテイクを読み込みました"),
+        "旁白 take 已归档": ("Voice-over take archived", "ナレーションテイクをアーカイブしました"),
+        "旁白 take 已更新": ("Voice-over take updated", "ナレーションテイクを更新しました"),
+        "旁白录制与 ADR": ("Voice-over recording and ADR", "ナレーション録音と ADR"),
+        "旁白录音已保存为新 take": (
+            "Voice-over recording saved as a new take",
+            "ナレーション録音を新しいテイクとして保存しました",
+        ),
+        "旁白录音已开始": ("Voice-over recording started", "ナレーション録音を開始しました"),
+        "多机位同步分析完成，置信度 %1%": (
+            "Multicam sync analysis complete, confidence %1%",
+            "マルチカム同期解析が完了しました。信頼度 %1%",
+        ),
+        "已导入 %1 条审阅批注": (
+            "Imported %1 review comments",
+            "レビュー注釈を %1 件読み込みました",
+        ),
+        "审阅包已导出：%1": (
+            "Review package exported: %1",
+            "レビューパッケージを書き出しました：%1",
+        ),
+        "审阅截图已保存": ("Review snapshot saved", "レビュースナップショットを保存しました"),
+        "审阅截图标注已保存": (
+            "Review snapshot markup saved",
+            "レビュースナップショットの注釈を保存しました",
+        ),
+        "贝塞尔曲线已更新": ("Bezier curve updated", "ベジェ曲線を更新しました"),
+        "画面关键帧曲线点已更新": (
+            "Picture keyframe curve point updated",
+            "映像キーフレームのカーブ点を更新しました",
+        ),
+        "蒙版顺序已更新": ("Mask order updated", "マスク順序を更新しました"),
+        "录音延迟已设为 %1 毫秒": (
+            "Recording latency set to %1 ms",
+            "録音レイテンシーを %1 ミリ秒に設定しました",
+        ),
+        "延迟校准中：扬声器将播放一段短测试声": (
+            "Latency calibration in progress: the speakers will play a short test tone",
+            "レイテンシー較正中：スピーカーから短いテスト音が再生されます",
+        ),
+        "延迟校准完成：%1 毫秒，可信度 %2%": (
+            "Latency calibration complete: %1 ms, confidence %2%",
+            "レイテンシー較正が完了しました：%1 ミリ秒、信頼度 %2%",
+        ),
+        "标记为已解决": ("Mark as resolved", "解決済みにする"),
+        "表演、发音或同步备注": (
+            "Performance, pronunciation, or sync notes",
+            "演技、発音、同期に関するメモ",
+        ),
+        "说话人": ("Speaker", "話者"),
+        "起止帧": ("Frame range", "フレーム範囲"),
+        "选中的旁白 take 已放入时间线": (
+            "Selected voice-over take placed on timeline",
+            "選択したナレーションテイクをタイムラインに配置しました",
+        ),
+        "选择或创建一个提示后即可录音、导入和管理 take。": (
+            "Select or create a cue to record, import, and manage takes.",
+            "録音、読み込み、テイク管理を行うには、キューを選択または作成してください。",
+        ),
+        "选用": ("Select", "選択"),
+        "音频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.wma)": (
+            "Audio files (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.wma)",
+            "音声ファイル (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.wma)",
+        ),
+    }
+)
+
+TRANSLATIONS.update(
+    {
+        "%1 · %2 项变更 · %3 个冲突%4": (
+            "%1 · %2 changes · %3 conflicts%4",
+            "%1・変更 %2 件・競合 %3 件%4",
+        ),
+        "%1 帧 · 补偿 %2 ms": ("%1 frames · %2 ms compensation", "%1 フレーム・%2 ms 補正"),
+        "RGB Parade": ("RGB Parade", "RGB パレード"),
+        "上移蒙版": ("Move mask up", "マスクを上へ移動"),
+        "下移蒙版": ("Move mask down", "マスクを下へ移動"),
+        "冲突时以母版为准（会覆盖冲突处的本地调整）": (
+            "Use the master for conflicts (overwrites local changes at conflicting paths)",
+            "競合時はマスターを優先（競合箇所のローカル調整を上書き）",
+        ),
+        "分析同步": ("Analyze sync", "同期を解析"),
+        "发现 %1 个冲突，请保留本地调整，或勾选“以母版为准”后保存。": (
+            "%1 conflicts found. Keep the local changes, or select “Use master” before saving.",
+            "%1 件の競合があります。ローカル調整を保持するか、「マスターを優先」を選んで保存してください。",
+        ),
+        "取消校准": ("Cancel calibration", "キャリブレーションをキャンセル"),
+        "变更计划已就绪。": ("Change plan is ready.", "変更プランの準備ができました。"),
+        "固定主音频机位": ("Fixed master-audio angle", "マスター音声アングルを固定"),
+        "声学往返测量": ("Acoustic round-trip measurement", "音響往復測定"),
+        "声音跟随当前机位": ("Audio follows active angle", "音声を現在のアングルに追従"),
+        "审阅包 (*.mfr *.zip)": ("Review packages (*.mfr *.zip)", "レビューパッケージ (*.mfr *.zip)"),
+        "审阅包 (*.mfr)": ("Review packages (*.mfr)", "レビューパッケージ (*.mfr)"),
+        "导入审阅包": ("Import review package", "レビューパッケージを読み込む"),
+        "导出审阅包": ("Export review package", "レビューパッケージを書き出す"),
+        "应用到所选曲线段": ("Apply to selected curve segment", "選択した曲線区間に適用"),
+        "截图中…": ("Capturing…", "キャプチャ中…"),
+        "截图帧 %1": ("Capture frame %1", "フレーム %1 をキャプチャ"),
+        "手动值": ("Manual value", "手動値"),
+        "手动同步帧": ("Manual sync frames", "手動同期フレーム"),
+        "检查变更": ("Review changes", "変更を確認"),
+        "正在播放并录制测试声，请保持环境安静……": (
+            "Playing and recording the test sound. Keep the room quiet…",
+            "テスト音を再生・録音しています。周囲を静かにしてください…",
+        ),
+        "每个版本都是可继续编辑的完整序列。母版变化后会同步到同一版本，人工调整会保留；双方改到同一处时先显示冲突。": (
+            "Each version is a fully editable sequence. Master changes sync into the same version while manual adjustments are preserved; edits to the same path are shown as conflicts first.",
+            "各バージョンは編集を続けられる完全なシーケンスです。マスターの変更は同じバージョンへ同期され、手動調整は保持されます。同じ箇所を双方が変更した場合は、先に競合を表示します。",
+        ),
+        "没有可校准的录音设备": (
+            "No recording device is available for calibration",
+            "キャリブレーション可能な録音デバイスがありません",
+        ),
+        "箭头": ("Arrow", "矢印"),
+        "素材时码": ("Source timecode", "素材タイムコード"),
+        "绑定项目修订 %1 · 序列修订 %2": (
+            "Bound to project revision %1 · sequence revision %2",
+            "プロジェクトリビジョン %1・シーケンスリビジョン %2 に紐付け",
+        ),
+        "置信度 %1%": ("Confidence %1%", "信頼度 %1%"),
+        "自动测量": ("Measure automatically", "自動測定"),
+        "自动测量会从默认扬声器播放短测试声并由所选输入录回；耳机或隔音链路请改用手动值。校准结果只写入之后录制的 take。": (
+            "Automatic measurement plays a short test sound through the default speakers and records it through the selected input. Use a manual value for headphones or isolated signal paths. The result is applied only to takes recorded afterward.",
+            "自動測定では既定のスピーカーから短いテスト音を再生し、選択した入力で録音します。ヘッドホンや分離された信号経路では手動値を使用してください。結果は測定後に録音するテイクだけに適用されます。",
+        ),
+        "自由画笔": ("Freehand", "フリーハンド"),
+        "设备延迟：%1 ms · %2 · 可信度 %3%": (
+            "Device latency: %1 ms · %2 · confidence %3%",
+            "デバイス遅延：%1 ms・%2・信頼度 %3%",
+        ),
+        "该设备尚未校准；未校准的 take 不会自动补偿延迟。": (
+            "This device is not calibrated. Takes recorded without calibration will not receive automatic latency compensation.",
+            "このデバイスは未キャリブレーションです。未キャリブレーションで録音したテイクには遅延補正が自動適用されません。",
+        ),
+        "贝塞尔路径": ("Bezier path", "ベジェパス"),
+        "路径点（高级 JSON）": ("Path points (advanced JSON)", "パスポイント（詳細 JSON）"),
+        "音频波形": ("Audio waveform", "音声波形"),
     }
 )
 

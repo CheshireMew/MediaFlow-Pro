@@ -15,6 +15,10 @@ Item {
     readonly property bool modalOpen: settingsDialog.opened
         || profileDialog.opened
         || sequenceProfileDialog.opened
+        || sequenceVariantDialog.opened
+        || multicamDialog.opened
+        || colorScopesDialog.opened
+        || voiceoverDialog.opened
 
     signal openExportRequested()
 
@@ -24,6 +28,25 @@ Item {
 
     function openSequenceProfile() {
         sequenceProfileDialog.open();
+    }
+
+    function openSequenceVariants() {
+        sequenceVariantDialog.open();
+    }
+
+    function openMulticam() {
+        multicamDialog.playheadFrame = root.timelineView.visiblePlayheadFrame;
+        multicamDialog.open();
+    }
+
+    function openColorScopes() {
+        colorScopesDialog.playheadFrame = root.timelineView.visiblePlayheadFrame;
+        colorScopesDialog.open();
+    }
+
+    function openVoiceover() {
+        voiceoverDialog.playheadFrame = root.timelineView.visiblePlayheadFrame;
+        voiceoverDialog.open();
     }
 
     WorkspaceStatusOverlays {
@@ -97,6 +120,22 @@ Item {
 
     SequenceProfileDialog {
         id: sequenceProfileDialog
+    }
+
+    SequenceVariantDialog {
+        id: sequenceVariantDialog
+    }
+
+    MulticamDialog {
+        id: multicamDialog
+    }
+
+    ColorScopesDialog {
+        id: colorScopesDialog
+    }
+
+    VoiceoverDialog {
+        id: voiceoverDialog
     }
 
     Connections {

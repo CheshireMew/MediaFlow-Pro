@@ -9,9 +9,27 @@ from .base import Projector
 
 class WorkspaceProjector(Projector):
     def refresh_runtime_tool_status(self, *, preserve_cuda: bool = True) -> None:
-        self.apply_runtime_tool_status(
-            self._session._api.runtime_tool_status(),
-            preserve_cuda=preserve_cuda,
+        self._session.state.requests.runtime_status_id += 1
+        request_id = self._session.state.requests.runtime_status_id
+        previous = self._session.state.requests.runtime_status_future
+        if previous is not None and not previous.done():
+            previous.cancel()
+        self._session.state.requests.runtime_status_future = self._session.background.submit(
+            "runtime_status",
+            (request_id, preserve_cuda),
+            self._session._api.runtime_tool_status,
+        )
+
+    def refresh_installed_asr_models(self) -> None:
+        self._session.state.requests.installed_asr_models_id += 1
+        request_id = self._session.state.requests.installed_asr_models_id
+        previous = self._session.state.requests.installed_asr_models_future
+        if previous is not None and not previous.done():
+            previous.cancel()
+        self._session.state.requests.installed_asr_models_future = self._session.background.submit(
+            "installed_asr_models",
+            request_id,
+            self._session._api.installed_asr_models,
         )
 
     def apply_runtime_tool_status(

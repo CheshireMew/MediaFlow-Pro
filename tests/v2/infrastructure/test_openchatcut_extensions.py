@@ -16,10 +16,13 @@ from mediaflow.domain.enums import (
     AssetKind,
     ClipMediaKind,
     ColorMode,
+    MaskShapeKind,
     TaskStatus,
     TrackKind,
     TransitionKind,
+    VisualEffectKind,
 )
+from mediaflow.domain.masks import MaskGeometry
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.settings import ServiceSettings
@@ -29,7 +32,11 @@ from mediaflow.domain.storage_names import (
     utf16_units,
 )
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
-from mediaflow.domain.task_commands import AnalyzeScenesCommand, TrackSubjectCommand
+from mediaflow.domain.task_commands import (
+    AnalyzeScenesCommand,
+    TrackMaskCommand,
+    TrackSubjectCommand,
+)
 from mediaflow.domain.timeline import (
     ClipAudio,
     ClipTransform,
@@ -158,6 +165,35 @@ def test_scene_and_subject_tasks_write_observable_timeline_results(tmp_path: Pat
         ]
         assert tracking_measurements
         assert tracking_measurements[-1].completed == tracking_measurements[-1].total
+        mask = project.timeline(sequence_id).add_clip_mask(
+            clip.id,
+            MaskShapeKind.RECTANGLE,
+            name="人物",
+            geometry=MaskGeometry(center_x=0.5, center_y=0.5, width=0.4, height=0.6),
+        )
+        mask_task = project.start_task(
+            TrackMaskCommand(
+                sequence_id=sequence_id,
+                clip_id=clip.id,
+                mask_id=mask.id,
+            ),
+            [asset.id],
+            sequence_id=sequence_id,
+        )
+        completed_mask = project.wait_for_task(mask_task.id, timeout=60)
+        assert completed_mask.status == TaskStatus.COMPLETED, completed_mask.error
+        state = repository.timeline.load_timeline(sequence_id)
+        tracked = next(item for item in state.clips if item.id == clip.id)
+        tracked_mask = next(item for item in tracked.masks if item.id == mask.id)
+        assert len(tracked_mask.keyframes) >= 2
+        assert all(item.source == "subject_tracking" for item in tracked_mask.keyframes)
+        mask_measurements = [
+            item
+            for item in task_progress[mask_task.id]
+            if item.message_code == "mask_tracking_analyzing"
+        ]
+        assert mask_measurements
+        assert mask_measurements[-1].completed == mask_measurements[-1].total
         xml = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(state).xml
         transform_filter = ET.fromstring(xml).find(f".//filter[@id='transform_{clip.id}']")
         assert transform_filter is not None
@@ -740,8 +776,10 @@ def test_fcpxml_preserves_linked_mute_detached_components_and_adjustments(
         assert [key.attrib["time"] for key in transform_keys] == [
             "0s",
             "1/10s",
+            "3/10s",
         ]
         assert transform_keys[1].attrib["value"].endswith(" 4")
+        assert transform_keys[2].attrib["value"] == transform_keys[1].attrib["value"]
 
         first_audio_element = next(
             element
@@ -828,6 +866,17 @@ def test_fcpxml_preflight_rejects_unreliable_transition_and_bus_processing(
                 unsupported_output,
             )
         assert not unsupported_output.parent.exists()
+
+        effect = editor.add_clip_visual_effect(
+            left.id,
+            VisualEffectKind.GAUSSIAN_BLUR,
+        )
+        with pytest.raises(ValueError, match="原生视觉效果"):
+            FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
+                editor.state,
+                tmp_path / "unsupported-native-effect.fcpxml",
+            )
+        editor.remove_clip_visual_effect(left.id, effect.id)
 
         editor.update_transition(
             transition.id,

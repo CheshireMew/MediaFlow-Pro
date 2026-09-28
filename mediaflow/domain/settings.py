@@ -44,7 +44,17 @@ class AsrSettings(DomainModel):
     compute_type: str = "float16"
     language: str = "auto"
     smart_split_limit: int = 42
-    parallel_chunks: int = Field(default=0, ge=0, le=4)
+    # Persist the existing public settings key; values now select a single
+    # model's VAD batch size instead of spawning multiple model processes.
+    parallel_chunks: int = Field(
+        default=0, ge=0, le=4,
+        description="长音频单模型批量：0 自动，1–4 为每批语音段数",
+    )
+
+    def compute_type_for_device(self, device: str) -> str:
+        if device == "cpu" and self.compute_type in {"float16", "int8_float16"}:
+            return "int8"
+        return self.compute_type
 
 
 class SpeechSynthesisSettings(DomainModel):

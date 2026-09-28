@@ -4,6 +4,7 @@ from .audio import (
     AudioBus,
     AudioEffect,
 )
+from .color_scopes import ColorScopeAnalysis, ColorScopeStatistics
 from .downloads import DownloadEntry, DownloadPlan, DownloadRequest
 from .editor_fields import (
     EditorFieldChoice,
@@ -19,6 +20,7 @@ from .enums import (
     ClipMediaKind,
     ColorMode,
     ExportFormat,
+    MaskShapeKind,
     SequenceKind,
     TaskKind,
     TaskStatus,
@@ -27,11 +29,15 @@ from .enums import (
 )
 from .exports import ExportPreset
 from .highlights import HighlightCandidate
+from .interchange import InterchangeTimelineSummary, LoadedInterchangeTimeline
+from .keyframes import KeyframeCurve, KeyframeInterpolation
+from .masks import ClipMask, MaskGeometry, MaskKeyframe, MaskPoint
 from .model_base import (
     DomainModel,
     new_id,
     now_ms,
 )
+from .multicam import MulticamAngle, MulticamAngleSyncSpec, MulticamCut, MulticamGroup
 from .progress import OperationProgress
 from .project import (
     Asset,
@@ -42,13 +48,27 @@ from .project import (
     Sequence,
     SequenceInOut,
 )
+from .project_collection import (
+    ProjectCollectionCandidate,
+    ProjectCollectionItem,
+    ProjectCollectionPreview,
+    ProjectCollectionRecord,
+    ProjectCollectionResult,
+)
 from .project_records import (
     ExportHistoryRecord,
     ExportQualityCheck,
     ExportQualityReport,
     ProjectVersionRecord,
 )
+from .review import ReviewMessage, ReviewThread
 from .sequence_bounds import SequenceBoundaryAnalysis
+from .sequence_variants import (
+    SequenceVariantGeneration,
+    SequenceVariantRecord,
+    SequenceVariantSpec,
+    VariantReframeMode,
+)
 from .subtitles import (
     SubtitleDocument,
     SubtitlePlacement,
@@ -79,6 +99,14 @@ from .transcript_edits import (
     TranscriptResolvedSelection,
     TranscriptSegmentSnapshot,
     TranscriptSnapshot,
+)
+from .visual_effects import VisualEffectParameterKeyframe
+from .voiceover import (
+    VoiceoverCue,
+    VoiceoverCueStatus,
+    VoiceoverLatencyCalibration,
+    VoiceoverLatencyMethod,
+    VoiceoverTake,
 )
 from .web_exports import WebClipExportResult
 from .web_manifest import (
@@ -128,7 +156,10 @@ __all__ = [
     "AudioEffectKind",
     "ClipMediaKind",
     "ColorMode",
+    "ColorScopeAnalysis",
+    "ColorScopeStatistics",
     "ExportFormat",
+    "MaskShapeKind",
     "SequenceKind",
     "TaskKind",
     "TaskStatus",
@@ -147,6 +178,7 @@ __all__ = [
     "ClipAudio",
     "ClipTransform",
     "ClipTransformKeyframe",
+    "ClipMask",
     "CompoundClip",
     "DomainModel",
     "ExportPreset",
@@ -154,8 +186,30 @@ __all__ = [
     "ExportQualityCheck",
     "ExportQualityReport",
     "HighlightCandidate",
+    "InterchangeTimelineSummary",
+    "KeyframeCurve",
+    "KeyframeInterpolation",
+    "MaskGeometry",
+    "MaskKeyframe",
+    "MaskPoint",
+    "LoadedInterchangeTimeline",
+    "MulticamAngle",
+    "MulticamAngleSyncSpec",
+    "MulticamCut",
+    "MulticamGroup",
+    "ReviewMessage",
+    "ReviewThread",
+    "SequenceVariantRecord",
+    "SequenceVariantGeneration",
+    "SequenceVariantSpec",
+    "VariantReframeMode",
     "MediaMetadata",
     "Project",
+    "ProjectCollectionCandidate",
+    "ProjectCollectionItem",
+    "ProjectCollectionPreview",
+    "ProjectCollectionRecord",
+    "ProjectCollectionResult",
     "ProjectProfile",
     "ProjectVersionRecord",
     "OperationProgress",
@@ -218,6 +272,12 @@ __all__ = [
     "WebSceneState",
     "WebVariant",
     "WebVariantResult",
+    "VisualEffectParameterKeyframe",
+    "VoiceoverCue",
+    "VoiceoverCueStatus",
+    "VoiceoverLatencyCalibration",
+    "VoiceoverLatencyMethod",
+    "VoiceoverTake",
     "new_id",
     "now_ms",
 ]

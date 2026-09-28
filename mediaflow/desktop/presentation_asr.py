@@ -141,24 +141,24 @@ def asr_parallel_options() -> list[dict]:
             0,
             QCoreApplication.translate(
                 "AsrParallelCatalog",
-                "长音频分块：自动（根据内存和显存）",
+                "长音频批量：自动（GPU 4 段 / CPU 2 段）",
             ),
         ),
         (
             1,
-            QCoreApplication.translate("AsrParallelCatalog", "长音频分块：顺序转录"),
+            QCoreApplication.translate("AsrParallelCatalog", "长音频批量：每批 1 段"),
         ),
         (
             2,
-            QCoreApplication.translate("AsrParallelCatalog", "长音频分块：同时转录 2 块"),
+            QCoreApplication.translate("AsrParallelCatalog", "长音频批量：每批 2 段"),
         ),
         (
             3,
-            QCoreApplication.translate("AsrParallelCatalog", "长音频分块：同时转录 3 块"),
+            QCoreApplication.translate("AsrParallelCatalog", "长音频批量：每批 3 段"),
         ),
         (
             4,
-            QCoreApplication.translate("AsrParallelCatalog", "长音频分块：同时转录 4 块"),
+            QCoreApplication.translate("AsrParallelCatalog", "长音频批量：每批 4 段"),
         ),
     )
     return [
@@ -180,10 +180,13 @@ def transcription_configuration_label(
         else QCoreApplication.translate("TaskCatalog", "内置 faster-whisper")
     )
     if settings.parallel_chunks == 0:
-        parallel = QCoreApplication.translate("TaskCatalog", "自动并行")
+        parallel = QCoreApplication.translate("TaskCatalog", "自动批量")
     else:
         parallel = QCoreApplication.translate(
             "TaskCatalog",
-            "%1 块并行",
+            "每批 %1 段",
         ).replace("%1", str(settings.parallel_chunks))
-    return f"{engine} · {settings.model} · {settings.device.upper()} · {settings.language} · {parallel}"
+    return (
+        f"{engine} · {settings.model} · {settings.device.upper()} · "
+        f"{settings.compute_type_for_device(settings.device).upper()} · {settings.language} · {parallel}"
+    )

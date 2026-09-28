@@ -20,7 +20,7 @@ from mediaflow.domain.task_commands import (
     GenerateProxyCommand,
     GenerateWaveformCommand,
 )
-from mediaflow.domain.tasks import Task
+from mediaflow.domain.tasks import ImportedAssetTaskOutcome, Task
 from mediaflow.domain.timebase import reframe_interval
 
 from .base import SessionCoordinator
@@ -353,6 +353,16 @@ class TimelineAssetOperations(SessionCoordinator):
                 self._session.state.assets.pending_import_tasks[task.id] = (batch_id, index)
             if batch.pending_task_ids:
                 self._session.state.assets.pending_import_batches[batch_id] = batch
+                for _, task in tasks:
+                    observed = self._session.state.tasks.items.get(task.id)
+                    if observed is None or not observed.status.is_terminal:
+                        continue
+                    imported_asset_id = (
+                        observed.outcome.asset_id
+                        if isinstance(observed.outcome, ImportedAssetTaskOutcome)
+                        else ""
+                    )
+                    self.finish_import_drop(observed.id, imported_asset_id)
             else:
                 self.queue_for_timeline(
                     [asset_id for asset_id in imported_asset_ids if asset_id],

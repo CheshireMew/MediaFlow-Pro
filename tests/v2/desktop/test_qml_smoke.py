@@ -37,7 +37,7 @@ from mediaflow.desktop.presentation_catalogs import (
     WORKSPACE_MODES,
     WORKSPACE_NAVIGATION_MODE_KEYS,
 )
-from mediaflow.domain.enums import AssetKind, TaskKind, TaskStatus, TrackKind
+from mediaflow.domain.enums import AssetKind, TaskKind, TaskStatus, TrackKind, VisualEffectKind
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import (
@@ -139,6 +139,19 @@ def _process_until(predicate, *, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.01)
     return bool(predicate())
+
+
+def _resources_ready(controllers, predicate, *, timeout: float = 10.0) -> bool:
+    return _process_until(
+        lambda: (
+            controllers.session.state.requests.media_resources_future is not None
+            and controllers.session.state.requests.media_resources_future.done()
+            and controllers.session.state.requests.media_resources_applied_id
+            == controllers.session.state.requests.media_resources_id
+            and predicate()
+        ),
+        timeout=timeout,
+    )
 
 
 def _write_test_lut_catalog(root: Path) -> Path:
@@ -318,6 +331,7 @@ def test_resource_library_panel_adopts_a_real_lut_into_the_selected_clip(
         assert resource_panel is not None
         resource_panel.setProperty("selectedCategory", "lut")
         controllers.resources.refresh("lut", "")
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         assert controllers.resources.sourceErrors == []
         assert controllers.resources.resultCount == 1
         row = controllers.resources.resourcesModel.get(0)
@@ -336,6 +350,248 @@ def test_resource_library_panel_adopts_a_real_lut_into_the_selected_clip(
         assert _process_until(lambda: controllers.workspace.statusMessage == "LUT 已从资源库添加")
         resource_list = workspace.findChild(QQuickItem, "resourceLibraryList")
         assert resource_list is not None and resource_list.property("count") == 1
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_native_keyframe_editor_updates_transform_and_effect_project_truth(
+    tmp_path: Path,
+) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(EditorApplication()),
+    )
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Native keyframes",
+        )
+        source = tmp_path / "keyframe-source.mp4"
+        generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        asset = project.import_external_asset(source)
+        project.adopt_main_profile_from_video(asset.id)
+        track = timeline.add_track(TrackKind.VIDEO)
+        clip = timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        effect = timeline.add_clip_visual_effect(clip.id, VisualEffectKind.GAUSSIAN_BLUR)
+        controllers.session.projectors.timeline.refresh_timeline()
+        controllers.timeline_view.selectClip(clip.id)
+
+        window = engine.rootObjects()[0]
+        page_loader = window.findChild(QQuickItem, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        assert _process_until(
+            lambda: workspace.findChild(QQuickItem, "nativeKeyframeEditor") is not None
+        )
+        keyframe_panel = workspace.findChild(QQuickItem, "nativeKeyframeEditor")
+        curve = workspace.findChild(QQuickItem, "nativeKeyframeCurveCanvas")
+        assert keyframe_panel is not None and keyframe_panel.isVisible()
+        assert curve is not None and curve.isVisible()
+
+        controllers.timeline_keyframes.setTransformKeyframe(
+            clip.id,
+            5,
+            12.0,
+            4.0,
+            1.2,
+            1.2,
+            8.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.9,
+            "ease_in_out",
+            0.25,
+            0.1,
+            0.25,
+            1.0,
+        )
+        controllers.timeline_keyframes.setEffectParameterKeyframe(
+            effect.id,
+            "sigma",
+            8,
+            9.0,
+            "hold",
+            0.25,
+            0.1,
+            0.25,
+            1.0,
+        )
+
+        stored = next(item for item in timeline.state.clips if item.id == clip.id)
+        assert stored.transform_keyframes[0].timeline_offset == 5
+        assert stored.transform_keyframes[0].curve.interpolation == "ease_in_out"
+        assert stored.visual_effects[0].parameter_keyframes["sigma"][0].timeline_offset == 8
+        assert controllers.timeline_keyframes.selectedTransformKeyframes[0]["timelineFrame"] == 5
+        assert len(controllers.timeline_keyframes.selectedEffectParameterKeyframes) == 1
+        controllers.timeline_keyframes.setTransformKeyframeChannel(
+            clip.id,
+            5,
+            6,
+            "x",
+            20.0,
+        )
+        controllers.timeline_keyframes.setTransformKeyframeCurve(
+            clip.id,
+            6,
+            0.15,
+            0.25,
+            0.75,
+            0.85,
+        )
+        edited = next(item for item in timeline.state.clips if item.id == clip.id)
+        assert len(edited.transform_keyframes) == 1
+        assert edited.transform_keyframes[0].timeline_offset == 6
+        assert (edited.transform_keyframes[0].transform.x, edited.transform_keyframes[0].transform.y) == (
+            20.0,
+            4.0,
+        )
+        assert edited.transform_keyframes[0].curve.model_dump(mode="json") == {
+            "interpolation": "bezier",
+            "x1": 0.15,
+            "y1": 0.25,
+            "x2": 0.75,
+            "y2": 0.85,
+        }
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_review_panel_updates_recoverable_project_threads(tmp_path: Path) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(EditorApplication()),
+    )
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Review threads",
+        )
+        window = engine.rootObjects()[0]
+        page_loader = window.findChild(QQuickItem, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        assert _process_until(
+            lambda: workspace.findChild(QQuickItem, "reviewPanel") is not None
+        )
+        review_panel = workspace.findChild(QQuickItem, "reviewPanel")
+        review_mode = workspace.findChild(QQuickItem, "reviewModeSwitch")
+        assert review_panel is not None
+        assert review_mode is not None
+
+        controllers.timeline_review.reviewMode = True
+        controllers.timeline_review.addThread(
+            12,
+            30,
+            "交付前检查",
+            "blocking",
+            "修正标题进入画面的节奏",
+        )
+        assert controllers.timeline_review.openCount == 1
+        assert controllers.timeline_review.blockingOpenCount == 1
+        row = controllers.timeline_review.visibleThreads[0]
+        assert row["startFrame"] == 12
+        assert row["endFrame"] == 30
+        assert row["messages"][0]["body"] == "修正标题进入画面的节奏"
+
+        thread_id = row["threadId"]
+        controllers.timeline_review.replyThread(thread_id, "已按反馈调整，等待确认")
+        controllers.timeline_review.resolveThread(thread_id)
+        controllers.timeline_review.statusFilter = "resolved"
+        assert controllers.timeline_review.visibleThreads[0]["status"] == "resolved"
+
+        controllers.timeline_review.archiveThread(thread_id)
+        controllers.timeline_review.statusFilter = "archived"
+        assert controllers.timeline_review.visibleThreads[0]["archivedFrom"] == "resolved"
+        controllers.timeline_review.restoreThread(thread_id)
+        controllers.timeline_review.statusFilter = "resolved"
+        assert controllers.timeline_review.visibleThreads[0]["status"] == "resolved"
+    finally:
+        controllers.shutdown()
+        engine.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+
+
+def test_sequence_variant_dialog_generates_portrait_delivery_sequence(tmp_path: Path) -> None:
+    app = QGuiApplication.instance() or QGuiApplication([])
+    configure_application_font(app)
+    engine, controllers = create_engine(
+        app,
+        DesktopPresentationApplication(EditorApplication()),
+    )
+    try:
+        controllers.workspace_project.createProject(
+            QUrl.fromLocalFile(str(tmp_path)).toString(),
+            "Sequence variants",
+        )
+        source = tmp_path / "variant-source.mp4"
+        generate_real_media(source, RuntimeContext.discover().paths, width=320, height=180)
+        project = controllers.session.state.binding.require_current()
+        timeline = controllers.session.state.binding.require_timeline()
+        asset = project.import_external_asset(source)
+        project.adopt_main_profile_from_video(asset.id)
+        track = timeline.add_track(TrackKind.VIDEO)
+        timeline.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        controllers.session.projectors.timeline.refresh_timeline()
+
+        window = engine.rootObjects()[0]
+        page_loader = window.findChild(QQuickItem, "pageLoader")
+        assert page_loader is not None
+        assert _process_until(
+            lambda: page_loader.property("item") is not None
+            and page_loader.property("item").objectName() == "workspace"
+        )
+        workspace = page_loader.property("item")
+        assert _process_until(
+            lambda: workspace.findChild(QObject, "sequenceVariantDialog") is not None
+        )
+        assert workspace.findChild(QQuickItem, "generateSequenceVariantsButton") is not None
+
+        source_sequence_id = timeline.state.sequence.id
+        controllers.workspace_sequence.generateDeliveryVariants(
+            ["portrait_9_16"],
+            "center_fill",
+            False,
+        )
+        variants = project.list_sequence_variants(source_sequence_id)
+        assert len(variants) == 1
+        variant = project.get_sequence(variants[0].sequence_id)
+        assert (variant.profile.width, variant.profile.height) == (1080, 1920)
+        assert controllers.workspace.sequencesModel.rowCount() == 2
     finally:
         controllers.shutdown()
         engine.deleteLater()
@@ -369,6 +625,7 @@ def test_resource_library_panel_adopts_the_synced_motion_graphic(
         )
         controllers.resources.refresh("motion-graphic", "进度栏")
 
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         assert controllers.resources.sourceErrors == []
         assert controllers.resources.resultCount == 1
         row = controllers.resources.resourcesModel.get(0)
@@ -447,6 +704,13 @@ def test_resource_library_resources_survive_reopen_and_real_export(
 
         controllers.timeline_view.selectClip(left.id)
         controllers.resources.refresh("transition", "")
+        assert _resources_ready(
+            controllers,
+            lambda: any(
+                controllers.resources.resourcesModel.get(index)["presetId"] == "dissolve"
+                for index in range(controllers.resources.resultCount)
+            ),
+        )
         transition_row = next(
             controllers.resources.resourcesModel.get(index)
             for index in range(controllers.resources.resultCount)
@@ -463,6 +727,7 @@ def test_resource_library_resources_survive_reopen_and_real_export(
 
         controllers.timeline_view.selectClip(left.id)
         controllers.resources.refresh("lut", "柔和电影感")
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         lut_row = controllers.resources.resourcesModel.get(0)
         assert lut_row["previewType"] == "image"
         assert Path(QUrl(lut_row["previewUrl"]).toLocalFile()).is_file()
@@ -471,6 +736,7 @@ def test_resource_library_resources_survive_reopen_and_real_export(
         assert any(effect.kind.value == "lut_3d" for effect in stored_left.visual_effects)
 
         controllers.resources.refresh("motion-graphic", "确定性文字动效库")
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         motion_row = controllers.resources.resourcesModel.get(0)
         assert motion_row["previewType"] == "image"
         controllers.resources.adoptResource(motion_row["resourceKey"], 50, 3.0, True)
@@ -480,27 +746,29 @@ def test_resource_library_resources_survive_reopen_and_real_export(
         assert {"favorites", "featured", "tag:audio"}.issubset(collection_values)
         assert any(item["value"] == "audio-effect" for item in controllers.resources.categoryOptions)
         controllers.resources.refresh("", "", "featured")
-        assert controllers.resources.resultCount > 0
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount > 0)
         assert all(
             controllers.resources.resourcesModel.get(index)["featuredRank"] >= 0
             for index in range(controllers.resources.resultCount)
         )
         controllers.resources.refresh("", "", "tag:audio")
-        assert controllers.resources.resultCount >= 3
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount >= 3)
         assert all(
             "audio" in controllers.resources.resourcesModel.get(index)["tags"]
             for index in range(controllers.resources.resultCount)
         )
 
         controllers.resources.refresh("sound-effect", "柔和确认音")
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         sound_row = controllers.resources.resourcesModel.get(0)
         assert sound_row["previewType"] == "audio"
         assert Path(QUrl(sound_row["previewUrl"]).toLocalFile()).is_file()
         controllers.resources.toggleFavorite(sound_row["resourceKey"])
         controllers.resources.refresh("", "", "favorites")
-        assert controllers.resources.resultCount == 1
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         assert controllers.resources.resourcesModel.get(0)["resourceKey"] == sound_row["resourceKey"]
         controllers.resources.refresh("sound-effect", "柔和确认音")
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         controllers.resources.adoptResource(
             sound_row["resourceKey"],
             10,
@@ -520,6 +788,7 @@ def test_resource_library_resources_survive_reopen_and_real_export(
         )
 
         controllers.resources.refresh("audio-effect", "参数均衡器")
+        assert _resources_ready(controllers, lambda: controllers.resources.resultCount == 1)
         audio_effect_row = controllers.resources.resourcesModel.get(0)
         assert audio_effect_row["adoptionTarget"] == "audio-effect"
         controllers.resources.adoptResource(
@@ -2344,7 +2613,25 @@ print('100%', flush=True)
         assert _process_until(
             lambda: controllers.timeline_view.clipsModel.rowCount() == 1,
             timeout=20,
-        )
+        ), {
+            "model_clip_count": controllers.timeline_view.clipsModel.rowCount(),
+            "timeline_clip_ids": [
+                clip.id
+                for clip in controllers.session.state.binding.require_timeline().state.clips
+            ],
+            "tasks": [
+                controllers.tasks.tasksModel.get(index)
+                for index in range(controllers.tasks.tasksModel.rowCount())
+            ],
+            "pending_import_tasks": dict(
+                controllers.session.state.assets.pending_import_tasks
+            ),
+            "pending_import_batches": list(
+                controllers.session.state.assets.pending_import_batches
+            ),
+            "last_error_id": controllers.session.state.presentation.last_error_id,
+            "status": controllers.session.state.presentation.status_message,
+        }
 
         window = engine.rootObjects()[0]
         page_loader = window.findChild(QQuickItem, "pageLoader")
@@ -2838,7 +3125,41 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             )
             and controllers.media.assetsModel.get(0)["proxyReady"],
             timeout=30,
-        )
+        ), {
+            "task_statuses": [
+                {
+                    "taskId": row["taskId"],
+                    "kind": row["kind"],
+                    "status": row["status"],
+                    "messageCode": row["messageCode"],
+                    "error": row["error"],
+                }
+                for row in (
+                    controllers.tasks.tasksModel.get(index)
+                    for index in range(controllers.tasks.tasksModel.rowCount())
+                )
+            ],
+            "asset_proxy_states": [
+                {
+                    "assetId": row["assetId"],
+                    "proxyReady": row["proxyReady"],
+                    "waveformReady": row["waveformReady"],
+                }
+                for row in (
+                    controllers.media.assetsModel.get(index)
+                    for index in range(controllers.media.assetsModel.rowCount())
+                )
+            ],
+            "task_cursor": controllers.session.state.tasks.cursor,
+            "task_revisions": dict(controllers.session.state.tasks.revisions),
+            "blocked_cursor": controllers.session.tasks._blocked_event_cursor,
+            "terminal_replays": list(controllers.session.tasks._terminal_replays),
+            "project_revision": (
+                controllers.session.state.binding.require_current().known_content_revision
+            ),
+            "last_error_id": controllers.session.state.presentation.last_error_id,
+            "status": controllers.session.state.presentation.status_message,
+        }
         project = controllers.session.state.binding.current
         assert project is not None
         proxied_asset = project.get_asset(asset_id)
@@ -2905,8 +3226,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             analyzed_clip_before["endFrame"],
         )
         analyzed_clip_after = controllers.timeline_view.clipsModel.get(0)
-        assert {key: value for key, value in analyzed_clip_after.items() if key != "waveformReady"} == {
-            key: value for key, value in analyzed_clip_before.items() if key != "waveformReady"
+        asynchronously_projected_cache_fields = {"filmstripFrames", "waveformReady"}
+        assert {
+            key: value
+            for key, value in analyzed_clip_after.items()
+            if key not in asynchronously_projected_cache_fields
+        } == {
+            key: value
+            for key, value in analyzed_clip_before.items()
+            if key not in asynchronously_projected_cache_fields
         }
 
         controllers.timeline_structure.setSequenceInOut(1, analyzed_clip_before["endFrame"] - 1)
@@ -3244,6 +3572,17 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         selected_clip_count = controllers.timeline_view.clipsModel.rowCount()
         assert QMetaObject.invokeMethod(versions_button, "click")
         assert _process_until(lambda: root.property("projectVersionsVisible") is True)
+        collect_project_button = root.findChild(QQuickItem, "collectProjectAssetsButton")
+        restore_collection_button = root.findChild(QQuickItem, "restoreCollectionPathsButton")
+        portable_archive_button = root.findChild(QQuickItem, "createPortableArchiveButton")
+        assert all(
+            item is not None and item.isVisible()
+            for item in (
+                collect_project_button,
+                restore_collection_button,
+                portable_archive_button,
+            )
+        )
         QTest.keyClick(root_window, Qt.Key_Delete)
         QCoreApplication.processEvents()
         assert controllers.timeline_view.clipsModel.rowCount() == selected_clip_count
@@ -3449,6 +3788,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             timeout=30,
         )
         preview_viewport.seek(0)
+        assert preview_viewport.property("pendingPlaybackMode") == 0
         assert _process_until(
             lambda: preview.property("position") == 0,
             timeout=30,
@@ -3459,6 +3799,12 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
             "buffering": preview.property("buffering"),
             "buffered_frames": preview.property("bufferedFrames"),
             "error": preview.property("errorString"),
+            "pending_playback_mode": preview_viewport.property("pendingPlaybackMode"),
+            "pending_playback_attempts": preview_viewport.property("pendingPlaybackAttempts"),
+            "playback_range": (
+                preview_viewport.property("playbackRangeStart"),
+                preview_viewport.property("playbackRangeEnd"),
+            ),
         }
         assert overlay.isVisible()
         overlay.setProperty("draftX", 12.5)

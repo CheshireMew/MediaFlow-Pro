@@ -42,6 +42,10 @@ LOCAL_RUNTIME_SERIAL_TESTS = (
     "tests/v2/infrastructure/test_release_runtime.py::"
     "test_release_runtime_reads_ready_evidence_from_the_real_desktop_startup",
 )
+LOCAL_INTERACTIVE_QML_TESTS = (
+    "tests/v2/desktop/test_qml_smoke.py::"
+    "test_transcript_button_runs_real_timeline_chain_and_opens_generated_subtitles",
+)
 RUFF_TARGETS = (
     "mediaflow",
     "packaging/windows/portable_entrypoint.py",
@@ -167,7 +171,7 @@ def _shard_command(profile: str, shard_index: int, shard_count: int) -> QualityC
         for node in LOCAL_SERIAL_TESTS:
             arguments.extend(("--exclude-node", node))
     elif profile == "runtime":
-        for node in LOCAL_RUNTIME_SERIAL_TESTS:
+        for node in (*LOCAL_RUNTIME_SERIAL_TESTS, *LOCAL_INTERACTIVE_QML_TESTS):
             arguments.extend(("--exclude-node", node))
     arguments.extend(("--run", "--", "-q", "--tb=short", "--durations=25"))
     return QualityCommand(f"{profile}-{shard_index + 1}-of-{shard_count}", tuple(arguments))
@@ -245,6 +249,33 @@ def interactive_qml_commands() -> tuple[QualityCommand, ...]:
                 "--tb=short",
             ),
         ),
+        # Real import, waveform, transcription and QML navigation share a
+        # 20-second visible-state deadline. Keep this product deadline intact
+        # and run the chain without competing runtime shards.
+        QualityCommand(
+            "qml-transcript-chain",
+            _python(
+                "-m",
+                "pytest",
+                *LOCAL_INTERACTIVE_QML_TESTS,
+                "-q",
+                "--tb=short",
+            ),
+        ),
+        # This chain enforces a 10-second desktop shutdown budget while a real
+        # QtWebEngine filmstrip request is active. Run it without a competing
+        # Chromium/export process so the wall-clock assertion measures the
+        # product shutdown boundary instead of quality-run resource contention.
+        QualityCommand(
+            "web-editor-import",
+            _python(
+                "-m",
+                "pytest",
+                "tests/v2/desktop/test_web_editor.py::test_unified_import_opens_the_v6_package_through_local_preview_server",
+                "-q",
+                "--tb=short",
+            ),
+        ),
     )
 
 
@@ -255,16 +286,6 @@ def interactive_chain_commands() -> tuple[QualityCommand, ...]:
         QualityCommand(
             "desktop-cli-requests",
             _python("-m", "scripts.verify_desktop_cli_requests"),
-        ),
-        QualityCommand(
-            "web-editor-import",
-            _python(
-                "-m",
-                "pytest",
-                "tests/v2/desktop/test_web_editor.py::test_unified_import_opens_the_v6_package_through_local_preview_server",
-                "-q",
-                "--tb=short",
-            ),
         ),
         QualityCommand(
             "drag-import-scrub",
@@ -367,7 +388,7 @@ def offline_preflight_commands(run_root: Path) -> tuple[QualityCommand, ...]:
     )
 
 
-def offline_parallel_commands() -> tuple[QualityCommand, ...]:
+def offline_rendering_commands() -> tuple[QualityCommand, ...]:
     return (
         QualityCommand("ui-matrix", _python("-m", "scripts.verify_ui_matrix")),
         QualityCommand(
@@ -488,9 +509,8 @@ def build_quality_stages(
         stages.append(QualityStage("offline-preflight", offline_preflight_commands(run_root)))
         stages.append(
             QualityStage(
-                "offline-parallel",
-                offline_parallel_commands(),
-                max_workers=2,
+                "offline-rendering",
+                offline_rendering_commands(),
             )
         )
         stages.append(QualityStage("offline-final", offline_final_commands()))

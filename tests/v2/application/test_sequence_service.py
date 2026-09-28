@@ -3,10 +3,21 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.audio import AudioBus, AudioEffect
-from mediaflow.domain.enums import AssetKind, AudioEffectKind, TrackKind
+from mediaflow.domain.enums import (
+    AssetKind,
+    AudioEffectKind,
+    MaskShapeKind,
+    TrackKind,
+    VisualEffectKind,
+)
+from mediaflow.domain.masks import MaskGeometry
+from mediaflow.domain.project import MediaMetadata
+from mediaflow.domain.sequence_variants import SequenceVariantSpec
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment
 from mediaflow.infrastructure.mlt import TimelineCompiler
 from mediaflow.infrastructure.project_repository import ProjectRepository
@@ -303,3 +314,161 @@ def test_short_sync_preserves_manual_subtitle_timing_across_reopen(
         assert [(item.start_frame, item.end_frame, item.timing_overridden) for item in copied] == [
             (10, 25, True)
         ]
+
+
+def test_delivery_variant_clone_preserves_masks_effects_and_reframes_picture(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "variant.mp4"
+    source_path.write_bytes(b"variant")
+    with ProjectRepository.create(tmp_path / "Variants", "Variants") as repository:
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source_path, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=60,
+                        width=1920,
+                        height=1080,
+                        has_video=True,
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=60,
+        )
+        effect = editor.add_clip_visual_effect(clip.id, VisualEffectKind.GAUSSIAN_BLUR)
+        mask = editor.add_clip_mask(
+            clip.id,
+            MaskShapeKind.ELLIPSE,
+            name="Subject",
+            geometry=MaskGeometry(width=0.4, height=0.5),
+        )
+        editor.assign_clip_visual_effect_mask(clip.id, effect.id, mask.id)
+
+        result = SequenceService(repository).generate_variants(
+            project.main_sequence_id,
+            [
+                SequenceVariantSpec(
+                    preset_id="portrait_9_16",
+                    name="Portrait",
+                    width=1080,
+                    height=1920,
+                    reframe_mode="center_fill",
+                )
+            ],
+        )
+
+        assert len(result.created_sequence_ids) == 1
+        state = repository.timeline.load_timeline(result.created_sequence_ids[0])
+        assert (state.sequence.profile.width, state.sequence.profile.height) == (1080, 1920)
+        assert state.clips[0].transform.scale_x > 3.0
+        assert state.clips[0].masks[0].name == "Subject"
+        assert state.clips[0].visual_effects[0].mask_id == state.clips[0].masks[0].id
+
+
+def test_delivery_variant_refresh_keeps_stable_sequence_and_reports_real_conflicts(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "variant-sync.mp4"
+    source_path.write_bytes(b"variant-sync")
+    with ProjectRepository.create(tmp_path / "Variant Sync", "Variant Sync") as repository:
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source_path, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=120,
+                        width=1920,
+                        height=1080,
+                        has_video=True,
+                    )
+                }
+            )
+        )
+        source_editor = TimelineEditor(repository, project.main_sequence_id)
+        source_track = source_editor.add_track(TrackKind.VIDEO)
+        source_clip = source_editor.add_clip(
+            track_id=source_track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=60,
+        )
+        spec = SequenceVariantSpec(
+            preset_id="portrait_9_16",
+            name="Portrait",
+            width=1080,
+            height=1920,
+            reframe_mode="fit",
+        )
+        service = SequenceService(repository)
+        created = service.generate_variants(project.main_sequence_id, [spec])
+        variant_id = created.created_sequence_ids[0]
+        variant_editor = TimelineEditor(repository, variant_id)
+        local_clip = variant_editor.state.clips[0]
+        variant_editor.set_clip_transform(
+            local_clip.id,
+            local_clip.transform.model_copy(update={"x": 5.0}),
+        )
+        source_editor.add_clip(
+            track_id=source_track.id,
+            asset_id=asset.id,
+            timeline_start=60,
+            source_in=60,
+            duration=30,
+        )
+        source_editor.add_marker(30, "Master changed")
+
+        plan = service.plan_variants(project.main_sequence_id, [spec])
+        assert plan.items[0].action == "refresh"
+        before_refresh = service.snapshot_variant(variant_id)
+        refreshed = service.generate_variants(project.main_sequence_id, [spec])
+        assert refreshed.refreshed_sequence_ids == [variant_id]
+        state = repository.timeline.load_timeline(variant_id)
+        assert len(state.clips) == 2
+        assert state.clips[0].transform.x == pytest.approx(5.0)
+        assert [item.name for item in state.markers] == ["Master changed"]
+        after_refresh = service.snapshot_variant(variant_id)
+
+        service.restore_variant_snapshot(before_refresh)
+        restored_before = repository.timeline.load_timeline(variant_id)
+        assert len(restored_before.clips) == 1
+        assert restored_before.clips[0].transform.x == pytest.approx(5.0)
+
+        service.restore_variant_snapshot(after_refresh)
+        restored_after = repository.timeline.load_timeline(variant_id)
+        assert len(restored_after.clips) == 2
+        assert restored_after.clips[0].transform.x == pytest.approx(5.0)
+        assert [item.name for item in restored_after.markers] == ["Master changed"]
+
+        variant_editor = TimelineEditor(repository, variant_id)
+        local_clip = variant_editor.state.clips[0]
+        variant_editor.set_clip_transform(
+            local_clip.id,
+            local_clip.transform.model_copy(update={"x": 7.0}),
+        )
+        source_editor = TimelineEditor(repository, project.main_sequence_id)
+        source_clip = source_editor.state.clips[0]
+        source_editor.set_clip_transform(
+            source_clip.id,
+            source_clip.transform.model_copy(update={"x": 12.0}),
+        )
+
+        conflict_plan = service.plan_variants(project.main_sequence_id, [spec])
+        assert conflict_plan.items[0].action == "conflict"
+        assert any(item.path.endswith("/transform/x") for item in conflict_plan.items[0].conflicts)
+        with pytest.raises(ValueError, match="未解决冲突"):
+            service.generate_variants(project.main_sequence_id, [spec])
+        forced = service.generate_variants(project.main_sequence_id, [spec], force=True)
+        assert forced.refreshed_sequence_ids == [variant_id]
+        assert repository.timeline.load_timeline(variant_id).clips[0].transform.x == pytest.approx(12.0)

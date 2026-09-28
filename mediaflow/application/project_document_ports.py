@@ -20,6 +20,7 @@ from mediaflow.application.project_service_ports import (
     SubtitleFileStore,
     TimelineEditorDocuments,
     TimelineValidationDocuments,
+    VoiceoverEditingDocuments,
     WebApplicationDocuments,
 )
 from mediaflow.application.project_storage_ports import (
@@ -36,6 +37,7 @@ from mediaflow.application.project_storage_ports import (
     TaskProjectAccess,
     TaskStore,
     TimelineDocuments,
+    VoiceoverDocuments,
     WebMediaDocuments,
     WebPackageValidatorPort,
     WorkflowDocuments,
@@ -81,6 +83,8 @@ __all__ = (
     "TimelineDocuments",
     "TimelineEditorDocuments",
     "TimelineValidationDocuments",
+    "VoiceoverDocuments",
+    "VoiceoverEditingDocuments",
     "TranscriptEditingDocuments",
     "TranscriptionTaskDocuments",
     "TranslationDocuments",

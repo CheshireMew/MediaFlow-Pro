@@ -210,6 +210,7 @@ Rectangle {
     }
 
     function seek(frame) {
+        cancelPendingPlayback();
         scrubFrame = boundedPlaybackFrame(frame);
         preview.seek(scrubFrame);
     }
@@ -327,10 +328,12 @@ Rectangle {
                 const end = root.playbackRangeEnd > start ? root.playbackRangeEnd : preview.duration;
                 const lastFrame = Math.max(start, end - 1);
                 if (preview.playbackRate >= 0 && preview.position >= lastFrame) {
+                    root.cancelPendingPlayback();
                     preview.pause();
                     if (root.playbackRangeStart >= 0)
                         root.clearPlaybackRange();
                 } else if (preview.playbackRate < 0 && preview.position <= start) {
+                    root.cancelPendingPlayback();
                     preview.pause();
                 }
             }

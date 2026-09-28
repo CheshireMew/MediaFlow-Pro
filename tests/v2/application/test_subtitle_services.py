@@ -1040,13 +1040,67 @@ def test_smart_split_and_delete_preserve_existing_placement_identity(tmp_path: P
         assert editing.smart_split_document(document.id, text_limit=12) == 1
         split_segments = repository.subtitles.list_subtitle_segments(document.id)
         split_placements = repository.subtitles.list_subtitle_placements(track.id)
-        assert len(split_segments) == len(split_placements) == 2
+        assert len(split_segments) == len(split_placements) == 4
+        assert all(len(segment.text) <= 12 for segment in split_segments)
         first_placement = next(item for item in split_placements if item.segment_id == split_segments[0].id)
         assert first_placement.id == original.id
 
         assert editing.delete_segments(document.id, [split_segments[1].id]) == 1
         assert [item.segment_id for item in repository.subtitles.list_subtitle_placements(track.id)] == [
-            split_segments[0].id
+            segment.id for segment in split_segments if segment.id != split_segments[1].id
+        ]
+
+
+def test_smart_split_persists_real_word_alignment_and_undo(tmp_path: Path) -> None:
+    source = tmp_path / "timed.zh.srt"
+    source.write_text("1\n00:00:00,000 --> 00:00:04,000\n甲乙丙丁\n", encoding="utf-8")
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        history = ProjectEditHistory()
+        acquisition, editing, _publication = _build_subtitle_components(repository, history)
+        document = acquisition.import_subtitle_file(source, AssetService(repository, _media_probe()))
+        segment = repository.subtitles.list_subtitle_segments(document.id)[0]
+        words = [SubtitleWord(
+            segment_id=segment.id, position=index, text=text, start_frame=start, end_frame=end,
+        ) for index, (text, start, end) in enumerate([
+            ("甲", 0, 1), ("乙", 1, 2), ("丙", 2, 3), ("丁", 3, 120),
+        ])]
+        repository.subtitles.save_subtitle_words(document.id, words)
+        assert editing.smart_split_document(document.id, text_limit=2) == 1
+        parts = repository.subtitles.list_subtitle_segments(document.id)
+        assert [(part.text, part.start_frame, part.end_frame) for part in parts] == [
+            ("甲乙", 0, 2), ("丙丁", 2, 120),
+        ]
+        actual_words = repository.subtitles.list_subtitle_words(document.id)
+        assert [word.text for word in actual_words if word.segment_id == parts[0].id] == ["甲", "乙"]
+        assert {word.id for word in actual_words} == {word.id for word in words}
+        assert editing.smart_split_document(document.id, text_limit=2) == 0
+        history.undo()
+        assert repository.subtitles.list_subtitle_segments(document.id) == [segment]
+        assert repository.subtitles.list_subtitle_words(document.id) == words
+        history.redo()
+        assert repository.subtitles.list_subtitle_segments(document.id) == parts
+
+
+def test_zero_duration_final_word_stays_inside_source_segment(tmp_path: Path) -> None:
+    with ProjectRepository.create(tmp_path / "Project", "Project") as repository:
+        source = tmp_path / "audio.wav"
+        source.write_bytes(b"timeline-only source")
+        asset = repository.assets.import_external_asset(source, AssetKind.AUDIO)
+        project = repository.projects.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.AUDIO)
+        clip = editor.add_clip(
+            track_id=track.id, asset_id=asset.id, timeline_start=0, source_in=0, duration=30,
+        )
+        projected = project_dialogue_transcript(
+            editor.state, (clip,), {asset.id: AsrResult("zh", 1, (AsrSegment(
+                0, 1, "甲乙。", words=(AsrWord(0, 0.5, "甲"), AsrWord(0.5, 0.5, "乙"), AsrWord(1, 1, "。")),
+            ),))}, start_frame=0, end_frame=30,
+        )
+        assert projected[0].text == "甲乙。"
+        assert projected[0].end_frame == 30
+        assert [(word.text, word.start_frame, word.end_frame) for word in projected[0].words] == [
+            ("甲", 0, 15), ("乙", 15, 16), ("。", 29, 30),
         ]
 
 

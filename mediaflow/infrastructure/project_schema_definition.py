@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 49
+PROJECT_SCHEMA_VERSION = 57
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -38,8 +38,73 @@ CREATE TABLE IF NOT EXISTS sequence (
     out_frame INTEGER,
     archived INTEGER NOT NULL DEFAULT 0,
     timeline_revision INTEGER NOT NULL DEFAULT 0,
+    multicam_groups_json TEXT NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS project_collection (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    collection_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS voiceover_cue (
+    id TEXT PRIMARY KEY,
+    sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    start_frame INTEGER NOT NULL,
+    end_frame INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    speaker TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('planned', 'recording', 'review', 'approved')),
+    selected_take_id TEXT,
+    placed_clip_id TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS voiceover_take (
+    id TEXT PRIMARY KEY,
+    cue_id TEXT NOT NULL REFERENCES voiceover_cue(id) ON DELETE CASCADE,
+    asset_id TEXT NOT NULL REFERENCES asset(id) ON DELETE RESTRICT,
+    name TEXT NOT NULL,
+    duration_frames INTEGER NOT NULL,
+    notes TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 0 AND 5),
+    latency_compensation_samples INTEGER NOT NULL DEFAULT 0,
+    latency_sample_rate INTEGER NOT NULL DEFAULT 48000,
+    calibration_device_id TEXT,
+    calibration_measured_at INTEGER,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_voiceover_cue_sequence_range
+ON voiceover_cue(sequence_id, archived, start_frame, end_frame);
+CREATE INDEX IF NOT EXISTS idx_voiceover_take_cue_time
+ON voiceover_take(cue_id, archived, created_at);
+CREATE TABLE IF NOT EXISTS voiceover_latency_calibration (
+    device_id TEXT PRIMARY KEY,
+    device_name TEXT NOT NULL,
+    latency_samples INTEGER NOT NULL,
+    sample_rate INTEGER NOT NULL,
+    confidence REAL NOT NULL,
+    method TEXT NOT NULL CHECK(method IN ('acoustic_roundtrip', 'manual')),
+    measured_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sequence_variant (
+    sequence_id TEXT PRIMARY KEY REFERENCES sequence(id) ON DELETE CASCADE,
+    source_sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE RESTRICT,
+    preset_id TEXT NOT NULL,
+    reframe_mode TEXT NOT NULL CHECK(reframe_mode IN ('fit', 'center_fill')),
+    source_timeline_revision INTEGER NOT NULL,
+    baseline_timeline_json TEXT,
+    baseline_audio_buses_json TEXT NOT NULL DEFAULT '[]',
+    baseline_audio_effects_json TEXT NOT NULL DEFAULT '[]',
+    baseline_subtitle_placements_json TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sequence_variant_source_preset
+ON sequence_variant(source_sequence_id, preset_id, created_at);
 CREATE TABLE IF NOT EXISTS asset_bin (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
@@ -110,7 +175,8 @@ CREATE TABLE IF NOT EXISTS clip (
     transform_json TEXT NOT NULL,
     transform_keyframes_json TEXT NOT NULL DEFAULT '[]',
     audio_json TEXT NOT NULL,
-    visual_effects_json TEXT NOT NULL DEFAULT '[]'
+    visual_effects_json TEXT NOT NULL DEFAULT '[]',
+    masks_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS compound_clip (
     id TEXT PRIMARY KEY,
@@ -215,6 +281,13 @@ CREATE TABLE IF NOT EXISTS subtitle_placement (
     end_frame INTEGER NOT NULL,
     text_override TEXT,
     timing_overridden INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS review_thread (
+    id TEXT PRIMARY KEY,
+    sequence_id TEXT NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    start_frame INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open', 'resolved', 'archived')),
+    thread_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dubbing_session (
     id TEXT PRIMARY KEY,
@@ -477,6 +550,8 @@ CREATE INDEX IF NOT EXISTS idx_subtitle_segment_document_time
 ON subtitle_segment(document_id, start_frame, id);
 CREATE INDEX IF NOT EXISTS idx_marker_sequence_time ON timeline_marker(sequence_id, frame);
 CREATE INDEX IF NOT EXISTS idx_range_sequence_time ON timeline_range(sequence_id, start_frame);
+CREATE INDEX IF NOT EXISTS idx_review_thread_sequence_status_time
+ON review_thread(sequence_id, status, start_frame);
 CREATE INDEX IF NOT EXISTS idx_task_project_time ON task(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_claimable_pending
 ON task(created_at, id)

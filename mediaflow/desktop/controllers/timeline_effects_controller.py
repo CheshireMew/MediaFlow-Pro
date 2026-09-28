@@ -40,6 +40,7 @@ class TimelineEffectsController(ControllerFacet[TimelinePresentationScope]):
                     "label": definition.label,
                     "position": effect.position,
                     "enabled": effect.enabled,
+                    "maskId": effect.mask_id or "",
                     "parameters": dict(effect.parameters),
                     "parameterSpecs": [
                         {
@@ -49,6 +50,18 @@ class TimelineEffectsController(ControllerFacet[TimelinePresentationScope]):
                             "descriptor": descriptor.model_dump(mode="json"),
                             "value": effect.parameters[descriptor.id],
                             "locked": False,
+                            "keyframes": [
+                                {
+                                    "timelineOffset": item.timeline_offset,
+                                    "timelineFrame": clip.timeline_start + item.timeline_offset,
+                                    "value": item.value,
+                                    "curve": item.curve.model_dump(mode="json"),
+                                }
+                                for item in effect.parameter_keyframes.get(
+                                    descriptor.id,
+                                    [],
+                                )
+                            ],
                         }
                         for descriptor in definition.descriptors
                     ],

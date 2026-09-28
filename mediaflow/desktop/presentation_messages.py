@@ -65,6 +65,99 @@ def status_message(source: str, *arguments: object) -> str:
         "短视频序列已移除；可使用撤销恢复": QCoreApplication.translate(
             "StatusMessageCatalog", "短视频序列已移除；可使用撤销恢复"
         ),
+        "已新建 %1 个、同步 %2 个交付版本": QCoreApplication.translate(
+            "StatusMessageCatalog", "已新建 %1 个、同步 %2 个交付版本"
+        ),
+        "交付版本变更计划已生成，%1 个冲突": QCoreApplication.translate(
+            "StatusMessageCatalog", "交付版本变更计划已生成，%1 个冲突"
+        ),
+        "%1 个交付版本已是最新，无需重复生成": QCoreApplication.translate(
+            "StatusMessageCatalog", "%1 个交付版本已是最新，无需重复生成"
+        ),
+        "已归集 %1 个外部素材，共 %2 字节": QCoreApplication.translate(
+            "StatusMessageCatalog", "已归集 %1 个外部素材，共 %2 字节"
+        ),
+        "已使用归集副本": QCoreApplication.translate(
+            "StatusMessageCatalog", "已使用归集副本"
+        ),
+        "已恢复归集前的素材路径": QCoreApplication.translate(
+            "StatusMessageCatalog", "已恢复归集前的素材路径"
+        ),
+        "可迁移项目已归档：%1（%2 个文件）": QCoreApplication.translate(
+            "StatusMessageCatalog", "可迁移项目已归档：%1（%2 个文件）"
+        ),
+        "多机位节目轨已创建": QCoreApplication.translate(
+            "StatusMessageCatalog", "多机位节目轨已创建"
+        ),
+        "多机位角度已切换": QCoreApplication.translate(
+            "StatusMessageCatalog", "多机位角度已切换"
+        ),
+        "多机位同步分析完成，置信度 %1%": QCoreApplication.translate(
+            "StatusMessageCatalog", "多机位同步分析完成，置信度 %1%"
+        ),
+        "已导入 %1 条审阅批注": QCoreApplication.translate(
+            "StatusMessageCatalog", "已导入 %1 条审阅批注"
+        ),
+        "审阅包已导出：%1": QCoreApplication.translate(
+            "StatusMessageCatalog", "审阅包已导出：%1"
+        ),
+        "审阅截图已保存": QCoreApplication.translate(
+            "StatusMessageCatalog", "审阅截图已保存"
+        ),
+        "审阅截图标注已保存": QCoreApplication.translate(
+            "StatusMessageCatalog", "审阅截图标注已保存"
+        ),
+        "贝塞尔曲线已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "贝塞尔曲线已更新"
+        ),
+        "画面关键帧曲线点已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "画面关键帧曲线点已更新"
+        ),
+        "蒙版顺序已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "蒙版顺序已更新"
+        ),
+        "视频示波器已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "视频示波器已更新"
+        ),
+        "旁白 / ADR 提示已创建": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白 / ADR 提示已创建"
+        ),
+        "旁白 / ADR 提示已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白 / ADR 提示已更新"
+        ),
+        "旁白 / ADR 提示已归档": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白 / ADR 提示已归档"
+        ),
+        "旁白 take 已导入": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白 take 已导入"
+        ),
+        "旁白 take 已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白 take 已更新"
+        ),
+        "已选择旁白 take": QCoreApplication.translate(
+            "StatusMessageCatalog", "已选择旁白 take"
+        ),
+        "旁白 take 已归档": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白 take 已归档"
+        ),
+        "选中的旁白 take 已放入时间线": QCoreApplication.translate(
+            "StatusMessageCatalog", "选中的旁白 take 已放入时间线"
+        ),
+        "旁白录音已开始": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白录音已开始"
+        ),
+        "旁白录音已保存为新 take": QCoreApplication.translate(
+            "StatusMessageCatalog", "旁白录音已保存为新 take"
+        ),
+        "录音延迟已设为 %1 毫秒": QCoreApplication.translate(
+            "StatusMessageCatalog", "录音延迟已设为 %1 毫秒"
+        ),
+        "延迟校准中：扬声器将播放一段短测试声": QCoreApplication.translate(
+            "StatusMessageCatalog", "延迟校准中：扬声器将播放一段短测试声"
+        ),
+        "延迟校准完成：%1 毫秒，可信度 %2%": QCoreApplication.translate(
+            "StatusMessageCatalog", "延迟校准完成：%1 毫秒，可信度 %2%"
+        ),
         "工作流任务失败：%1": QCoreApplication.translate("StatusMessageCatalog", "工作流任务失败：%1"),
         "高光候选已保存": QCoreApplication.translate("StatusMessageCatalog", "高光候选已保存"),
         "高光候选已删除": QCoreApplication.translate("StatusMessageCatalog", "高光候选已删除"),
@@ -110,6 +203,9 @@ def status_message(source: str, *arguments: object) -> str:
         "已实时同步 %1 的修改": QCoreApplication.translate("StatusMessageCatalog", "已实时同步 %1 的修改"),
         "已导入 %1": QCoreApplication.translate("StatusMessageCatalog", "已导入 %1"),
         "已导入 %1 个素材": QCoreApplication.translate("StatusMessageCatalog", "已导入 %1 个素材"),
+        "交换时间线已导入：%1": QCoreApplication.translate(
+            "StatusMessageCatalog", "交换时间线已导入：%1"
+        ),
         "已导入 %1，共 %2 条字幕": QCoreApplication.translate(
             "StatusMessageCatalog", "已导入 %1，共 %2 条字幕"
         ),
@@ -192,6 +288,68 @@ def status_message(source: str, *arguments: object) -> str:
         "正在检测场景切点": QCoreApplication.translate("StatusMessageCatalog", "正在检测场景切点"),
         "片段素材已替换": QCoreApplication.translate("StatusMessageCatalog", "片段素材已替换"),
         "画面跟踪已应用": QCoreApplication.translate("StatusMessageCatalog", "画面跟踪已应用"),
+        "画面关键帧已保存": QCoreApplication.translate("StatusMessageCatalog", "画面关键帧已保存"),
+        "画面关键帧已移除": QCoreApplication.translate("StatusMessageCatalog", "画面关键帧已移除"),
+        "画面关键帧已移动": QCoreApplication.translate("StatusMessageCatalog", "画面关键帧已移动"),
+        "画面关键帧时间已缩放": QCoreApplication.translate(
+            "StatusMessageCatalog", "画面关键帧时间已缩放"
+        ),
+        "已复制 %1 个画面关键帧": QCoreApplication.translate(
+            "StatusMessageCatalog", "已复制 %1 个画面关键帧"
+        ),
+        "已粘贴画面关键帧": QCoreApplication.translate(
+            "StatusMessageCatalog", "已粘贴画面关键帧"
+        ),
+        "视觉效果关键帧已保存": QCoreApplication.translate(
+            "StatusMessageCatalog", "视觉效果关键帧已保存"
+        ),
+        "蒙版已添加": QCoreApplication.translate("StatusMessageCatalog", "蒙版已添加"),
+        "蒙版已更新": QCoreApplication.translate("StatusMessageCatalog", "蒙版已更新"),
+        "蒙版已移除": QCoreApplication.translate("StatusMessageCatalog", "蒙版已移除"),
+        "效果蒙版已更新": QCoreApplication.translate(
+            "StatusMessageCatalog", "效果蒙版已更新"
+        ),
+        "正在跟踪蒙版": QCoreApplication.translate("StatusMessageCatalog", "正在跟踪蒙版"),
+        "蒙版跟踪已应用": QCoreApplication.translate(
+            "StatusMessageCatalog", "蒙版跟踪已应用"
+        ),
+        "审阅批注已添加": QCoreApplication.translate("StatusMessageCatalog", "审阅批注已添加"),
+        "审阅回复已添加": QCoreApplication.translate("StatusMessageCatalog", "审阅回复已添加"),
+        "审阅批注已解决": QCoreApplication.translate("StatusMessageCatalog", "审阅批注已解决"),
+        "审阅批注已重新打开": QCoreApplication.translate(
+            "StatusMessageCatalog", "审阅批注已重新打开"
+        ),
+        "审阅批注已归档，可随时恢复": QCoreApplication.translate(
+            "StatusMessageCatalog", "审阅批注已归档，可随时恢复"
+        ),
+        "审阅批注已恢复": QCoreApplication.translate("StatusMessageCatalog", "审阅批注已恢复"),
+        "蒙版关键帧已保存": QCoreApplication.translate(
+            "StatusMessageCatalog", "蒙版关键帧已保存"
+        ),
+        "蒙版关键帧已移除": QCoreApplication.translate(
+            "StatusMessageCatalog", "蒙版关键帧已移除"
+        ),
+        "蒙版关键帧已移动": QCoreApplication.translate(
+            "StatusMessageCatalog", "蒙版关键帧已移动"
+        ),
+        "蒙版关键帧时间已缩放": QCoreApplication.translate(
+            "StatusMessageCatalog", "蒙版关键帧时间已缩放"
+        ),
+        "视觉效果关键帧已移除": QCoreApplication.translate(
+            "StatusMessageCatalog", "视觉效果关键帧已移除"
+        ),
+        "视觉效果关键帧已移动": QCoreApplication.translate(
+            "StatusMessageCatalog", "视觉效果关键帧已移动"
+        ),
+        "视觉效果关键帧时间已缩放": QCoreApplication.translate(
+            "StatusMessageCatalog", "视觉效果关键帧时间已缩放"
+        ),
+        "已复制 %1 个视觉效果关键帧": QCoreApplication.translate(
+            "StatusMessageCatalog", "已复制 %1 个视觉效果关键帧"
+        ),
+        "已粘贴视觉效果关键帧": QCoreApplication.translate(
+            "StatusMessageCatalog", "已粘贴视觉效果关键帧"
+        ),
         "离线素材已重新关联": QCoreApplication.translate("StatusMessageCatalog", "离线素材已重新关联"),
         "素材文件夹已更新": QCoreApplication.translate("StatusMessageCatalog", "素材文件夹已更新"),
         "视觉效果已更新": QCoreApplication.translate("StatusMessageCatalog", "视觉效果已更新"),

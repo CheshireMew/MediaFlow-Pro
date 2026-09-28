@@ -1,3 +1,4 @@
+import json
 import re
 import subprocess
 import sys
@@ -25,6 +26,8 @@ from mediaflow.domain.enums import (
     VisualEffectKind,
 )
 from mediaflow.domain.exports import ExportPreset, SubtitleStyle, WatermarkOverlay
+from mediaflow.domain.keyframes import KeyframeCurve
+from mediaflow.domain.masks import MaskGeometry, MaskPoint
 from mediaflow.domain.project import ProjectProfile, SequenceInOut
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
@@ -745,6 +748,312 @@ def test_visual_effect_stack_compiles_in_persisted_order_for_preview_and_export(
         assert "avfilter.gblur" in document.xml
 
 
+def test_visual_effect_parameter_keyframes_compile_into_the_shared_mlt_graph(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"effect-keyframe-source")
+    with ProjectRepository.create(
+        tmp_path / "Visual Effect Keyframes",
+        "Visual Effect Keyframes",
+    ) as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        project = repository.projects.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+        effect = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.GAUSSIAN_BLUR,
+        )
+        editor.upsert_clip_effect_parameter_keyframe(
+            clip.id,
+            effect.id,
+            "sigma",
+            5,
+            2.0,
+            curve=KeyframeCurve(interpolation="hold"),
+        )
+        editor.upsert_clip_effect_parameter_keyframe(
+            clip.id,
+            effect.id,
+            "sigma",
+            20,
+            10.0,
+        )
+
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
+        root = ET.fromstring(document.xml)
+        animation = root.find(
+            f".//filter[@id='visual_effect_{effect.id}']/property[@name='av.sigma']"
+        )
+
+        assert animation is not None and animation.text is not None
+        points = {
+            int(item.split("=", 1)[0]): float(item.split("=", 1)[1])
+            for item in animation.text.split(";")
+        }
+        assert points[0] == pytest.approx(3.0)
+        assert points[5] == pytest.approx(2.0)
+        assert points[19] == pytest.approx(2.0)
+        assert points[20] == pytest.approx(10.0)
+        assert points[29] == pytest.approx(10.0)
+
+
+def test_transform_crop_keyframes_compile_into_the_shared_mlt_graph(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "crop-keyframe-source.mp4"
+    source.write_bytes(b"crop-keyframe-source")
+    with ProjectRepository.create(
+        tmp_path / "Crop Keyframes",
+        "Crop Keyframes",
+    ) as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": asset.metadata.model_copy(
+                        update={"width": 100, "height": 50}
+                    )
+                }
+            )
+        )
+        project = repository.projects.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=20,
+        )
+        editor.upsert_clip_transform_keyframe(
+            clip.id,
+            0,
+            clip.transform.model_copy(update={"crop_left": 0.1}),
+            curve=KeyframeCurve(interpolation="hold"),
+        )
+        editor.upsert_clip_transform_keyframe(
+            clip.id,
+            10,
+            clip.transform.model_copy(update={"crop_left": 0.5}),
+        )
+
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
+        root = ET.fromstring(document.xml)
+        animation = root.find(f".//filter[@id='crop_{clip.id}']/property[@name='left']")
+
+        assert animation is not None and animation.text is not None
+        points = {
+            int(item.split("=", 1)[0]): int(item.split("=", 1)[1])
+            for item in animation.text.split(";")
+        }
+        assert points[0] == 10
+        assert points[9] == 10
+        assert points[10] == 50
+        assert points[19] == 50
+
+
+def test_native_mask_wraps_only_its_bound_visual_effect_in_the_mlt_graph(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mask-source.mp4"
+    source.write_bytes(b"mask-source")
+    with ProjectRepository.create(tmp_path / "Mask Graph", "Mask Graph") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        editor = TimelineEditor(
+            repository,
+            repository.projects.get_project().main_sequence_id,
+        )
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=20,
+        )
+        effect = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.GAUSSIAN_BLUR,
+        )
+        mask = editor.add_clip_mask(
+            clip.id,
+            "rectangle",
+            name="Local blur",
+            geometry=MaskGeometry(center_x=0.25, center_y=0.5, width=0.5, height=1.0),
+        )
+        editor.assign_clip_visual_effect_mask(clip.id, effect.id, mask.id)
+
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
+        root = ET.fromstring(document.xml)
+        producer = root.find(f".//producer[@id='{MltGraph.producer_id(clip.id)}']")
+        assert producer is not None
+        filter_ids = [str(item.get("id")) for item in producer.findall("filter")]
+        start_id = f"mask_start_{mask.id}_{effect.id}"
+        visual_effect_id = f"visual_effect_{effect.id}"
+        apply_id = f"mask_apply_{mask.id}_{effect.id}"
+        assert (
+            filter_ids.index(start_id)
+            < filter_ids.index(visual_effect_id)
+            < filter_ids.index(apply_id)
+        )
+        spline = producer.find(
+            f"filter[@id='{start_id}']/property[@name='filter.spline']"
+        )
+        assert spline is not None and spline.text is not None
+        assert set(json.loads(spline.text)) >= {"0", "19"}
+
+
+def test_bezier_boolean_mask_stack_compiles_handles_and_subtraction_in_order(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "bezier-mask-source.mp4"
+    source.write_bytes(b"bezier-mask-source")
+    with ProjectRepository.create(tmp_path / "Bezier Mask", "Bezier Mask") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        editor = TimelineEditor(
+            repository,
+            repository.projects.get_project().main_sequence_id,
+        )
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=20,
+        )
+        effect = editor.add_clip_visual_effect(clip.id, VisualEffectKind.GAUSSIAN_BLUR)
+        base = editor.add_clip_mask(
+            clip.id,
+            "rectangle",
+            name="Base",
+            geometry=MaskGeometry(width=0.8, height=0.8),
+        )
+        cutout = editor.add_clip_mask(
+            clip.id,
+            "bezier",
+            name="Bezier cutout",
+            combine_mode="subtract",
+            geometry=MaskGeometry(
+                points=(
+                    MaskPoint(x=0.25, y=0.25, outgoing_x=0.45, outgoing_y=0.15),
+                    MaskPoint(x=0.75, y=0.25, incoming_x=0.55, incoming_y=0.15),
+                    MaskPoint(x=0.50, y=0.75, incoming_x=0.65, incoming_y=0.70),
+                )
+            ),
+        )
+        editor.assign_clip_visual_effect_mask(clip.id, effect.id, cutout.id)
+
+        document = TimelineCompiler(repository, RuntimeContext.discover().paths).compile(editor.state)
+        producer = ET.fromstring(document.xml).find(
+            f".//producer[@id='{MltGraph.producer_id(clip.id)}']"
+        )
+        assert producer is not None
+        filter_ids = [str(item.get("id")) for item in producer.findall("filter")]
+        assert filter_ids.index(f"mask_start_{base.id}_{effect.id}") < filter_ids.index(
+            f"mask_combine_{cutout.id}_{effect.id}"
+        ) < filter_ids.index(f"visual_effect_{effect.id}") < filter_ids.index(
+            f"mask_apply_{cutout.id}_{effect.id}"
+        )
+        combine = producer.find(f"filter[@id='mask_combine_{cutout.id}_{effect.id}']")
+        assert combine is not None
+        assert combine.find("property[@name='alpha_operation']").text == "sub"
+        spline = combine.find("property[@name='spline']")
+        assert spline is not None and spline.text is not None
+        points = json.loads(spline.text)["0"]
+        assert points[0] == [[0.25, 0.25], [0.25, 0.25], [0.45, 0.15]]
+
+
+def test_native_mask_changes_only_the_bound_region_in_real_export(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimeContext.discover().paths
+    assert paths.melt is not None
+    source = tmp_path / "red-mask-source.mp4"
+    _generate_color_media(source, paths, "red")
+    with ProjectRepository.create(
+        tmp_path / "Local Effect Render",
+        "Local Effect Render",
+    ) as repository:
+        assets = AssetService(repository, MediaProbe(paths))
+        asset = assets.import_external(source)
+        asset = assets.adopt_main_profile_from_video(asset.id)
+        editor = TimelineEditor(
+            repository,
+            repository.projects.get_project().main_sequence_id,
+        )
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        effect = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.COLOR_ADJUSTMENT,
+        )
+        editor.update_clip_visual_effect(
+            clip.id,
+            effect.id,
+            enabled=True,
+            parameters={"brightness": 0.0, "contrast": 1.0, "saturation": 0.0},
+        )
+        mask = editor.add_clip_mask(
+            clip.id,
+            "rectangle",
+            name="Left half",
+            geometry=MaskGeometry(center_x=0.25, center_y=0.5, width=0.45, height=0.9),
+        )
+        editor.assign_clip_visual_effect_mask(clip.id, effect.id, mask.id)
+        preset = ExportPreset(
+            name="Local effect pixels",
+            format=ExportFormat.H264,
+            container="mp4",
+            encoder_policy={"mode": "software"},
+            audio_codec="aac",
+            pixel_format="yuv420p",
+            quality_value=18,
+            preset="ultrafast",
+            gop_frames=25,
+        )
+
+        rendered = MltExportService(
+            TimelineCompiler(repository, paths),
+            paths,
+        ).export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "local-effect.mp4",
+        )
+
+        inside = _frame_region_rgb_mean(
+            rendered.output_path,
+            paths,
+            frame=10,
+            box=(16, 10, 64, 80),
+        )
+        outside = _frame_region_rgb_mean(
+            rendered.output_path,
+            paths,
+            frame=10,
+            box=(96, 10, 144, 80),
+        )
+        assert max(inside) - min(inside) < 18
+        assert max(outside) - min(outside) > 120
+
+
 def test_timeline_compiler_resolves_one_shared_asset_source_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -844,6 +1153,76 @@ def test_visual_effect_stack_changes_real_exported_pixels(tmp_path: Path) -> Non
         filtered_spread = max(filtered_rgb) - min(filtered_rgb)
         assert baseline_spread > 5
         assert filtered_spread < baseline_spread * 0.35
+
+
+def test_visual_effect_parameter_keyframes_change_real_exported_frames(
+    tmp_path: Path,
+) -> None:
+    paths = RuntimeContext.discover().paths
+    assert paths.melt is not None
+    source = tmp_path / "animated-effect-source.mp4"
+    generate_real_media(source, paths, width=160, height=90)
+    with ProjectRepository.create(
+        tmp_path / "Animated Effect Render",
+        "Animated Effect Render",
+    ) as repository:
+        assets = AssetService(repository, MediaProbe(paths))
+        asset = assets.import_external(source)
+        asset = assets.adopt_main_profile_from_video(asset.id)
+        editor = TimelineEditor(
+            repository,
+            repository.projects.get_project().main_sequence_id,
+        )
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+        effect = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.COLOR_ADJUSTMENT,
+        )
+        editor.upsert_clip_effect_parameter_keyframe(
+            clip.id,
+            effect.id,
+            "brightness",
+            0,
+            -0.8,
+            curve=KeyframeCurve(interpolation="hold"),
+        )
+        editor.upsert_clip_effect_parameter_keyframe(
+            clip.id,
+            effect.id,
+            "brightness",
+            12,
+            0.5,
+        )
+        preset = ExportPreset(
+            name="Animated visual effect pixels",
+            format=ExportFormat.H264,
+            container="mp4",
+            encoder_policy={"mode": "software"},
+            audio_codec="aac",
+            pixel_format="yuv420p",
+            quality_value=18,
+            preset="ultrafast",
+            gop_frames=25,
+        )
+
+        rendered = MltExportService(
+            TimelineCompiler(repository, paths),
+            paths,
+        ).export(
+            editor.state,
+            preset,
+            repository.project_dir / "exports" / "animated-effect.mp4",
+        )
+
+        dark, bright = _frame_rgb_means(rendered.output_path, paths, [5, 18])
+        assert sum(bright) / 3.0 > sum(dark) / 3.0 + 60.0
 
 
 def test_lut_visual_effect_changes_real_exported_pixels(tmp_path: Path) -> None:
@@ -2096,6 +2475,54 @@ def _frame_rgb_means(path: Path, paths: RuntimePaths, frames: list[int]) -> list
         payload = result.stdout[index * frame_size : (index + 1) * frame_size]
         means.append(tuple(sum(payload[channel::3]) / (frame_size // 3) for channel in range(3)))
     return means
+
+
+def _frame_region_rgb_mean(
+    path: Path,
+    paths: RuntimePaths,
+    *,
+    frame: int,
+    box: tuple[int, int, int, int],
+) -> tuple[float, float, float]:
+    result = subprocess.run(
+        [
+            str(paths.ffmpeg),
+            "-hide_banner",
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            f"select='eq(n\\,{frame})'",
+            "-vsync",
+            "0",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    width = 160
+    height = 90
+    assert len(result.stdout) == width * height * 3
+    left, top, right, bottom = box
+    assert 0 <= left < right <= width and 0 <= top < bottom <= height
+    sums = [0, 0, 0]
+    count = 0
+    for y in range(top, bottom):
+        for x in range(left, right):
+            offset = (y * width + x) * 3
+            for channel in range(3):
+                sums[channel] += result.stdout[offset + channel]
+            count += 1
+    return tuple(value / count for value in sums)
 
 
 def test_mlt_transition_uses_two_real_sources_and_preserves_timeline_duration(tmp_path: Path) -> None:

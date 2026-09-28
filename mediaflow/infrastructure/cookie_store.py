@@ -106,6 +106,8 @@ class CookieStore:
         ]
         if any(domain in {"x.com", "twitter.com"} for domain in candidates):
             candidates.extend(("x.com", "twitter.com"))
+        if host == "youtu.be":
+            candidates.append("youtube.com")
         for domain in dict.fromkeys(candidates):
             status = self.status(domain)
             if status["valid"]:

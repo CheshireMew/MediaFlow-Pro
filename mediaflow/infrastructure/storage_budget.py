@@ -6,9 +6,10 @@ import os
 import re
 import shutil
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import psutil
 
@@ -19,7 +20,7 @@ GIB = 1024**3
 MIB = 1024**2
 PROJECT_CACHE_OWNER_FILENAME = ".mediaflow-storage-owner.json"
 PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS = 15.0
-PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA = "mediaflow-project-cache-reservations/v2"
+PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA = "mediaflow-project-cache-reservations/v3"
 PROJECT_CACHE_RESERVATION_LEDGER_FILENAME = ".mediaflow-project-cache-reservations.json"
 PROJECT_CACHE_DEFERRED_RESERVATION_MAX_BYTES = 64 * MIB
 PROJECT_CACHE_DEFERRED_RESERVATION_LIMIT_DIVISOR = 1024
@@ -51,6 +52,43 @@ class StoragePolicy:
     download_operation_max_bytes: int = 64 * GIB
     delivery_operation_max_bytes: int = 256 * GIB
     minimum_free_bytes: int = 80 * GIB
+
+
+@dataclass(slots=True)
+class ProjectCacheReservation:
+    ledger_path: Path
+    projects_root: Path
+    reservation_id: str
+    _released: bool = False
+
+    def __enter__(self) -> ProjectCacheReservation:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.release()
+
+    def release(self) -> None:
+        if self._released:
+            return
+        ledger_lock = _acquire_project_cache_reservation_lock(self.ledger_path)
+        try:
+            observed_by_project, reservations, ledger_is_valid = (
+                _project_cache_reservation_state(
+                    self.ledger_path,
+                    self.projects_root,
+                )
+            )
+            if ledger_is_valid and self.reservation_id in reservations:
+                reservations.pop(self.reservation_id)
+                _write_project_cache_pending_reservations(
+                    self.ledger_path,
+                    self.projects_root,
+                    observed_by_project=observed_by_project,
+                    reservations=reservations,
+                )
+            self._released = True
+        finally:
+            ledger_lock.release()
 
 
 def _positive_environment_integer(name: str, default: int) -> int:
@@ -767,6 +805,21 @@ def require_project_cache_budget(
     expected_new_bytes: int | None,
     label: str,
 ) -> dict[str, Any]:
+    report, reservation = _acquire_project_cache_budget(
+        root,
+        expected_new_bytes=expected_new_bytes,
+        label=label,
+    )
+    reservation.release()
+    return report
+
+
+def _acquire_project_cache_budget(
+    root: str | Path,
+    *,
+    expected_new_bytes: int | None,
+    label: str,
+) -> tuple[dict[str, Any], ProjectCacheReservation]:
     if expected_new_bytes is None:
         raise RuntimeError(f"{label} storage preflight blocked: peak estimate is unknown")
     if type(expected_new_bytes) is not int or expected_new_bytes < 0:
@@ -775,102 +828,175 @@ def require_project_cache_budget(
     selected = Path(root).expanduser().resolve()
     projects_root = selected.parent
     ledger_path = projects_root.parent / PROJECT_CACHE_RESERVATION_LEDGER_FILENAME
-    ledger_lock = ProcessFileLock(ledger_path.with_suffix(f"{ledger_path.suffix}.lock"))
-    if not ledger_lock.acquire_until(timeout_seconds=PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS):
-        raise RuntimeError(f"Timed out reserving project cache capacity: {ledger_path}")
+    usage = shutil.disk_usage(_existing_volume_path(projects_root))
+    deferred_limit = min(
+        PROJECT_CACHE_DEFERRED_RESERVATION_MAX_BYTES,
+        max(
+            1,
+            policy.project_caches_max_bytes
+            // PROJECT_CACHE_DEFERRED_RESERVATION_LIMIT_DIVISOR,
+        ),
+    )
+
+    ledger_lock = _acquire_project_cache_reservation_lock(ledger_path)
     try:
-        observed_bytes, pending_bytes, ledger_is_valid = (
+        _observed_by_project, reservations, ledger_is_valid = (
             _project_cache_reservation_state(
                 ledger_path,
                 projects_root,
             )
         )
-        deferred_limit = min(
-            PROJECT_CACHE_DEFERRED_RESERVATION_MAX_BYTES,
-            max(
-                1,
-                policy.project_caches_max_bytes
-                // PROJECT_CACHE_DEFERRED_RESERVATION_LIMIT_DIVISOR,
-            ),
-        )
-        can_defer_global_inventory = (
-            ledger_is_valid
-            and pending_bytes + expected_new_bytes <= deferred_limit
-        )
-        usage = shutil.disk_usage(_existing_volume_path(projects_root))
-        if can_defer_global_inventory:
-            project_inventory = directory_inventory(selected)
-            project_report = _require_storage_budget_from_inventory(
-                selected,
-                inventory=project_inventory,
-                usage=usage,
-                # Pending writes may belong to this project. Charging all of
-                # them here is deliberately conservative and keeps the
-                # per-project cap safe without a per-project reservation map.
-                expected_new_bytes=pending_bytes + expected_new_bytes,
-                maximum_managed_bytes=policy.project_cache_max_bytes,
-                minimum_free_bytes=policy.minimum_free_bytes,
-                label=label,
-            )
-            next_pending_bytes = pending_bytes + expected_new_bytes
-            all_projects_report = _require_storage_budget_from_inventory(
-                projects_root,
-                inventory={
-                    "bytes": observed_bytes,
-                    "cleanup_candidates": [],
-                },
-                usage=usage,
-                expected_new_bytes=next_pending_bytes,
-                maximum_managed_bytes=policy.project_caches_max_bytes,
-                minimum_free_bytes=policy.minimum_free_bytes,
-                label="MediaFlow all project-derived caches",
-            )
-            _write_project_cache_pending_reservations(
-                ledger_path,
-                projects_root,
-                observed_bytes=observed_bytes,
-                pending_bytes=next_pending_bytes,
-            )
-            return {
-                "project": project_report,
-                "all_projects": _deferred_project_caches_report(
-                    report=all_projects_report,
-                    expected_new_bytes=expected_new_bytes,
-                    pending_bytes=next_pending_bytes,
-                    deferred_limit=deferred_limit,
-                ),
-            }
+        reservations = _active_project_cache_reservations(reservations)
+    finally:
+        ledger_lock.release()
 
-        all_projects_inventory = directory_inventory(projects_root)
-        current_observed_bytes = int(all_projects_inventory["bytes"])
-        observed_growth = (
-            max(0, current_observed_bytes - observed_bytes)
-            if ledger_is_valid
-            else 0
+    if (
+        ledger_is_valid
+        and _project_cache_pending_bytes(reservations) + expected_new_bytes
+        <= deferred_limit
+    ):
+        project_inventory = directory_inventory(selected)
+        ledger_lock = _acquire_project_cache_reservation_lock(ledger_path)
+        try:
+            latest_observed_by_project, latest_reservations, latest_valid = (
+                _project_cache_reservation_state(ledger_path, projects_root)
+            )
+            latest_reservations = _active_project_cache_reservations(
+                latest_reservations
+            )
+            if (
+                latest_valid
+                and _project_cache_pending_bytes(latest_reservations)
+                + expected_new_bytes
+                <= deferred_limit
+            ):
+                project_key = selected.name
+                observed_by_project = dict(latest_observed_by_project)
+                observed_by_project[project_key] = max(
+                    observed_by_project.get(project_key, 0),
+                    int(project_inventory["bytes"]),
+                )
+                reservation_id, reservations = _append_project_cache_reservation(
+                    latest_reservations,
+                    project_key=project_key,
+                    expected_new_bytes=expected_new_bytes,
+                )
+                project_pending_bytes = _project_cache_pending_bytes(
+                    reservations,
+                    project_key=project_key,
+                )
+                pending_bytes = _project_cache_pending_bytes(reservations)
+                project_report_inventory = {
+                    **project_inventory,
+                    "bytes": observed_by_project[project_key],
+                }
+                project_report = _require_storage_budget_from_inventory(
+                    selected,
+                    inventory=project_report_inventory,
+                    usage=usage,
+                    expected_new_bytes=project_pending_bytes,
+                    maximum_managed_bytes=policy.project_cache_max_bytes,
+                    minimum_free_bytes=policy.minimum_free_bytes,
+                    label=label,
+                )
+                all_projects_report = _require_storage_budget_from_inventory(
+                    projects_root,
+                    inventory={
+                        "bytes": sum(observed_by_project.values()),
+                        "cleanup_candidates": [],
+                    },
+                    usage=usage,
+                    expected_new_bytes=pending_bytes,
+                    maximum_managed_bytes=policy.project_caches_max_bytes,
+                    minimum_free_bytes=policy.minimum_free_bytes,
+                    label="MediaFlow all project-derived caches",
+                )
+                _write_project_cache_pending_reservations(
+                    ledger_path,
+                    projects_root,
+                    observed_by_project=observed_by_project,
+                    reservations=reservations,
+                )
+                return (
+                    {
+                        "project": project_report,
+                        "all_projects": _deferred_project_caches_report(
+                            report=all_projects_report,
+                            expected_new_bytes=expected_new_bytes,
+                            pending_bytes=pending_bytes,
+                            deferred_limit=deferred_limit,
+                        ),
+                    },
+                    ProjectCacheReservation(
+                        ledger_path=ledger_path,
+                        projects_root=projects_root,
+                        reservation_id=reservation_id,
+                    ),
+                )
+        finally:
+            ledger_lock.release()
+
+    # Directory inventory can take seconds on a mature runtime cache. Keep it
+    # outside the cross-process ledger lock, then merge the scan with the latest
+    # ledger state so concurrent reservations cannot be overwritten.
+    all_projects_inventory = directory_inventory(projects_root)
+    scanned_observed_by_project = {
+        str(project_key): int(category["bytes"])
+        for project_key, category in all_projects_inventory["categories"].items()
+    }
+    project_inventory = _project_inventory_from_aggregate(
+        selected,
+        all_projects_inventory,
+    )
+    ledger_lock = _acquire_project_cache_reservation_lock(ledger_path)
+    try:
+        latest_observed_by_project, latest_reservations, latest_valid = (
+            _project_cache_reservation_state(ledger_path, projects_root)
         )
-        remaining_pending_bytes = (
-            max(0, pending_bytes - observed_growth) if ledger_is_valid else 0
+        latest_reservations = _active_project_cache_reservations(
+            latest_reservations
         )
-        reserved_new_bytes = remaining_pending_bytes + expected_new_bytes
-        project_inventory = _project_inventory_from_aggregate(
-            selected,
-            all_projects_inventory,
+        observed_by_project = dict(scanned_observed_by_project)
+        if latest_valid:
+            for project_key, observed_bytes in latest_observed_by_project.items():
+                observed_by_project[project_key] = max(
+                    observed_by_project.get(project_key, 0),
+                    observed_bytes,
+                )
+        project_key = selected.name
+        reservation_id, reservations = _append_project_cache_reservation(
+            latest_reservations,
+            project_key=project_key,
+            expected_new_bytes=expected_new_bytes,
         )
+        project_pending_bytes = _project_cache_pending_bytes(
+            reservations,
+            project_key=project_key,
+        )
+        pending_bytes = _project_cache_pending_bytes(reservations)
+        all_projects_report_inventory = {
+            **all_projects_inventory,
+            "bytes": sum(observed_by_project.values()),
+        }
+        project_report_inventory = {
+            **project_inventory,
+            "bytes": observed_by_project.get(project_key, 0),
+        }
         result = {
             "project": _require_storage_budget_from_inventory(
                 selected,
-                inventory=project_inventory,
+                inventory=project_report_inventory,
                 usage=usage,
-                expected_new_bytes=reserved_new_bytes,
+                expected_new_bytes=project_pending_bytes,
                 maximum_managed_bytes=policy.project_cache_max_bytes,
                 minimum_free_bytes=policy.minimum_free_bytes,
                 label=label,
             ),
             "all_projects": _require_storage_budget_from_inventory(
                 projects_root,
-                inventory=all_projects_inventory,
+                inventory=all_projects_report_inventory,
                 usage=usage,
-                expected_new_bytes=reserved_new_bytes,
+                expected_new_bytes=pending_bytes,
                 maximum_managed_bytes=policy.project_caches_max_bytes,
                 minimum_free_bytes=policy.minimum_free_bytes,
                 label="MediaFlow all project-derived caches",
@@ -879,43 +1005,138 @@ def require_project_cache_budget(
         _write_project_cache_pending_reservations(
             ledger_path,
             projects_root,
-            observed_bytes=current_observed_bytes,
-            pending_bytes=reserved_new_bytes,
+            observed_by_project=observed_by_project,
+            reservations=reservations,
         )
-        return result
+        return (
+            result,
+            ProjectCacheReservation(
+                ledger_path=ledger_path,
+                projects_root=projects_root,
+                reservation_id=reservation_id,
+            ),
+        )
     finally:
         ledger_lock.release()
+
+
+def _acquire_project_cache_reservation_lock(ledger_path: Path) -> ProcessFileLock:
+    ledger_lock = ProcessFileLock(
+        ledger_path.with_suffix(f"{ledger_path.suffix}.lock")
+    )
+    if not ledger_lock.acquire_until(
+        timeout_seconds=PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS
+    ):
+        raise RuntimeError(f"Timed out reserving project cache capacity: {ledger_path}")
+    return ledger_lock
 
 
 def _project_cache_reservation_state(
     ledger_path: Path,
     projects_root: Path,
-) -> tuple[int, int, bool]:
+) -> tuple[dict[str, int], dict[str, dict[str, Any]], bool]:
     if not ledger_path.is_file():
-        return 0, 0, False
+        return {}, {}, False
     try:
         payload = json.loads(ledger_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return 0, 0, False
+        return {}, {}, False
+    if not isinstance(payload, dict):
+        return {}, {}, False
+    observed_by_project = payload.get("observed_by_project")
+    reservations = payload.get("reservations")
     if (
-        not isinstance(payload, dict)
-        or payload.get("schema") != PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA
+        payload.get("schema") != PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA
         or payload.get("projects_root") != str(projects_root)
-        or type(payload.get("observed_bytes")) is not int
-        or int(payload["observed_bytes"]) < 0
-        or type(payload.get("pending_bytes")) is not int
-        or int(payload["pending_bytes"]) < 0
+        or not _is_non_negative_integer_map(observed_by_project)
+        or not isinstance(reservations, dict)
     ):
-        return 0, 0, False
-    return int(payload["observed_bytes"]), int(payload["pending_bytes"]), True
+        return {}, {}, False
+    observed_map = cast(dict[str, int], observed_by_project)
+    reservation_map = cast(dict[str, dict[str, Any]], reservations)
+    if (
+        any(
+            not isinstance(reservation_id, str)
+            or not reservation_id
+            or not _is_project_cache_reservation(reservation)
+            for reservation_id, reservation in reservation_map.items()
+        )
+        or payload.get("observed_bytes") != sum(observed_map.values())
+        or payload.get("pending_bytes")
+        != _project_cache_pending_bytes(reservation_map)
+    ):
+        return {}, {}, False
+    return dict(observed_map), dict(reservation_map), True
+
+
+def _is_non_negative_integer_map(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str)
+        and bool(key)
+        and type(item) is int
+        and item >= 0
+        for key, item in value.items()
+    )
+
+
+def _is_project_cache_reservation(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("project"), str)
+        and bool(value["project"])
+        and type(value.get("bytes")) is int
+        and value["bytes"] >= 0
+        and isinstance(value.get("owner"), dict)
+    )
+
+
+def _active_project_cache_reservations(
+    reservations: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        reservation_id: reservation
+        for reservation_id, reservation in reservations.items()
+        if _storage_receipt_owner_active(reservation.get("owner"))
+    }
+
+
+def _project_cache_pending_bytes(
+    reservations: dict[str, dict[str, Any]],
+    *,
+    project_key: str | None = None,
+) -> int:
+    return sum(
+        int(reservation["bytes"])
+        for reservation in reservations.values()
+        if project_key is None or reservation["project"] == project_key
+    )
+
+
+def _append_project_cache_reservation(
+    reservations: dict[str, dict[str, Any]],
+    *,
+    project_key: str,
+    expected_new_bytes: int,
+) -> tuple[str, dict[str, dict[str, Any]]]:
+    reservation_id = uuid.uuid4().hex
+    appended = dict(reservations)
+    appended[reservation_id] = {
+        "project": project_key,
+        "bytes": expected_new_bytes,
+        "owner": {
+            "pid": os.getpid(),
+            "process_started": psutil.Process(os.getpid()).create_time(),
+        },
+    }
+    return reservation_id, appended
 
 
 def _write_project_cache_pending_reservations(
     ledger_path: Path,
     projects_root: Path,
     *,
-    observed_bytes: int,
-    pending_bytes: int,
+    observed_by_project: dict[str, int],
+    reservations: dict[str, dict[str, Any]],
 ) -> None:
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
@@ -924,8 +1145,10 @@ def _write_project_cache_pending_reservations(
             {
                 "schema": PROJECT_CACHE_RESERVATION_LEDGER_SCHEMA,
                 "projects_root": str(projects_root),
-                "observed_bytes": observed_bytes,
-                "pending_bytes": pending_bytes,
+                "observed_bytes": sum(observed_by_project.values()),
+                "pending_bytes": _project_cache_pending_bytes(reservations),
+                "observed_by_project": observed_by_project,
+                "reservations": reservations,
             },
             ensure_ascii=False,
             indent=2,
@@ -980,17 +1203,22 @@ def reserve_project_cache(
     expected_new_bytes: int | None,
     label: str,
     case_sensitive_paths: bool,
-) -> None:
-    require_project_cache_budget(
+) -> ProjectCacheReservation:
+    _report, reservation = _acquire_project_cache_budget(
         root,
         expected_new_bytes=expected_new_bytes,
         label=label,
     )
-    register_project_cache_owner(
-        root,
-        project_dir,
-        case_sensitive_paths=case_sensitive_paths,
-    )
+    try:
+        register_project_cache_owner(
+            root,
+            project_dir,
+            case_sensitive_paths=case_sensitive_paths,
+        )
+    except BaseException:
+        reservation.release()
+        raise
+    return reservation
 
 
 def require_test_artifact_budget(

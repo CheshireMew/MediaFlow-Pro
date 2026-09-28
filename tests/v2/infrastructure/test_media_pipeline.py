@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+from fractions import Fraction
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,7 +18,7 @@ from mediaflow.composition import EditorProject
 from mediaflow.domain.downloads import DownloadRequest
 from mediaflow.domain.enums import AssetKind, AssetOrigin, ColorMode, TaskStatus, TrackKind
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.project import MediaMetadata, ProjectProfile
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.storage_names import (
     WINDOWS_INTEROP_PATH_UTF16_LIMIT,
@@ -46,6 +47,22 @@ from mediaflow.waveform_cache import (
     read_waveform_peaks,
 )
 from tests.v2.real_media import generate_real_media
+
+
+def test_media_probe_timecode_supports_non_drop_drop_frame_and_clock_conversion() -> None:
+    ntsc = ProjectProfile(fps_numerator=30_000, fps_denominator=1_001)
+    assert MediaProbe._timecode_frame("01:00:00;00", Fraction(30_000, 1_001), ntsc) == 107_892
+    assert MediaProbe._timecode_frame(
+        "01:02:03:04",
+        Fraction(25, 1),
+        ProjectProfile(fps_numerator=25, fps_denominator=1),
+    ) == (1 * 3600 + 2 * 60 + 3) * 25 + 4
+    metadata = MediaMetadata(duration_frames=250, start_timecode_frame=1_000)
+    converted = metadata.in_frame_clock(
+        ProjectProfile(fps_numerator=25, fps_denominator=1),
+        ProjectProfile(fps_numerator=50, fps_denominator=1),
+    )
+    assert (converted.duration_frames, converted.start_timecode_frame) == (500, 2_000)
 
 
 def test_native_media_services_reject_an_overlong_external_source_before_launch(

@@ -8,12 +8,12 @@ from typing import Any
 from mediaflow.automation.contracts import AutomationRequest, describe_contract
 from mediaflow.domain.collaboration import ActorIdentity
 
+from .application_commands import application_command
 from .commands import desktop_command, parse_desktop_target
 from .discovery import SERVICE_PROTOCOL, SERVICE_PROTOCOL_VERSION
 from .events import EventHub, ServiceEvent
 from .execution import ServiceExecutionPools, ServiceWorkload
 from .project_paths import project_path
-from .runtime_sessions import application_command_workload
 from .sessions import EditorServiceOperations
 from .workspaces import WorkspaceRegistry
 
@@ -164,7 +164,7 @@ class ServiceRequestDispatcher:
             if self._workspaces is None:
                 raise RuntimeError("Workspace registry is not ready")
             return {
-                **await self._execution.run("runtime", self._operations.runtime.desktop_bootstrap),
+                **await self._execution.run("snapshot", self._operations.runtime.desktop_bootstrap),
                 "workspace": self._workspaces.attach(client_id=str(params.get("client_id") or "")),
             }
         if method == "desktop.project.call":
@@ -190,28 +190,22 @@ class ServiceRequestDispatcher:
             )
         runtime = self._operations.runtime
         if method == "desktop.application.settings":
-            return await self._execution.run("runtime", runtime.application_settings)
+            return await self._execution.run("snapshot", runtime.application_settings)
         if method == "desktop.application.settings.replace":
             return await self._execution.run(
                 "runtime",
                 runtime.replace_application_settings,
                 params.get("settings"),
             )
-        if method == "desktop.application.cookies":
-            return await self._execution.run(
-                "tool",
-                runtime.cookie_command,
-                str(params.get("command") or ""),
-                params.get("args", []),
-            )
         if method == "desktop.application.call":
             command = str(params.get("command") or "")
+            if set(params) - {"command", "arguments"}:
+                raise ValueError("Application calls require named arguments")
             return await self._execution.run(
-                application_command_workload(command),
+                application_command(command).workload,
                 runtime.execute_application_command,
                 command,
-                params.get("args", []),
-                params.get("kwargs", {}),
+                params.get("arguments", {}),
             )
         return _UNHANDLED
 

@@ -89,9 +89,10 @@ class SettingsController(ControllerFacet[SettingsFormControllerScope]):
             "设置已保存；界面语言将在下次启动时生效",
         )
         self._session.projectors.workspace.refresh_runtime_tool_status()
+        self._session.projectors.workspace.refresh_installed_asr_models()
 
     def _installed_asr_models(self) -> frozenset[str]:
-        return self._session._api.installed_asr_models()
+        return self._session.state.presentation.installed_asr_models
 
     @Slot(str, str)
     @report_ui_errors

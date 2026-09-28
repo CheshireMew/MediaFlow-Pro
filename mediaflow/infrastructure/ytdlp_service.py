@@ -19,7 +19,7 @@ from mediaflow.domain.storage_names import (
 )
 
 from .cookie_store import CookieStore
-from .download_errors import YtDlpErrorCapture, classify_download_error
+from .download_errors import DownloadExtractionError, YtDlpErrorCapture, classify_download_error
 from .output_reservation import (
     output_set_transaction,
     require_output_transaction_path,
@@ -34,6 +34,7 @@ from .storage_budget import (
     require_download_budget,
     start_storage_receipt,
 )
+from .youtube_runtime import youtube_runtime_options
 
 DownloadProgress = Callable[[OperationProgress], None]
 CancellationCheck = Callable[[], None]
@@ -109,11 +110,11 @@ class YtDlpDownloadService:
         except yt_dlp.utils.DownloadError as error:
             _checkpoint(check_cancelled)
             classified = classify_download_error(
-                capture.text or str(error),
+                "\n".join(filter(None, (capture.text, str(error)))),
                 url=normalized_url,
                 fallback_code="no_info",
             )
-            raise RuntimeError(classified.display_message) from error
+            raise DownloadExtractionError(classified) from error
         _checkpoint(check_cancelled)
         if not info:
             classified = classify_download_error(
@@ -121,7 +122,7 @@ class YtDlpDownloadService:
                 url=normalized_url,
                 fallback_code="no_info",
             )
-            raise RuntimeError(classified.display_message)
+            raise DownloadExtractionError(classified)
         return self._plan_from_info(info, normalized_url)
 
     @classmethod
@@ -342,11 +343,11 @@ class YtDlpDownloadService:
         except yt_dlp.utils.DownloadError as error:
             _checkpoint(check_cancelled)
             classified = classify_download_error(
-                capture.text or str(error),
+                "\n".join(filter(None, (capture.text, str(error)))),
                 url=page_url,
                 fallback_code="no_info",
             )
-            raise RuntimeError(classified.display_message) from error
+            raise DownloadExtractionError(classified) from error
         _checkpoint(check_cancelled)
         if not info:
             classified = classify_download_error(
@@ -354,7 +355,7 @@ class YtDlpDownloadService:
                 url=page_url,
                 fallback_code="no_info",
             )
-            raise RuntimeError(classified.display_message)
+            raise DownloadExtractionError(classified)
         candidates = [item for item in (info.get("entries") or [info]) if item]
         if not moved_paths:
             for item, prepared_path in zip(candidates, prepared_paths, strict=False):
@@ -400,13 +401,14 @@ class YtDlpDownloadService:
                 )
             },
             "quiet": True,
-            "no_warnings": True,
+            "no_warnings": False,
             "retries": 10,
             "fragment_retries": 10,
             "extractor_retries": 5,
             "file_access_retries": 3,
             "socket_timeout": YTDLP_SOCKET_TIMEOUT_SECONDS,
         }
+        options.update(youtube_runtime_options(self.paths))
         options["ffmpeg_location"] = str(self.paths.ffmpeg.parent)
         if cookie_file:
             options["cookiefile"] = str(Path(cookie_file).resolve(strict=True))

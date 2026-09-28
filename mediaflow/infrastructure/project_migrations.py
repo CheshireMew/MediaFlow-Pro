@@ -63,6 +63,14 @@ from .project_migrations_v42_v49 import (
     migrate_v47_to_v48,
     migrate_v48_to_v49,
 )
+from .project_migrations_v50 import migrate_v49_to_v50
+from .project_migrations_v51 import migrate_v50_to_v51
+from .project_migrations_v52 import migrate_v51_to_v52
+from .project_migrations_v53 import migrate_v52_to_v53
+from .project_migrations_v54 import migrate_v53_to_v54
+from .project_migrations_v55 import migrate_v54_to_v55
+from .project_migrations_v56 import migrate_v55_to_v56
+from .project_migrations_v57 import migrate_v56_to_v57
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +159,14 @@ PROJECT_MIGRATIONS = (
     ProjectMigration(46, 47, migrate_v46_to_v47),
     ProjectMigration(47, 48, migrate_v47_to_v48),
     ProjectMigration(48, 49, migrate_v48_to_v49),
+    ProjectMigration(49, 50, migrate_v49_to_v50),
+    ProjectMigration(50, 51, migrate_v50_to_v51),
+    ProjectMigration(51, 52, migrate_v51_to_v52),
+    ProjectMigration(52, 53, migrate_v52_to_v53),
+    ProjectMigration(53, 54, migrate_v53_to_v54),
+    ProjectMigration(54, 55, migrate_v54_to_v55),
+    ProjectMigration(55, 56, migrate_v55_to_v56),
+    ProjectMigration(56, 57, migrate_v56_to_v57),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

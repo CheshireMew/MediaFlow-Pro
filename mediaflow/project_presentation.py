@@ -8,13 +8,6 @@ from mediaflow.application.presentation_models import RecentProjectSnapshot
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import AssetKind, TaskStatus, TrackKind
 from mediaflow.domain.storage_names import content_addressed_child_path
-from mediaflow.domain.tasks import (
-    ArtifactReference,
-    DiagnosticsBundleTaskOutcome,
-    ExportTaskOutcome,
-    SequenceBuildTaskOutcome,
-    Task,
-)
 from mediaflow.domain.timeline import Clip, TimelineState, Track, default_clip_media_kind
 from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
@@ -25,16 +18,6 @@ from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.timeline_filmstrip import FILMSTRIP_REQUESTS, TimelineFilmstripService
-
-
-def _user_visible_task_artifacts(task: Task) -> tuple[ArtifactReference, ...]:
-    if isinstance(task.outcome, ExportTaskOutcome):
-        return tuple(item.output for item in task.outcome.files)
-    if isinstance(task.outcome, SequenceBuildTaskOutcome):
-        return (task.outcome.output.output,)
-    if isinstance(task.outcome, DiagnosticsBundleTaskOutcome):
-        return (task.outcome.output,)
-    return tuple(task.artifacts)
 
 
 class ProjectPresentationService:
@@ -172,13 +155,14 @@ class ProjectPresentationService:
                         )
                         cover = self.covers.cover_for(repository)
                         item["coverPath"] = str(cover) if cover else ""
-                        artifacts = [
-                            local
-                            for task in reversed(tasks)
-                            for value in reversed(_user_visible_task_artifacts(task))
-                            if (local := value.local_path(path)) is not None and local.is_file()
-                        ]
-                        item["recentArtifact"] = str(artifacts[0]) if artifacts else ""
+                        exported_files = (
+                            Path(record.output_path)
+                            for record in repository.records.list_export_history()
+                        )
+                        item["recentArtifact"] = next(
+                            (str(output) for output in exported_files if output.is_file()),
+                            "",
+                        )
                 except ProjectUpgradeRequiredError:
                     pass
                 except (RuntimeError, sqlite3.Error):

@@ -37,6 +37,7 @@ PYTHON_COMPONENTS = {
     "mcp": {"MIT"},
     "mcp-types": {"MIT"},
     "yt-dlp": {"Unlicense"},
+    "yt-dlp-ejs": {"Unlicense AND MIT AND ISC"},
     "faster-whisper": {"MIT"},
     "openai": {"Apache-2.0"},
     "json-repair": {"MIT"},

@@ -315,8 +315,16 @@ class EditorServiceClient:
                 _started_processes[process.pid] = process
 
 
-def execute_sync(request: dict[str, Any]) -> dict[str, Any]:
-    result = _sync_transport.call("operation.execute", {"request": request})
+def execute_sync(
+    request: dict[str, Any],
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    result = _sync_transport.call(
+        "operation.execute",
+        {"request": request},
+        timeout_seconds=timeout_seconds,
+    )
     if not isinstance(result, dict):
         raise EditorServiceUnavailable("Editor Service operation result must be an object")
     return result

@@ -101,11 +101,8 @@ class ProjectSession(QObject):
         self._home_requests_started = True
         self.projectors.workspace.refresh_recent_projects()
         self.projectors.workspace.discover_encoder_policies()
-        self.background.submit(
-            "runtime_status",
-            1,
-            self._api.runtime_tool_status,
-        )
+        self.projectors.workspace.refresh_runtime_tool_status(preserve_cuda=False)
+        self.projectors.workspace.refresh_installed_asr_models()
 
     def _attach_controllers(self, controllers: dict[str, QObject]) -> None:
         if self._controller_notifiers_attached:

@@ -11,6 +11,11 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
 from mcp.types import ToolAnnotations
 
+from mediaflow.domain.workspace_commands import (
+    WorkspaceCommandEvent,
+    WorkspaceCommandName,
+    validate_workspace_arguments,
+)
 from mediaflow.service.client import EditorServiceClient
 
 EditorServiceConnector = Callable[[ClientSession], Awaitable[EditorServiceClient]]
@@ -335,7 +340,7 @@ def register_workspace_tool(server: MCPServer[McpState]) -> None:
     )
     async def workspace_command(
         workspace_session_id: str,
-        command: str,
+        command: WorkspaceCommandName,
         ctx: Context[McpState, Any],
         arguments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -344,12 +349,10 @@ def register_workspace_tool(server: MCPServer[McpState]) -> None:
             {
                 "workspace_session_id": workspace_session_id,
                 "command": command,
-                "arguments": arguments or {},
+                "arguments": validate_workspace_arguments(command, arguments or {}),
             },
         )
-        if not isinstance(result, dict):
-            raise RuntimeError("Editor Service returned an invalid workspace event")
-        return result
+        return WorkspaceCommandEvent.model_validate(result).model_dump(mode="json")
 
 
 def register_mediaflow_tools(server: MCPServer[McpState]) -> None:

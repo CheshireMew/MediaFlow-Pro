@@ -21,7 +21,6 @@ from mediaflow.domain.task_commands import TranscribeSequenceCommand
 from mediaflow.infrastructure import runtime_tools as runtime_tools_module
 from mediaflow.infrastructure.asr_engine import (
     AsrPipeline,
-    ChunkedAsrEngine,
     FasterWhisperCliEngine,
     FasterWhisperProcessEngine,
     create_asr_pipeline,
@@ -92,6 +91,8 @@ def _transcription_command(
     repository: ProjectRepository,
     sequence_id: str,
     settings: AsrSettings,
+    *,
+    dialogue_track_id: str | None = None,
 ) -> TranscribeSequenceCommand:
     state = repository.timeline.load_timeline(sequence_id)
     duration = state.duration_frames
@@ -103,6 +104,7 @@ def _transcription_command(
         project_profile=repository.sequences.get_sequence(
             repository.projects.get_project().main_sequence_id
         ).profile,
+        dialogue_track_id=dialogue_track_id,
         start_frame=min(duration, bounds.in_frame) if bounds else 0,
         end_frame=min(duration, bounds.out_frame) if bounds else duration,
     )
@@ -156,7 +158,52 @@ def test_transcription_plan_uses_the_sequence_frame_clock(tmp_path: Path) -> Non
         assert plan.recognition_seconds == 1.0
 
 
-def test_built_in_pipeline_uses_the_shared_long_audio_chunk_orchestrator(
+def test_transcription_plan_can_target_an_explicit_non_primary_audio_track(
+    tmp_path: Path,
+) -> None:
+    profile = ProjectProfile(fps_numerator=25, fps_denominator=1)
+    source = tmp_path / "explicit-dialogue.wav"
+    source.write_bytes(b"explicit-dialogue")
+    with ProjectRepository.create(
+        tmp_path / "Explicit Dialogue",
+        "Explicit Dialogue",
+        profile,
+    ) as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.AUDIO)
+        asset = repository.assets.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": asset.metadata.model_copy(
+                        update={"duration_frames": 25, "has_audio": True}
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
+        primary = editor.add_track(TrackKind.AUDIO, "Primary")
+        explicit = editor.add_track(TrackKind.AUDIO, "Imported original voice")
+        editor.set_primary_dialogue_track(primary.id)
+        editor.add_clip(
+            track_id=explicit.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=25,
+        )
+
+        plan = build_dialogue_transcription_plan(
+            editor.state,
+            {asset.id: asset},
+            AsrSettings(),
+            project_profile=profile,
+            dialogue_track_id=explicit.id,
+        )
+
+        assert plan.dialogue_track_id == explicit.id
+        assert [source.asset_id for source in plan.sources] == [asset.id]
+
+
+def test_built_in_pipeline_uses_one_model_process(
     tmp_path: Path,
 ) -> None:
     pipeline = create_asr_pipeline(
@@ -165,8 +212,7 @@ def test_built_in_pipeline_uses_the_shared_long_audio_chunk_orchestrator(
     )
 
     assert isinstance(pipeline, AsrPipeline)
-    assert isinstance(pipeline.engine, ChunkedAsrEngine)
-    assert isinstance(pipeline.engine.engine, FasterWhisperProcessEngine)
+    assert isinstance(pipeline.engine, FasterWhisperProcessEngine)
 
 
 def test_cli_engine_process_output_reaches_project_subtitles_and_srt(tmp_path: Path) -> None:
@@ -207,8 +253,7 @@ print('100%', flush=True)
     )
     engine = create_asr_pipeline(settings, paths)
     assert isinstance(engine, AsrPipeline)
-    assert isinstance(engine.engine, ChunkedAsrEngine)
-    assert isinstance(engine.engine.engine, FasterWhisperCliEngine)
+    assert isinstance(engine.engine, FasterWhisperCliEngine)
     progress: list[OperationProgress] = []
 
     repository = ProjectRepository.create(tmp_path / "Project", "Project")
@@ -221,7 +266,9 @@ print('100%', flush=True)
     try:
         sequence_id = repository.projects.get_project().main_sequence_id
         editor = project.timeline(sequence_id)
-        audio_track = editor.add_track(TrackKind.AUDIO)
+        primary_track = editor.add_track(TrackKind.AUDIO, "Primary dialogue")
+        audio_track = editor.add_track(TrackKind.AUDIO, "Imported original voice")
+        editor.set_primary_dialogue_track(primary_track.id)
         editor.add_clip(
             track_id=audio_track.id,
             asset_id=asset.id,
@@ -236,7 +283,12 @@ print('100%', flush=True)
             include_snapshot=False,
         )
         task = project.start_task(
-            _transcription_command(repository, sequence_id, settings),
+            _transcription_command(
+                repository,
+                sequence_id,
+                settings,
+                dialogue_track_id=audio_track.id,
+            ),
             [asset.id],
             sequence_id=sequence_id,
         )
@@ -285,7 +337,20 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("yt_dlp/__init__.py", "from . import version\n")
         archive.writestr("yt_dlp/version.py", "__version__ = '2099.1'\n")
-        archive.writestr("yt_dlp-2099.1.dist-info/METADATA", "Version: 2099.1\n")
+        archive.writestr("yt_dlp-2099.1.dist-info/METADATA", (
+            "Name: yt-dlp\nVersion: 2099.1\nRequires-Dist: yt-dlp-ejs==0.8.0; extra == 'default'\n"
+        ))
+    ejs_wheel = release_dir / "yt_dlp_ejs-0.8.0-py3-none-any.whl"
+    with zipfile.ZipFile(ejs_wheel, "w") as archive:
+        archive.writestr("yt_dlp_ejs/__init__.py", "__version__ = '0.8.0'\n")
+        archive.writestr("yt_dlp_ejs-0.8.0.dist-info/METADATA", "Name: yt-dlp-ejs\nVersion: 0.8.0\n")
+    ejs_metadata = release_dir / "ejs.json"
+    ejs_metadata.write_text(json.dumps({
+        "info": {"version": "0.8.0"},
+        "urls": [{"filename": ejs_wheel.name, "packagetype": "bdist_wheel",
+                  "url": ejs_wheel.as_uri(), "size": ejs_wheel.stat().st_size,
+                  "digests": {"sha256": hashlib.sha256(ejs_wheel.read_bytes()).hexdigest()}}],
+    }), encoding="utf-8")
     metadata = release_dir / "yt-dlp.json"
     metadata.write_text(
         json.dumps(
@@ -297,6 +362,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
                         "packagetype": "bdist_wheel",
                         "url": wheel.as_uri(),
                         "size": wheel.stat().st_size,
+                        "digests": {"sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()},
                     }
                 ],
             }
@@ -351,6 +417,7 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
         settings,
         paths,
         ytdlp_metadata_url=metadata.as_uri(),
+        ejs_metadata_url=ejs_metadata.as_uri(),
         component_catalog_path=component_catalog,
     )
     progress: list[OperationProgress] = []
@@ -366,6 +433,8 @@ def test_runtime_tool_updates_versioned_ytdlp_and_installs_cli_on_runtime_drive(
     assert updated["version"] == "2099.1"
     assert pointer["version"] == "2099.1"
     assert Path(pointer["path"]).joinpath("yt_dlp", "version.py").is_file()
+    assert Path(pointer["path"]).joinpath("yt_dlp_ejs", "__init__.py").is_file()
+    assert pointer["ejs_version"] == "0.8.0"
     assert service.ytdlp_version() == "2099.1"
     assert cli_path.read_bytes() == b"observable CLI artifact"
     assert Path(installation.root) == cli_path.parent
@@ -520,12 +589,14 @@ print('100%', flush=True)
         documents = repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)
         assert completed.status == TaskStatus.COMPLETED
         assert len(documents) == 1
-        assert len(repository.subtitles.list_subtitle_segments(documents[0].id)) == 2
+        split_segments = repository.subtitles.list_subtitle_segments(documents[0].id)
+        assert len(split_segments) == 4
+        assert all(len(segment.text) <= 8 for segment in split_segments)
         subtitle_track = next(
             track for track in repository.timeline.load_timeline(sequence_id).tracks
             if track.kind == TrackKind.SUBTITLE
         )
-        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 2
+        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 4
         removed_timeline_mix = repository.project_dir / "generated" / "audio" / (
             f"{sequence_id}-transcription.wav"
         )
@@ -547,8 +618,8 @@ print('100%', flush=True)
 
         assert repeated_completed.status == TaskStatus.COMPLETED
         assert [document.id for document in repeated_documents] == [documents[0].id]
-        assert len(repository.subtitles.list_subtitle_segments(documents[0].id)) == 2
-        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 2
+        assert len(repository.subtitles.list_subtitle_segments(documents[0].id)) == 4
+        assert len(repository.subtitles.list_subtitle_placements(subtitle_track.id)) == 4
         assert (tmp_path / "task-calls.txt").read_text(
             encoding="utf-8"
         ).splitlines() == ["tiny"]
@@ -848,91 +919,7 @@ print('100%', flush=True)
         project.close()
 
 
-def test_long_audio_strategy_really_splits_files_and_offsets_cli_results(
-    tmp_path: Path,
-) -> None:
-    paths = _runtime_paths(tmp_path)
-    source = tmp_path / "long-source.m4a"
-    generated = subprocess.run(
-        [
-            str(paths.ffmpeg),
-            "-y",
-            "-hide_banner",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=2.5",
-            "-c:a",
-            "aac",
-            str(source),
-        ],
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
-    assert generated.returncode == 0, generated.stderr.decode(errors="replace")
-    fake_cli = tmp_path / "chunk_faster_whisper.py"
-    fake_cli.write_text(
-        """from pathlib import Path
-import os
-import sys
-import time
-
-source = Path(sys.argv[1])
-assert source.is_file() and source.stat().st_size > 1000
-marker = Path(__file__).with_name('active-' + str(os.getpid()))
-marker.write_text('active', encoding='utf-8')
-time.sleep(0.35)
-if len(list(Path(__file__).parent.glob('active-*'))) > 1:
-    Path(__file__).with_name('parallel-observed.txt').write_text('yes', encoding='utf-8')
-output = Path(sys.argv[sys.argv.index('-o') + 1])
-output.mkdir(parents=True, exist_ok=True)
-(output / 'chunk.srt').write_text(
-    '1\\n00:00:00,100 --> 00:00:00,400\\nChunk output\\n',
-    encoding='utf-8-sig',
-)
-print('100%', flush=True)
-marker.unlink()
-""",
-        encoding="utf-8",
-    )
-    settings = AsrSettings(
-        engine="faster_whisper_cli",
-        cli_path=str(fake_cli),
-        model="tiny.en",
-        device="cpu",
-        language="en",
-        parallel_chunks=3,
-    )
-    progress: list[OperationProgress] = []
-    engine = ChunkedAsrEngine(
-        FasterWhisperCliEngine(settings, paths),
-        settings,
-        paths,
-        threshold_seconds=2.0,
-        target_chunk_seconds=1.0,
-    )
-    result = engine.transcribe(
-        source,
-        language="en",
-        progress=progress.append,
-    )
-    chunk_files = list((paths.runtime_dir / "cache" / "asr-chunks" / "runs").rglob("*.wav"))
-
-    assert chunk_files == []
-    assert [round(segment.start_seconds, 1) for segment in result.segments] == [0.1, 1.1, 2.1]
-    assert [round(segment.end_seconds, 1) for segment in result.segments] == [0.4, 1.4, 2.4]
-    assert any(item.message_code == "asr_silence_detection" for item in progress)
-    assert any(item.message_code == "asr_chunk_extracting" for item in progress)
-    assert any(item.message_code == "asr_chunks_transcribing" for item in progress)
-    assert progress[-1].message_code == "asr_chunks_transcribing"
-    assert progress[-1].completed == progress[-1].total
-    assert (tmp_path / "parallel-observed.txt").read_text(encoding="utf-8") == "yes"
-
-
-def test_xxl_task_chain_chunks_and_parallelizes_real_long_audio(
+def test_xxl_task_chain_batches_real_long_audio_in_one_process(
     tmp_path: Path,
 ) -> None:
     paths = _runtime_paths(tmp_path)
@@ -962,28 +949,24 @@ def test_xxl_task_chain_chunks_and_parallelizes_real_long_audio(
     fake_cli = tmp_path / "long_task_faster_whisper.py"
     fake_cli.write_text(
         """from pathlib import Path
+import json
 import os
 import sys
-import time
 
+assert '--batched' in sys.argv
+assert sys.argv[sys.argv.index('--batch_size') + 1] == '2'
+assert sys.argv[sys.argv.index('--chunk_length') + 1] == '30'
 root = Path(__file__).parent
-Path(root / ('call-' + str(os.getpid()) + '.txt')).write_text(
-    Path(sys.argv[1]).name,
-    encoding='utf-8',
-)
-active = root / ('task-active-' + str(os.getpid()))
-active.write_text('active', encoding='utf-8')
-time.sleep(0.35)
-if len(list(root.glob('task-active-*'))) > 1:
-    (root / 'task-parallel-observed.txt').write_text('yes', encoding='utf-8')
+(root / ('call-' + str(os.getpid()) + '.txt')).write_text(str(sys.argv), encoding='utf-8')
 output = Path(sys.argv[sys.argv.index('-o') + 1])
-output.mkdir(parents=True, exist_ok=True)
-(output / 'chunk.srt').write_text(
-    '1\\n00:00:00,100 --> 00:00:00,400\\nLong chunk\\n',
-    encoding='utf-8-sig',
-)
+segments = [
+    {'start': offset + 0.1, 'end': offset + 0.4, 'text': 'Long chunk', 'words': [
+        {'start': offset + 0.1, 'end': offset + 0.25, 'word': 'Long'},
+        {'start': offset + 0.25, 'end': offset + 0.4, 'word': ' chunk'},
+    ]} for offset in (0, 600)
+]
+(output / 'result.json').write_text(json.dumps({'language': 'en', 'segments': segments}), encoding='utf-8')
 print('100%', flush=True)
-active.unlink()
 """,
         encoding="utf-8",
     )
@@ -1031,10 +1014,8 @@ active.unlink()
         )
 
         assert completed.status == TaskStatus.COMPLETED
-        assert len(list(tmp_path.glob("call-*.txt"))) == 2
-        assert (
-            tmp_path / "task-parallel-observed.txt"
-        ).read_text(encoding="utf-8") == "yes"
+        assert len(list(tmp_path.glob("call-*.txt"))) == 1
+        assert not (paths.runtime_dir / "cache" / "asr-chunks").exists()
         document = next(
             item
             for item in repository.subtitles.list_subtitle_documents(sequence_id=sequence_id)

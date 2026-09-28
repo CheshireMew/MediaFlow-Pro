@@ -106,6 +106,8 @@ class TimelineChangeSession:
                 state.transitions = list(change.state.transitions)
                 state.markers = list(change.state.markers)
                 state.ranges = list(change.state.ranges)
+                state.review_threads = list(change.state.review_threads)
+                state.multicam_groups = list(change.state.multicam_groups)
 
             self.commit_change("修改序列配置", mutate, allow_locked_changes=True)
             return self.snapshot
@@ -328,6 +330,8 @@ class TimelineChangeSession:
             and before.transitions == after.transitions
             and before.markers == after.markers
             and before.ranges == after.ranges
+            and before.review_threads == after.review_threads
+            and before.multicam_groups == after.multicam_groups
         )
         if non_clip_graph_is_unchanged:
             changed_clip_ids = {

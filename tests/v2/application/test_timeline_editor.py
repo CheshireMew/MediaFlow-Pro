@@ -1,29 +1,38 @@
+from array import array
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.timeline_diff import FrameInterval, RippleAdjustment, TimelineDiff
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.enums import (
     AssetKind,
     ClipMediaKind,
     ColorMode,
+    MaskShapeKind,
     TrackKind,
     TransitionKind,
     VisualEffectKind,
 )
 from mediaflow.domain.highlights import HighlightCandidate
+from mediaflow.domain.keyframes import KeyframeCurve
+from mediaflow.domain.masks import MaskGeometry
+from mediaflow.domain.multicam import MulticamAngleSyncSpec
 from mediaflow.domain.project import MediaMetadata, ProjectProfile
 from mediaflow.domain.sequence_audio import audio_clips_for_track
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
 from mediaflow.domain.timeline import (
     ClipAddRequest,
     ClipAudio,
+    ClipTransform,
     ClipTransformKeyframe,
     TimelineMarker,
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.waveform_cache import write_waveform_cache
 
 
 @pytest.fixture
@@ -54,6 +63,187 @@ def test_duration_frames_matches_the_cached_timeline_state(editor_fixture) -> No
     )
 
     assert editor.duration_frames == editor.state.duration_frames == 100
+
+
+def test_multicam_sync_builds_real_program_clips_and_angle_switches_are_reversible(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "camera-a.mp4"
+    second_source = tmp_path / "camera-b.mp4"
+    first_source.write_bytes(b"camera-a")
+    second_source.write_bytes(b"camera-b")
+    with ProjectRepository.create(tmp_path / "MulticamProject", "MulticamProject") as repository:
+        first = repository.assets.import_external_asset(first_source, AssetKind.VIDEO)
+        second = repository.assets.import_external_asset(second_source, AssetKind.VIDEO)
+        metadata = MediaMetadata(duration_frames=500, width=1920, height=1080, has_video=True)
+        first = repository.assets.update_asset(first.model_copy(update={"metadata": metadata}))
+        second = repository.assets.update_asset(second.model_copy(update={"metadata": metadata}))
+        project = repository.projects.get_project()
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        angle_a = MulticamAngleSyncSpec(asset_id=first.id, name="机位 A", sync_frame=100)
+        angle_b = MulticamAngleSyncSpec(asset_id=second.id, name="机位 B", sync_frame=130)
+
+        group = editor.create_multicam_group(
+            "访谈",
+            [angle_a, angle_b],
+            timeline_start=20,
+            duration=200,
+            sync_offset=40,
+        )
+        assert [item.source_in for item in group.angles] == [60, 90]
+        state = repository.timeline.load_timeline(project.main_sequence_id)
+        program = [item for item in state.clips if item.id in group.program_clip_ids]
+        assert [(item.asset_id, item.timeline_start, item.source_in, item.duration) for item in program] == [
+            (first.id, 20, 60, 200)
+        ]
+
+        switched = editor.switch_multicam_angle(group.id, angle_b.id, 95)
+        assert [(item.frame, item.angle_id) for item in switched.cuts] == [
+            (0, angle_a.id),
+            (75, angle_b.id),
+        ]
+        program = [
+            item
+            for item in repository.timeline.load_timeline(project.main_sequence_id).clips
+            if item.id in switched.program_clip_ids
+        ]
+        assert [(item.asset_id, item.timeline_start, item.source_in, item.duration) for item in program] == [
+            (first.id, 20, 60, 75),
+            (second.id, 95, 165, 125),
+        ]
+
+        editor.undo()
+        restored = repository.timeline.load_timeline(project.main_sequence_id).multicam_groups[0]
+        assert len(restored.cuts) == 1
+        editor.redo()
+        reapplied = repository.timeline.load_timeline(project.main_sequence_id).multicam_groups[0]
+        assert [item.frame for item in reapplied.cuts] == [0, 75]
+
+
+def test_multicam_timecode_sync_and_master_audio_remain_stable_across_video_cuts(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "timecode-a.mp4"
+    second_source = tmp_path / "timecode-b.mp4"
+    first_source.write_bytes(b"timecode-a")
+    second_source.write_bytes(b"timecode-b")
+    with ProjectRepository.create(tmp_path / "TimecodeMulticam", "TimecodeMulticam") as repository:
+        first = repository.assets.import_external_asset(first_source, AssetKind.VIDEO)
+        second = repository.assets.import_external_asset(second_source, AssetKind.VIDEO)
+        first = repository.assets.update_asset(
+            first.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=500,
+                        width=1920,
+                        height=1080,
+                        has_video=True,
+                        has_audio=True,
+                        start_timecode_frame=1000,
+                    )
+                }
+            )
+        )
+        second = repository.assets.update_asset(
+            second.model_copy(
+                update={
+                    "metadata": first.metadata.model_copy(
+                        update={"start_timecode_frame": 1030}
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
+        analysis = editor.analyze_multicam_sync([first.id, second.id], "timecode")
+        assert [item.sync_frame for item in analysis.angles] == [30, 0]
+        assert analysis.confidence == 1.0
+
+        group = editor.create_multicam_group(
+            "Timecode",
+            analysis.angles,
+            timeline_start=0,
+            duration=200,
+            sync_method="timecode",
+            sync_confidence=analysis.confidence,
+            audio_strategy="master_angle",
+            master_audio_angle_id=analysis.angles[1].id,
+        )
+        state = repository.timeline.load_timeline(editor.sequence_id)
+        audio = next(item for item in state.clips if item.id in group.program_audio_clip_ids)
+        assert audio.asset_id == second.id
+        assert audio.duration == 200
+        switched = editor.switch_multicam_angle(group.id, analysis.angles[1].id, 75)
+        updated = repository.timeline.load_timeline(editor.sequence_id)
+        stable_audio = next(
+            item for item in updated.clips if item.id in switched.program_audio_clip_ids
+        )
+        assert stable_audio.asset_id == second.id
+        assert stable_audio.timeline_start == 0
+        assert stable_audio.duration == 200
+
+
+def test_multicam_waveform_sync_uses_persisted_peak_cache(tmp_path: Path) -> None:
+    generator = np.random.default_rng(20260825)
+    reference = generator.uniform(0.05, 0.95, size=512)
+    reference[:64] = 0.0
+    reference[-64:] = 0.0
+    delay = 20
+    delayed = np.concatenate((np.zeros(delay), reference[:-delay]))
+
+    def cache(name: str, values: np.ndarray) -> Path:
+        fragment = tmp_path / f"{name}.peaks"
+        payload = array("h")
+        for value in values:
+            peak = round(float(value) * 30_000)
+            payload.extend((-peak, peak))
+        with fragment.open("wb") as stream:
+            payload.tofile(stream)
+        output = tmp_path / f"{name}.mfwave"
+        write_waveform_cache(
+            output,
+            sample_rate=48_000,
+            sample_count=len(values) * 1_920,
+            fragments={1_920: fragment},
+            level_counts={1_920: len(values)},
+        )
+        return output
+
+    with ProjectRepository.create(
+        tmp_path / "WaveformMulticam",
+        "WaveformMulticam",
+        ProjectProfile(fps_numerator=25, fps_denominator=1),
+    ) as repository:
+        assets = []
+        for name, values in (("camera-a", reference), ("camera-b", delayed)):
+            source = tmp_path / f"{name}.mp4"
+            source.write_bytes(name.encode("ascii"))
+            imported = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+            assets.append(
+                repository.assets.update_asset(
+                    imported.model_copy(
+                        update={
+                            "metadata": MediaMetadata(
+                                duration_frames=1_000,
+                                has_video=True,
+                                has_audio=True,
+                            ),
+                            "waveform_path": str(cache(name, values)),
+                        }
+                    )
+                )
+            )
+        editor = TimelineEditor(
+            repository,
+            repository.projects.get_project().main_sequence_id,
+        )
+        analysis = editor.analyze_multicam_sync(
+            [assets[0].id, assets[1].id],
+            "waveform",
+        )
+
+        assert [item.sync_frame for item in analysis.angles] == [0, delay]
+        assert analysis.offset_span_frames == delay
+        assert analysis.confidence > 0.65
 
 
 def test_split_undo_redo_round_trip_is_persisted(editor_fixture) -> None:
@@ -337,6 +527,189 @@ def test_visual_effect_stack_is_validated_ordered_persisted_and_undoable(
         adjustment.id,
         vignette.id,
     ]
+
+
+def test_native_transform_and_effect_keyframes_persist_retime_and_undo(
+    editor_fixture,
+) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=30,
+    )
+    editor.upsert_clip_transform_keyframe(
+        clip.id,
+        5,
+        ClipTransform(x=10, opacity=0.5),
+        curve=KeyframeCurve(interpolation="ease_in_out"),
+    )
+    editor.upsert_clip_transform_keyframe(
+        clip.id,
+        15,
+        ClipTransform(x=80, opacity=1.0),
+    )
+    editor.retime_clip_transform_keyframes(
+        clip.id,
+        [5, 15],
+        anchor_offset=5,
+        scale=0.5,
+    )
+    effect = editor.add_clip_visual_effect(
+        clip.id,
+        VisualEffectKind.GAUSSIAN_BLUR,
+    )
+    editor.upsert_clip_effect_parameter_keyframe(
+        clip.id,
+        effect.id,
+        "sigma",
+        4,
+        2.0,
+        curve=KeyframeCurve(interpolation="hold"),
+    )
+    editor.upsert_clip_effect_parameter_keyframe(
+        clip.id,
+        effect.id,
+        "sigma",
+        12,
+        12.0,
+    )
+    editor.move_clip_effect_parameter_keyframe(
+        clip.id,
+        effect.id,
+        "sigma",
+        12,
+        14,
+    )
+
+    stored = repository.timeline.load_timeline(editor.sequence_id).clips[0]
+
+    assert [item.timeline_offset for item in stored.transform_keyframes] == [5, 10]
+    assert stored.transform_keyframes[0].curve.interpolation == "ease_in_out"
+    stored_effect = stored.visual_effects[0]
+    assert [
+        item.timeline_offset for item in stored_effect.parameter_keyframes["sigma"]
+    ] == [4, 14]
+    assert stored_effect.parameter_keyframes["sigma"][0].curve.interpolation == "hold"
+
+    editor.undo()
+    assert [
+        item.timeline_offset
+        for item in editor.state.clips[0].visual_effects[0].parameter_keyframes["sigma"]
+    ] == [4, 12]
+
+    with pytest.raises(ValueError, match="片段范围内"):
+        editor.upsert_clip_effect_parameter_keyframe(
+            clip.id,
+            effect.id,
+            "sigma",
+            30,
+            5.0,
+        )
+
+
+def test_native_mask_local_effect_keyframes_and_undo(editor_fixture) -> None:
+    _repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=30,
+    )
+    effect = editor.add_clip_visual_effect(
+        clip.id,
+        VisualEffectKind.GAUSSIAN_BLUR,
+    )
+    mask = editor.add_clip_mask(
+        clip.id,
+        MaskShapeKind.ELLIPSE,
+        name="Face",
+        geometry=MaskGeometry(center_x=0.25, center_y=0.5, width=0.3, height=0.4),
+    )
+    editor.assign_clip_visual_effect_mask(clip.id, effect.id, mask.id)
+    editor.upsert_clip_mask_keyframe(
+        clip.id,
+        mask.id,
+        5,
+        MaskGeometry(center_x=0.3, center_y=0.5, width=0.3, height=0.4),
+        curve=KeyframeCurve(interpolation="ease_in_out"),
+    )
+    editor.upsert_clip_mask_keyframe(
+        clip.id,
+        mask.id,
+        15,
+        MaskGeometry(center_x=0.7, center_y=0.5, width=0.3, height=0.4),
+    )
+    editor.retime_clip_mask_keyframes(
+        clip.id,
+        mask.id,
+        [5, 15],
+        anchor_offset=5,
+        scale=2.0,
+    )
+
+    stored = next(item for item in editor.state.clips if item.id == clip.id)
+    assert stored.visual_effects[0].mask_id == mask.id
+    assert [item.timeline_offset for item in stored.masks[0].keyframes] == [5, 25]
+    assert stored.masks[0].keyframes[0].curve.interpolation == "ease_in_out"
+
+    editor.remove_clip_mask(clip.id, mask.id)
+    stored = next(item for item in editor.state.clips if item.id == clip.id)
+    assert stored.masks == []
+    assert stored.visual_effects[0].mask_id is None
+    editor.undo()
+    restored = next(item for item in editor.state.clips if item.id == clip.id)
+    assert restored.masks[0].id == mask.id
+    assert restored.visual_effects[0].mask_id == mask.id
+
+
+def test_review_threads_are_timecoded_recoverable_and_undoable(editor_fixture) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=0,
+        source_in=0,
+        duration=60,
+    )
+    reviewer = ActorIdentity(kind="human", id="reviewer", name="审阅人")
+    agent = ActorIdentity(kind="agent", id="assistant", name="剪辑 Agent")
+    thread = editor.add_review_thread(
+        12,
+        "这里需要换一个更清楚的镜头",
+        reviewer,
+        end_frame=24,
+        clip_id=clip.id,
+        subject="镜头表达",
+        priority="blocking",
+    )
+    editor.reply_review_thread(thread.id, "已找到替代镜头，等待确认", agent)
+    stored = repository.timeline.load_timeline(editor.sequence_id).review_threads[0]
+    assert (stored.start_frame, stored.end_frame, stored.priority) == (12, 24, "blocking")
+    assert [item.author.id for item in stored.messages] == ["reviewer", "assistant"]
+
+    with pytest.raises(PermissionError, match="只能编辑自己"):
+        editor.edit_review_message(
+            thread.id,
+            stored.messages[0].id,
+            "不能冒充审阅人修改",
+            agent,
+        )
+
+    editor.resolve_review_thread(thread.id, reviewer)
+    editor.archive_review_thread(thread.id)
+    archived = editor.state.review_threads[0]
+    assert archived.status == "archived"
+    assert archived.archived_from == "resolved"
+    editor.restore_review_thread(thread.id)
+    assert editor.state.review_threads[0].status == "resolved"
+    editor.reopen_review_thread(thread.id)
+    assert editor.state.review_threads[0].status == "open"
+    editor.undo()
+    assert editor.state.review_threads[0].status == "resolved"
 
 
 def test_split_preserves_valid_incoming_and_outgoing_transitions(editor_fixture) -> None:

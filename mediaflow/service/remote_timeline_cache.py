@@ -15,6 +15,10 @@ _LOCALLY_PROJECTED_WRITES = {
     "set_clip_audio",
     "set_clip_speed",
     "set_clip_transform",
+    "upsert_clip_transform_keyframe",
+    "remove_clip_transform_keyframe",
+    "move_clip_transform_keyframe",
+    "retime_clip_transform_keyframes",
     "set_clips_properties",
     "split_clip",
     "trim_clip",
@@ -106,6 +110,11 @@ def project_timeline_write(
         return state.model_copy(
             update={
                 "clips": [item for item in state.clips if item.id not in selected_ids],
+                "compounds": [
+                    compound
+                    for compound in state.compounds
+                    if selected_ids.isdisjoint(compound.clip_ids)
+                ],
                 "transitions": [
                     item
                     for item in state.transitions

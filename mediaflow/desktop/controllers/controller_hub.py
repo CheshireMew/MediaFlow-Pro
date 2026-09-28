@@ -46,10 +46,17 @@ from .subtitle_view_controller import SubtitleViewController
 from .task_controller import TaskController
 from .timeline_analysis_controller import TimelineAnalysisController
 from .timeline_clip_controller import TimelineClipController
+from .timeline_color_controller import TimelineColorController
 from .timeline_effects_controller import TimelineEffectsController
+from .timeline_interchange_controller import TimelineInterchangeController
+from .timeline_keyframe_controller import TimelineKeyframeController
+from .timeline_mask_controller import TimelineMaskController
+from .timeline_multicam_controller import TimelineMulticamController
+from .timeline_review_controller import TimelineReviewController
 from .timeline_structure_controller import TimelineStructureController
 from .timeline_view_controller import TimelineViewController
 from .timeline_viewport_controller import TimelineViewportController
+from .timeline_voiceover_controller import TimelineVoiceoverController
 from .web_controller import WebController
 from .web_delivery_controller import WebDeliveryController
 from .web_timeline_controller import WebTimelineController
@@ -96,8 +103,15 @@ class EditorControllers(QObject):
         self.timeline_view = TimelineViewController(timeline)
         self.timeline_viewport = TimelineViewportController(timeline)
         self.timeline_clips = TimelineClipController(timeline)
+        self.timeline_color = TimelineColorController(timeline)
         self.timeline_structure = TimelineStructureController(timeline)
         self.timeline_effects = TimelineEffectsController(timeline)
+        self.timeline_keyframes = TimelineKeyframeController(timeline)
+        self.timeline_interchange = TimelineInterchangeController(timeline)
+        self.timeline_masks = TimelineMaskController(timeline)
+        self.timeline_multicam = TimelineMulticamController(timeline)
+        self.timeline_review = TimelineReviewController(timeline)
+        self.timeline_voiceover = TimelineVoiceoverController(timeline)
         self.timeline_analysis = TimelineAnalysisController(timeline)
         self.subtitle_view = SubtitleViewController(subtitles)
         self.subtitle_placement = SubtitlePlacementController(subtitles)
@@ -136,8 +150,15 @@ class EditorControllers(QObject):
             "timelineView": self.timeline_view,
             "timelineViewport": self.timeline_viewport,
             "timelineClips": self.timeline_clips,
+            "timelineColor": self.timeline_color,
             "timelineStructure": self.timeline_structure,
             "timelineEffects": self.timeline_effects,
+            "timelineKeyframes": self.timeline_keyframes,
+            "timelineInterchange": self.timeline_interchange,
+            "timelineMasks": self.timeline_masks,
+            "timelineMulticam": self.timeline_multicam,
+            "timelineReview": self.timeline_review,
+            "timelineVoiceover": self.timeline_voiceover,
             "timelineAnalysis": self.timeline_analysis,
             "subtitleView": self.subtitle_view,
             "subtitlePlacement": self.subtitle_placement,
@@ -187,8 +208,39 @@ class EditorControllers(QObject):
     timelineViewController = Property(QObject, lambda self: self.timeline_view, constant=True)
     timelineViewportController = Property(QObject, lambda self: self.timeline_viewport, constant=True)
     timelineClipController = Property(QObject, lambda self: self.timeline_clips, constant=True)
+    timelineColorController = Property(QObject, lambda self: self.timeline_color, constant=True)
     timelineStructureController = Property(QObject, lambda self: self.timeline_structure, constant=True)
     timelineEffectsController = Property(QObject, lambda self: self.timeline_effects, constant=True)
+    timelineKeyframeController = Property(
+        QObject,
+        lambda self: self.timeline_keyframes,
+        constant=True,
+    )
+    timelineInterchangeController = Property(
+        QObject,
+        lambda self: self.timeline_interchange,
+        constant=True,
+    )
+    timelineMaskController = Property(
+        QObject,
+        lambda self: self.timeline_masks,
+        constant=True,
+    )
+    timelineMulticamController = Property(
+        QObject,
+        lambda self: self.timeline_multicam,
+        constant=True,
+    )
+    timelineReviewController = Property(
+        QObject,
+        lambda self: self.timeline_review,
+        constant=True,
+    )
+    timelineVoiceoverController = Property(
+        QObject,
+        lambda self: self.timeline_voiceover,
+        constant=True,
+    )
     timelineAnalysisController = Property(QObject, lambda self: self.timeline_analysis, constant=True)
     subtitleViewController = Property(QObject, lambda self: self.subtitle_view, constant=True)
     subtitlePlacementController = Property(QObject, lambda self: self.subtitle_placement, constant=True)

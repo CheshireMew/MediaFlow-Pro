@@ -12,6 +12,7 @@ from mediaflow.domain.web_rendering import WebRenderActualCapture, WebRenderPlan
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.storage_budget import ProjectCacheReservation
 from mediaflow.infrastructure.web_browser_cache_renderer import WebBrowserCacheRenderer
 from mediaflow.infrastructure.web_capture_prewarm import prewarm_web_capture_engine
 from mediaflow.infrastructure.web_clip_export_writer import WebClipExportWriter
@@ -153,16 +154,24 @@ class WebRenderService:
             return target.path
         if progress:
             progress(OperationProgress.indeterminate("web_render_preparing"))
-        self._reserve_cache(target, label="MediaFlow editable web render cache")
-        target.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = target.path.with_name(f"{target.path.name}.lock")
-        cache_lock = self._acquire_cache_lock(
-            lock_path,
+        reservation = self._reserve_cache(
             target,
-            render_plan,
-            check_cancelled=check_cancelled,
+            label="MediaFlow editable web render cache",
         )
+        try:
+            target.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = target.path.with_name(f"{target.path.name}.lock")
+            cache_lock = self._acquire_cache_lock(
+                lock_path,
+                target,
+                render_plan,
+                check_cancelled=check_cancelled,
+            )
+        except BaseException:
+            reservation.release()
+            raise
         if cache_lock is None:
+            reservation.release()
             return target.path
         try:
             if self._cache_is_ready(target, render_plan):
@@ -199,6 +208,7 @@ class WebRenderService:
             return target.path
         finally:
             cache_lock.release()
+            reservation.release()
 
     def render_filmstrip_source(
         self,
@@ -298,8 +308,13 @@ class WebRenderService:
     ) -> bool:
         return WebRenderCacheLifecycle.cache_is_ready(target, render_plan)
 
-    def _reserve_cache(self, target: WebRenderTarget, *, label: str) -> None:
-        self.cache_lifecycle.reserve(target, label=label)
+    def _reserve_cache(
+        self,
+        target: WebRenderTarget,
+        *,
+        label: str,
+    ) -> ProjectCacheReservation:
+        return self.cache_lifecycle.reserve(target, label=label)
 
     @classmethod
     def _acquire_cache_lock(

@@ -141,7 +141,7 @@ def _command_handler(target: DesktopTarget, name: str) -> tuple[Any, bool]:
     return descriptor, True
 
 
-def _contract_signature(source: Any) -> tuple[inspect.Signature, dict[str, Any], Any]:
+def command_signature(source: Any) -> tuple[inspect.Signature, dict[str, Any], Any]:
     signature = inspect.signature(source)
     hints = get_type_hints(source)
     parameters = list(signature.parameters.values())
@@ -175,8 +175,8 @@ def _transport_parameter_annotation(annotation: Any) -> Any:
     return annotation
 
 
-def _contract_models(
-    target: DesktopTarget,
+def command_models(
+    target: str,
     name: str,
     signature: inspect.Signature,
     annotations: dict[str, Any],
@@ -198,13 +198,14 @@ def _contract_models(
             **cast(dict[str, Any], request_fields),
         ),
     )
-    result_type = object if result_annotation in {inspect.Signature.empty, Any} else result_annotation
+    if result_annotation in {inspect.Signature.empty, Any, object}:
+        raise RuntimeError(f"Command contract has an untyped result: {target}.{name}")
     result_model = cast(
         type[DesktopCommandResult],
         create_model(
             f"{model_prefix}Result",
             __base__=DesktopCommandResult,
-            value=(result_type, ...),
+            value=(result_annotation, ...),
         ),
     )
     return request_model, result_model
@@ -225,9 +226,9 @@ def _register_commands(
         if key in registry:
             raise RuntimeError(f"Duplicate desktop command registration: {target}.{name}")
         handler, bind_receiver = _command_handler(target, name)
-        signature, annotations, result_annotation = _contract_signature(handler)
+        signature, annotations, result_annotation = command_signature(handler)
         try:
-            request_model, result_model = _contract_models(
+            request_model, result_model = command_models(
                 target,
                 name,
                 signature,

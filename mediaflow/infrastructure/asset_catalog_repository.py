@@ -16,6 +16,7 @@ from mediaflow.domain.project import (
     AssetFingerprint,
     MediaMetadata,
 )
+from mediaflow.domain.project_collection import ProjectCollectionRecord
 from mediaflow.waveform_cache import waveform_cache_is_current
 
 from .file_fingerprint import fingerprint_file, fingerprint_matches
@@ -281,6 +282,42 @@ class AssetCatalogRepository(ProjectRepositoryComponent):
             )
             self._touch_project(connection)
         return self.get_asset(asset.id)
+
+    def save_project_collection(
+        self,
+        record: ProjectCollectionRecord,
+    ) -> ProjectCollectionRecord:
+        for item in record.items:
+            self.get_asset(item.asset_id)
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO project_collection(id, created_at, collection_json)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       created_at=excluded.created_at,
+                       collection_json=excluded.collection_json""",
+                (record.id, record.created_at, _model_json(record)),
+            )
+            self._touch_project(connection)
+        return self.get_project_collection(record.id)
+
+    def get_project_collection(self, collection_id: str) -> ProjectCollectionRecord:
+        row = self._fetchone(
+            "SELECT collection_json FROM project_collection WHERE id=?",
+            (collection_id,),
+        )
+        if row is None:
+            raise KeyError(collection_id)
+        return ProjectCollectionRecord.model_validate_json(row["collection_json"])
+
+    def list_project_collections(self) -> list[ProjectCollectionRecord]:
+        rows = self._fetchall(
+            "SELECT collection_json FROM project_collection ORDER BY created_at, id"
+        )
+        return [
+            ProjectCollectionRecord.model_validate_json(row["collection_json"])
+            for row in rows
+        ]
 
     def set_asset_proxy_paths(
         self,

@@ -83,7 +83,7 @@ Item {
             Text {
                 text: qsTr("%1 项").arg(mediaflow.resourceLibraryController.resultCount)
                 color: Theme.textMuted
-                font.pixelSize: Theme.fontSizeSmall
+                font.pixelSize: Theme.fontSizeCaption
             }
         }
 
@@ -157,7 +157,7 @@ Item {
                 text: mediaflow.resourceLibraryController.sourceErrors.join("\n")
                 color: Theme.danger
                 wrapMode: Text.WordWrap
-                font.pixelSize: Theme.fontSizeSmall
+                font.pixelSize: Theme.fontSizeCaption
             }
         }
 
@@ -179,6 +179,7 @@ Item {
                 required property string description
                 required property string provider
                 required property var tags
+                required property var tagLabels
                 required property string previewType
                 required property string previewUrl
                 required property string license
@@ -257,16 +258,17 @@ Item {
                             Layout.fillWidth: true
                             text: card.description
                             color: Theme.textMuted
-                            font.pixelSize: Theme.fontSizeSmall
+                            font.pixelSize: Theme.fontSizeCaption
                             wrapMode: Text.WordWrap
                             maximumLineCount: 2
                             elide: Text.ElideRight
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: card.provider + (card.tags.length ? " · " + card.tags.join(" / ") : "")
+                            text: card.provider + (card.tagLabels.length
+                                ? " · " + card.tagLabels.join(" / ") : "")
                             color: Theme.textDisabled
-                            font.pixelSize: Theme.fontSizeSmall
+                            font.pixelSize: Theme.fontSizeCaption
                             elide: Text.ElideRight
                         }
                         Item { Layout.fillHeight: true }
@@ -276,7 +278,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: card.license
                                 color: Theme.textDisabled
-                                font.pixelSize: Theme.fontSizeSmall
+                                font.pixelSize: Theme.fontSizeCaption
                                 elide: Text.ElideRight
                             }
                             AppButton {

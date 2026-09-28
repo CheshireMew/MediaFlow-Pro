@@ -538,6 +538,10 @@ Rectangle {
                     previewViewport.seek(frame);
                 }
                 onEditProfileRequested: workspaceChrome.openSequenceProfile()
+                onCreateVariantsRequested: workspaceChrome.openSequenceVariants()
+                onCreateMulticamRequested: workspaceChrome.openMulticam()
+                onOpenColorScopesRequested: workspaceChrome.openColorScopes()
+                onOpenVoiceoverRequested: workspaceChrome.openVoiceover()
             }
     }
 

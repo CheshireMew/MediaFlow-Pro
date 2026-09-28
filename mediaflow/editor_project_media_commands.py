@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from collections.abc import Sequence as CollectionSequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mediaflow.application.asset_service import AssetService
+from mediaflow.application.edit_history import ProjectEditHistory
 from mediaflow.application.highlight_service import HighlightService
+from mediaflow.application.project_collection_service import ProjectCollectionService
+from mediaflow.application.review_package_service import ReviewPackageService
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.subtitle_editing import _UNSET, SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
@@ -12,9 +17,27 @@ from mediaflow.application.timeline_clock import asset_in_timeline_clock
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcript_editing import TranscriptEditingService
 from mediaflow.application.translation_comparison import TranslationComparisonService
+from mediaflow.domain.collaboration import (
+    ProjectChange,
+    ProjectChangeSet,
+    ProjectEditAction,
+    ProjectEditCommand,
+)
 from mediaflow.domain.enums import AssetKind, AssetOrigin
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.project import Asset, ProjectProfile, Sequence
+from mediaflow.domain.project_collection import (
+    ProjectCollectionPreview,
+    ProjectCollectionRecord,
+    ProjectCollectionResult,
+)
+from mediaflow.domain.review import ReviewPackageResult, ReviewSnapshot, ReviewThread
+from mediaflow.domain.sequence_variants import (
+    SequenceVariantGeneration,
+    SequenceVariantPlan,
+    SequenceVariantRecord,
+    SequenceVariantSpec,
+)
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment
 from mediaflow.domain.transcript_edits import (
@@ -33,14 +56,18 @@ class EditorProjectMediaCommands:
     _repository: ProjectRepository
     _paths: RuntimePaths
     _assets: AssetService
+    _collections: ProjectCollectionService
     _subtitle_editing: SubtitleEditingService
     _subtitle_publication: SubtitlePublicationService
     _transcript_editing: TranscriptEditingService
     _highlights: HighlightService
     _sequences: SequenceService
+    _review_packages: ReviewPackageService
     _settings: ServiceSettings
+    _history: ProjectEditHistory
     if TYPE_CHECKING:
         def _require_writable(self) -> None: ...
+        def _reload_timelines(self) -> None: ...
         def timeline(self, sequence_id: str) -> TimelineEditor: ...
 
     def import_external_asset(
@@ -88,6 +115,34 @@ class EditorProjectMediaCommands:
 
     def relink_offline_assets(self, directory: str | Path) -> tuple[list[Asset], list[Asset]]:
         return self._assets.relink_offline_from_directory(directory)
+
+    def preview_project_collection(
+        self,
+        asset_ids: list[str] | None = None,
+    ) -> ProjectCollectionPreview:
+        return self._collections.preview(asset_ids)
+
+    def collect_project_assets(
+        self,
+        asset_ids: list[str] | None = None,
+    ) -> ProjectCollectionResult:
+        self._require_writable()
+        return self._collections.collect(asset_ids)
+
+    def list_project_collections(self) -> list[ProjectCollectionRecord]:
+        return self._collections.list_records()
+
+    def set_project_collection_state(
+        self,
+        collection_id: str,
+        *,
+        using_collected: bool,
+    ) -> ProjectCollectionResult:
+        self._require_writable()
+        return self._collections.set_state(
+            collection_id,
+            using_collected=using_collected,
+        )
 
     def translation_comparison(
         self,
@@ -395,3 +450,206 @@ class EditorProjectMediaCommands:
             end_frame,
             name=name,
         )
+
+    def list_sequence_variants(
+        self,
+        source_sequence_id: str | None = None,
+        *,
+        include_archived: bool = False,
+    ) -> list[SequenceVariantRecord]:
+        return self._sequences.list_variants(
+            source_sequence_id,
+            include_archived=include_archived,
+        )
+
+    def generate_sequence_variants(
+        self,
+        source_sequence_id: str,
+        specs: CollectionSequence[SequenceVariantSpec | Mapping[str, Any]],
+        *,
+        force: bool = False,
+        conflict_resolutions: dict[str, str] | None = None,
+    ) -> SequenceVariantGeneration:
+        self._require_writable()
+        normalized = [SequenceVariantSpec.model_validate(item) for item in specs]
+        requested_presets = {item.preset_id for item in normalized}
+        before_snapshots = {
+            record.sequence_id: self._sequences.snapshot_variant(record.sequence_id)
+            for record in self._sequences.list_variants(
+                source_sequence_id, include_archived=False
+            )
+            if record.preset_id in requested_presets
+        }
+        result = self._sequences.generate_variants(
+            source_sequence_id,
+            normalized,
+            force=force,
+            conflict_resolutions=conflict_resolutions,
+        )
+        if not result.created_sequence_ids and not result.refreshed_sequence_ids:
+            return result
+
+        undo_actions = [
+            ProjectEditAction(
+                kind="sequence.archive-state",
+                payload={"sequence_id": sequence_id, "archived": True},
+            )
+            for sequence_id in result.created_sequence_ids
+        ]
+        undo_actions.extend(
+            ProjectEditAction(
+                kind="sequence.archive-state",
+                payload={"sequence_id": sequence_id, "archived": False},
+            )
+            for sequence_id in result.archived_sequence_ids
+        )
+        undo_actions.extend(
+            ProjectEditAction(
+                kind="sequence.variant-state",
+                payload={
+                    "snapshot": before_snapshots[sequence_id].model_dump(
+                        mode="json", exclude_computed_fields=True
+                    )
+                },
+            )
+            for sequence_id in result.refreshed_sequence_ids
+        )
+        redo_actions = [
+            ProjectEditAction(
+                kind="sequence.archive-state",
+                payload={"sequence_id": sequence_id, "archived": True},
+            )
+            for sequence_id in result.archived_sequence_ids
+        ]
+        redo_actions.extend(
+            ProjectEditAction(
+                kind="sequence.archive-state",
+                payload={"sequence_id": sequence_id, "archived": False},
+            )
+            for sequence_id in result.created_sequence_ids
+        )
+        redo_actions.extend(
+            ProjectEditAction(
+                kind="sequence.variant-state",
+                payload={
+                    "snapshot": self._sequences.snapshot_variant(sequence_id).model_dump(
+                        mode="json", exclude_computed_fields=True
+                    )
+                },
+            )
+            for sequence_id in result.refreshed_sequence_ids
+        )
+        changes = [
+            ProjectChange(
+                path=f"/sequences/{sequence_id}",
+                action="create",
+                value=next(
+                    item.model_dump(mode="json")
+                    for item in result.sequences
+                    if item.id == sequence_id
+                ),
+            )
+            for sequence_id in result.created_sequence_ids
+        ]
+        changes.extend(
+            ProjectChange(
+                path=f"/sequences/{sequence_id}/settings/archived",
+                action="update",
+                value=True,
+            )
+            for sequence_id in result.archived_sequence_ids
+        )
+        changes.extend(
+            ProjectChange(
+                path=f"/sequences/{sequence_id}/variant-sync",
+                action="update",
+                value=next(
+                    item.model_dump(mode="json")
+                    for item in result.plans
+                    if item.sequence_id == sequence_id
+                ),
+            )
+            for sequence_id in result.refreshed_sequence_ids
+        )
+        self._history.push(
+            ProjectEditCommand(
+                label="生成交付版本",
+                undo_actions=undo_actions,
+                redo_actions=redo_actions,
+            ),
+            ProjectChangeSet(changes=changes),
+        )
+        self._reload_timelines()
+        return result
+
+    def _apply_sequence_variant_history_action(
+        self,
+        action: ProjectEditAction,
+    ) -> None:
+        self._sequences.apply_history_action(action)
+        self._reload_timelines()
+
+    def plan_sequence_variants(
+        self,
+        source_sequence_id: str,
+        specs: CollectionSequence[SequenceVariantSpec | Mapping[str, Any]],
+    ) -> SequenceVariantPlan:
+        normalized = [SequenceVariantSpec.model_validate(item) for item in specs]
+        return self._sequences.plan_variants(source_sequence_id, normalized)
+
+    def attach_review_snapshot(
+        self,
+        sequence_id: str,
+        thread_id: str,
+        *,
+        frame: int,
+        rendered_path: str | Path,
+        rendered_sha256: str,
+        width: int,
+        height: int,
+    ) -> ReviewSnapshot:
+        self._require_writable()
+        return self._review_packages.attach_snapshot(
+            sequence_id,
+            thread_id,
+            frame=frame,
+            rendered_path=rendered_path,
+            rendered_sha256=rendered_sha256,
+            width=width,
+            height=height,
+        )
+
+    def set_review_snapshot_markup(
+        self,
+        sequence_id: str,
+        thread_id: str,
+        snapshot_id: str,
+        markup: list[dict[str, Any]],
+    ) -> ReviewThread:
+        self._require_writable()
+        return self._review_packages.set_markup(
+            sequence_id, thread_id, snapshot_id, markup
+        )
+
+    def export_review_package(
+        self,
+        sequence_id: str,
+        destination: str | Path,
+        *,
+        thread_ids: list[str] | None = None,
+        overwrite: bool = False,
+    ) -> ReviewPackageResult:
+        return self._review_packages.export_package(
+            sequence_id,
+            destination,
+            thread_ids=thread_ids,
+            overwrite=overwrite,
+        )
+
+    def import_review_package(
+        self,
+        sequence_id: str,
+        source: str | Path,
+    ) -> ReviewPackageResult:
+        self._require_writable()
+        return self._review_packages.import_package(sequence_id, source)

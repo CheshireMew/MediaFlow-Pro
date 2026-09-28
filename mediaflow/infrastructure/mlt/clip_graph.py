@@ -4,11 +4,17 @@ import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from pathlib import Path
 
-from mediaflow.domain.clip_transform_projection import project_clip_transform_points
+from mediaflow.domain.clip_transform_projection import sampled_clip_transform_points
 from mediaflow.domain.enums import AssetKind, ColorMode
+from mediaflow.domain.mask_projection import mask_spline_json
+from mediaflow.domain.masks import ClipMask
 from mediaflow.domain.project import Asset
 from mediaflow.domain.timeline import Clip, ClipTransform
-from mediaflow.domain.visual_effects import visual_effect_mlt
+from mediaflow.domain.visual_effects import (
+    ClipVisualEffect,
+    visual_effect_mlt,
+    visual_effect_parameter_points,
+)
 from mediaflow.infrastructure.mlt.graph import MltGraph
 
 
@@ -166,34 +172,56 @@ class MltClipGraph:
         visual_effect_resources: Mapping[str, Path],
     ) -> None:
         transform = clip.transform
+        transform_points = sampled_clip_transform_points(clip)
+        masks = {mask.id: mask for mask in clip.masks}
         for effect in clip.visual_effects:
             if not effect.enabled:
                 continue
+            mask = masks.get(effect.mask_id) if effect.mask_id is not None else None
+            if effect.mask_id is not None and (mask is None or not mask.enabled):
+                continue
+            mask_stack = self._effect_mask_stack(clip, mask) if mask is not None else []
+            if mask_stack:
+                self._append_mask_start(
+                    producer,
+                    clip,
+                    mask_stack[0],
+                    effect,
+                    producer_start=producer_start,
+                )
+                for combined_mask in mask_stack[1:]:
+                    self._append_combined_mask(
+                        producer,
+                        clip,
+                        combined_mask,
+                        effect,
+                        producer_start=producer_start,
+                    )
             resource_path = visual_effect_resources.get(effect.id)
-            service, properties = visual_effect_mlt(
-                effect,
-                resource_path=str(resource_path) if resource_path is not None else None,
-            )
-            filter_element = ET.SubElement(
+            self._append_visual_effect(
                 producer,
-                "filter",
-                {
-                    "id": f"visual_effect_{effect.id}",
-                    "in": str(producer_start),
-                    "out": str(producer_start + clip.duration - 1),
-                },
+                clip,
+                effect,
+                producer_start=producer_start,
+                resource_path=resource_path,
             )
-            MltGraph.property(filter_element, "mlt_service", service)
-            for name, value in properties.items():
-                rendered = f"{value:g}" if isinstance(value, (int, float)) else value
-                MltGraph.property(filter_element, name, rendered)
+            if mask_stack:
+                self._append_mask_apply(
+                    producer,
+                    clip,
+                    mask_stack[-1],
+                    effect,
+                    producer_start=producer_start,
+                )
+
         if any(
             value > 0.0
+            for _frame, point in transform_points
             for value in (
-                transform.crop_left,
-                transform.crop_top,
-                transform.crop_right,
-                transform.crop_bottom,
+                point.crop_left,
+                point.crop_top,
+                point.crop_right,
+                point.crop_bottom,
             )
         ):
             crop = ET.SubElement(
@@ -207,12 +235,21 @@ class MltClipGraph:
             )
             MltGraph.property(crop, "mlt_service", "crop")
             MltGraph.property(crop, "active", "1")
-            MltGraph.property(crop, "left", str(round(transform.crop_left * (asset.metadata.width or 1))))
-            MltGraph.property(crop, "top", str(round(transform.crop_top * (asset.metadata.height or 1))))
-            MltGraph.property(crop, "right", str(round(transform.crop_right * (asset.metadata.width or 1))))
-            MltGraph.property(
-                crop, "bottom", str(round(transform.crop_bottom * (asset.metadata.height or 1)))
-            )
+            width = asset.metadata.width or 1
+            height = asset.metadata.height or 1
+
+            def crop_animation(field: str, dimension: int) -> str:
+                if not clip.transform_keyframes:
+                    return str(round(getattr(transform, field) * dimension))
+                return ";".join(
+                    f"{producer_start + frame}={round(getattr(point, field) * dimension)}"
+                    for frame, point in transform_points
+                )
+
+            MltGraph.property(crop, "left", crop_animation("crop_left", width))
+            MltGraph.property(crop, "top", crop_animation("crop_top", height))
+            MltGraph.property(crop, "right", crop_animation("crop_right", width))
+            MltGraph.property(crop, "bottom", crop_animation("crop_bottom", height))
         if (
             transform.x
             or transform.y
@@ -240,9 +277,11 @@ class MltClipGraph:
 
             rect = rect_value(transform)
             rotation = f"{transform.rotation:g}"
-            projection = project_clip_transform_points(clip)
-            if projection.has_keyframes:
-                points = {producer_start + frame: value for frame, value in projection.points}
+            if clip.transform_keyframes:
+                points = {
+                    producer_start + frame: value
+                    for frame, value in transform_points
+                }
                 final_value = points[max(points)]
                 points[producer_start + clip.duration - 1] = final_value
                 rect = ";".join(f"{frame}={rect_value(value)}" for frame, value in sorted(points.items()))
@@ -256,6 +295,158 @@ class MltClipGraph:
         self.append_clip_audio_filters(producer, clip, producer_start=producer_start)
         if asset.kind in {AssetKind.IMAGE, AssetKind.WEB}:
             MltGraph.property(producer, "set.test_audio", "1")
+
+    @staticmethod
+    def _effect_mask_stack(clip: Clip, terminal: ClipMask) -> list[ClipMask]:
+        ordered = sorted(clip.masks, key=lambda item: item.position)
+        terminal_index = next(
+            index for index, item in enumerate(ordered) if item.id == terminal.id
+        )
+        candidates = [item for item in ordered[: terminal_index + 1] if item.enabled]
+        replace_index = max(
+            (
+                index
+                for index, item in enumerate(candidates)
+                if item.combine_mode == "replace"
+            ),
+            default=0,
+        )
+        return candidates[replace_index:]
+
+    @staticmethod
+    def _append_mask_start(
+        producer: ET.Element,
+        clip: Clip,
+        mask: ClipMask,
+        effect: ClipVisualEffect,
+        *,
+        producer_start: int,
+    ) -> None:
+        element = ET.SubElement(
+            producer,
+            "filter",
+            {
+                "id": f"mask_start_{mask.id}_{effect.id}",
+                "in": str(producer_start),
+                "out": str(producer_start + clip.duration - 1),
+            },
+        )
+        MltGraph.property(element, "mlt_service", "mask_start")
+        MltGraph.property(element, "filter", "rotoscoping")
+        MltGraph.property(element, "filter.mode", "alpha")
+        MltGraph.property(element, "filter.alpha_operation", "clear")
+        MltGraph.property(element, "filter.invert", "1" if mask.inverted else "0")
+        MltGraph.property(element, "filter.feather", str(mask.feather))
+        MltGraph.property(element, "filter.feather_passes", str(mask.feather_passes))
+        MltGraph.property(
+            element,
+            "filter.spline",
+            mask_spline_json(clip, mask, producer_start=producer_start),
+        )
+
+    @staticmethod
+    def _append_visual_effect(
+        producer: ET.Element,
+        clip: Clip,
+        effect: ClipVisualEffect,
+        *,
+        producer_start: int,
+        resource_path: Path | None,
+    ) -> None:
+        service, properties = visual_effect_mlt(
+            effect,
+            resource_path=str(resource_path) if resource_path is not None else None,
+        )
+        element = ET.SubElement(
+            producer,
+            "filter",
+            {
+                "id": f"visual_effect_{effect.id}",
+                "in": str(producer_start),
+                "out": str(producer_start + clip.duration - 1),
+            },
+        )
+        MltGraph.property(element, "mlt_service", service)
+        for name, value in properties.items():
+            field_id = name.removeprefix("av.")
+            animation = effect.parameter_keyframes.get(field_id)
+            if animation:
+                rendered = ";".join(
+                    f"{producer_start + frame}={sample:g}"
+                    for frame, sample in visual_effect_parameter_points(
+                        effect,
+                        field_id,
+                        duration=clip.duration,
+                    )
+                )
+            else:
+                rendered = f"{value:g}" if isinstance(value, (int, float)) else value
+            MltGraph.property(element, name, rendered)
+
+    @staticmethod
+    def _append_combined_mask(
+        producer: ET.Element,
+        clip: Clip,
+        mask: ClipMask,
+        effect: ClipVisualEffect,
+        *,
+        producer_start: int,
+    ) -> None:
+        operations = {
+            "add": "max",
+            "subtract": "sub",
+            "intersect": "min",
+        }
+        operation = operations.get(mask.combine_mode)
+        if operation is None:
+            raise ValueError("蒙版堆叠中只有首个启用蒙版可以使用替换模式")
+        element = ET.SubElement(
+            producer,
+            "filter",
+            {
+                "id": f"mask_combine_{mask.id}_{effect.id}",
+                "in": str(producer_start),
+                "out": str(producer_start + clip.duration - 1),
+            },
+        )
+        MltGraph.property(element, "mlt_service", "rotoscoping")
+        MltGraph.property(element, "mode", "alpha")
+        MltGraph.property(element, "alpha_operation", operation)
+        MltGraph.property(element, "invert", "1" if mask.inverted else "0")
+        MltGraph.property(element, "feather", str(mask.feather))
+        MltGraph.property(element, "feather_passes", str(mask.feather_passes))
+        MltGraph.property(
+            element,
+            "spline",
+            mask_spline_json(clip, mask, producer_start=producer_start),
+        )
+
+    @staticmethod
+    def _append_mask_apply(
+        producer: ET.Element,
+        clip: Clip,
+        mask: ClipMask,
+        effect: ClipVisualEffect,
+        *,
+        producer_start: int,
+    ) -> None:
+        element = ET.SubElement(
+            producer,
+            "filter",
+            {
+                "id": f"mask_apply_{mask.id}_{effect.id}",
+                "in": str(producer_start),
+                "out": str(producer_start + clip.duration - 1),
+            },
+        )
+        MltGraph.property(element, "mlt_service", "mask_apply")
+        MltGraph.property(element, "transition", "qtblend")
+        MltGraph.property(element, "transition.threads", "0")
+        MltGraph.property(
+            element,
+            "transition.rect",
+            f"0%/0%:100%x100%:{mask.opacity * 100:g}%",
+        )
 
     def append_clip_audio_filters(
         self,

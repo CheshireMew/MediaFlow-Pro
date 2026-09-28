@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from mediaflow.domain.enums import ClipMediaKind, SequenceKind, TrackKind
 from mediaflow.domain.project import Sequence
-from mediaflow.domain.timeline import Clip, TimelineState, Track
+from mediaflow.domain.timeline import Clip, CompoundClip, TimelineState, Track
 from mediaflow.domain.web_state import WebClipState
-from mediaflow.service.remote_project import project_write_affects_timeline
+from mediaflow.service.remote_project import RemoteEditorProject, project_write_affects_timeline
 from mediaflow.service.remote_timeline_cache import project_timeline_write
 
 
@@ -91,6 +93,38 @@ def test_remote_timeline_cache_refuses_to_guess_ripple_delete() -> None:
     )
 
 
+def test_remote_timeline_cache_removes_a_compound_with_a_deleted_member() -> None:
+    state = _timeline_state()
+    copied = state.clips[0].model_copy(
+        update={"id": "copied", "timeline_start": 20}
+    )
+    state = state.model_copy(
+        update={
+            "clips": [*state.clips, copied],
+            "compounds": [
+                CompoundClip(
+                    id="compound",
+                    sequence_id=state.sequence.id,
+                    name="Compound",
+                    clip_ids=["source", "copied"],
+                )
+            ],
+        }
+    )
+
+    projected = project_timeline_write(
+        state,
+        "delete_clips",
+        None,
+        args=(["copied"],),
+        kwargs={"ripple": False},
+    )
+
+    assert projected is not None
+    assert [item.id for item in projected.clips] == ["source"]
+    assert projected.compounds == []
+
+
 def test_project_write_only_invalidates_the_timeline_it_can_change() -> None:
     assert not project_write_affects_timeline(
         ["/subtitles/documents/document/segments/segment"],
@@ -100,3 +134,19 @@ def test_project_write_only_invalidates_the_timeline_it_can_change() -> None:
     assert project_write_affects_timeline(["/sequences/main/clips/clip"], "main")
     assert project_write_affects_timeline(["/web/clips/clip"], "main")
     assert project_write_affects_timeline(["/project"], "main")
+
+
+def test_remote_project_invalidates_revision_cached_reads_before_projecting_task_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = object.__new__(RemoteEditorProject)
+    invalidations: list[bool] = []
+    monkeypatch.setattr(
+        project,
+        "_invalidate_read_cache",
+        lambda *, invalidate_timelines=True: invalidations.append(invalidate_timelines),
+    )
+
+    project.invalidate_task_result_cache()
+
+    assert invalidations == [False]

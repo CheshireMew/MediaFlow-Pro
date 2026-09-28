@@ -82,6 +82,7 @@ class MediaMetadata(DomainModel):
     variable_frame_rate: bool = False
     has_video: bool = False
     has_audio: bool = False
+    start_timecode_frame: int | None = Field(default=None, ge=0)
 
     def in_frame_clock(
         self,
@@ -94,7 +95,16 @@ class MediaMetadata(DomainModel):
                     self.duration_frames,
                     source_profile,
                     destination_profile,
-                )
+                ),
+                "start_timecode_frame": (
+                    reframe_frames(
+                        self.start_timecode_frame,
+                        source_profile,
+                        destination_profile,
+                    )
+                    if self.start_timecode_frame is not None
+                    else None
+                ),
             }
         )
 

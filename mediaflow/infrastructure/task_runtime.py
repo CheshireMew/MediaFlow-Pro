@@ -23,6 +23,7 @@ from mediaflow.application.ports import (
 from mediaflow.domain.asr import RegionAsrPipeline
 from mediaflow.domain.downloads import DownloadPlan, DownloadRequest
 from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.masks import ClipMask, MaskKeyframe
 from mediaflow.domain.product_identity import PRODUCT_NAME
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset, AssetFingerprint, ProjectProfile
@@ -543,6 +544,25 @@ class InfrastructureAnalysisTaskRuntime:
             clip,
             profile,
             mode=mode,
+            check_cancelled=check_cancelled,
+            progress=progress,
+        )
+
+    @staticmethod
+    def track_mask(
+        source: Path,
+        clip: Clip,
+        mask: ClipMask,
+        profile: ProjectProfile,
+        *,
+        check_cancelled: CancellationCheck,
+        progress: ProgressCallback,
+    ) -> list[MaskKeyframe]:
+        return SubjectMotionService().analyze_mask(
+            source,
+            clip,
+            mask,
+            profile,
             check_cancelled=check_cancelled,
             progress=progress,
         )

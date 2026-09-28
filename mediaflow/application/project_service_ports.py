@@ -13,6 +13,7 @@ from mediaflow.application.project_storage_ports import (
     SequenceDocuments,
     SubtitleDocuments,
     TimelineDocuments,
+    VoiceoverDocuments,
     WebMediaDocuments,
 )
 from mediaflow.domain.subtitle_file import SubtitleCue
@@ -131,6 +132,29 @@ class SequenceServiceDocuments(
 
     @property
     def web(self) -> WebMediaDocuments: ...
+
+
+class VoiceoverEditingDocuments(
+    ProjectAccess,
+    Protocol,
+):
+    @property
+    def projects(self) -> ProjectMetadataDocuments: ...
+
+    @property
+    def sequences(self) -> SequenceDocuments: ...
+
+    @property
+    def assets(self) -> AssetDocuments: ...
+
+    @property
+    def audio(self) -> AudioDocuments: ...
+
+    @property
+    def timeline(self) -> TimelineDocuments: ...
+
+    @property
+    def voiceover(self) -> VoiceoverDocuments: ...
 
 
 class SubtitleAcquisitionDocuments(

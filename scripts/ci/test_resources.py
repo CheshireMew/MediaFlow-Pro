@@ -5,6 +5,7 @@ from collections.abc import Sequence
 RUNTIME_TEST_SOURCES = frozenset(
     {
         "tests/v2/infrastructure/test_asr_cli.py",
+        "tests/v2/infrastructure/test_asr_batching.py",
         "tests/v2/infrastructure/test_dubbing_runtime.py",
         "tests/v2/infrastructure/test_editable_media_v6_runtime.py",
         "tests/v2/infrastructure/test_editable_media_project_migration.py",
@@ -39,6 +40,7 @@ RUNTIME_TEST_NODE_PREFIXES = (
     "tests/v2/application/test_subtitle_services.py::test_single_subtitle_edit_uses_segment_scoped_storage_and_history",
     "tests/v2/application/test_subtitle_services.py::test_srt_import_edit_place_compile_and_export_use_one_document_boundary",
     "tests/v2/application/test_subtitle_services.py::test_smart_split_and_delete_preserve_existing_placement_identity",
+    "tests/v2/application/test_subtitle_services.py::test_smart_split_persists_real_word_alignment_and_undo",
     "tests/v2/application/test_subtitle_services.py::test_subtitle_edit_database_commit_failure_restores_database_and_visible_srt",
     "tests/v2/application/test_subtitle_services.py::test_subtitle_import_commit_failure_with_related_media_rolls_back_everything",
     "tests/v2/application/test_subtitle_services.py::test_subtitle_import_cancellation_after_related_media_probe_has_no_side_effects",

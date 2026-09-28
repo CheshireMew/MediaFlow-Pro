@@ -30,6 +30,15 @@ SETTINGS_TABS = ("general", "download", "editor", "ai")
 UI_MATRIX_WORKERS = 3
 
 
+def recommended_ui_matrix_workers(platform: str | None = None) -> int:
+    selected_platform = sys.platform if platform is None else platform
+    # Windows Qt Quick processes intermittently terminate with a native access
+    # violation when several complete offscreen workspaces are constructed at
+    # once. Each language/scale scenario is already isolated in its own process;
+    # running those processes serially keeps the same coverage and stable evidence.
+    return 1 if selected_platform == "win32" else UI_MATRIX_WORKERS
+
+
 def probe(root: Path, language: str, scale: str) -> dict:
     workspace = verification_workspace_root(root)
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -619,7 +628,7 @@ def orchestrate(root: Path) -> dict:
     ]
     for scenario, _language, _scale in scenarios:
         scenario.mkdir()
-    worker_count = min(UI_MATRIX_WORKERS, len(scenarios))
+    worker_count = min(recommended_ui_matrix_workers(), len(scenarios))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = [
             executor.submit(_run_scenario, scenario, language, scale)

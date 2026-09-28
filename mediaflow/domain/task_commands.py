@@ -378,6 +378,17 @@ class TrackSubjectCommand(CommandModel):
         return TaskKind.ANALYZE
 
 
+class TrackMaskCommand(CommandModel):
+    command_type: Literal["track_mask"] = "track_mask"
+    sequence_id: NonEmptyText
+    clip_id: NonEmptyText
+    mask_id: NonEmptyText
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.ANALYZE
+
+
 type TaskCommand = Annotated[
     ImportAssetCommand
     | GenerateProxyCommand
@@ -400,6 +411,7 @@ type TaskCommand = Annotated[
     | AnalyzeSequenceBoundsCommand
     | AnalyzeLoudnessCommand
     | AnalyzeScenesCommand
-    | TrackSubjectCommand,
+    | TrackSubjectCommand
+    | TrackMaskCommand,
     Field(discriminator="command_type"),
 ]

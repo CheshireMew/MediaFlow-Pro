@@ -14,7 +14,8 @@ This source repository does not contain a generated portable runtime. When a por
 | ICU (Linux Qt build runtime) | 73.x | ICU License | https://icu.unicode.org/ |
 | MLT Framework | 7.40.0 | Core libraries LGPL-2.1; melt and individual modules may use GPL or other compatible licenses | https://www.mltframework.org/docs/copyrightpolicy/ |
 | FFmpeg | n8.1.2 tested runtime | GPLv3-or-later for the tested build because it is configured with `--enable-gpl --enable-version3` | https://ffmpeg.org/legal.html |
-| yt-dlp | 2026.3.17 | Unlicense | https://github.com/yt-dlp/yt-dlp |
+| yt-dlp | 2026.8.19 | Unlicense | https://github.com/yt-dlp/yt-dlp |
+| yt-dlp-ejs | 0.8.0 | Unlicense AND MIT AND ISC | https://github.com/yt-dlp/ejs |
 | Playwright for Python | 1.61.0 | Apache-2.0 | https://github.com/microsoft/playwright-python |
 | OpenCV Python headless | 5.0.0.93 | Apache-2.0 | https://github.com/opencv/opencv-python |
 | faster-whisper | 1.2.1 | MIT | https://github.com/SYSTRAN/faster-whisper |

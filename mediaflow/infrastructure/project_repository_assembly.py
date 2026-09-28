@@ -22,6 +22,7 @@ from mediaflow.infrastructure.project_repository_relations import ProjectObserva
 from mediaflow.infrastructure.sequence_catalog_repository import SequenceCatalogRepository
 from mediaflow.infrastructure.subtitle_repository import SubtitleRepository
 from mediaflow.infrastructure.timeline_repository import TimelineRepository
+from mediaflow.infrastructure.voiceover_repository import VoiceoverRepository
 from mediaflow.infrastructure.web_media_repository import WebMediaRepository
 
 
@@ -38,6 +39,7 @@ class ProjectRepositoryAssembly:
     frame_clock: MainFrameClockRepository
     audio: AudioRepository
     dubbing: DubbingRepository
+    voiceover: VoiceoverRepository
     subtitles: SubtitleRepository
     highlights: HighlightRepository
     web: WebMediaRepository
@@ -91,6 +93,11 @@ def assemble_project_repositories(
         subtitles=lambda: subtitles,
         timeline=lambda: timeline,
     )
+    voiceover = VoiceoverRepository(
+        database,
+        sequences=lambda: sequences,
+        assets=lambda: assets,
+    )
     records = ProjectRecordsRepository(
         database,
         projects=lambda: projects,
@@ -105,6 +112,7 @@ def assemble_project_repositories(
             timeline=timeline,
             audio=audio,
             dubbing=dubbing,
+            voiceover=voiceover,
             subtitles=subtitles,
             highlights=highlights,
             web=web,
@@ -128,6 +136,7 @@ def assemble_project_repositories(
         frame_clock=frame_clock,
         audio=audio,
         dubbing=dubbing,
+        voiceover=voiceover,
         subtitles=subtitles,
         highlights=highlights,
         web=web,

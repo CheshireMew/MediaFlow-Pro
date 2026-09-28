@@ -6,6 +6,7 @@ from typing import Any
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.settings_repository import ServiceSettingsRepository
+from mediaflow.infrastructure.storage_paths import default_media_root
 
 
 class DeferredEditorApplication:
@@ -27,6 +28,10 @@ class DeferredEditorApplication:
     @property
     def materialized(self) -> bool:
         return self._application is not None
+
+    @property
+    def default_media_directory(self) -> str:
+        return default_media_root()
 
     def runtime_tool_status(self) -> dict:
         from mediaflow.infrastructure.runtime_tools import RuntimeToolService

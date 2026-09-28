@@ -70,12 +70,30 @@ def _change_scopes(
         return ["/project"]
     if operation == "project.version.create":
         return ["/project/versions"]
+    if operation == "project.archive.create":
+        return []
     if operation == "asset.import":
         return ["/assets"]
+    if operation.startswith("project.collection.") and operation not in {
+        "project.collection.preview",
+        "project.collection.list",
+    }:
+        return ["/assets", "/project/collections"]
     if operation == "sequence.short.create":
+        return ["/sequences"]
+    if operation == "sequence.variant.generate":
         return ["/sequences"]
     if operation == "timeline.portable.import":
         return ["/assets", sequence_root, "/subtitles", "/highlights"]
+    if operation == "timeline.interchange.import":
+        return ["/assets", "/sequences", "/subtitles"]
+    if operation.startswith("voiceover."):
+        scopes = ["/voiceover"]
+        if operation == "voiceover.take.add":
+            scopes.append("/assets")
+        if operation == "voiceover.take.place":
+            scopes.append("/sequences")
+        return scopes
     if operation.startswith("timeline."):
         if operation == "timeline.set_sequence_profile":
             return [sequence_root, "/assets", "/subtitles", "/highlights"]
@@ -86,6 +104,10 @@ def _change_scopes(
                 arguments,
                 sequence_root=sequence_root,
             )
+        return [sequence_root]
+    if operation.startswith("review."):
+        return [f"{sequence_root}/reviews"]
+    if operation.startswith("multicam."):
         return [sequence_root]
     if operation == "subtitle.track.style.update":
         return [sequence_root]
@@ -234,16 +256,34 @@ def _conflict_set(
         "timeline.clip.delete",
         "timeline.clip.freeze.add",
         "timeline.clip.transform",
+        "timeline.clip.transform.keyframe.set",
+        "timeline.clip.transform.keyframe.remove",
+        "timeline.clip.transform.keyframe.move",
+        "timeline.clip.transform.keyframe.retime",
         "timeline.clip.audio",
         "timeline.clip.source.replace",
         "timeline.clip.effect.add",
         "timeline.clip.effect.update",
         "timeline.clip.effect.move",
         "timeline.clip.effect.remove",
+        "timeline.clip.effect.keyframe.set",
+        "timeline.clip.effect.keyframe.remove",
+        "timeline.clip.effect.keyframe.move",
+        "timeline.clip.effect.keyframe.retime",
+        "timeline.clip.effect.mask.assign",
+        "timeline.clip.mask.add",
+        "timeline.clip.mask.update",
+        "timeline.clip.mask.remove",
+        "timeline.clip.mask.keyframe.set",
+        "timeline.clip.mask.keyframe.remove",
+        "timeline.clip.mask.keyframe.move",
+        "timeline.clip.mask.keyframe.retime",
         "timeline.trim_clip",
         "timeline.detach_clip_audio",
         "timeline.set_clip_speed",
         "timeline.set_clip_transform_keyframes",
+        "timeline.set_clip_effect_parameter_keyframes",
+        "timeline.set_clip_mask_keyframes",
         "timeline.replace_scene_markers",
     }:
         clip_id = arguments.get("clip_id")
@@ -270,6 +310,15 @@ def _conflict_set(
     if operation.startswith("timeline.marker."):
         marker_id = arguments.get("marker_id")
         return [f"{root}/markers/{_path(marker_id)}" if marker_id else f"{root}/markers/create"]
+    if operation == "review.thread.create":
+        return [f"{root}/reviews/create"]
+    if operation.startswith("review."):
+        thread_id = arguments.get("thread_id")
+        return [
+            f"{root}/reviews/{_path(thread_id)}"
+            if thread_id
+            else f"{root}/reviews"
+        ]
     if operation in {"timeline.update_range", "timeline.remove_range"}:
         return [f"{root}/ranges/{_path(arguments.get('range_id'))}"]
     if operation == "timeline.add_range":

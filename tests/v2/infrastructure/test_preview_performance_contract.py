@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from scripts.verify_preview_performance import preview_requirements_met
+from scripts.verify_performance import MAX_PERFORMANCE_ATTEMPTS
+from scripts.verify_preview_performance import (
+    MAX_PREVIEW_PERFORMANCE_ATTEMPTS,
+    preview_requirements_met,
+)
 
 
 def _requirements(**overrides: object) -> bool:
@@ -26,6 +30,11 @@ def _requirements(**overrides: object) -> bool:
 
 def test_preview_contract_accepts_complete_drop_free_playback() -> None:
     assert _requirements()
+
+
+def test_desktop_performance_verifiers_use_bounded_complete_attempts() -> None:
+    assert MAX_PERFORMANCE_ATTEMPTS == 3
+    assert MAX_PREVIEW_PERFORMANCE_ATTEMPTS == 3
 
 
 def test_preview_contract_rejects_playback_that_freezes_after_ten_seconds() -> None:

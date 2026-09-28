@@ -34,6 +34,8 @@ def timeline_change_set(
         ("transitions", before.transitions, after.transitions, False),
         ("markers", before.markers, after.markers, False),
         ("ranges", before.ranges, after.ranges, False),
+        ("reviews", before.review_threads, after.review_threads, False),
+        ("multicam", before.multicam_groups, after.multicam_groups, False),
     ):
         _diff_entity_sequence(
             f"{root}/{name}",

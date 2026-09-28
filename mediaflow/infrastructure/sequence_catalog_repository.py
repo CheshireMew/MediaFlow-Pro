@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from mediaflow.domain.audio import AudioBus
+from pydantic import TypeAdapter
+
+from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.enums import (
     ColorMode,
     SequenceKind,
@@ -17,9 +20,12 @@ from mediaflow.domain.project import (
     Sequence,
     SequenceInOut,
 )
-from mediaflow.domain.timeline import TimelineRevisionConflict
+from mediaflow.domain.sequence_variants import SequenceVariantRecord
+from mediaflow.domain.subtitles import SubtitlePlacement
+from mediaflow.domain.timeline import TimelineRevisionConflict, TimelineState
 
 from .project_repository_component import ProjectRepositoryComponent
+from .project_serialization import json_value as _json_value
 from .project_serialization import model_json as _model_json
 
 if TYPE_CHECKING:
@@ -175,6 +181,129 @@ class SequenceCatalogRepository(ProjectRepositoryComponent):
             connection.execute("UPDATE sequence SET archived=0 WHERE id=?", (sequence_id,))
             self._touch_project(connection)
         return self.get_sequence(sequence_id)
+
+    def save_sequence_variant(self, record: SequenceVariantRecord) -> SequenceVariantRecord:
+        sequence = self.get_sequence(record.sequence_id)
+        source = self.get_sequence(record.source_sequence_id)
+        if sequence.kind != SequenceKind.SHORT:
+            raise ValueError("Only short sequences can be registered as delivery variants")
+        if sequence.id == source.id:
+            raise ValueError("A sequence variant cannot derive from itself")
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO sequence_variant(
+                       sequence_id, source_sequence_id, preset_id, reframe_mode,
+                       source_timeline_revision, baseline_timeline_json,
+                       baseline_audio_buses_json, baseline_audio_effects_json,
+                       baseline_subtitle_placements_json, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(sequence_id) DO UPDATE SET
+                       source_sequence_id=excluded.source_sequence_id,
+                       preset_id=excluded.preset_id,
+                       reframe_mode=excluded.reframe_mode,
+                       source_timeline_revision=excluded.source_timeline_revision,
+                       baseline_timeline_json=excluded.baseline_timeline_json,
+                       baseline_audio_buses_json=excluded.baseline_audio_buses_json,
+                       baseline_audio_effects_json=excluded.baseline_audio_effects_json,
+                       baseline_subtitle_placements_json=excluded.baseline_subtitle_placements_json,
+                       created_at=excluded.created_at,
+                       updated_at=excluded.updated_at""",
+                (
+                    record.sequence_id,
+                    record.source_sequence_id,
+                    record.preset_id,
+                    record.reframe_mode,
+                    record.source_timeline_revision,
+                    _json_value(
+                        record.baseline_timeline.model_dump(
+                            mode="json", exclude_computed_fields=True
+                        )
+                    )
+                    if record.baseline_timeline is not None
+                    else None,
+                    _json_value(
+                        [
+                            item.model_dump(mode="json", exclude_computed_fields=True)
+                            for item in record.baseline_audio_buses
+                        ]
+                    ),
+                    _json_value(
+                        [
+                            item.model_dump(mode="json", exclude_computed_fields=True)
+                            for item in record.baseline_audio_effects
+                        ]
+                    ),
+                    _json_value(
+                        [
+                            item.model_dump(mode="json", exclude_computed_fields=True)
+                            for item in record.baseline_subtitle_placements
+                        ]
+                    ),
+                    record.created_at,
+                    record.updated_at,
+                ),
+            )
+            self._touch_project(connection)
+        return self.get_sequence_variant(record.sequence_id)
+
+    def get_sequence_variant(self, sequence_id: str) -> SequenceVariantRecord:
+        row = self._fetchone(
+            "SELECT * FROM sequence_variant WHERE sequence_id=?",
+            (sequence_id,),
+        )
+        if row is None:
+            raise KeyError(sequence_id)
+        return self._variant_from_row(row)
+
+    def list_sequence_variants(
+        self,
+        source_sequence_id: str | None = None,
+        *,
+        include_archived: bool = False,
+    ) -> list[SequenceVariantRecord]:
+        conditions: list[str] = []
+        values: list[object] = []
+        if source_sequence_id is not None:
+            self.get_sequence(source_sequence_id)
+            conditions.append("variant.source_sequence_id=?")
+            values.append(source_sequence_id)
+        if not include_archived:
+            conditions.append("sequence.archived=0")
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = self._fetchall(
+            """SELECT variant.* FROM sequence_variant AS variant
+               JOIN sequence ON sequence.id=variant.sequence_id"""
+            + where
+            + " ORDER BY variant.created_at, variant.sequence_id",
+            tuple(values),
+        )
+        return [self._variant_from_row(row) for row in rows]
+
+    @staticmethod
+    def _variant_from_row(row: sqlite3.Row) -> SequenceVariantRecord:
+        return SequenceVariantRecord(
+            sequence_id=row["sequence_id"],
+            source_sequence_id=row["source_sequence_id"],
+            preset_id=row["preset_id"],
+            reframe_mode=row["reframe_mode"],
+            source_timeline_revision=row["source_timeline_revision"],
+            baseline_timeline=(
+                TimelineState.model_validate_json(row["baseline_timeline_json"])
+                if row["baseline_timeline_json"]
+                else None
+            ),
+            baseline_audio_buses=TypeAdapter(list[AudioBus]).validate_python(
+                json.loads(row["baseline_audio_buses_json"])
+            ),
+            baseline_audio_effects=TypeAdapter(list[AudioEffect]).validate_python(
+                json.loads(row["baseline_audio_effects_json"])
+            ),
+            baseline_subtitle_placements=TypeAdapter(
+                list[SubtitlePlacement]
+            ).validate_python(json.loads(row["baseline_subtitle_placements_json"])),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
 
     @staticmethod
     def _insert_sequence_record(

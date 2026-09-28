@@ -10,6 +10,7 @@ from mediaflow.domain.asr import RegionAsrPipeline
 from mediaflow.domain.downloads import DownloadPlan, DownloadRequest
 from mediaflow.domain.dubbing import DiarizationResult, DiarizationSpeechInterval
 from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.masks import ClipMask, MaskKeyframe
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import Asset, AssetFingerprint, ProjectProfile
 from mediaflow.domain.project_records import ExportQualityReport
@@ -315,6 +316,17 @@ class AnalysisTaskRuntime(Protocol):
         check_cancelled: CancellationCheck,
         progress: ProgressCallback,
     ) -> list[ClipTransformKeyframe]: ...
+
+    def track_mask(
+        self,
+        source: Path,
+        clip: Clip,
+        mask: ClipMask,
+        profile: ProjectProfile,
+        *,
+        check_cancelled: CancellationCheck,
+        progress: ProgressCallback,
+    ) -> list[MaskKeyframe]: ...
 
     def write_visual_analysis(
         self,

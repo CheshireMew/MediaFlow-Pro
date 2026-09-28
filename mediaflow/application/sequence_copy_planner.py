@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import NAMESPACE_URL, uuid5
 
 from mediaflow.application.ports import SequenceServiceDocuments
 from mediaflow.application.timeline_clock import (
@@ -10,6 +11,7 @@ from mediaflow.application.timeline_clock import (
 from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.enums import AudioEffectKind, TrackKind
 from mediaflow.domain.model_base import new_id
+from mediaflow.domain.multicam import MulticamGroup
 from mediaflow.domain.project import ProjectProfile, Sequence
 from mediaflow.domain.subtitles import SubtitlePlacement
 from mediaflow.domain.timebase import reframe_frames, source_frame_at_timeline_offset
@@ -63,29 +65,44 @@ class SequenceCopyPlanner:
         *,
         name: str | None,
         destination_sequence: Sequence | None = None,
+        destination_is_new: bool = False,
+        identity_namespace: str | None = None,
     ) -> PreparedShortSequence:
         destination, new_sequence, source_profile, destination_profile = self._destination(
             source,
             selected,
             name=name,
             destination_sequence=destination_sequence,
+            destination_is_new=destination_is_new,
         )
-        audio = self._clone_audio(source, destination.sequence.id)
+        audio = self._clone_audio(
+            source, destination.sequence.id, identity_namespace=identity_namespace
+        )
         tracks = self._clone_tracks(
             source,
             destination.sequence.id,
             audio.bus_ids,
+            identity_namespace=identity_namespace,
         )
         destination.tracks = list(tracks.tracks)
-        clips = self._clone_clips(source, selected, tracks.track_ids)
+        clips = self._clone_clips(
+            source,
+            selected,
+            tracks.track_ids,
+            identity_namespace=identity_namespace,
+        )
         destination.clips = list(clips.clips)
         self._clone_relationships(
             source,
             destination,
+            selected,
             tracks.track_ids,
             clips.clip_ids,
+            identity_namespace=identity_namespace,
         )
-        self._clone_annotations(source, destination, selected)
+        self._clone_annotations(
+            source, destination, selected, identity_namespace=identity_namespace
+        )
         destination = reframe_timeline_clock(
             destination,
             self.documents.assets.list_assets(),
@@ -102,6 +119,7 @@ class SequenceCopyPlanner:
             clips.clip_ids,
             source_profile,
             destination_profile,
+            identity_namespace=identity_namespace,
         )
         return PreparedShortSequence(
             state=destination,
@@ -118,8 +136,9 @@ class SequenceCopyPlanner:
         *,
         name: str | None,
         destination_sequence: Sequence | None,
+        destination_is_new: bool,
     ) -> tuple[TimelineState, bool, ProjectProfile, ProjectProfile]:
-        new_sequence = destination_sequence is None
+        new_sequence = destination_sequence is None or destination_is_new
         sequence = destination_sequence or self.documents.sequences.prepare_short_sequence(
             name or selected.name or "短视频"
         )
@@ -144,9 +163,14 @@ class SequenceCopyPlanner:
         self,
         source: TimelineState,
         destination_sequence_id: str,
+        *,
+        identity_namespace: str | None,
     ) -> _AudioCopy:
         source_buses = self.documents.audio.list_audio_buses(source.sequence.id)
-        bus_ids = {bus.id: new_id() for bus in source_buses}
+        bus_ids = {
+            bus.id: self._copy_id(identity_namespace, "audio-bus", bus.id)
+            for bus in source_buses
+        }
         buses = tuple(
             AudioBus(
                 id=bus_ids[bus.id],
@@ -173,7 +197,7 @@ class SequenceCopyPlanner:
                         parameters["driver_bus_id"] = bus_ids[driver_bus_id]
                 effects.append(
                     AudioEffect(
-                        id=new_id(),
+                        id=self._copy_id(identity_namespace, "audio-effect", effect.id),
                         bus_id=bus_ids[bus.id],
                         kind=effect.kind,
                         position=effect.position,
@@ -183,17 +207,20 @@ class SequenceCopyPlanner:
                 )
         return _AudioCopy(bus_ids, buses, tuple(effects))
 
-    @staticmethod
     def _clone_tracks(
+        self,
         source: TimelineState,
         destination_sequence_id: str,
         bus_ids: dict[str, str],
+        *,
+        identity_namespace: str | None,
     ) -> _TrackCopy:
         source_tracks = sorted(source.tracks, key=lambda item: item.position)
         track_ids: dict[str, str] = {}
         tracks: list[Track] = []
         for position, track in enumerate(source_tracks):
             copied = Track(
+                id=self._copy_id(identity_namespace, "track", track.id),
                 sequence_id=destination_sequence_id,
                 name=track.name,
                 kind=track.kind,
@@ -204,6 +231,7 @@ class SequenceCopyPlanner:
                 solo=track.solo,
                 audio_bus_id=(bus_ids[track.audio_bus_id] if track.audio_bus_id is not None else None),
                 primary_dialogue=track.primary_dialogue,
+                subtitle_style=track.subtitle_style,
             )
             tracks.append(copied)
             track_ids[track.id] = copied.id
@@ -215,11 +243,13 @@ class SequenceCopyPlanner:
         ]
         return _TrackCopy(track_ids, tuple(tracks))
 
-    @staticmethod
     def _clone_clips(
+        self,
         source: TimelineState,
         selected: TimelineRange,
         track_ids: dict[str, str],
+        *,
+        identity_namespace: str | None,
     ) -> _ClipCopy:
         clip_ids: dict[str, str] = {}
         clips: list[Clip] = []
@@ -230,7 +260,7 @@ class SequenceCopyPlanner:
                 continue
             timeline_start = overlap_start - selected.start_frame
             copied = Clip(
-                id=new_id(),
+                id=self._copy_id(identity_namespace, "clip", clip.id),
                 track_id=track_ids[clip.track_id],
                 asset_id=clip.asset_id,
                 timeline_start=timeline_start,
@@ -249,20 +279,26 @@ class SequenceCopyPlanner:
                 speed_numerator=clip.speed_numerator,
                 speed_denominator=clip.speed_denominator,
                 pitch_compensation=clip.pitch_compensation,
+                freeze_source_frame=clip.freeze_source_frame,
                 transform=clip.transform,
                 transform_keyframes=list(clip.transform_keyframes),
                 audio=clip.audio,
+                visual_effects=[item.model_copy(deep=True) for item in clip.visual_effects],
+                masks=[item.model_copy(deep=True) for item in clip.masks],
             )
             clips.append(copied)
             clip_ids[clip.id] = copied.id
         return _ClipCopy(clip_ids, tuple(clips))
 
-    @staticmethod
     def _clone_relationships(
+        self,
         source: TimelineState,
         destination: TimelineState,
+        selected: TimelineRange,
         track_ids: dict[str, str],
         clip_ids: dict[str, str],
+        *,
+        identity_namespace: str | None,
     ) -> None:
         destination.web_states = {
             destination_id: source.web_states[source_id].model_copy(
@@ -273,12 +309,49 @@ class SequenceCopyPlanner:
         }
         destination.compounds = [
             CompoundClip(
+                id=self._copy_id(identity_namespace, "compound", item.id),
                 sequence_id=destination.sequence.id,
                 name=item.name,
                 clip_ids=[clip_ids[clip_id] for clip_id in item.clip_ids],
             )
             for item in source.compounds
             if all(clip_id in clip_ids for clip_id in item.clip_ids)
+        ]
+        destination.multicam_groups = [
+            MulticamGroup(
+                id=self._copy_id(identity_namespace, "multicam-group", item.id),
+                sequence_id=destination.sequence.id,
+                name=item.name,
+                program_track_id=track_ids[item.program_track_id],
+                timeline_start=item.timeline_start - selected.start_frame,
+                duration=item.duration,
+                sync_offset=item.sync_offset,
+                sync_method=item.sync_method,
+                sync_confidence=item.sync_confidence,
+                audio_strategy=item.audio_strategy,
+                master_audio_angle_id=item.master_audio_angle_id,
+                program_audio_track_id=(
+                    track_ids[item.program_audio_track_id]
+                    if item.program_audio_track_id is not None
+                    else None
+                ),
+                angles=[angle.model_copy(deep=True) for angle in item.angles],
+                cuts=[cut.model_copy(deep=True) for cut in item.cuts],
+                program_clip_ids=[clip_ids[clip_id] for clip_id in item.program_clip_ids],
+                program_audio_clip_ids=[
+                    clip_ids[clip_id] for clip_id in item.program_audio_clip_ids
+                ],
+            )
+            for item in source.multicam_groups
+            if item.timeline_start >= selected.start_frame
+            and item.timeline_start + item.duration <= selected.end_frame
+            and all(clip_id in clip_ids for clip_id in item.program_clip_ids)
+            and item.program_track_id in track_ids
+            and (
+                item.program_audio_track_id is None
+                or item.program_audio_track_id in track_ids
+            )
+            and all(clip_id in clip_ids for clip_id in item.program_audio_clip_ids)
         ]
         clips_by_id = {clip.id: clip for clip in destination.clips}
         for item in source.transitions:
@@ -290,6 +363,7 @@ class SequenceCopyPlanner:
                 continue
             destination.transitions.append(
                 Transition(
+                    id=self._copy_id(identity_namespace, "transition", item.id),
                     track_id=track_ids[item.track_id],
                     left_clip_id=left.id,
                     right_clip_id=right.id,
@@ -299,14 +373,17 @@ class SequenceCopyPlanner:
                 )
             )
 
-    @staticmethod
     def _clone_annotations(
+        self,
         source: TimelineState,
         destination: TimelineState,
         selected: TimelineRange,
+        *,
+        identity_namespace: str | None,
     ) -> None:
         destination.markers = [
             TimelineMarker(
+                id=self._copy_id(identity_namespace, "marker", item.id),
                 sequence_id=destination.sequence.id,
                 frame=item.frame - selected.start_frame,
                 name=item.name,
@@ -323,6 +400,7 @@ class SequenceCopyPlanner:
             converted_start = start - selected.start_frame
             destination.ranges.append(
                 TimelineRange(
+                    id=self._copy_id(identity_namespace, "range", item.id),
                     sequence_id=destination.sequence.id,
                     start_frame=converted_start,
                     end_frame=max(
@@ -342,6 +420,8 @@ class SequenceCopyPlanner:
         clip_ids: dict[str, str],
         source_profile: ProjectProfile,
         destination_profile: ProjectProfile,
+        *,
+        identity_namespace: str | None,
     ) -> tuple[SubtitlePlacement, ...]:
         source_tracks = {track.id: track for track in source.tracks}
         placements: list[SubtitlePlacement] = []
@@ -360,6 +440,7 @@ class SequenceCopyPlanner:
                 )
                 placements.append(
                     SubtitlePlacement(
+                        id=self._copy_id(identity_namespace, "subtitle-placement", placement.id),
                         track_id=destination_track_id,
                         segment_id=placement.segment_id,
                         clip_id=clip_ids.get(placement.clip_id or ""),
@@ -377,3 +458,9 @@ class SequenceCopyPlanner:
                     )
                 )
         return tuple(placements)
+
+    @staticmethod
+    def _copy_id(namespace: str | None, kind: str, source_id: str) -> str:
+        if namespace is None:
+            return new_id()
+        return str(uuid5(NAMESPACE_URL, f"mediaflow:{namespace}:{kind}:{source_id}"))

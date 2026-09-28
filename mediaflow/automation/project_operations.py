@@ -4,8 +4,14 @@ from mediaflow.automation.operation_context import (
     OperationContext,
     project_snapshot,
 )
+from mediaflow.domain.project_collection import (
+    ProjectCollectionPreview,
+    ProjectCollectionResult,
+)
+from mediaflow.domain.sequence_variants import SequenceVariantGeneration, SequenceVariantPlan
 
 _OPERATION_LABELS = {
+    "sequence.variant.generate": "生成交付版本",
     "timeline.clip.add": "添加片段",
     "timeline.clip.batch.add": "批量添加片段",
     "timeline.clip.freeze.add": "添加定格片段",
@@ -35,6 +41,9 @@ _OPERATION_LABELS = {
     "web.clip.theme.update": "调整网页主题",
     "project.version.create": "创建工程版本",
     "project.version.restore": "恢复工程版本",
+    "project.collection.apply": "归集项目素材",
+    "project.collection.state.set": "切换归集素材路径",
+    "project.archive.create": "创建可迁移项目归档",
 }
 
 
@@ -190,6 +199,37 @@ def list_assets(context: OperationContext) -> dict:
     return {"assets": context.project.list_assets()}
 
 
+def preview_project_collection(context: OperationContext) -> ProjectCollectionPreview:
+    asset_ids = context.arguments.get("asset_ids")
+    return context.project.preview_project_collection(
+        list(asset_ids) if asset_ids is not None else None
+    )
+
+
+def collect_project_assets(context: OperationContext) -> ProjectCollectionResult:
+    asset_ids = context.arguments.get("asset_ids")
+    return context.project.collect_project_assets(
+        list(asset_ids) if asset_ids is not None else None
+    )
+
+
+def list_project_collections(context: OperationContext) -> dict:
+    return {"collections": context.project.list_project_collections()}
+
+
+def set_project_collection_state(context: OperationContext) -> ProjectCollectionResult:
+    return context.project.set_project_collection_state(
+        str(context.required("collection_id")),
+        using_collected=bool(context.required("using_collected")),
+    )
+
+
+def create_project_archive(context: OperationContext) -> dict:
+    return context.project.create_project_archive(str(context.required("destination"))).model_dump(
+        mode="json"
+    )
+
+
 def import_asset(context: OperationContext) -> dict:
     task = context.project.import_asset(
         str(context.required("source")),
@@ -206,3 +246,40 @@ def create_short_sequence(context: OperationContext) -> dict:
         name=str(context.arguments.get("name") or "短视频"),
     )
     return {"sequence": sequence}
+
+
+def list_sequence_variants(context: OperationContext) -> dict:
+    source_value = context.arguments.get("source_sequence_id")
+    records = context.project.list_sequence_variants(
+        str(source_value) if source_value else None,
+        include_archived=bool(context.arguments.get("include_archived", False)),
+    )
+    variants = []
+    for record in records:
+        sequence = context.project.get_sequence(record.sequence_id)
+        source = context.project.get_sequence(record.source_sequence_id)
+        variants.append(
+            {
+                "record": record,
+                "sequence": sequence,
+                "stale": record.source_timeline_revision != source.timeline_revision,
+            }
+        )
+    return {"variants": variants}
+
+
+def generate_sequence_variants(context: OperationContext) -> SequenceVariantGeneration:
+    result = context.project.generate_sequence_variants(
+        str(context.required("source_sequence_id")),
+        list(context.required("specs")),
+        force=bool(context.arguments.get("force", False)),
+        conflict_resolutions=dict(context.arguments.get("conflict_resolutions") or {}),
+    )
+    return result
+
+
+def plan_sequence_variants(context: OperationContext) -> SequenceVariantPlan:
+    return context.project.plan_sequence_variants(
+        str(context.required("source_sequence_id")),
+        list(context.required("specs")),
+    )

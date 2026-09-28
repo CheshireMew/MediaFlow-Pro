@@ -73,17 +73,48 @@ class TimelineProjector(Projector):
         if not self._session.state.binding.current:
             self._session.models.sequences.set_items([])
             return
+        current = self._session.state.binding.require_current()
+        sequences = current.list_sequences()
+        by_id = {item.id: item for item in sequences}
+        variants = {
+            item.sequence_id: item for item in current.list_sequence_variants()
+        }
+        source_revisions = {
+            item.source_sequence_id: (
+                by_id[item.source_sequence_id].timeline_revision
+                if item.source_sequence_id in by_id
+                else current.get_sequence(item.source_sequence_id).timeline_revision
+            )
+            for item in variants.values()
+        }
         self._session.models.sequences.set_items(
             [
                 {
                     "sequenceId": sequence.id,
                     "name": sequence.name,
-                    "displayName": system_name(sequence.name),
+                    "displayName": (
+                        f"{system_name(sequence.name)} · 需更新"
+                        if sequence.id in variants
+                        and variants[sequence.id].source_timeline_revision
+                        != source_revisions[variants[sequence.id].source_sequence_id]
+                        else system_name(sequence.name)
+                    ),
                     "kind": sequence.kind.value,
                     "profile": f"{sequence.profile.width}×{sequence.profile.height}",
                     "colorMode": sequence.profile.color_mode.value,
+                    "sourceSequenceId": (
+                        variants[sequence.id].source_sequence_id if sequence.id in variants else ""
+                    ),
+                    "variantPreset": (
+                        variants[sequence.id].preset_id if sequence.id in variants else ""
+                    ),
+                    "variantStale": (
+                        sequence.id in variants
+                        and variants[sequence.id].source_timeline_revision
+                        != source_revisions[variants[sequence.id].source_sequence_id]
+                    ),
                 }
-                for sequence in self._session.state.binding.require_current().list_sequences()
+                for sequence in sequences
             ]
         )
 

@@ -19,14 +19,26 @@ from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.automation.contracts import describe_contract
 from mediaflow.cli import main
 from mediaflow.composition import EditorApplication
-from mediaflow.domain.enums import AssetKind, TrackKind
+from mediaflow.domain.enums import (
+    AssetKind,
+    ExportFormat,
+    MaskShapeKind,
+    TaskStatus,
+    TrackKind,
+    VisualEffectKind,
+)
+from mediaflow.domain.masks import MaskGeometry
 from mediaflow.domain.product_identity import PRODUCT_NAME
-from mediaflow.domain.project import ProjectProfile
+from mediaflow.domain.project import MediaMetadata, ProjectProfile
+from mediaflow.domain.project_records import ExportHistoryRecord, ExportQualityReport
 from mediaflow.domain.runtime_capabilities import RUNTIME_CAPABILITY_IDS
 from mediaflow.domain.storage_names import utf16_units
 from mediaflow.domain.subtitles import SubtitleDocument, SubtitleSegment, SubtitleWord
+from mediaflow.domain.task_commands import ImportAssetCommand
+from mediaflow.domain.tasks import ArtifactReference, ImportedAssetTaskOutcome, Task
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.storage_paths import default_project_root
+from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.service.client import EditorServiceRpcError, call_sync
 from tests.v2.editor_service_api import EditorServiceApi
 
@@ -143,6 +155,57 @@ def test_recent_projects_disable_corrupt_databases_but_keep_upgradable_projects(
     assert rows[missing.name]["unavailableReason"] == "项目文件不存在"
     assert rows[upgradable.name]["available"] is True
     assert rows[upgradable.name]["unavailableReason"] == ""
+
+
+def test_recent_projects_use_committed_exports_instead_of_imported_sources(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "Recent project"
+    source = tmp_path / "newer-source.mp4"
+    source.write_bytes(b"source")
+    output = root / "exports" / "finished.mp4"
+    with ProjectRepository.create(root, "Recent project") as repository:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"export")
+        project = repository.projects.get_project()
+        TaskRepository(repository).create(
+            Task(
+                project_id=project.id,
+                sequence_id=project.main_sequence_id,
+                command=ImportAssetCommand(source_path=str(source)),
+                status=TaskStatus.COMPLETED,
+                artifacts=[ArtifactReference.external(source)],
+                outcome=ImportedAssetTaskOutcome(
+                    asset_id="imported-source",
+                    purpose="media",
+                ),
+                created_at=2,
+                updated_at=2,
+            )
+        )
+        repository.records.save_export_history(
+            ExportHistoryRecord(
+                id="finished-export",
+                task_id="finished-export",
+                sequence_id=project.main_sequence_id,
+                output_path=str(output),
+                format=ExportFormat.H264,
+                preset={},
+                quality=ExportQualityReport(
+                    output_path=str(output),
+                    passed=True,
+                    checks=[],
+                    sha256="0" * 64,
+                ),
+                content_revision=repository.content_revision(),
+                created_at=1,
+            )
+        )
+
+    snapshot = EditorApplication().recent_projects([str(root)])
+
+    assert snapshot.items[0]["recentArtifact"] == str(output)
+    assert snapshot.totals["recentArtifactCount"] == 1
 
 
 def _run_cli_request(
@@ -724,6 +787,163 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
     )["clip"]
     assert updated["visual_effects"][0]["parameters"] == {"sigma": 7.5}
 
+    transformed = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.transform.keyframe.set",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "timeline_offset": 1,
+                "transform": {"x": 12, "opacity": 0.8},
+                "curve": {"interpolation": "ease_in_out"},
+            },
+        },
+        application=application,
+    )["clip"]
+    assert transformed["transform_keyframes"][0]["timeline_offset"] == 1
+    assert transformed["transform_keyframes"][0]["curve"]["interpolation"] == "ease_in_out"
+
+    animated = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.effect.keyframe.set",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "effect_id": effect_id,
+                "field_id": "sigma",
+                "timeline_offset": 1,
+                "value": 4.5,
+                "curve": {"interpolation": "hold"},
+            },
+        },
+        application=application,
+    )["clip"]
+    assert animated["visual_effects"][0]["parameter_keyframes"]["sigma"][0] == {
+        "timeline_offset": 1,
+        "value": 4.5,
+        "curve": {
+            "interpolation": "hold",
+            "x1": 0.25,
+            "y1": 0.1,
+            "x2": 0.25,
+            "y2": 1.0,
+        },
+    }
+
+    masked = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.mask.add",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "kind": "ellipse",
+                "name": "Face",
+                "geometry": {
+                    "center_x": 0.3,
+                    "center_y": 0.5,
+                    "width": 0.25,
+                    "height": 0.4,
+                },
+            },
+        },
+        application=application,
+    )["clip"]
+    mask_id = masked["masks"][0]["id"]
+    bound = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.effect.mask.assign",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "effect_id": effect_id,
+                "mask_id": mask_id,
+            },
+        },
+        application=application,
+    )["clip"]
+    assert bound["visual_effects"][0]["mask_id"] == mask_id
+    mask_animated = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.mask.keyframe.set",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "mask_id": mask_id,
+                "timeline_offset": 2,
+                "geometry": {
+                    "center_x": 0.6,
+                    "center_y": 0.5,
+                    "width": 0.25,
+                    "height": 0.4,
+                },
+                "curve": {"interpolation": "ease_out"},
+            },
+        },
+        application=application,
+    )["clip"]
+    assert mask_animated["masks"][0]["keyframes"][0]["curve"]["interpolation"] == (
+        "ease_out"
+    )
+    boolean_masked = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.mask.add",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "kind": "bezier",
+                "name": "Eye cutout",
+                "combine_mode": "subtract",
+                "geometry": {
+                    "points": [
+                        {"x": 0.2, "y": 0.3, "outgoing_x": 0.4, "outgoing_y": 0.2},
+                        {"x": 0.8, "y": 0.3, "incoming_x": 0.6, "incoming_y": 0.2},
+                        {"x": 0.5, "y": 0.7},
+                    ]
+                },
+            },
+        },
+        application=application,
+    )["clip"]
+    bezier_id = boolean_masked["masks"][1]["id"]
+    assert boolean_masked["masks"][1]["combine_mode"] == "subtract"
+    reordered = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "timeline.clip.mask.move",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "clip_id": clip_id,
+                "mask_id": bezier_id,
+                "position": 0,
+            },
+        },
+        application=application,
+    )["clip"]
+    assert [(item["id"], item["position"]) for item in reordered["masks"]] == [
+        (bezier_id, 0),
+        (mask_id, 1),
+    ]
+
     removed = execute_request(
         {
             "protocol": "mediaflow-editor",
@@ -751,7 +971,111 @@ def test_clip_source_and_visual_effects_run_through_public_cli_contract(
         "timeline.clip.effect.update",
         "timeline.clip.effect.move",
         "timeline.clip.effect.remove",
+        "timeline.clip.transform.keyframe.set",
+        "timeline.clip.transform.keyframe.remove",
+        "timeline.clip.transform.keyframe.move",
+        "timeline.clip.transform.keyframe.retime",
+        "timeline.clip.effect.keyframe.set",
+        "timeline.clip.effect.keyframe.remove",
+        "timeline.clip.effect.keyframe.move",
+        "timeline.clip.effect.keyframe.retime",
+        "timeline.clip.effect.mask.assign",
+        "timeline.clip.mask.add",
+        "timeline.clip.mask.update",
+        "timeline.clip.mask.move",
+        "timeline.clip.mask.remove",
+        "timeline.clip.mask.keyframe.set",
+        "timeline.clip.mask.keyframe.remove",
+        "timeline.clip.mask.keyframe.move",
+        "timeline.clip.mask.keyframe.retime",
     } <= operation_names
+
+
+def test_review_threads_run_through_public_cli_and_remain_recoverable(
+    tmp_path: Path,
+) -> None:
+    application = EditorApplication()
+    project_path = tmp_path / "Public Review"
+    project = application.create_project(project_path, "Public Review")
+    try:
+        sequence_id = project.get_project().main_sequence_id
+    finally:
+        project.close()
+
+    base = {
+        "protocol": "mediaflow-editor",
+        "version": 4,
+        "project": str(project_path),
+    }
+    created = execute_request(
+        {
+            **base,
+            "operation": "review.thread.create",
+            "arguments": {
+                "sequence_id": sequence_id,
+                "start_frame": 25,
+                "end_frame": 40,
+                "subject": "字幕遮挡",
+                "priority": "blocking",
+                "body": "字幕挡住了人物姓名条",
+            },
+        },
+        application=application,
+    )["thread"]
+    thread_id = created["id"]
+    assert created["messages"][0]["author"]["kind"] == "agent"
+
+    replied = execute_request(
+        {
+            **base,
+            "operation": "review.thread.reply",
+            "arguments": {
+                "sequence_id": sequence_id,
+                "thread_id": thread_id,
+                "body": "已把姓名条上移，等待复核",
+            },
+        },
+        application=application,
+    )["thread"]
+    assert len(replied["messages"]) == 2
+
+    resolved = execute_request(
+        {
+            **base,
+            "operation": "review.thread.resolve",
+            "arguments": {"sequence_id": sequence_id, "thread_id": thread_id},
+        },
+        application=application,
+    )["thread"]
+    assert resolved["status"] == "resolved"
+    archived = execute_request(
+        {
+            **base,
+            "operation": "review.thread.archive",
+            "arguments": {"sequence_id": sequence_id, "thread_id": thread_id},
+        },
+        application=application,
+    )["thread"]
+    assert archived["archived_from"] == "resolved"
+    restored = execute_request(
+        {
+            **base,
+            "operation": "review.thread.restore",
+            "arguments": {"sequence_id": sequence_id, "thread_id": thread_id},
+        },
+        application=application,
+    )["thread"]
+    assert restored["status"] == "resolved"
+
+    summary = execute_request(
+        {
+            **base,
+            "operation": "review.summary",
+            "arguments": {"sequence_id": sequence_id},
+        },
+        application=application,
+    )
+    assert summary == {"open": 0, "resolved": 1, "archived": 0, "blocking_open": 0}
 
 
 def test_cli_and_desktop_composition_api_share_real_persisted_task_chain(
@@ -1041,6 +1365,27 @@ def test_script_operations_expose_and_edit_real_transcript_paragraphs(
     assert inspected["recognized_word_count"] == 4
     assert inspected["paragraphs"][0]["timing_precision"] == "recognized_words"
     first_id, second_id = [item["segment"]["id"] for item in inspected["paragraphs"]]
+
+    speech_review = execute_request(
+        {
+            "protocol": "mediaflow-editor",
+            "version": 4,
+            "operation": "speech.review.inspect",
+            "project": str(project_path),
+            "arguments": {
+                "sequence_id": sequence_id,
+                "rules": {
+                    "pause_threshold_seconds": 0.4,
+                    "review_edge_gaps": False,
+                },
+            },
+        }
+    )
+    assert speech_review["document_id"] == document.id
+    assert speech_review["recognized_word_count"] == 4
+    assert speech_review["review"]["gap_candidate_count"] == 1
+    assert speech_review["review"]["candidates"][0]["kind"] == "pause"
+    assert speech_review["review"]["automatic_deletions"] == 0
 
     assert _SERVICE_API is not None
     speaker_update = execute_request(
@@ -1626,3 +1971,587 @@ def test_short_sequence_archive_is_recoverable_through_project_history(
         "project.close",
         {"project": str(project_path), "client_id": client_id},
     )
+
+
+def test_master_sequence_generates_refreshable_delivery_variants_with_full_clip_truth(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Delivery Variants"
+    source_path = tmp_path / "master-source.mp4"
+    source_path.write_bytes(b"variant-source")
+    with ProjectRepository.create(project_path, "Delivery Variants") as repository:
+        project = repository.projects.get_project()
+        asset = repository.assets.import_external_asset(source_path, AssetKind.VIDEO)
+        asset = repository.assets.update_asset(
+            asset.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=120,
+                        width=1920,
+                        height=1080,
+                        has_video=True,
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(repository, project.main_sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=120,
+        )
+        effect = editor.add_clip_visual_effect(clip.id, VisualEffectKind.GAUSSIAN_BLUR)
+        mask = editor.add_clip_mask(
+            clip.id,
+            MaskShapeKind.ELLIPSE,
+            name="Face",
+            geometry=MaskGeometry(center_x=0.5, center_y=0.5, width=0.4, height=0.5),
+        )
+        editor.assign_clip_visual_effect_mask(clip.id, effect.id, mask.id)
+        source_sequence_id = project.main_sequence_id
+
+    assert _SERVICE_API is not None
+    _SERVICE_API.execute("project.inspect", project=project_path)
+    revision = _SERVICE_API.revision(project_path)
+    generated = _SERVICE_API.request(
+        "sequence.variant.generate",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "source_sequence_id": source_sequence_id,
+            "specs": [
+                {
+                    "preset_id": "portrait_9_16",
+                    "name": "竖屏 9:16",
+                    "width": 1080,
+                    "height": 1920,
+                    "reframe_mode": "center_fill",
+                },
+                {
+                    "preset_id": "square_1_1",
+                    "name": "方形 1:1",
+                    "width": 1080,
+                    "height": 1080,
+                    "reframe_mode": "fit",
+                },
+            ],
+        },
+    )
+    result = _SERVICE_API.execute_request(generated)["result"]
+    assert len(result["created_sequence_ids"]) == 2
+    portrait_id, square_id = result["created_sequence_ids"]
+    portrait = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": portrait_id},
+    )["timeline"]
+    square = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": square_id},
+    )["timeline"]
+    assert (portrait["sequence"]["profile"]["width"], portrait["sequence"]["profile"]["height"]) == (
+        1080,
+        1920,
+    )
+    assert portrait["clips"][0]["transform"]["scale_x"] > 3.0
+    assert square["clips"][0]["transform"]["scale_x"] == 1.0
+    assert portrait["clips"][0]["visual_effects"][0]["mask_id"]
+    assert portrait["clips"][0]["masks"][0]["name"] == "Face"
+
+    variants = _SERVICE_API.execute(
+        "sequence.variant.list",
+        project=project_path,
+        arguments={"source_sequence_id": source_sequence_id},
+    )["variants"]
+    assert {item["record"]["preset_id"] for item in variants} == {
+        "portrait_9_16",
+        "square_1_1",
+    }
+    assert not any(item["stale"] for item in variants)
+
+    revision = _SERVICE_API.revision(project_path)
+    _SERVICE_API.execute(
+        "timeline.marker.add",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "sequence_id": source_sequence_id,
+            "frame": 30,
+            "name": "Master changed",
+            "color": "#4ea1ff",
+        },
+    )
+    variants = _SERVICE_API.execute(
+        "sequence.variant.list",
+        project=project_path,
+        arguments={"source_sequence_id": source_sequence_id},
+    )["variants"]
+    assert all(item["stale"] for item in variants)
+
+    plan = _SERVICE_API.execute(
+        "sequence.variant.plan",
+        project=project_path,
+        arguments={
+            "source_sequence_id": source_sequence_id,
+            "specs": [
+                {
+                    "preset_id": "portrait_9_16",
+                    "name": "竖屏 9:16",
+                    "width": 1080,
+                    "height": 1920,
+                    "reframe_mode": "center_fill",
+                }
+            ],
+        },
+    )
+    assert plan["items"][0]["sequence_id"] == portrait_id
+    assert plan["items"][0]["conflicts"] == []
+
+    revision = _SERVICE_API.revision(project_path)
+    refreshed = _SERVICE_API.execute_request(
+        _SERVICE_API.request(
+            "sequence.variant.generate",
+            project=project_path,
+            base_revision=revision,
+            arguments={
+                "source_sequence_id": source_sequence_id,
+                "specs": [
+                    {
+                        "preset_id": "portrait_9_16",
+                        "name": "竖屏 9:16",
+                        "width": 1080,
+                        "height": 1920,
+                        "reframe_mode": "center_fill",
+                    }
+                ],
+            },
+        )
+    )["result"]
+    refreshed_id = refreshed["refreshed_sequence_ids"][0]
+    assert refreshed["created_sequence_ids"] == []
+    assert refreshed["archived_sequence_ids"] == []
+    assert refreshed_id == portrait_id
+    refreshed_portrait = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": portrait_id},
+    )["timeline"]
+    assert [item["name"] for item in refreshed_portrait["markers"]] == ["Master changed"]
+
+    _SERVICE_API.history("undo", project_path)
+    undo_variants = _SERVICE_API.execute(
+        "sequence.variant.list",
+        project=project_path,
+        arguments={"source_sequence_id": source_sequence_id},
+    )["variants"]
+    assert next(
+        item for item in undo_variants if item["record"]["preset_id"] == "portrait_9_16"
+    )["stale"] is True
+    undone_portrait = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": portrait_id},
+    )["timeline"]
+    assert undone_portrait["markers"] == []
+
+    _SERVICE_API.history("redo", project_path)
+    redo_variants = _SERVICE_API.execute(
+        "sequence.variant.list",
+        project=project_path,
+        arguments={"source_sequence_id": source_sequence_id},
+    )["variants"]
+    assert next(
+        item for item in redo_variants if item["record"]["preset_id"] == "portrait_9_16"
+    )["stale"] is False
+    redone_portrait = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": portrait_id},
+    )["timeline"]
+    assert [item["name"] for item in redone_portrait["markers"]] == ["Master changed"]
+
+
+def test_public_project_collection_and_archive_are_verified_and_reversible(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Portable Project"
+    source = tmp_path / "external-source.mov"
+    source.write_bytes(b"public collection source")
+    destination = (tmp_path / "Portable Delivery").resolve()
+    with ProjectRepository.create(project_path, "Portable Project") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+
+    assert _SERVICE_API is not None
+    preview = _SERVICE_API.execute("project.collection.preview", project=project_path)
+    assert preview["collectable_count"] == 1
+    revision = _SERVICE_API.revision(project_path)
+    collected = _SERVICE_API.execute(
+        "project.collection.apply",
+        project=project_path,
+        base_revision=revision,
+    )
+    assert collected["using_collected_files"] is True
+    collection_id = collected["record"]["id"]
+    listed = _SERVICE_API.execute("project.collection.list", project=project_path)
+    assert listed["collections"][0]["id"] == collection_id
+
+    _SERVICE_API.history("undo", project_path)
+    restored = _SERVICE_API.execute("asset.list", project=project_path)["assets"][0]
+    assert restored["managed"] is False
+    assert Path(restored["path"]) == source
+
+    _SERVICE_API.history("redo", project_path)
+    managed = _SERVICE_API.execute("asset.list", project=project_path)["assets"][0]
+    assert managed["managed"] is True
+    assert (project_path / managed["path"]).read_bytes() == source.read_bytes()
+
+    revision = _SERVICE_API.revision(project_path)
+    archived = _SERVICE_API.execute(
+        "project.archive.create",
+        project=project_path,
+        base_revision=revision,
+        arguments={"destination": str(destination)},
+    )
+    assert Path(archived["manifest_path"]).is_file()
+    with ProjectRepository.open(destination, writable=False) as repository:
+        archived_asset = repository.assets.get_asset(asset.id)
+        assert repository.assets.resolve_asset_path(archived_asset).read_bytes() == source.read_bytes()
+
+
+def test_public_multicam_program_uses_real_clips_and_recoverable_angle_cuts(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Multicam API"
+    camera_a = tmp_path / "api-camera-a.mp4"
+    camera_b = tmp_path / "api-camera-b.mp4"
+    camera_a.write_bytes(b"api camera a")
+    camera_b.write_bytes(b"api camera b")
+    with ProjectRepository.create(project_path, "Multicam API") as repository:
+        project = repository.projects.get_project()
+        first = repository.assets.import_external_asset(camera_a, AssetKind.VIDEO)
+        second = repository.assets.import_external_asset(camera_b, AssetKind.VIDEO)
+        metadata = MediaMetadata(duration_frames=400, width=1920, height=1080, has_video=True)
+        repository.assets.update_asset(first.model_copy(update={"metadata": metadata}))
+        repository.assets.update_asset(second.model_copy(update={"metadata": metadata}))
+        sequence_id = project.main_sequence_id
+
+    assert _SERVICE_API is not None
+    revision = _SERVICE_API.revision(project_path)
+    created = _SERVICE_API.execute(
+        "multicam.group.create",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "sequence_id": sequence_id,
+            "name": "Interview",
+            "timeline_start": 10,
+            "duration": 180,
+            "sync_offset": 30,
+            "angles": [
+                {"id": "angle-a", "asset_id": first.id, "name": "Camera A", "sync_frame": 80},
+                {"id": "angle-b", "asset_id": second.id, "name": "Camera B", "sync_frame": 100},
+            ],
+        },
+    )["group"]
+    assert created["cuts"] == [{"frame": 0, "angle_id": "angle-a"}]
+
+    revision = _SERVICE_API.revision(project_path)
+    switched = _SERVICE_API.execute(
+        "multicam.angle.switch",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "sequence_id": sequence_id,
+            "group_id": created["id"],
+            "angle_id": "angle-b",
+            "timeline_frame": 70,
+        },
+    )["group"]
+    assert [item["frame"] for item in switched["cuts"]] == [0, 60]
+    timeline = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": sequence_id},
+    )["timeline"]
+    program = [item for item in timeline["clips"] if item["id"] in switched["program_clip_ids"]]
+    assert [(item["asset_id"], item["timeline_start"], item["duration"]) for item in program] == [
+        (first.id, 10, 60),
+        (second.id, 70, 120),
+    ]
+
+    _SERVICE_API.history("undo", project_path)
+    groups = _SERVICE_API.execute(
+        "multicam.list",
+        project=project_path,
+        arguments={"sequence_id": sequence_id},
+    )["groups"]
+    assert len(groups[0]["cuts"]) == 1
+
+
+def test_public_fcpxml_import_creates_a_native_recoverable_sequence(tmp_path: Path) -> None:
+    project_path = tmp_path / "Interchange API"
+    source = tmp_path / "interchange-tone.wav"
+    _write_wave(source)
+    with ProjectRepository.create(
+        project_path,
+        "Interchange API",
+        ProjectProfile(fps_numerator=25, fps_denominator=1),
+    ) as repository:
+        main_sequence_id = repository.projects.get_project().main_sequence_id
+
+    assert _SERVICE_API is not None
+    receipt = _SERVICE_API.execute(
+        "asset.import",
+        project=project_path,
+        arguments={"source": str(source)},
+    )
+    imported_asset = wait_for_imported_asset(project_path, receipt)
+    revision = _SERVICE_API.revision(project_path)
+    track = _SERVICE_API.execute(
+        "timeline.track.add",
+        project=project_path,
+        base_revision=revision,
+        arguments={"sequence_id": main_sequence_id, "kind": "audio", "name": "Dialogue"},
+    )["track"]
+    revision = _SERVICE_API.revision(project_path)
+    _SERVICE_API.execute(
+        "timeline.clip.add",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "sequence_id": main_sequence_id,
+            "track_id": track["id"],
+            "asset_id": imported_asset["id"],
+            "timeline_start": 0,
+            "source_in": 0,
+            "duration": 20,
+        },
+    )
+    handoff = tmp_path / "roundtrip.fcpxml"
+    revision = _SERVICE_API.revision(project_path)
+    _SERVICE_API.execute(
+        "export.fcpxml",
+        project=project_path,
+        base_revision=revision,
+        arguments={"sequence_id": main_sequence_id, "output_path": str(handoff)},
+    )
+
+    inspected = _SERVICE_API.execute(
+        "timeline.interchange.inspect",
+        project=project_path,
+        arguments={"sequence_id": main_sequence_id, "timeline_path": str(handoff)},
+    )
+    assert inspected["format"] == "fcpxml"
+    assert inspected["missing_sources"] == []
+    assert inspected["clip_count"] == 1
+
+    revision = _SERVICE_API.revision(project_path)
+    result = _SERVICE_API.execute(
+        "timeline.interchange.import",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "sequence_id": main_sequence_id,
+            "timeline_path": str(handoff),
+            "name": "Imported handoff",
+        },
+    )
+    imported_sequence_id = result["sequence"]["id"]
+    assert result["sequence"]["name"] == "Imported handoff"
+    imported_clips = [
+        item
+        for item in result["timeline"]["clips"]
+        if item["media_kind"] == "audio_only"
+    ]
+    assert len(imported_clips) == 1
+    assert (imported_clips[0]["timeline_start"], imported_clips[0]["duration"]) == (0, 20)
+
+    _SERVICE_API.history("undo", project_path)
+    with ProjectRepository.open(project_path, writable=False) as repository:
+        assert repository.sequences.get_sequence(imported_sequence_id).archived is True
+    _SERVICE_API.history("redo", project_path)
+    with ProjectRepository.open(project_path, writable=False) as repository:
+        assert repository.sequences.get_sequence(imported_sequence_id).archived is False
+        assert repository.timeline.load_timeline(imported_sequence_id).duration_frames == 20
+
+
+def test_public_voiceover_adr_manages_real_takes_and_recoverable_timeline_placement(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "Voiceover API"
+    guide = tmp_path / "voiceover-guide.wav"
+    first_take = tmp_path / "voiceover-take-one.wav"
+    second_take = tmp_path / "voiceover-take-two.wav"
+    _write_wave(guide)
+    _write_wave(first_take)
+    _write_wave(second_take)
+    with ProjectRepository.create(project_path, "Voiceover API") as repository:
+        sequence_id = repository.projects.get_project().main_sequence_id
+        guide_asset = repository.assets.import_external_asset(guide, AssetKind.AUDIO)
+        repository.assets.update_asset(
+            guide_asset.model_copy(
+                update={
+                    "metadata": MediaMetadata(
+                        duration_frames=300,
+                        has_audio=True,
+                    )
+                }
+            )
+        )
+        editor = TimelineEditor(repository, sequence_id)
+        guide_track = editor.add_track(TrackKind.AUDIO, "Guide")
+        editor.add_clip(
+            track_id=guide_track.id,
+            asset_id=guide_asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=240,
+        )
+
+    assert _SERVICE_API is not None
+    revision = _SERVICE_API.revision(project_path)
+    cue = _SERVICE_API.execute(
+        "voiceover.cue.create",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "sequence_id": sequence_id,
+            "start_frame": 30,
+            "end_frame": 90,
+            "text": "把这句旁白和画面动作对齐。",
+            "speaker": "Narrator",
+            "notes": "语气自然，句尾收住。",
+        },
+    )["cue"]
+    assert cue["status"] == "planned"
+
+    revision = _SERVICE_API.revision(project_path)
+    calibration = _SERVICE_API.execute(
+        "voiceover.latency.set",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "device_id": "studio-mic",
+            "device_name": "Studio microphone",
+            "latency_samples": 4_800,
+            "sample_rate": 48_000,
+        },
+    )["calibration"]
+    assert calibration["latency_samples"] == 4_800
+    assert _SERVICE_API.execute(
+        "voiceover.latency.get",
+        project=project_path,
+        arguments={"device_id": "studio-mic"},
+    )["calibration"]["method"] == "manual"
+
+    revision = _SERVICE_API.revision(project_path)
+    first = _SERVICE_API.execute(
+        "voiceover.take.add",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "cue_id": cue["id"],
+            "source": str(first_take),
+            "name": "Take 1",
+            "calibration_device_id": "studio-mic",
+        },
+    )
+    first_take_id = first["take"]["id"]
+    assert first["take"]["latency_compensation_samples"] == 4_800
+    managed_copy = project_path / "sources" / "voiceover" / cue["id"]
+    assert any(path.read_bytes() == first_take.read_bytes() for path in managed_copy.iterdir())
+
+    revision = _SERVICE_API.revision(project_path)
+    rated = _SERVICE_API.execute(
+        "voiceover.take.update",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "take_id": first_take_id,
+            "name": "Take 1 · preferred",
+            "notes": "节奏最自然",
+            "rating": 5,
+        },
+    )["take"]
+    assert rated["rating"] == 5
+
+    revision = _SERVICE_API.revision(project_path)
+    second = _SERVICE_API.execute(
+        "voiceover.take.add",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "cue_id": cue["id"],
+            "source": str(second_take),
+            "name": "Take 2",
+        },
+    )
+    assert second["cue"]["selected_take_id"] == second["take"]["id"]
+
+    revision = _SERVICE_API.revision(project_path)
+    selected = _SERVICE_API.execute(
+        "voiceover.take.select",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "cue_id": cue["id"],
+            "take_id": first_take_id,
+            "expected_revision": second["cue"]["revision"],
+        },
+    )["cue"]
+    assert selected["selected_take_id"] == first_take_id
+
+    revision = _SERVICE_API.revision(project_path)
+    placed = _SERVICE_API.execute(
+        "voiceover.take.place",
+        project=project_path,
+        base_revision=revision,
+        arguments={
+            "cue_id": cue["id"],
+            "expected_revision": selected["revision"],
+        },
+    )["cue"]
+    timeline = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": sequence_id},
+    )["timeline"]
+    placed_clip = next(item for item in timeline["clips"] if item["id"] == placed["placed_clip_id"])
+    placement_track = next(
+        item for item in timeline["tracks"] if item["id"] == placed_clip["track_id"]
+    )
+    assert placed_clip["timeline_start"] == 30
+    with ProjectRepository.open(project_path, writable=False) as repository:
+        profile = repository.sequences.get_sequence(sequence_id).profile
+    assert placed_clip["source_in"] == round(
+        4_800 * profile.fps_numerator / (48_000 * profile.fps_denominator)
+    )
+    assert placed_clip["media_kind"] == "audio_only"
+    assert placement_track["name"].startswith("旁白 / ADR")
+
+    _SERVICE_API.history("undo", project_path)
+    undone = _SERVICE_API.execute(
+        "voiceover.cue.list",
+        project=project_path,
+        arguments={"sequence_id": sequence_id},
+    )["cues"][0]
+    assert undone["placed_clip_id"] is None
+    undone_timeline = _SERVICE_API.execute(
+        "timeline.get",
+        project=project_path,
+        arguments={"sequence_id": sequence_id},
+    )["timeline"]
+    assert placed["placed_clip_id"] not in {item["id"] for item in undone_timeline["clips"]}
+
+    _SERVICE_API.history("redo", project_path)
+    reopened = _SERVICE_API.execute(
+        "voiceover.cue.list",
+        project=project_path,
+        arguments={"sequence_id": sequence_id},
+    )["cues"][0]
+    assert reopened["placed_clip_id"] == placed["placed_clip_id"]
+    assert [item["rating"] for item in reopened["takes"] if item["id"] == first_take_id] == [5]

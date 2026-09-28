@@ -4,18 +4,10 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from mediaflow.domain.model_base import now_ms
-
-WorkspaceCommand = Literal[
-    "playhead.seek",
-    "playback.play",
-    "playback.pause",
-    "playback.stop",
-    "workspace.mode.activate",
-    "timeline.selection.set",
-]
+from mediaflow.domain.workspace_commands import WorkspaceCommandEvent, validate_workspace_arguments
 
 
 @dataclass(slots=True)
@@ -98,67 +90,22 @@ class WorkspaceRegistry:
         command: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        allowed = {
-            "playhead.seek",
-            "playback.play",
-            "playback.pause",
-            "playback.stop",
-            "workspace.mode.activate",
-            "timeline.selection.set",
-        }
-        if command not in allowed:
-            raise ValueError(f"Unknown workspace command: {command}")
-        normalized_arguments = dict(arguments)
-        if command in {"playhead.seek", "playback.play"}:
-            frame = normalized_arguments.get("frame")
-            if type(frame) is not int or frame < 0:
-                raise ValueError(f"{command} requires a non-negative integer frame")
-            normalized_arguments = {"frame": frame}
-        elif command == "workspace.mode.activate":
-            mode = str(normalized_arguments.get("mode") or "")
-            if mode not in {
-                "media",
-                "resources",
-                "transcript",
-                "highlight",
-                "audio",
-                "tasks",
-            }:
-                raise ValueError(f"Unknown workspace mode: {mode}")
-            normalized_arguments = {"mode": mode}
-        elif command == "timeline.selection.set":
-            clip_ids = normalized_arguments.get("clip_ids", [])
-            if not isinstance(clip_ids, list) or any(
-                not isinstance(value, str) or not value.strip() for value in clip_ids
-            ):
-                raise ValueError("timeline.selection.set clip_ids must be an array of ids")
-            transition_id = normalized_arguments.get("transition_id")
-            if transition_id is not None and (
-                not isinstance(transition_id, str) or not transition_id.strip()
-            ):
-                raise ValueError("timeline.selection.set transition_id must be null or an id")
-            if clip_ids and transition_id:
-                raise ValueError("Timeline selection cannot contain clips and a transition")
-            normalized_arguments = {
-                "clip_ids": list(dict.fromkeys(value.strip() for value in clip_ids)),
-                "transition_id": transition_id.strip() if transition_id else None,
-            }
-        elif normalized_arguments:
-            raise ValueError(f"{command} does not accept arguments")
+        normalized_arguments = validate_workspace_arguments(command, arguments)
         with self._lock:
             session = self._sessions.get(workspace_session_id)
             if session is None or not session.connections:
                 raise RuntimeError(
                     f"Workspace session is not connected: {workspace_session_id}"
                 )
-            session.revision += 1
-            return {
+            event = WorkspaceCommandEvent.model_validate({
                 "workspace_session_id": session.id,
-                "workspace_revision": session.revision,
+                "workspace_revision": session.revision + 1,
                 "project": session.project,
                 "command": command,
                 "arguments": normalized_arguments,
-            }
+            })
+            session.revision = event.workspace_revision
+            return event.model_dump(mode="json")
 
     def status(self, workspace_session_id: str) -> dict[str, Any]:
         with self._lock:

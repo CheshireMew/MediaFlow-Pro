@@ -9,7 +9,10 @@ from xml.etree import ElementTree as ET
 
 from mediaflow.application.ports import InterchangeExportDocuments
 from mediaflow.application.timeline_clock import assets_in_timeline_clock
-from mediaflow.domain.clip_transform_projection import project_clip_transform_points
+from mediaflow.domain.clip_transform_projection import (
+    project_clip_transform_points,
+    sampled_clip_transform_points,
+)
 from mediaflow.domain.enums import (
     AssetKind,
     ClipMediaKind,
@@ -92,6 +95,25 @@ class FcpxmlExportService:
 
     def validate(self, state: TimelineState) -> None:
         """Reject editing decisions that FCPXML cannot preserve faithfully."""
+
+        visual_effects = [
+            effect.kind.value
+            for clip in state.clips
+            for effect in clip.visual_effects
+            if effect.enabled
+        ]
+        if visual_effects:
+            raise ValueError(
+                "FCPXML 没有可靠保留 MediaFlow 原生视觉效果及参数关键帧的通用映射："
+                + "、".join(sorted(set(visual_effects)))
+                + "。请先渲染该片段，或改为导出成片。"
+            )
+
+        if any(clip.masks for clip in state.clips):
+            raise ValueError(
+                "FCPXML 没有可靠保留 MediaFlow 原生蒙版、跟踪关键帧和局部效果的通用映射。"
+                "请先渲染该片段，或改为导出成片。"
+            )
 
         frozen = [clip.id for clip in state.clips if clip.freeze_source_frame is not None]
         if frozen:
@@ -700,7 +722,11 @@ class FcpxmlExportService:
         state: TimelineState,
     ) -> None:
         projection = project_clip_transform_points(clip)
-        points = list(projection.points)
+        points = list(
+            sampled_clip_transform_points(clip)
+            if projection.has_keyframes
+            else projection.points
+        )
         has_keyframes = projection.has_keyframes
         transforms = [value for _frame, value in points]
         if any(

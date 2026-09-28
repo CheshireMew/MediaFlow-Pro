@@ -11,6 +11,7 @@ Item {
     readonly property string shortSequencePrefix: qsTr("短")
     property bool actionsEnabled: true
     signal createShortRequested
+    signal createVariantsRequested
     signal editProfileRequested
 
     implicitWidth: Math.min(520, Math.max(150, sequenceTabs.contentWidth))
@@ -114,6 +115,16 @@ Item {
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
                 elide: Text.ElideRight
+            }
+            AppButton {
+                objectName: "generateSequenceVariantsButton"
+                Layout.fillWidth: true
+                text: qsTr("从当前序列生成交付版本")
+                enabled: root.actionsEnabled
+                onClicked: {
+                    root.createVariantsRequested();
+                    sequenceMenu.close();
+                }
             }
             AppButton {
                 objectName: "archiveActiveSequenceButton"

@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from mediaflow.atomic_file import atomic_write_text
+from mediaflow.domain.masks import ClipMask, MaskGeometry, MaskKeyframe, MaskPoint
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
 from mediaflow.domain.storage_names import require_windows_interop_path
@@ -258,6 +259,188 @@ class SubjectMotionService:
         x = min(0.0, max(minimum, x))
         y = min(0.0, max(minimum, y))
         return ClipTransform(x=x, y=y, scale_x=zoom, scale_y=zoom)
+
+    def analyze_mask(
+        self,
+        source: Path,
+        clip: Clip,
+        mask: ClipMask,
+        profile: ProjectProfile,
+        *,
+        check_cancelled=None,
+        progress=None,
+    ) -> list[MaskKeyframe]:
+        source = require_windows_interop_path(Path(source).resolve(strict=True))
+        capture = cv2.VideoCapture(str(source))
+        if not capture.isOpened():
+            raise RuntimeError(f"无法读取视频素材：{source}")
+        try:
+            source_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            if source_width <= 0 or source_height <= 0:
+                raise RuntimeError("视频素材没有可用的画面尺寸")
+            low, source_end = source_interval_for_timeline_interval(
+                clip.source_in,
+                0,
+                clip.duration,
+                clip.speed_numerator,
+                clip.speed_denominator,
+                freeze_source_frame=clip.freeze_source_frame,
+            )
+            high = source_end - 1
+            project_step = max(1, round(profile.fps / 5))
+            source_frames = list(range(low, high + 1, project_step))
+            if not source_frames or source_frames[-1] != high:
+                source_frames.append(high)
+
+            geometry = mask.geometry
+            previous_gray: np.ndarray | None = None
+            previous_template: np.ndarray | None = None
+            template_size: tuple[int, int] | None = None
+            keyframes: list[MaskKeyframe] = []
+            for index, source_frame in enumerate(source_frames):
+                if check_cancelled:
+                    check_cancelled()
+                capture.set(cv2.CAP_PROP_POS_MSEC, source_frame / profile.fps * 1000.0)
+                ok, frame = capture.read()
+                if not ok:
+                    continue
+                scale = min(1.0, 720.0 / max(source_width, source_height))
+                if scale < 1.0:
+                    frame = cv2.resize(
+                        frame,
+                        (
+                            max(1, round(source_width * scale)),
+                            max(1, round(source_height * scale)),
+                        ),
+                    )
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if previous_gray is None:
+                    left, top, width, height = self._mask_bounds(geometry, gray.shape)
+                    previous_template = gray[top : top + height, left : left + width].copy()
+                    template_size = (width, height)
+                    confidence = 1.0
+                else:
+                    assert previous_template is not None and template_size is not None
+                    left, top, width, height = self._mask_bounds(geometry, gray.shape)
+                    margin_x = max(width, 32)
+                    margin_y = max(height, 32)
+                    search_left = max(0, left - margin_x)
+                    search_top = max(0, top - margin_y)
+                    search_right = min(gray.shape[1], left + width + margin_x)
+                    search_bottom = min(gray.shape[0], top + height + margin_y)
+                    search = gray[search_top:search_bottom, search_left:search_right]
+                    confidence = 0.0
+                    if (
+                        search.shape[1] >= previous_template.shape[1]
+                        and search.shape[0] >= previous_template.shape[0]
+                        and float(previous_template.std()) >= 2.0
+                    ):
+                        matches = cv2.matchTemplate(
+                            search,
+                            previous_template,
+                            cv2.TM_CCOEFF_NORMED,
+                        )
+                        _minimum, maximum, _minimum_at, maximum_at = cv2.minMaxLoc(matches)
+                        matched_left = search_left + maximum_at[0]
+                        matched_top = search_top + maximum_at[1]
+                        old_center_x = (left + width / 2.0) / gray.shape[1]
+                        old_center_y = (top + height / 2.0) / gray.shape[0]
+                        new_center_x = (matched_left + width / 2.0) / gray.shape[1]
+                        new_center_y = (matched_top + height / 2.0) / gray.shape[0]
+                        geometry = self._translate_mask_geometry(
+                            geometry,
+                            new_center_x - old_center_x,
+                            new_center_y - old_center_y,
+                        )
+                        confidence = min(1.0, max(0.0, float(maximum)))
+                        previous_template = gray[
+                            matched_top : matched_top + height,
+                            matched_left : matched_left + width,
+                        ].copy()
+                keyframes.append(
+                    MaskKeyframe(
+                        source_frame=source_frame,
+                        geometry=geometry,
+                        source="subject_tracking",
+                        confidence=confidence,
+                    )
+                )
+                previous_gray = gray
+                if progress:
+                    progress(
+                        OperationProgress.determinate(
+                            "mask_tracking_analyzing",
+                            completed=index + 1,
+                            total=len(source_frames),
+                            unit="frames",
+                        )
+                    )
+            if not keyframes:
+                raise RuntimeError("没有从视频中读取到可跟踪画面")
+            return keyframes
+        finally:
+            capture.release()
+
+    @staticmethod
+    def _mask_bounds(
+        geometry: MaskGeometry,
+        image_shape: tuple[int, ...],
+    ) -> tuple[int, int, int, int]:
+        image_height, image_width = image_shape[:2]
+        if geometry.points:
+            xs = [point.x for point in geometry.points]
+            ys = [point.y for point in geometry.points]
+            left_f, right_f = min(xs), max(xs)
+            top_f, bottom_f = min(ys), max(ys)
+        else:
+            left_f = geometry.center_x - geometry.width / 2.0
+            right_f = geometry.center_x + geometry.width / 2.0
+            top_f = geometry.center_y - geometry.height / 2.0
+            bottom_f = geometry.center_y + geometry.height / 2.0
+        left = max(0, min(image_width - 1, round(left_f * image_width)))
+        top = max(0, min(image_height - 1, round(top_f * image_height)))
+        right = max(left + 1, min(image_width, round(right_f * image_width)))
+        bottom = max(top + 1, min(image_height, round(bottom_f * image_height)))
+        width = max(8, right - left)
+        height = max(8, bottom - top)
+        left = min(left, max(0, image_width - width))
+        top = min(top, max(0, image_height - height))
+        width = min(width, image_width - left)
+        height = min(height, image_height - top)
+        return left, top, width, height
+
+    @staticmethod
+    def _translate_mask_geometry(
+        geometry: MaskGeometry,
+        delta_x: float,
+        delta_y: float,
+    ) -> MaskGeometry:
+        if geometry.points:
+            min_x = min(point.x for point in geometry.points)
+            max_x = max(point.x for point in geometry.points)
+            min_y = min(point.y for point in geometry.points)
+            max_y = max(point.y for point in geometry.points)
+            delta_x = min(1.0 - max_x, max(-min_x, delta_x))
+            delta_y = min(1.0 - max_y, max(-min_y, delta_y))
+            return geometry.model_copy(
+                update={
+                    "center_x": min(1.0, max(0.0, geometry.center_x + delta_x)),
+                    "center_y": min(1.0, max(0.0, geometry.center_y + delta_y)),
+                    "points": tuple(
+                        MaskPoint(x=point.x + delta_x, y=point.y + delta_y)
+                        for point in geometry.points
+                    ),
+                }
+            )
+        half_width = min(0.5, geometry.width / 2.0)
+        half_height = min(0.5, geometry.height / 2.0)
+        return geometry.model_copy(
+            update={
+                "center_x": min(1.0 - half_width, max(half_width, geometry.center_x + delta_x)),
+                "center_y": min(1.0 - half_height, max(half_height, geometry.center_y + delta_y)),
+            }
+        )
 
 
 def write_visual_analysis(path: Path, payload: dict) -> Path:

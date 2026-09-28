@@ -1,3 +1,4 @@
+import json
 from fractions import Fraction
 from pathlib import Path
 
@@ -5,7 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from mediaflow.domain.audio import AUDIO_EFFECT_DEFINITIONS, AudioEffect
-from mediaflow.domain.clip_transform_projection import project_clip_transform_points
+from mediaflow.domain.clip_transform_projection import (
+    project_clip_transform_points,
+    sampled_clip_transform_points,
+)
 from mediaflow.domain.downloads import DownloadEntry, DownloadRequest
 from mediaflow.domain.editor_fields import EditorFieldValue
 from mediaflow.domain.enums import (
@@ -18,6 +22,9 @@ from mediaflow.domain.enums import (
     WorkflowStage,
 )
 from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.keyframes import KeyframeCurve, keyframe_progress
+from mediaflow.domain.mask_projection import mask_spline_json, sampled_mask_points
+from mediaflow.domain.masks import ClipMask, MaskGeometry, MaskKeyframe, MaskPoint
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile, Sequence
 from mediaflow.domain.storage_names import (
@@ -136,6 +143,132 @@ def test_clip_transform_projection_uses_one_clip_local_clock_for_all_renderers()
 
     assert projection.has_keyframes is True
     assert projection.points == ((0, clip.transform), (2, transformed))
+
+
+def test_native_keyframe_curves_are_deterministic_and_baked_for_renderers() -> None:
+    curve = KeyframeCurve(
+        interpolation="bezier",
+        x1=0.42,
+        y1=0.0,
+        x2=0.58,
+        y2=1.0,
+    )
+    clip = Clip(
+        track_id="video",
+        asset_id="asset",
+        timeline_start=0,
+        source_in=0,
+        duration=5,
+        media_kind=ClipMediaKind.VIDEO_ONLY,
+        transform_keyframes=[
+            ClipTransformKeyframe(
+                timeline_offset=0,
+                transform=ClipTransform(x=0),
+                curve=curve,
+            ),
+            ClipTransformKeyframe(
+                timeline_offset=4,
+                transform=ClipTransform(x=100),
+            ),
+        ],
+    )
+
+    samples = dict(sampled_clip_transform_points(clip))
+
+    assert keyframe_progress(curve, 0.5) == pytest.approx(0.5)
+    assert tuple(samples) == (0, 1, 2, 3, 4)
+    assert samples[2].x == pytest.approx(50)
+    assert samples[1].x < 25
+    assert samples[3].x > 75
+
+
+def test_hold_transform_curve_preserves_the_previous_value_until_the_next_keyframe() -> None:
+    clip = Clip(
+        track_id="video",
+        asset_id="asset",
+        timeline_start=0,
+        source_in=0,
+        duration=4,
+        media_kind=ClipMediaKind.VIDEO_ONLY,
+        transform_keyframes=[
+            ClipTransformKeyframe(
+                timeline_offset=0,
+                transform=ClipTransform(opacity=0.2),
+                curve=KeyframeCurve(interpolation="hold"),
+            ),
+            ClipTransformKeyframe(
+                timeline_offset=3,
+                transform=ClipTransform(opacity=1.0),
+            ),
+        ],
+    )
+
+    samples = dict(sampled_clip_transform_points(clip))
+
+    assert [samples[frame].opacity for frame in range(4)] == [0.2, 0.2, 0.2, 1.0]
+
+
+def test_native_polygon_mask_requires_stable_points_and_compiles_curves() -> None:
+    geometry = MaskGeometry(
+        points=(
+            MaskPoint(x=0.1, y=0.1),
+            MaskPoint(x=0.8, y=0.2),
+            MaskPoint(x=0.4, y=0.9),
+        )
+    )
+    mask = ClipMask(
+        kind="polygon",
+        position=0,
+        geometry=geometry,
+        keyframes=[
+            MaskKeyframe(
+                timeline_offset=0,
+                geometry=geometry,
+                curve=KeyframeCurve(interpolation="hold"),
+            ),
+            MaskKeyframe(
+                timeline_offset=10,
+                geometry=geometry.model_copy(
+                    update={
+                        "points": (
+                            MaskPoint(x=0.2, y=0.1),
+                            MaskPoint(x=0.9, y=0.2),
+                            MaskPoint(x=0.5, y=0.9),
+                        )
+                    }
+                ),
+            ),
+        ],
+    )
+    clip = Clip(
+        track_id="video",
+        asset_id="asset",
+        timeline_start=0,
+        source_in=0,
+        duration=20,
+        media_kind=ClipMediaKind.VIDEO_ONLY,
+        masks=[mask],
+    )
+
+    samples = dict(sampled_mask_points(clip, mask))
+    spline = json.loads(mask_spline_json(clip, mask, producer_start=3))
+
+    assert samples[9].points[0].x == pytest.approx(0.1)
+    assert samples[10].points[0].x == pytest.approx(0.2)
+    assert set(spline) >= {"3", "12", "13", "22"}
+    assert len(spline["3"]) == 3
+
+    with pytest.raises(ValueError, match="at least three"):
+        ClipMask(
+            kind="polygon",
+            position=0,
+            geometry=MaskGeometry(
+                points=(
+                    MaskPoint(x=0.1, y=0.1),
+                    MaskPoint(x=0.8, y=0.8),
+                )
+            ),
+        )
 
 
 def test_storage_names_are_windows_safe_normalized_and_length_bounded() -> None:
@@ -547,3 +680,23 @@ def test_visual_effects_use_the_same_descriptor_validation_and_keyframe_contract
                 "parameters": {**effect.parameters, "saturation": 4.0},
             }
         )
+
+
+def test_three_way_color_wheels_expose_nine_keyframable_channels() -> None:
+    effect = new_visual_effect(VisualEffectKind.COLOR_WHEELS, 0)
+    definition = VISUAL_EFFECT_DEFINITIONS[VisualEffectKind.COLOR_WHEELS]
+
+    assert definition.service == "avfilter.colorbalance"
+    assert [descriptor.id for descriptor in definition.descriptors] == [
+        "rs",
+        "gs",
+        "bs",
+        "rm",
+        "gm",
+        "bm",
+        "rh",
+        "gh",
+        "bh",
+    ]
+    assert effect.parameters == {descriptor.id: 0.0 for descriptor in definition.descriptors}
+    assert {descriptor.timeline for descriptor in definition.descriptors} == {"keyframe"}

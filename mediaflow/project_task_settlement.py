@@ -311,6 +311,7 @@ def task_project_write_set(task: Task) -> list[str]:
         "analyze_sequence_bounds",
         "analyze_scenes",
         "track_subject",
+        "track_mask",
     }:
         sequence_id = task.sequence_id or str(getattr(command, "sequence_id", ""))
         if not sequence_id:

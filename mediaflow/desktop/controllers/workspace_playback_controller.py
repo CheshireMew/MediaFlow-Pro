@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from typing import cast
+
 from PySide6.QtCore import Signal, Slot
+
+from mediaflow.domain.workspace_commands import WorkspaceCommandEvent
 
 from .controller_facet import ControllerFacet
 from .controller_scopes import WorkspacePlaybackScope
@@ -22,13 +26,17 @@ class WorkspacePlaybackController(ControllerFacet[WorkspacePlaybackScope]):
     def _apply_workspace_command(self, event: object) -> None:
         if not isinstance(event, dict):
             return
-        command = str(event.get("command") or "")
-        arguments = event.get("arguments")
-        values = arguments if isinstance(arguments, dict) else {}
+        try:
+            accepted = WorkspaceCommandEvent.model_validate(event)
+        except ValueError:
+            self._session.updates.report_error("远程工作区命令格式无效")
+            return
+        command = accepted.command
+        values = accepted.arguments
         if command == "playhead.seek":
-            self.remoteSeekRequested.emit(int(values["frame"]))
+            self.remoteSeekRequested.emit(cast(int, values["frame"]))
         elif command == "playback.play":
-            self.remotePlayRequested.emit(int(values["frame"]))
+            self.remotePlayRequested.emit(cast(int, values["frame"]))
         elif command == "playback.pause":
             self.remotePauseRequested.emit()
         elif command == "playback.stop":

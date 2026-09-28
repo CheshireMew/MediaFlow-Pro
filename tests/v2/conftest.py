@@ -34,6 +34,19 @@ if TYPE_CHECKING:
     from tests.v2.editor_service_api import EditorServiceApi
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
+_windows_directory = os.environ.get("WINDIR", "").strip()
+if _windows_directory:
+    _windows_fonts = Path(_windows_directory) / "Fonts"
+    if _windows_fonts.is_dir():
+        os.environ.setdefault("QT_QPA_FONTDIR", str(_windows_fonts))
+
+
+@pytest.fixture(scope="session")
+def qapp_cls():
+    """Use the same application base class as the QML-first desktop tests."""
+    from PySide6.QtGui import QGuiApplication
+
+    return QGuiApplication
 
 TEST_RUN_ROOT = test_run_root()
 MANAGED_PYTEST_ROOT = TEST_RUN_ROOT / "p"

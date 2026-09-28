@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .editor_fields import EditorFieldConstraints, EditorFieldDescriptor
 from .enums import AssetKind, VisualEffectKind
+from .keyframes import KeyframeCurve, interpolate_number, keyframe_progress
 from .model_base import DomainModel, new_id
 
 
@@ -59,6 +60,21 @@ VISUAL_EFFECT_DEFINITIONS: dict[VisualEffectKind, VisualEffectDefinition] = {
             _number_field("saturation", "饱和度", 1.0, 0.0, 3.0),
         ),
     ),
+    VisualEffectKind.COLOR_WHEELS: VisualEffectDefinition(
+        label="三向色轮",
+        service="avfilter.colorbalance",
+        descriptors=(
+            _number_field("rs", "阴影 · 红 / 青", 0.0, -1.0, 1.0),
+            _number_field("gs", "阴影 · 绿 / 洋红", 0.0, -1.0, 1.0),
+            _number_field("bs", "阴影 · 蓝 / 黄", 0.0, -1.0, 1.0),
+            _number_field("rm", "中间调 · 红 / 青", 0.0, -1.0, 1.0),
+            _number_field("gm", "中间调 · 绿 / 洋红", 0.0, -1.0, 1.0),
+            _number_field("bm", "中间调 · 蓝 / 黄", 0.0, -1.0, 1.0),
+            _number_field("rh", "高光 · 红 / 青", 0.0, -1.0, 1.0),
+            _number_field("gh", "高光 · 绿 / 洋红", 0.0, -1.0, 1.0),
+            _number_field("bh", "高光 · 蓝 / 黄", 0.0, -1.0, 1.0),
+        ),
+    ),
     VisualEffectKind.GAUSSIAN_BLUR: VisualEffectDefinition(
         label="高斯模糊",
         service="avfilter.gblur",
@@ -89,6 +105,19 @@ def visual_effect_defaults(kind: VisualEffectKind) -> dict[str, float]:
     }
 
 
+class VisualEffectParameterKeyframe(DomainModel):
+    timeline_offset: int = Field(ge=0)
+    value: float
+    curve: KeyframeCurve = Field(default_factory=KeyframeCurve)
+
+    @field_validator("value")
+    @classmethod
+    def finite_value(cls, value: float) -> float:
+        if value != value or value in {float("inf"), float("-inf")}:
+            raise ValueError("Visual effect keyframe values must be finite")
+        return value
+
+
 class ClipVisualEffect(DomainModel):
     id: str = Field(default_factory=new_id)
     kind: VisualEffectKind
@@ -96,6 +125,10 @@ class ClipVisualEffect(DomainModel):
     enabled: bool = True
     parameters: dict[str, float]
     resource_asset_id: str | None = None
+    mask_id: str | None = None
+    parameter_keyframes: dict[str, list[VisualEffectParameterKeyframe]] = Field(
+        default_factory=dict
+    )
 
     @model_validator(mode="after")
     def validate_parameters(self) -> ClipVisualEffect:
@@ -113,7 +146,72 @@ class ClipVisualEffect(DomainModel):
             raise ValueError(f"{self.kind.value} visual effect cannot reference a resource asset")
         if required_resource is not None and not self.resource_asset_id:
             raise ValueError(f"{self.kind.value} visual effect requires a resource asset")
+        for field_id, keyframes in self.parameter_keyframes.items():
+            animated_descriptor = descriptors.get(field_id)
+            if animated_descriptor is None:
+                raise ValueError(f"Unknown visual effect animation field: {field_id}")
+            if animated_descriptor.timeline != "keyframe":
+                raise ValueError(f"Visual effect field {field_id} cannot be keyframed")
+            frames = [item.timeline_offset for item in keyframes]
+            if frames != sorted(set(frames)):
+                raise ValueError(
+                    f"Visual effect field {field_id} keyframes must be unique and ordered"
+                )
+            for keyframe in keyframes:
+                animated_descriptor.validate_value(keyframe.value)
         return self
+
+
+def visual_effect_parameter_points(
+    effect: ClipVisualEffect,
+    field_id: str,
+    *,
+    duration: int,
+) -> tuple[tuple[int, float], ...]:
+    """Compile one effect parameter into deterministic clip-local samples."""
+
+    if duration <= 0:
+        return ()
+    descriptor = next(
+        item
+        for item in VISUAL_EFFECT_DEFINITIONS[effect.kind].descriptors
+        if item.id == field_id
+    )
+
+    def constrain(value: float) -> float:
+        minimum = descriptor.constraints.minimum
+        maximum = descriptor.constraints.maximum
+        if minimum is not None:
+            value = max(float(minimum), value)
+        if maximum is not None:
+            value = min(float(maximum), value)
+        return value
+
+    keyframes = effect.parameter_keyframes.get(field_id, [])
+    points = {0: (float(effect.parameters[field_id]), KeyframeCurve())}
+    for keyframe in keyframes:
+        if keyframe.timeline_offset < duration:
+            points[keyframe.timeline_offset] = (float(keyframe.value), keyframe.curve)
+    ordered = [(frame, *points[frame]) for frame in sorted(points)]
+    compiled: dict[int, float] = {}
+    for index, (start_frame, start_value, curve) in enumerate(ordered):
+        compiled[start_frame] = start_value
+        if index + 1 >= len(ordered):
+            continue
+        end_frame, end_value, _end_curve = ordered[index + 1]
+        if curve.interpolation == "linear":
+            compiled[end_frame] = end_value
+            continue
+        span = end_frame - start_frame
+        for frame in range(start_frame + 1, end_frame + 1):
+            progress = keyframe_progress(curve, (frame - start_frame) / span)
+            compiled[frame] = constrain(
+                interpolate_number(start_value, end_value, progress)
+            )
+    last_frame = duration - 1
+    if last_frame not in compiled:
+        compiled[last_frame] = ordered[-1][1]
+    return tuple(sorted(compiled.items()))
 
 
 def new_visual_effect(

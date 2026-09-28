@@ -44,6 +44,10 @@ Rectangle {
     readonly property int visiblePlayheadFrame: playheadScrubbing || playheadSeekPending ? interactivePlayheadFrame : Math.min(playheadFrame, maxPlayheadFrame)
     signal seekRequested(int frame)
     signal editProfileRequested
+    signal createVariantsRequested
+    signal createMulticamRequested
+    signal openColorScopesRequested
+    signal openVoiceoverRequested
 
     function boundedPlayheadFrame(frame) {
         return Math.max(0, Math.min(maxPlayheadFrame, Math.round(frame)));

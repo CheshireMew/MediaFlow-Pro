@@ -346,6 +346,49 @@ AppScrollView {
             }
         }
 
+        NativeKeyframeEditor {
+            Layout.fillWidth: true
+            visible: mediaflow.timelineViewController.selectedClipId.length > 0
+                && !mediaflow.webController.isWebClip
+                && mediaflow.timelineViewController.selectedClipData.trackKind === "video"
+            canEdit: root.canEdit
+            clipId: mediaflow.timelineViewController.selectedClipId
+            clipStartFrame: Number(mediaflow.timelineViewController.selectedClipData.startFrame || 0)
+            clipDuration: Number(mediaflow.timelineViewController.selectedClipData.durationFrames || 0)
+            playheadFrame: editScroll.playheadFrame
+            transformX: Number(posX.text)
+            transformY: Number(posY.text)
+            transformScaleX: Number(scaleX.text)
+            transformScaleY: Number(scaleY.text)
+            transformRotation: Number(rotation.text)
+            transformCropLeft: Number(cropLeft.text)
+            transformCropTop: Number(cropTop.text)
+            transformCropRight: Number(cropRight.text)
+            transformCropBottom: Number(cropBottom.text)
+            transformOpacity: Number(opacity.text)
+            onSeekRequested: frame => editScroll.seekRequested(frame)
+        }
+
+        ReviewPanel {
+            Layout.fillWidth: true
+            canEdit: root.canEdit
+            playheadFrame: editScroll.playheadFrame
+            threads: mediaflow.timelineReviewController.visibleThreads
+            onSeekRequested: frame => editScroll.seekRequested(frame)
+        }
+
+        MaskStackPanel {
+            Layout.fillWidth: true
+            visible: mediaflow.timelineViewController.selectedClipId.length > 0
+                && !mediaflow.webController.isWebClip
+                && mediaflow.timelineViewController.selectedClipData.trackKind === "video"
+            canEdit: root.canEdit
+            masks: mediaflow.timelineMaskController.selectedMasks
+            shapeOptions: mediaflow.timelineMaskController.shapeOptions
+            playheadFrame: editScroll.playheadFrame
+            onSeekRequested: frame => editScroll.seekRequested(frame)
+        }
+
         VisualEffectStackPanel {
             Layout.fillWidth: true
             visible: mediaflow.timelineViewController.selectedClipId.length > 0
@@ -354,6 +397,9 @@ AppScrollView {
             canEdit: root.canEdit
             effects: mediaflow.timelineEffectsController.selectedClipVisualEffects
             effectOptions: mediaflow.timelineEffectsController.visualEffectOptions
+            masks: mediaflow.timelineMaskController.selectedMasks
+            playheadFrame: editScroll.playheadFrame
+            onSeekRequested: frame => editScroll.seekRequested(frame)
         }
 
         Panel {

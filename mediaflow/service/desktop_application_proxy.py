@@ -18,11 +18,13 @@ from mediaflow.domain.settings import DesktopSettings, ServiceSettings
 from mediaflow.infrastructure.font_assets import subtitle_font_options
 from mediaflow.infrastructure.settings_repository import DesktopSettingsRepository
 
+from .application_commands import application_command
 from .client import (
     EditorServiceClient,
     EditorServiceRpcError,
     call_sync,
     close_sync_transport,
+    execute_sync,
 )
 from .codec import decode_transport, encode_transport
 from .remote_project import RemoteEditorProject
@@ -61,6 +63,10 @@ class DesktopEditorApplication:
         if not isinstance(runtime_tool_status, dict):
             raise RuntimeError("Editor Service returned invalid runtime tool status")
         self._initial_runtime_tool_status = runtime_tool_status
+        default_media_directory = bootstrap.get("default_media_directory")
+        if not isinstance(default_media_directory, str) or not default_media_directory:
+            raise RuntimeError("Editor Service returned an invalid default media directory")
+        self._default_media_directory = default_media_directory
         self._desktop_settings_repository = DesktopSettingsRepository()
         self._desktop_settings = self._desktop_settings_repository.load()
         self.cookies = _RemoteCookieStore()
@@ -116,6 +122,28 @@ class DesktopEditorApplication:
         self._desktop_settings_repository.save(settings)
         self._desktop_settings = settings.model_copy(deep=True)
 
+    def execute_read_operation(
+        self,
+        operation: str,
+        project: str | Path,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = execute_sync(
+            {
+                "protocol": "mediaflow-editor",
+                "version": 4,
+                "operation": operation,
+                "project": str(Path(project).resolve()),
+                "arguments": arguments or {},
+                "actor": self._actor.model_dump(mode="json"),
+                "client_id": self._actor.id,
+            }
+        )
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Editor Service returned an invalid read-operation result")
+        return result
+
     def close_client_transport(self) -> None:
         try:
             call_sync(
@@ -142,7 +170,7 @@ class DesktopEditorApplication:
 
     @property
     def default_media_directory(self) -> str:
-        return self._application_call("default_media_directory")
+        return self._default_media_directory
 
     def subtitle_font_options(self) -> list[dict]:
         # Font availability is a GUI-process capability. The resident service
@@ -218,16 +246,19 @@ class DesktopEditorApplication:
 
                 consumer = asyncio.create_task(consume_progress())
                 try:
+                    definition = application_command("run_runtime_tool")
+                    call_arguments = definition.arguments_from_call(
+                        (operation,), {"arguments": arguments},
+                    )
                     value = await client.call(
                         "desktop.application.call",
                         {
                             "command": "run_runtime_tool",
-                            "args": encode_transport([operation]),
-                            "kwargs": encode_transport({"arguments": arguments}),
+                            "arguments": encode_transport(call_arguments),
                         },
                         session=session,
                     )
-                    return decode_transport(value)
+                    return definition.validate_result(decode_transport(value))
                 finally:
                     consumer.cancel()
                     await asyncio.gather(consumer, return_exceptions=True)
@@ -305,15 +336,16 @@ class DesktopEditorApplication:
 
     @staticmethod
     def _application_call(command: str, *args: Any, **kwargs: Any) -> Any:
+        definition = application_command(command)
+        arguments = definition.arguments_from_call(args, kwargs)
         value = call_sync(
             "desktop.application.call",
             {
                 "command": command,
-                "args": encode_transport(list(args)),
-                "kwargs": encode_transport(kwargs),
+                "arguments": encode_transport(arguments),
             },
         )
-        return decode_transport(value)
+        return definition.validate_result(decode_transport(value))
 
     def create_project(
         self,
@@ -385,22 +417,11 @@ def create_desktop_editor_application() -> DesktopEditorApplication:
 
 
 class _RemoteCookieStore:
-    def status(self, *args: Any) -> Any:
-        return self._call("status", *args)
+    def status(self, domain: str) -> dict[str, Any]:
+        return DesktopEditorApplication._application_call("cookie_status", domain)
 
-    def save(self, *args: Any) -> Any:
-        return self._call("save", *args)
+    def save(self, domain: str, cookies: list[dict[str, Any]]) -> Path:
+        return DesktopEditorApplication._application_call("cookie_save", domain, cookies)
 
-    def clear(self, *args: Any) -> Any:
-        return self._call("clear", *args)
-
-    @staticmethod
-    def _call(command: str, *args: Any) -> Any:
-        value = call_sync(
-            "desktop.application.cookies",
-            {
-                "command": command,
-                "args": encode_transport(list(args)),
-            },
-        )
-        return decode_transport(value)
+    def clear(self, domain: str) -> bool:
+        return DesktopEditorApplication._application_call("cookie_clear", domain)

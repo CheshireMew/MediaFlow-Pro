@@ -341,6 +341,7 @@ class ProjectLifecycle(SessionCoordinator):
     def reconcile_task_events(self) -> None:
         self._session.tasks.reconcile_committed_results()
         self.replay_task_events()
+        self._session.tasks.update_reconciliation_state()
 
     def _capture_interaction(self) -> ProjectInteractionSnapshot:
         return ProjectInteractionSnapshot(

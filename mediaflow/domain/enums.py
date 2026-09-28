@@ -63,9 +63,17 @@ class TransitionKind(DomainEnum):
 
 class VisualEffectKind(DomainEnum):
     COLOR_ADJUSTMENT = "color_adjustment"
+    COLOR_WHEELS = "color_wheels"
     GAUSSIAN_BLUR = "gaussian_blur"
     VIGNETTE = "vignette"
     LUT_3D = "lut_3d"
+
+
+class MaskShapeKind(DomainEnum):
+    RECTANGLE = "rectangle"
+    ELLIPSE = "ellipse"
+    POLYGON = "polygon"
+    BEZIER = "bezier"
 
 
 class AudioEffectKind(DomainEnum):

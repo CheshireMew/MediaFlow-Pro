@@ -22,6 +22,7 @@ from mediaflow.domain.enums import (
     SequenceKind,
     TaskStatus,
     TrackKind,
+    VisualEffectKind,
 )
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.project import MediaMetadata, ProjectProfile, SequenceInOut
@@ -256,6 +257,467 @@ def test_v48_migration_adds_claimable_task_indexes(tmp_path: Path) -> None:
             "idx_task_claimable_pending",
             "idx_task_claimable_running",
         } <= indexes
+
+
+def test_v50_migration_adds_native_curves_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "NativeKeyframeMigration"
+    source = tmp_path / "native-keyframe-source.mp4"
+    source.write_bytes(b"native-keyframe-source")
+    with ProjectRepository.create(root, "NativeKeyframeMigration") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        sequence_id = repository.projects.get_project().main_sequence_id
+        editor = TimelineEditor(repository, sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+        editor.upsert_clip_transform_keyframe(
+            clip.id,
+            5,
+            clip.transform.model_copy(update={"x": 0.25}),
+        )
+        effect = editor.add_clip_visual_effect(
+            clip.id,
+            VisualEffectKind.GAUSSIAN_BLUR,
+        )
+        editor.upsert_clip_effect_parameter_keyframe(
+            clip.id,
+            effect.id,
+            "sigma",
+            10,
+            8.0,
+        )
+        version = repository.records.create_project_version("Before native curves")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v49(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            row = connection.execute(
+                "SELECT transform_keyframes_json, visual_effects_json FROM clip WHERE id=?",
+                (clip.id,),
+            ).fetchone()
+            transform_keyframes = json.loads(row[0])
+            visual_effects = json.loads(row[1])
+            for keyframe in transform_keyframes:
+                keyframe.pop("curve")
+            for stored_effect in visual_effects:
+                for keyframes in stored_effect["parameter_keyframes"].values():
+                    for keyframe in keyframes:
+                        keyframe.pop("curve")
+            connection.execute(
+                """UPDATE clip
+                   SET transform_keyframes_json=?, visual_effects_json=?
+                   WHERE id=?""",
+                (
+                    json.dumps(transform_keyframes),
+                    json.dumps(visual_effects),
+                    clip.id,
+                ),
+            )
+            connection.execute(
+                "UPDATE schema_info SET version=49 WHERE component='project'"
+            )
+
+    downgrade_to_v49(snapshot_path)
+    downgrade_to_v49(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            row = connection.execute(
+                "SELECT transform_keyframes_json, visual_effects_json FROM clip WHERE id=?",
+                (clip.id,),
+            ).fetchone()
+        transform_keyframes = json.loads(row[0])
+        visual_effects = json.loads(row[1])
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert transform_keyframes[0]["curve"]["interpolation"] == "linear"
+        effect_keyframe = visual_effects[0]["parameter_keyframes"]["sigma"][0]
+        assert effect_keyframe["curve"]["interpolation"] == "linear"
+
+
+def test_v51_migration_adds_native_masks_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "NativeMaskMigration"
+    source = tmp_path / "native-mask-source.mp4"
+    source.write_bytes(b"native-mask-source")
+    with ProjectRepository.create(root, "NativeMaskMigration") as repository:
+        asset = repository.assets.import_external_asset(source, AssetKind.VIDEO)
+        sequence_id = repository.projects.get_project().main_sequence_id
+        editor = TimelineEditor(repository, sequence_id)
+        track = editor.add_track(TrackKind.VIDEO)
+        clip = editor.add_clip(
+            track_id=track.id,
+            asset_id=asset.id,
+            timeline_start=0,
+            source_in=0,
+            duration=30,
+        )
+        editor.add_clip_visual_effect(clip.id, VisualEffectKind.GAUSSIAN_BLUR)
+        version = repository.records.create_project_version("Before native masks")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v50(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            row = connection.execute(
+                "SELECT visual_effects_json FROM clip WHERE id=?",
+                (clip.id,),
+            ).fetchone()
+            effects = json.loads(row[0])
+            for effect in effects:
+                effect.pop("mask_id")
+            connection.execute(
+                "UPDATE clip SET visual_effects_json=? WHERE id=?",
+                (json.dumps(effects), clip.id),
+            )
+            connection.execute("ALTER TABLE clip DROP COLUMN masks_json")
+            connection.execute(
+                "UPDATE schema_info SET version=50 WHERE component='project'"
+            )
+
+    downgrade_to_v50(snapshot_path)
+    downgrade_to_v50(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(clip)")
+            }
+            row = connection.execute(
+                "SELECT masks_json, visual_effects_json FROM clip WHERE id=?",
+                (clip.id,),
+            ).fetchone()
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert "masks_json" in columns
+        assert json.loads(row[0]) == []
+        assert json.loads(row[1])[0]["mask_id"] is None
+
+
+def test_v52_migration_adds_review_threads_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ReviewThreadMigration"
+    with ProjectRepository.create(root, "ReviewThreadMigration") as repository:
+        version = repository.records.create_project_version("Before review threads")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v51(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("DROP TABLE review_thread")
+            connection.execute(
+                "UPDATE schema_info SET version=51 WHERE component='project'"
+            )
+
+    downgrade_to_v51(snapshot_path)
+    downgrade_to_v51(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='review_thread'"
+            ).fetchone()
+            index = connection.execute(
+                """SELECT name FROM sqlite_master
+                   WHERE type='index' AND name='idx_review_thread_sequence_status_time'"""
+            ).fetchone()
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert table is not None
+        assert index is not None
+
+
+def test_v53_migration_adds_sequence_variants_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "SequenceVariantMigration"
+    with ProjectRepository.create(root, "SequenceVariantMigration") as repository:
+        version = repository.records.create_project_version("Before delivery variants")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v52(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("DROP TABLE sequence_variant")
+            connection.execute(
+                "UPDATE schema_info SET version=52 WHERE component='project'"
+            )
+
+    downgrade_to_v52(snapshot_path)
+    downgrade_to_v52(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='sequence_variant'"
+            ).fetchone()
+            index = connection.execute(
+                """SELECT name FROM sqlite_master
+                   WHERE type='index' AND name='idx_sequence_variant_source_preset'"""
+            ).fetchone()
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert table is not None
+        assert index is not None
+
+
+def test_v54_migration_adds_project_collections_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ProjectCollectionMigration"
+    with ProjectRepository.create(root, "ProjectCollectionMigration") as repository:
+        version = repository.records.create_project_version("Before project collection")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v53(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("DROP TABLE project_collection")
+            connection.execute(
+                "UPDATE schema_info SET version=53 WHERE component='project'"
+            )
+
+    downgrade_to_v53(snapshot_path)
+    downgrade_to_v53(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='project_collection'"
+            ).fetchone()
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert table is not None
+
+
+def test_v55_migration_adds_multicam_state_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "MulticamMigration"
+    with ProjectRepository.create(root, "MulticamMigration") as repository:
+        version = repository.records.create_project_version("Before multicam")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v54(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("ALTER TABLE sequence DROP COLUMN multicam_groups_json")
+            connection.execute(
+                "UPDATE schema_info SET version=54 WHERE component='project'"
+            )
+
+    downgrade_to_v54(snapshot_path)
+    downgrade_to_v54(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(sequence)")}
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert "multicam_groups_json" in columns
+
+
+def test_v56_migration_adds_voiceover_state_to_project_and_named_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "VoiceoverMigration"
+    with ProjectRepository.create(root, "VoiceoverMigration") as repository:
+        version = repository.records.create_project_version("Before voiceover")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v55(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("DROP TABLE voiceover_take")
+            connection.execute("DROP TABLE voiceover_cue")
+            connection.execute(
+                "UPDATE schema_info SET version=55 WHERE component='project'"
+            )
+
+    downgrade_to_v55(snapshot_path)
+    downgrade_to_v55(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert {"voiceover_cue", "voiceover_take"} <= tables
+
+
+def test_v57_migration_adds_variant_baselines_and_voiceover_latency_to_versions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "VariantLatencyMigration"
+    with ProjectRepository.create(root, "VariantLatencyMigration") as repository:
+        version = repository.records.create_project_version("Before v57 state")
+
+    snapshot_path = root / version.snapshot_path
+
+    def downgrade_to_v56(path: Path) -> None:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute("DROP TABLE voiceover_latency_calibration")
+            for column in (
+                "baseline_timeline_json",
+                "baseline_audio_buses_json",
+                "baseline_audio_effects_json",
+                "baseline_subtitle_placements_json",
+                "updated_at",
+            ):
+                connection.execute(f"ALTER TABLE sequence_variant DROP COLUMN {column}")
+            for column in (
+                "latency_compensation_samples",
+                "latency_sample_rate",
+                "calibration_device_id",
+                "calibration_measured_at",
+            ):
+                connection.execute(f"ALTER TABLE voiceover_take DROP COLUMN {column}")
+            connection.execute(
+                "UPDATE schema_info SET version=56 WHERE component='project'"
+            )
+
+    downgrade_to_v56(snapshot_path)
+    downgrade_to_v56(root / "project.mfp")
+    with closing(sqlite3.connect(root / "project.mfp")) as connection, connection:
+        connection.execute(
+            "UPDATE project_version SET sha256=? WHERE id=?",
+            (sha256_file(snapshot_path), version.id),
+        )
+
+    with _open_writable(root) as repository:
+        assert repository._fetchone("SELECT version FROM schema_info")["version"] == (
+            PROJECT_SCHEMA_VERSION
+        )
+
+    for path in (root / "project.mfp", snapshot_path):
+        with closing(sqlite3.connect(path)) as connection:
+            version_value = connection.execute(
+                "SELECT version FROM schema_info WHERE component='project'"
+            ).fetchone()[0]
+            variant_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(sequence_variant)")
+            }
+            take_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(voiceover_take)")
+            }
+            calibration_table = connection.execute(
+                """SELECT name FROM sqlite_master
+                   WHERE type='table' AND name='voiceover_latency_calibration'"""
+            ).fetchone()
+        assert version_value == PROJECT_SCHEMA_VERSION
+        assert {
+            "baseline_timeline_json",
+            "baseline_audio_buses_json",
+            "baseline_audio_effects_json",
+            "baseline_subtitle_placements_json",
+            "updated_at",
+        } <= variant_columns
+        assert {
+            "latency_compensation_samples",
+            "latency_sample_rate",
+            "calibration_device_id",
+            "calibration_measured_at",
+        } <= take_columns
+        assert calibration_table is not None
 
 
 def test_project_repository_owns_the_project_root_path_boundary(

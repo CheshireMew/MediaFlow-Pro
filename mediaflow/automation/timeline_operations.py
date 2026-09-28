@@ -3,11 +3,15 @@ from __future__ import annotations
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.enums import (
     ExportFormat,
+    MaskShapeKind,
     TrackKind,
     TransitionKind,
     VisualEffectKind,
 )
 from mediaflow.domain.exports import ExportPreset, SubtitleStyle
+from mediaflow.domain.keyframes import KeyframeCurve
+from mediaflow.domain.masks import MaskGeometry
+from mediaflow.domain.multicam import MulticamAngleSyncSpec
 from mediaflow.domain.task_commands import (
     BuildSequenceCommand,
     ExportSequenceCommand,
@@ -57,12 +61,123 @@ def import_portable_timeline(context: OperationContext) -> dict:
     }
 
 
+def inspect_interchange_timeline(context: OperationContext) -> dict:
+    loaded = context.project.inspect_interchange_timeline(
+        str(context.required("timeline_path")),
+        sequence_id=context.sequence_id(),
+        frame_rate=(
+            float(context.arguments["frame_rate"])
+            if context.arguments.get("frame_rate") is not None
+            else None
+        ),
+        media_mappings={
+            str(key): str(value)
+            for key, value in dict(context.arguments.get("media_mappings") or {}).items()
+        },
+    )
+    return loaded.summary.model_dump(mode="json", exclude_computed_fields=True)
+
+
+def import_interchange_timeline(context: OperationContext) -> dict:
+    loaded, sequence, state, assets, subtitle_document_ids = (
+        context.project.import_interchange_timeline(
+            str(context.required("timeline_path")),
+            sequence_id=context.sequence_id(),
+            name=(str(context.arguments["name"]) if context.arguments.get("name") else None),
+            frame_rate=(
+                float(context.arguments["frame_rate"])
+                if context.arguments.get("frame_rate") is not None
+                else None
+            ),
+            media_mappings={
+                str(key): str(value)
+                for key, value in dict(context.arguments.get("media_mappings") or {}).items()
+            },
+        )
+    )
+    return {
+        "summary": loaded.summary,
+        "sequence": sequence,
+        "timeline": state,
+        "source_assets": assets,
+        "subtitle_document_ids": subtitle_document_ids,
+    }
+
+
 def add_track(context: OperationContext) -> dict:
     track = context.project.timeline(context.sequence_id()).add_track(
         TrackKind(str(context.required("kind"))),
         (str(context.arguments["name"]) if context.arguments.get("name") else None),
     )
     return {"track": track}
+
+
+def list_multicam_groups(context: OperationContext) -> dict:
+    return {"groups": context.project.timeline(context.sequence_id()).list_multicam_groups()}
+
+
+def create_multicam_group(context: OperationContext) -> dict:
+    group = context.project.timeline(context.sequence_id()).create_multicam_group(
+        str(context.required("name")),
+        [MulticamAngleSyncSpec.model_validate(item) for item in context.required("angles")],
+        timeline_start=int(context.required("timeline_start")),
+        duration=int(context.required("duration")),
+        sync_offset=int(context.arguments.get("sync_offset", 0)),
+        initial_angle_id=(
+            str(context.arguments["initial_angle_id"])
+            if context.arguments.get("initial_angle_id")
+            else None
+        ),
+        sync_method=str(context.arguments.get("sync_method", "manual")),
+        sync_confidence=(
+            float(context.arguments["sync_confidence"])
+            if context.arguments.get("sync_confidence") is not None
+            else None
+        ),
+        audio_strategy=str(context.arguments.get("audio_strategy", "follow_video")),
+        master_audio_angle_id=(
+            str(context.arguments["master_audio_angle_id"])
+            if context.arguments.get("master_audio_angle_id")
+            else None
+        ),
+    )
+    return {"group": group}
+
+
+def analyze_multicam_sync(context: OperationContext):
+    return context.project.timeline(context.sequence_id()).analyze_multicam_sync(
+        [str(item) for item in context.required("asset_ids")],
+        str(context.required("method")),
+    )
+
+
+def switch_multicam_angle(context: OperationContext) -> dict:
+    group = context.project.timeline(context.sequence_id()).switch_multicam_angle(
+        str(context.required("group_id")),
+        str(context.required("angle_id")),
+        int(context.required("timeline_frame")),
+    )
+    return {"group": group}
+
+
+def analyze_color_scopes(context: OperationContext) -> dict:
+    state = context.project.timeline(context.sequence_id()).state
+    frame = int(context.required("frame"))
+    if not 0 <= frame < state.duration_frames:
+        raise ValueError("示波器帧必须位于时间线内容范围内")
+    context.project.prepare_web_sequence(state)
+    _graph, rendered = context.application.render_preview_frames(
+        context.project.project_dir,
+        state,
+        [frame],
+        use_proxies=bool(context.arguments.get("use_proxies", True)),
+        prefer_sdr_preview_proxy=True,
+    )
+    return context.application.analyze_color_scope_frame(
+        str(rendered[0]["path"]),
+        frame=frame,
+        bins=int(context.arguments.get("bins", 64)),
+    ).model_dump(mode="json")
 
 
 def add_clip(context: OperationContext) -> dict:
@@ -198,6 +313,43 @@ def transform_clip(context: OperationContext) -> dict:
     return {"clip": clip}
 
 
+def set_clip_transform_keyframe(context: OperationContext) -> dict:
+    clip = context.project.timeline(context.sequence_id()).upsert_clip_transform_keyframe(
+        str(context.required("clip_id")),
+        int(context.required("timeline_offset")),
+        ClipTransform.model_validate(context.required("transform")),
+        curve=KeyframeCurve.model_validate(context.required("curve")),
+    )
+    return {"clip": clip}
+
+
+def remove_clip_transform_keyframe(context: OperationContext) -> dict:
+    clip = context.project.timeline(context.sequence_id()).remove_clip_transform_keyframe(
+        str(context.required("clip_id")),
+        int(context.required("timeline_offset")),
+    )
+    return {"clip": clip}
+
+
+def move_clip_transform_keyframe(context: OperationContext) -> dict:
+    clip = context.project.timeline(context.sequence_id()).move_clip_transform_keyframe(
+        str(context.required("clip_id")),
+        int(context.required("old_timeline_offset")),
+        int(context.required("new_timeline_offset")),
+    )
+    return {"clip": clip}
+
+
+def retime_clip_transform_keyframes(context: OperationContext) -> dict:
+    clip = context.project.timeline(context.sequence_id()).retime_clip_transform_keyframes(
+        str(context.required("clip_id")),
+        [int(value) for value in context.required("timeline_offsets")],
+        anchor_offset=int(context.required("anchor_offset")),
+        scale=float(context.required("scale")),
+    )
+    return {"clip": clip}
+
+
 def update_clip_audio(context: OperationContext) -> dict:
     clip = context.project.timeline(context.sequence_id()).set_clip_audio(
         str(context.required("clip_id")),
@@ -258,6 +410,172 @@ def remove_clip_visual_effect(context: OperationContext) -> dict:
     editor.remove_clip_visual_effect(
         clip_id,
         str(context.required("effect_id")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def set_clip_effect_keyframe(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.upsert_clip_effect_parameter_keyframe(
+        clip_id,
+        str(context.required("effect_id")),
+        str(context.required("field_id")),
+        int(context.required("timeline_offset")),
+        float(context.required("value")),
+        curve=KeyframeCurve.model_validate(context.required("curve")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def remove_clip_effect_keyframe(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.remove_clip_effect_parameter_keyframe(
+        clip_id,
+        str(context.required("effect_id")),
+        str(context.required("field_id")),
+        int(context.required("timeline_offset")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def move_clip_effect_keyframe(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.move_clip_effect_parameter_keyframe(
+        clip_id,
+        str(context.required("effect_id")),
+        str(context.required("field_id")),
+        int(context.required("old_timeline_offset")),
+        int(context.required("new_timeline_offset")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def retime_clip_effect_keyframes(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.retime_clip_effect_parameter_keyframes(
+        clip_id,
+        str(context.required("effect_id")),
+        str(context.required("field_id")),
+        [int(value) for value in context.required("timeline_offsets")],
+        anchor_offset=int(context.required("anchor_offset")),
+        scale=float(context.required("scale")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def assign_clip_effect_mask(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.assign_clip_visual_effect_mask(
+        clip_id,
+        str(context.required("effect_id")),
+        (
+            str(context.arguments["mask_id"])
+            if context.arguments.get("mask_id") is not None
+            else None
+        ),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def add_clip_mask(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.add_clip_mask(
+        clip_id,
+        MaskShapeKind(str(context.required("kind"))),
+        name=str(context.required("name")),
+        geometry=MaskGeometry.model_validate(context.required("geometry")),
+        combine_mode=str(context.arguments.get("combine_mode", "replace")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def update_clip_mask(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.update_clip_mask(
+        clip_id,
+        str(context.required("mask_id")),
+        name=str(context.required("name")),
+        enabled=bool(context.required("enabled")),
+        inverted=bool(context.required("inverted")),
+        feather=int(context.required("feather")),
+        feather_passes=int(context.required("feather_passes")),
+        opacity=float(context.required("opacity")),
+        geometry=MaskGeometry.model_validate(context.required("geometry")),
+        combine_mode=str(context.arguments.get("combine_mode", "replace")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def move_clip_mask(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.move_clip_mask(
+        clip_id,
+        str(context.required("mask_id")),
+        int(context.required("position")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def remove_clip_mask(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.remove_clip_mask(clip_id, str(context.required("mask_id")))
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def set_clip_mask_keyframe(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.upsert_clip_mask_keyframe(
+        clip_id,
+        str(context.required("mask_id")),
+        int(context.required("timeline_offset")),
+        MaskGeometry.model_validate(context.required("geometry")),
+        curve=KeyframeCurve.model_validate(context.required("curve")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def remove_clip_mask_keyframe(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.remove_clip_mask_keyframe(
+        clip_id,
+        str(context.required("mask_id")),
+        int(context.required("timeline_offset")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def move_clip_mask_keyframe(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.move_clip_mask_keyframe(
+        clip_id,
+        str(context.required("mask_id")),
+        int(context.required("old_timeline_offset")),
+        int(context.required("new_timeline_offset")),
+    )
+    return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
+
+
+def retime_clip_mask_keyframes(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    clip_id = str(context.required("clip_id"))
+    editor.retime_clip_mask_keyframes(
+        clip_id,
+        str(context.required("mask_id")),
+        [int(value) for value in context.required("timeline_offsets")],
+        anchor_offset=int(context.required("anchor_offset")),
+        scale=float(context.required("scale")),
     )
     return {"clip": next(item for item in editor.state.clips if item.id == clip_id)}
 

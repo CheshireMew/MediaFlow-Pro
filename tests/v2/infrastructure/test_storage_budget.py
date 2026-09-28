@@ -288,19 +288,19 @@ def test_small_project_cache_reservations_defer_only_a_bounded_global_inventory(
 
     monkeypatch.setattr(storage_budget, "directory_inventory", observed_inventory)
 
-    initialized = storage_budget.require_project_cache_budget(
+    initialized, first_reservation = storage_budget._acquire_project_cache_budget(
         current,
         expected_new_bytes=8,
         label="small waveform",
     )
     (current / "realized.bin").parent.mkdir(parents=True, exist_ok=True)
     (current / "realized.bin").write_bytes(b"x" * 8)
-    deferred = storage_budget.require_project_cache_budget(
+    deferred, second_reservation = storage_budget._acquire_project_cache_budget(
         current,
         expected_new_bytes=8,
         label="second small waveform",
     )
-    reconciled = storage_budget.require_project_cache_budget(
+    reconciled, third_reservation = storage_budget._acquire_project_cache_budget(
         current,
         expected_new_bytes=49,
         label="reservation threshold",
@@ -324,7 +324,80 @@ def test_small_project_cache_reservations_defer_only_a_bounded_global_inventory(
         ).read_text(encoding="utf-8")
     )
     assert ledger["observed_bytes"] == 108
-    assert ledger["pending_bytes"] == 57
+    assert ledger["pending_bytes"] == 65
+    assert ledger["observed_by_project"] == {"current": 8, "other": 100}
+    assert len(ledger["reservations"]) == 3
+
+    first_reservation.release()
+    second_reservation.release()
+    third_reservation.release()
+    released = json.loads(
+        (
+            projects.parent
+            / storage_budget.PROJECT_CACHE_RESERVATION_LEDGER_FILENAME
+        ).read_text(encoding="utf-8")
+    )
+    assert released["pending_bytes"] == 0
+    assert released["reservations"] == {}
+
+
+def test_concurrent_different_project_reservations_do_not_hold_or_cross_charge_the_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects = tmp_path / "runtime" / "cache" / "projects"
+    project_roots = [projects / "first", projects / "second"]
+    projects.mkdir(parents=True)
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_CACHE_MAX_BYTES", "100")
+    monkeypatch.setenv("MEDIAFLOW_PROJECT_CACHES_MAX_BYTES", "1000")
+    monkeypatch.setenv("MEDIAFLOW_MINIMUM_FREE_BYTES", "1")
+    monkeypatch.setattr(
+        storage_budget.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=1_000_000, used=0, free=1_000_000),
+    )
+    monkeypatch.setattr(
+        storage_budget,
+        "PROJECT_CACHE_OWNER_LOCK_TIMEOUT_SECONDS",
+        0.25,
+    )
+    original_inventory = storage_budget.directory_inventory
+    scans_ready = threading.Barrier(2)
+
+    def concurrent_inventory(root: str | Path) -> dict[str, object]:
+        if Path(root).resolve() == projects.resolve():
+            scans_ready.wait(timeout=2)
+            time.sleep(0.05)
+        return original_inventory(root)
+
+    monkeypatch.setattr(storage_budget, "directory_inventory", concurrent_inventory)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                storage_budget._acquire_project_cache_budget,
+                project_roots[index],
+                expected_new_bytes=60,
+                label=f"concurrent cache {index}",
+            )
+            for index in range(2)
+        ]
+        reports_and_reservations = [future.result(timeout=3) for future in futures]
+
+    assert len(reports_and_reservations) == 2
+    ledger = json.loads(
+        (
+            projects.parent
+            / storage_budget.PROJECT_CACHE_RESERVATION_LEDGER_FILENAME
+        ).read_text(encoding="utf-8")
+    )
+    assert ledger["observed_bytes"] == 0
+    assert ledger["pending_bytes"] == 120
+    assert sorted(
+        reservation["project"] for reservation in ledger["reservations"].values()
+    ) == ["first", "second"]
+    for _report, reservation in reports_and_reservations:
+        reservation.release()
 
 
 def test_operation_budget_checks_peak_without_claiming_user_owned_files(

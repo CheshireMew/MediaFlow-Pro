@@ -81,6 +81,17 @@ def _require_int_str_request(value: object, label: str) -> tuple[int, str]:
     return value
 
 
+def _require_runtime_status_request(value: object) -> tuple[int, bool]:
+    if (
+        not isinstance(value, tuple)
+        or len(value) != 2
+        or not isinstance(value[0], int)
+        or not isinstance(value[1], bool)
+    ):
+        raise TypeError("Runtime-status request identity is invalid")
+    return value
+
+
 def _require_waveform(value: object | None) -> tuple[int, dict[str, object]]:
     if (
         not isinstance(value, tuple)
@@ -108,6 +119,7 @@ class BackgroundResultRouter:
             "recent_projects": self._handle_recent_projects,
             "encoder_policies": self._handle_encoder_policies,
             "runtime_status": self._handle_runtime_status,
+            "installed_asr_models": self._handle_installed_asr_models,
             "download_plan": self._handle_download_plan,
             "waveform": self._handle_waveform,
             "asset_thumbnails": self._handle_asset_thumbnails,
@@ -149,13 +161,29 @@ class BackgroundResultRouter:
             self._session.updates.commit(settings=True)
 
     def _handle_runtime_status(self, payload: BackgroundResult) -> None:
+        request_id, preserve_cuda = _require_runtime_status_request(payload.request_id)
+        if request_id != self._session.state.requests.runtime_status_id:
+            return
         if payload.error:
             logger.warning("Failed to read runtime status: %s", payload.error)
             return
         self._session.projectors.workspace.apply_runtime_tool_status(
             _require_object_map(payload.result, "Runtime-status"),
-            preserve_cuda=False,
+            preserve_cuda=preserve_cuda,
         )
+
+    def _handle_installed_asr_models(self, payload: BackgroundResult) -> None:
+        if payload.request_id != self._session.state.requests.installed_asr_models_id:
+            return
+        if payload.error:
+            logger.warning("Failed to inspect installed ASR models: %s", payload.error)
+            return
+        if not isinstance(payload.result, frozenset) or not all(
+            isinstance(item, str) for item in payload.result
+        ):
+            raise TypeError("Installed-ASR-model request returned an invalid snapshot")
+        self._session.state.presentation.installed_asr_models = payload.result
+        self._session.updates.commit(settings=True)
 
     def _handle_download_plan(self, payload: BackgroundResult) -> None:
         if payload.request_id != self._session.state.download.request_id:

@@ -156,6 +156,7 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             "audio": self._audio_document,
             "web": self._web_document,
             "dubbing": self._dubbing_document,
+            "voiceover": self._voiceover_document,
             "highlights": self._highlights_document,
             "tasks": self._tasks_document,
             "records": self._records_document,
@@ -176,6 +177,7 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             "audio": self._audio_document(),
             "web": self._web_document(),
             "dubbing": self._dubbing_document(),
+            "voiceover": self._voiceover_document(),
             "highlights": self._highlights_document(),
             "tasks": self._tasks_document(),
             "records": self._records_document(),
@@ -199,14 +201,23 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
             state = self._sources.timeline.load_timeline(sequence.id)
             tracks = self._entity_map(state.tracks)
             tracks["order"] = [track.id for track in state.tracks]
+            try:
+                variant_sync = self._model(
+                    self._sources.sequences.get_sequence_variant(sequence.id)
+                )
+            except KeyError:
+                variant_sync = None
             result[sequence.id] = {
                 "settings": self._model(sequence, exclude={"timeline_revision"}),
+                "variant-sync": variant_sync,
                 "tracks": tracks,
                 "clips": self._entity_map(state.clips),
                 "compounds": self._entity_map(state.compounds),
                 "transitions": self._entity_map(state.transitions),
                 "markers": self._entity_map(state.markers),
                 "ranges": self._entity_map(state.ranges),
+                "reviews": self._entity_map(state.review_threads),
+                "multicam": self._entity_map(state.multicam_groups),
                 "web-states": {clip_id: self._model(value) for clip_id, value in state.web_states.items()},
                 "subtitles": self._sequence_subtitles(sequence.id),
             }
@@ -259,6 +270,19 @@ class ProjectObservationRepository(ProjectRepositoryComponent):
 
     def _dubbing_document(self) -> dict[str, Any]:
         return self._entity_map(self._sources.dubbing.list_sessions())
+
+    def _voiceover_document(self) -> dict[str, Any]:
+        cues: list[Any] = []
+        for sequence in self._sources.sequences.list_sequences(include_archived=True):
+            cues.extend(
+                self._sources.voiceover.list_cues(sequence.id, include_archived=True)
+            )
+        document = self._entity_map(cues)
+        document["latency-calibrations"] = {
+            item.device_id: self._model(item)
+            for item in self._sources.voiceover.list_latency_calibrations()
+        }
+        return document
 
     def _highlights_document(self) -> dict[str, Any]:
         return self._entity_map(self._sources.highlights.list_highlights())

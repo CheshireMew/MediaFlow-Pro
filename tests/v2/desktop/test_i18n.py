@@ -250,7 +250,7 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
             "Language: Current code it" if language == "en" else "言語：現在のコード it"
         )
         assert asr_parallel_options()[2]["text"] == (
-            "Long-audio chunks: 2 at once" if language == "en" else "長時間音声チャンク：2 個を同時処理"
+            "Long-audio batch: 2 segments" if language == "en" else "長時間音声バッチ：2 区間"
         )
         transcription_config = transcription_configuration_label(
             TranscribeSequenceCommand(
@@ -274,9 +274,9 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
             )
         )
         assert transcription_config == (
-            "Built-in faster-whisper · tiny.en · CPU · en · 2 chunks in parallel"
+            "Built-in faster-whisper · tiny.en · CPU · INT8 · en · 2 segments per batch"
             if language == "en"
-            else "内蔵 faster-whisper · tiny.en · CPU · en · 2 チャンク並列"
+            else "内蔵 faster-whisper · tiny.en · CPU · INT8 · en · バッチあたり 2 区間"
         )
         assert (
             task_title(

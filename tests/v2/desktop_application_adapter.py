@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mediaflow.composition import EditorApplication
+from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.settings import DesktopSettings, ServiceSettings
 from mediaflow.infrastructure.settings_repository import DesktopSettingsRepository
 
@@ -20,6 +21,10 @@ class DesktopPresentationProject:
     @property
     def actor_id(self) -> str:
         return "desktop-presentation-test"
+
+    @property
+    def actor_identity(self) -> ActorIdentity:
+        return ActorIdentity(kind="human", id=self.actor_id, name="Desktop test user")
 
     def subscribe_project_events(
         self,

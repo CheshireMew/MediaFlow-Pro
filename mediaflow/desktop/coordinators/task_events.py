@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal, Slot
 
 from mediaflow.application.events import TaskEvent
 from mediaflow.domain.enums import TaskKind
@@ -16,6 +16,7 @@ from mediaflow.domain.task_commands import (
     GenerateProxyCommand,
     GenerateWaveformCommand,
     TaskCommand,
+    TrackMaskCommand,
     TrackSubjectCommand,
     TranscribeSequenceCommand,
     TranslateDocumentCommand,
@@ -44,11 +45,15 @@ class TaskOperations(SessionCoordinator):
         self._active_workflow_loaded = False
         self._bridge = _TaskEventBridge(session)
         self._bridge.eventReceived.connect(self._on_event)
+        self._reconciliation_timer = QTimer(self)
+        self._reconciliation_timer.setInterval(1_000)
+        self._reconciliation_timer.timeout.connect(self._reconcile_timer_tick)
 
     def publish(self, envelope: object) -> None:
         self._bridge.eventReceived.emit(envelope)
 
     def reset_delivery_state(self) -> None:
+        self._reconciliation_timer.stop()
         self._blocked_event_cursor = None
         self._terminal_replays.clear()
         self._reported_delivery_errors.clear()
@@ -70,10 +75,15 @@ class TaskOperations(SessionCoordinator):
             return
         candidates = dict(self._terminal_replays)
         for task in current.list_tasks():
-            if task.status.is_terminal:
+            projected = self._session.state.tasks.items.get(task.id)
+            if task.status.is_terminal and (
+                task.revision > self._session.state.tasks.revisions.get(task.id, -1)
+                or projected is None
+                or projected.revision < task.revision
+                or projected.status != task.status
+            ):
                 candidates[task.id] = task
         for task in candidates.values():
-            self._session.state.tasks.items[task.id] = task
             if self._apply_task_update(task):
                 self._terminal_replays.pop(task.id, None)
                 self._session.state.tasks.revisions[task.id] = task.revision
@@ -117,9 +127,47 @@ class TaskOperations(SessionCoordinator):
                     input_asset_ids,
                     sequence_id=(sequence_id or self._session.state.binding.active_sequence_id),
                 )
-        self._session.state.tasks.items[task.id] = task
+        observed = self._session.state.tasks.items.get(task.id)
+        # The synchronous service facade keeps pumping the Qt event loop while
+        # start_task waits for its response. A fast task can therefore publish
+        # running and terminal events before this method receives the older
+        # created-task snapshot. Never let that response move the desktop back
+        # to an earlier task revision.
+        if observed is None or task.revision >= observed.revision:
+            self._session.state.tasks.items[task.id] = task
         self._session.projectors.tasks.refresh_tasks()
+        self.update_reconciliation_state()
         return task
+
+    def update_reconciliation_state(self) -> None:
+        needs_reconciliation = bool(self._terminal_replays) or any(
+            task.status.is_active
+            for task in self._session.state.tasks.items.values()
+        )
+        if (
+            needs_reconciliation
+            and self._session.state.binding.current is not None
+            and not self._session.state.requests.shutting_down
+            and QCoreApplication.instance() is not None
+        ):
+            if not self._reconciliation_timer.isActive():
+                self._reconciliation_timer.start()
+        else:
+            self._reconciliation_timer.stop()
+
+    @Slot()
+    def _reconcile_timer_tick(self) -> None:
+        if (
+            self._session.state.binding.current is None
+            or self._session.state.requests.shutting_down
+        ):
+            self._reconciliation_timer.stop()
+            return
+        try:
+            self._session.lifecycle.reconcile_task_events()
+        except Exception:
+            logger.exception("Desktop task event reconciliation failed")
+        self.update_reconciliation_state()
 
     def _active_task_for_scope(
         self,
@@ -180,6 +228,13 @@ class TaskOperations(SessionCoordinator):
                 command.clip_id,
                 command.mode,
             )
+        if isinstance(command, TrackMaskCommand):
+            return (
+                "mask_tracking",
+                command.sequence_id,
+                command.clip_id,
+                command.mask_id,
+            )
         return None
 
     @Slot(object)
@@ -209,6 +264,7 @@ class TaskOperations(SessionCoordinator):
                 if self._blocked_event_cursor == event.cursor:
                     self._blocked_event_cursor = None
             self._session.projectors.tasks.refresh_tasks()
+            self.update_reconciliation_state()
             return
         elif event.revision <= previous_revision:
             return
@@ -223,8 +279,8 @@ class TaskOperations(SessionCoordinator):
             if event.cursor:
                 self._blocked_event_cursor = event.cursor
             return
-        self._session.state.tasks.items[task.id] = task
         if current is None:
+            self._session.state.tasks.items[task.id] = task
             if task.status.is_terminal:
                 self._session.timeline_assets.finish_import_drop(
                     task.id,
@@ -237,12 +293,14 @@ class TaskOperations(SessionCoordinator):
                 if self._blocked_event_cursor == event.cursor:
                     self._blocked_event_cursor = None
             self._session.projectors.tasks.refresh_tasks()
+            self.update_reconciliation_state()
             return
         if not self._apply_task_update(task):
             if task.status.is_terminal:
                 self._terminal_replays[task.id] = task
             if event.cursor:
                 self._blocked_event_cursor = event.cursor
+            self.update_reconciliation_state()
             return
         self._terminal_replays.pop(task.id, None)
         self._session.state.tasks.revisions[task.id] = event.revision
@@ -250,14 +308,17 @@ class TaskOperations(SessionCoordinator):
             self._session.state.tasks.cursor = event.cursor
             if self._blocked_event_cursor == event.cursor:
                 self._blocked_event_cursor = None
+        self.update_reconciliation_state()
 
     def _apply_task_update(self, task: Task) -> bool:
         result = None
         current = self._session.state.binding.current
         if current is None:
             return False
+        previous_task = self._session.state.tasks.items.get(task.id)
         try:
             if task.status.is_terminal:
+                current.invalidate_task_result_cache()
                 result = current.committed_task_result(task.id)
                 if result is None:
                     raise RuntimeError("服务尚未提交任务结果")
@@ -335,9 +396,14 @@ class TaskOperations(SessionCoordinator):
                 error,
             )
             return False
+        self._session.state.tasks.items[task.id] = task
         try:
             self._finish_task_update(task, result)
         except Exception as error:
+            if previous_task is None:
+                self._session.state.tasks.items.pop(task.id, None)
+            else:
+                self._session.state.tasks.items[task.id] = previous_task
             self._report_delivery_error(
                 task.id,
                 task.revision,
@@ -381,7 +447,10 @@ class TaskOperations(SessionCoordinator):
                 self._session.projectors.assets.refresh_assets()
             self._session.projectors.subtitles.refresh_documents()
             self._session.projectors.timeline.refresh_preview_subtitles()
-        if isinstance(task.command, (AnalyzeScenesCommand, TrackSubjectCommand)):
+        if isinstance(
+            task.command,
+            (AnalyzeScenesCommand, TrackMaskCommand, TrackSubjectCommand),
+        ):
             if task.command.sequence_id == self._session.state.binding.active_sequence_id:
                 if timeline is None:
                     raise RuntimeError("当前项目没有活动时间线")
@@ -393,6 +462,8 @@ class TaskOperations(SessionCoordinator):
             if task.status.value == "completed":
                 if isinstance(task.command, AnalyzeScenesCommand):
                     self._session._set_status("场景切点已写入时间线")
+                elif isinstance(task.command, TrackMaskCommand):
+                    self._session._set_status("蒙版跟踪已应用")
                 else:
                     self._session._set_status("画面跟踪已应用")
         if task.kind == TaskKind.HIGHLIGHT:

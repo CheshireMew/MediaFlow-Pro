@@ -16,12 +16,18 @@ from mediaflow.application.external_capabilities import (
     SpeechCapability,
 )
 from mediaflow.application.highlight_service import HighlightService
+from mediaflow.application.interchange_import import InterchangeImportService
 from mediaflow.application.media_resource_service import MediaResourceService
 from mediaflow.application.portable_timeline_import import PortableTimelineImportService
 from mediaflow.application.ports import MediaProbePort
+from mediaflow.application.production_bundle_inspection import (
+    ProductionBundleInspectionService,
+)
+from mediaflow.application.project_collection_service import ProjectCollectionService
 from mediaflow.application.project_command_queue import ProjectCommandQueue
 from mediaflow.application.project_task_handlers import ProjectTaskHandlers
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
+from mediaflow.application.review_package_service import ReviewPackageService
 from mediaflow.application.sequence_service import SequenceService
 from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
 from mediaflow.application.subtitle_editing import SubtitleEditingService
@@ -30,6 +36,7 @@ from mediaflow.application.task_service import TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcript_editing import TranscriptEditingService
 from mediaflow.application.translation_service import TranslationService
+from mediaflow.application.voiceover_editing import VoiceoverEditingService
 from mediaflow.application.web_media_service import WebMediaServices
 from mediaflow.application.workflow_models import WorkflowUpdate
 from mediaflow.domain.collaboration import (
@@ -38,6 +45,7 @@ from mediaflow.domain.collaboration import (
     ProjectMutationPlan,
     ProjectUndoGroup,
 )
+from mediaflow.domain.color_scopes import ColorScopeAnalysis
 from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.progress import OperationProgress
@@ -63,14 +71,18 @@ from mediaflow.editor_project_task_commands import (
 from mediaflow.editor_project_web_commands import EditorProjectWebCommands
 from mediaflow.infrastructure.asr_models import FasterWhisperModelStore
 from mediaflow.infrastructure.cache_manager import CacheManager
+from mediaflow.infrastructure.color_scope_analysis import ColorScopeAnalyzer
 from mediaflow.infrastructure.cookie_store import CookieStore
 from mediaflow.infrastructure.editable_media_contract import editable_media_contract
 from mediaflow.infrastructure.encoder_discovery import EncoderDiscoveryService
 from mediaflow.infrastructure.file_fingerprint import fingerprint_file
+from mediaflow.infrastructure.interchange_timeline_loader import InterchangeTimelineLoader
 from mediaflow.infrastructure.llm_client import OpenAIJsonClient
 from mediaflow.infrastructure.media_probe import MediaProbe
 from mediaflow.infrastructure.media_resource_catalog import load_media_resource_catalog
 from mediaflow.infrastructure.portable_timeline_loader import load_portable_timeline
+from mediaflow.infrastructure.project_archive_service import ProjectArchiveService
+from mediaflow.infrastructure.project_collection_storage import LocalProjectCollectionStorage
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.reference_video_comparison import ReferenceVideoComparisonService
 from mediaflow.infrastructure.runtime_capabilities import RuntimeInspectionService
@@ -89,6 +101,7 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.task_runtime import InfrastructureTaskRuntimes
 from mediaflow.infrastructure.timeline_proof_frames import TimelineProofFrameService
 from mediaflow.infrastructure.translation_cache import TranslationCache
+from mediaflow.infrastructure.voiceover_take_storage import VoiceoverTakeStorage
 from mediaflow.infrastructure.web_browser import (
     BrowserWebPackageValidator,
     WebPackagePreviewServer,
@@ -148,6 +161,16 @@ class EditorProject(
             cast(MediaProbePort, MediaProbe(paths)),
             fingerprint_file,
         )
+        self._collections = ProjectCollectionService(
+            repository,
+            LocalProjectCollectionStorage(repository.project_dir),
+            self._history,
+        )
+        self._project_archives = ProjectArchiveService(repository)
+        self._history.register_handler(
+            "asset.collection-state",
+            self._collections.apply_history_action,
+        )
         web_contract = editable_media_contract()
         self._structured_files = LocalStructuredFileReader()
         web_validator = BrowserWebPackageValidator(paths.chromium, web_contract)
@@ -186,6 +209,29 @@ class EditorProject(
             self.timeline,
             load_portable_timeline,
         )
+        self._interchange_timelines = InterchangeImportService(
+            repository,
+            self._assets,
+            self._portable_timelines,
+            self.timeline,
+            self._history,
+            InterchangeTimelineLoader(),
+        )
+        self._voiceover = VoiceoverEditingService(
+            repository,
+            self._assets,
+            self.timeline,
+            self._history,
+            VoiceoverTakeStorage(repository.project_dir),
+        )
+        self._history.register_handler(
+            "voiceover.cue-state",
+            self._voiceover.apply_history_action,
+        )
+        self._history.register_handler(
+            "voiceover.take-state",
+            self._voiceover.apply_history_action,
+        )
         self._subtitle_editing = SubtitleEditingService(
             repository,
             self._subtitle_publication,
@@ -205,6 +251,11 @@ class EditorProject(
             self._subtitle_publication,
         )
         self._sequences = SequenceService(repository)
+        self._review_packages = ReviewPackageService(repository, self.timeline)
+        self._history.register_handler(
+            "sequence.variant-state",
+            self._apply_sequence_variant_history_action,
+        )
         self._task_followup_updates: dict[str, WorkflowUpdate] = {}
         self._task_followup_lock = threading.RLock()
         self._task_settlement = ProjectTaskSettlement(
@@ -474,6 +525,9 @@ class EditorProject(
         for editor in self._timelines.values():
             editor.reload()
 
+    def invalidate_task_result_cache(self) -> None:
+        """Keep the local and resident-service project surfaces interchangeable."""
+
     def __enter__(self) -> EditorProject:
         return self
 
@@ -528,6 +582,9 @@ class EditorApplication(EditorApplicationPresentationCommands):
             load_media_resource_catalog,
             lambda: self.service_settings.resource_library.catalog_paths,
         )
+        self.production_bundles = ProductionBundleInspectionService(
+            load_portable_timeline,
+        )
 
     @property
     def mlt_runtime_root(self) -> str:
@@ -564,6 +621,15 @@ class EditorApplication(EditorApplicationPresentationCommands):
     @property
     def default_project_directory(self) -> str:
         return self.service_settings.default_project_directory
+
+    @staticmethod
+    def analyze_color_scope_frame(
+        path: str | Path,
+        *,
+        frame: int,
+        bins: int,
+    ) -> ColorScopeAnalysis:
+        return ColorScopeAnalyzer().analyze(path, frame=frame, bins=bins)
 
     def save_service_settings(self) -> None:
         self._settings_repository.save(self.service_settings)
