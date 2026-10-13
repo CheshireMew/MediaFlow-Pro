@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.asr import TranscriptionPlan
-from mediaflow.domain.audio import AudioEffect
+from mediaflow.domain.audio import AudioBus, AudioEffect
 from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.speech_review import SpeechReviewRules, review_transcript
@@ -321,6 +321,23 @@ def update_audio_bus(context: OperationContext) -> dict:
         bus.model_copy(update=dict(context.required("changes")))
     )
     return {"bus": updated}
+
+
+def add_audio_bus(context: OperationContext) -> dict:
+    buses = context.project.list_audio_buses(context.sequence_id())
+    parent_id = str(context.required("parent_bus_id"))
+    parent = next((item for item in buses if item.id == parent_id), None)
+    if parent is None:
+        raise ValueError("Parent audio bus does not belong to this sequence")
+    name = str(context.required("name")).strip()
+    if not name:
+        raise ValueError("Audio bus name cannot be empty")
+    bus = context.project.save_audio_bus(AudioBus(
+        sequence_id=context.sequence_id(), name=name, parent_bus_id=parent.id,
+        position=max((item.position for item in buses), default=-1) + 1,
+        channel_layout=parent.channel_layout,
+    ))
+    return {"bus": bus}
 
 
 def save_audio_effect(context: OperationContext) -> dict:

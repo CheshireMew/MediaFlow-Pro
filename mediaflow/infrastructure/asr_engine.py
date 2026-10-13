@@ -361,10 +361,12 @@ class FasterWhisperCliEngine:
         paths: RuntimePaths,
         *,
         check_cancelled: Callable[[], None] | None = None,
+        initial_prompt: str | None = None,
     ):
         self.settings = settings
         self.paths = paths
         self.check_cancelled = check_cancelled
+        self.initial_prompt = initial_prompt
 
     def transcribe(
         self,
@@ -384,6 +386,7 @@ class FasterWhisperCliEngine:
                 settings,
                 self.paths,
                 check_cancelled=self.check_cancelled,
+                initial_prompt=self.initial_prompt,
             )._transcribe_once(
                 media_path,
                 language=language,
@@ -523,7 +526,7 @@ class FasterWhisperCliEngine:
                 "--word_timestamps",
                 "True",
                 "--initial_prompt",
-                "None",
+                self.initial_prompt or "None",
             ]
         )
         if batch_size:

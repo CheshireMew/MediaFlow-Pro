@@ -31,6 +31,11 @@ class AudioBusUpdateArguments(DomainModel):
     changes: AudioBusChanges
 
 
+class AudioBusAddArguments(SequenceArguments):
+    name: str = Field(min_length=1, max_length=160)
+    parent_bus_id: str = Field(min_length=1)
+
+
 class AudioEffectSaveArguments(DomainModel):
     effect: AudioEffect
 

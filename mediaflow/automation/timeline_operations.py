@@ -112,6 +112,17 @@ def add_track(context: OperationContext) -> dict:
     return {"track": track}
 
 
+def route_track_audio(context: OperationContext) -> dict:
+    editor = context.project.timeline(context.sequence_id())
+    track_id = str(context.required("track_id"))
+    source = next(track for track in editor.state.tracks if track.id == track_id)
+    track = editor.set_track_state(
+        track_id, enabled=source.enabled, locked=source.locked,
+        muted=source.muted, solo=source.solo, audio_bus_id=context.arguments["bus_id"],
+    )
+    return {"track": track}
+
+
 def list_multicam_groups(context: OperationContext) -> dict:
     return {"groups": context.project.timeline(context.sequence_id()).list_multicam_groups()}
 

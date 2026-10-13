@@ -6281,7 +6281,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Runtime tool operation completed</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+2" />
+            <source>下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明</source>
+            <translation>Download components updated. Restart the background service to apply them; see YouTube downloads in README for instructions.</translation>
+        </message>
+        <message>
+            <location line="+5" />
             <source>错误详情已复制</source>
             <translation>Error details copied</translation>
         </message>
@@ -6670,7 +6675,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_messages.py" line="-392" />
+            <location filename="../../desktop/presentation_messages.py" line="-398" />
             <source>主序列</source>
             <translation>Main Sequence</translation>
         </message>
@@ -7079,12 +7084,12 @@ After confirmation, the link will be updated and preview caches and audio wavefo
             <translation>Waiting for transcription or prewarm to release the model</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+3" />
             <source>内存或显存不足，正在缩小批量重试</source>
             <translation>Memory exhausted; retrying with a smaller batch</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+3" />
             <source>CUDA 不可用，正在切换到 CPU</source>
             <translation>CUDA is unavailable; switching to CPU</translation>
         </message>
@@ -7427,7 +7432,7 @@ After confirmation, the link will be updated and preview caches and audio wavefo
     <context>
         <name>TaskStatusCatalog</name>
         <message>
-            <location line="-177" />
+            <location line="-181" />
             <source>等待中</source>
             <translation>Pending</translation>
         </message>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -220,6 +221,35 @@ def self_test() -> None:
     print(f"test shard self-test passed ({len(nodes)} synthetic nodes across 4 shards)")
 
 
+def run_pytest_nodes(selected: Sequence[str], pytest_arguments: Sequence[str]) -> int:
+    if os.name != "nt":
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", *selected, *pytest_arguments],
+            cwd=REPOSITORY_ROOT, check=False,
+        ).returncode
+    # pytest reads one argument per line; this preserves node IDs with spaces and
+    # avoids the Windows process command-line limit without splitting the shard.
+    from scripts.run_artifacts import verification_run
+
+    run = verification_run("pytest-shard")
+    try:
+        arguments_file = run.path / "pytest-nodes.txt"
+        arguments_file.write_text("\n".join(selected) + "\n", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", f"@{arguments_file}", *pytest_arguments],
+            cwd=REPOSITORY_ROOT, check=False,
+        )
+        if result.returncode:
+            error = ChildProcessError(f"pytest exited with status {result.returncode}")
+            run.mark_failed(ChildProcessError, error, None)
+        else:
+            run.mark_passed()
+        return result.returncode
+    except BaseException as error:
+        run.mark_failed(type(error), error, error.__traceback__)
+        raise
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Select a deterministic V2 pytest shard")
     parser.add_argument("--shard-index", type=int, default=0)
@@ -251,9 +281,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if not selected:
         raise RuntimeError(f"No tests were assigned to shard {arguments.shard_index}")
-    command = [sys.executable, "-m", "pytest", *selected, *pytest_arguments]
     print(f"running shard {arguments.shard_index + 1}/{arguments.shard_count}: {len(selected)} nodes")
-    return subprocess.run(command, cwd=REPOSITORY_ROOT, check=False).returncode
+    return run_pytest_nodes(selected, pytest_arguments)
 
 
 if __name__ == "__main__":

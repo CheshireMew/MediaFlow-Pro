@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 import mediaflow.automation.operation_delivery_models as delivery_models
+import mediaflow.automation.operation_download_models as download_models
 import mediaflow.automation.operation_language_models as language_models
 import mediaflow.automation.operation_model_common as common_models
 import mediaflow.automation.operation_production_models as production_models
@@ -58,6 +59,7 @@ class _LazyOperationModule:
 
 
 diagnostics = _LazyOperationModule("mediaflow.automation.diagnostics_operations")
+downloads = _LazyOperationModule("mediaflow.automation.download_operations")
 dubbing = _LazyOperationModule("mediaflow.automation.dubbing_operations")
 language_audio = _LazyOperationModule("mediaflow.automation.language_audio_operations")
 media_quality = _LazyOperationModule("mediaflow.automation.media_quality_operations")
@@ -182,6 +184,18 @@ WEB = ("project-editing", "editable-web-media")
 
 
 OPERATIONS: dict[str, OperationDefinition] = {
+    "download.analyze": _write(
+        download_models.DownloadAnalyzeArguments,
+        delivery_models.TaskReceiptResult,
+        downloads.analyze,
+        task_backed=True,
+    ),
+    "download.start": _write(
+        download_models.DownloadStartArguments,
+        delivery_models.TaskReceiptResult,
+        downloads.start,
+        task_backed=True,
+    ),
     "resource.catalog.search": _operation(
         project_models.MediaResourceSearchArguments,
         project_models.MediaResourceSearchResult,
@@ -962,6 +976,17 @@ OPERATIONS: dict[str, OperationDefinition] = {
         common_models.SequenceArguments,
         delivery_models.AudioInspectResult,
         language_audio.inspect_audio,
+    ),
+    "audio.bus.add": _write(
+        delivery_models.AudioBusAddArguments,
+        delivery_models.AudioBusResult,
+        language_audio.add_audio_bus,
+    ),
+    "timeline.track.audio.route": _write(
+        timeline_models.TimelineTrackAudioRouteArguments,
+        timeline_models.TrackResult,
+        timeline.route_track_audio,
+        reversible=True,
     ),
     "audio.bus.update": _write(
         delivery_models.AudioBusUpdateArguments,

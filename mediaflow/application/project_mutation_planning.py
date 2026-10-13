@@ -124,6 +124,8 @@ def _change_scopes(
         return [f"/tasks/transcript-sequence:{sequence}"]
     if operation == "diagnostics.bundle.create":
         return ["/tasks/diagnostics-bundle"]
+    if operation == "audio.bus.add":
+        return ["/audio/buses"]
     if operation == "audio.bus.update":
         root = f"/audio/buses/{_path(arguments.get('bus_id'))}"
         return _field_paths(root, arguments.get("changes"))
@@ -133,6 +135,8 @@ def _change_scopes(
         return [f"/audio/effects/{_path(arguments.get('effect_id'))}"]
     if operation == "project.save_audio_effect_chain":
         return ["/audio"]
+    if operation in {"download.analyze", "download.start"}:
+        return [f"/tasks/{operation.replace('.', '-')}:{sequence}"]
     if operation.startswith("task."):
         return [f"/tasks/{_path(arguments.get('task_id'), 'new')}"]
     if operation.startswith("dubbing."):

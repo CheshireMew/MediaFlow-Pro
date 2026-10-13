@@ -2,18 +2,23 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/media-resource-catalog.json",
-  "producer_revision": "752315c54042ee8317205b856dd3d91bbe5c1073",
+  "producer_revision": "0c3b1fdac281300e09f14e1d5714cc12ad88ddc1",
   "catalog_id": "visual-multimedia-core-resources",
-  "catalog_version": "1.1.0",
+  "catalog_version": "1.2.0",
   "files": {
     "assets/editor-luts/clean-cool-17.cube": "dc71d2ab1a631f012b6b4afff591645a21e96984ae57ed567e6eebd5e945d252",
     "assets/editor-luts/soft-cinema-17.cube": "c73b4aab1872d4634a9ca32b42d3eee2c4f45213729f008ce6eafcb1b1942340",
     "assets/editor-resource-previews/clean-cool-17.svg": "c395f1fe2102d5c23cb69f0a4559562e939c1ca2eb8d8d11002b801ca3c40ba2",
+    "assets/editor-resource-previews/editorial-title-card.svg": "209b2b9e122d757ff0b43ad083775dbef0badbabe170b5c347ad9fbef8aeb47d",
     "assets/editor-resource-previews/segmented-progress-rail.svg": "bc9e7d948de58c553cb83b064dd4cdd400e8f6a90cf24b03405050a0ba2ac598",
     "assets/editor-resource-previews/soft-cinema-17.svg": "536e88c61c5521c7751d21cd9d142deea587e9f1f9b713242d51d5e6afee10fe",
     "assets/editor-resource-previews/text-motion-gallery.svg": "1a093ddc963d2d868fe3ec45bd7fbe8fe2851cb93284cc10e66a67f52bb11f43",
     "assets/editor-sound-effects/marker-pop.wav": "37e06d57bc1dc7f88f3771c36605da5a81b82631a4149304e61a891f6824fef6",
     "assets/editor-sound-effects/soft-confirm.wav": "870217d5083d515f9a9d453a4ab8aa97f38bc94d77db3dea05a05fc1ca7c5a13",
+    "assets/editorial-title-card/editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
+    "assets/editorial-title-card/editable-media.json": "957cb202245cf7fabb079b0887d2010d9d7fe76fa80af0eec76fffa8365399f6",
+    "assets/editorial-title-card/index.html": "cf5c774ef3645f3bc9be782490283aa318675cdb9d05c58473b1863bc70a6321",
+    "assets/editorial-title-card/media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce",
     "assets/text-motion-library/THIRD_PARTY_NOTICES.md": "e493f2c59aa8ef05499f8a75aafdeabdb4024d0936ccd03fc9dd594e58bf9168",
     "assets/text-motion-library/catalog.json": "0fea1ecc598cf07093752bc0b5f80c50f9d0673e3e0bc43bd8bc0914966def75",
     "assets/text-motion-library/editable-media-runtime.js": "371c36a741ec188a588a1b80ab76b07e3decd62ce13b5791a6eaedfa10426c5c",
@@ -53,6 +58,6 @@
     "assets/video-progress-bar/index.html": "5ca2995b18bb633cb8b7a8561ff2e50f79eb6a52362d497b5736368f96bd63e3",
     "assets/video-progress-bar/media-sources.json": "033434ed379524e503657ec85c02c0566d10d5b617345a4ab4cefc98a71ae6ce",
     "assets/video-progress-bar/video-progress-bar-spec.json": "96dd774a5f63503a28900ca1756428132263c5b86086caa8ea907c8b11981ffb",
-    "media-resource-catalog.json": "215b390f89f97b698b2b910521fa31fb69268ccc82e2ea6c87b8aa7085314df9"
+    "media-resource-catalog.json": "ea3a982af5afab4e34827827f1a8b09ac5f5479cab9b67e341978781e14f4734"
   }
 }

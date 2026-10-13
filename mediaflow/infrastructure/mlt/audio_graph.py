@@ -301,7 +301,8 @@ class MltAudioGraph:
             ),
             AudioEffectKind.LIMITER: (
                 "avfilter.alimiter",
-                {"av.limit": self.db_to_amplitude(values.get("ceiling_db", -1.0))},
+                {"av.limit": self.db_to_amplitude(values.get("ceiling_db", -1.0)),
+                 "av.level": "0", "av.latency": "1"},
             ),
             AudioEffectKind.NOISE_GATE: (
                 "avfilter.agate",

@@ -79,8 +79,9 @@ def test_mediaflow_consumes_the_synced_production_resource_catalog() -> None:
     loaded = load_media_resource_catalog(SYNCED_PRODUCTION_CATALOG)
 
     assert loaded.catalog.catalog_id == "visual-multimedia-core-resources"
-    assert loaded.catalog.catalog_version == "1.1.0"
+    assert loaded.catalog.catalog_version == "1.2.0"
     assert [item.category for item in loaded.catalog.items] == [
+        "motion-graphic",
         "motion-graphic",
         "motion-graphic",
         "lut",

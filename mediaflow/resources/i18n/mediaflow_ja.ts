@@ -6281,7 +6281,12 @@
             <translation>ランタイムツール操作が完了しました</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+2" />
+            <source>下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明</source>
+            <translation>ダウンロードコンポーネントを更新しました。バックグラウンドサービスの再起動後に有効になります。手順は README の YouTube ダウンロードの説明をご覧ください。</translation>
+        </message>
+        <message>
+            <location line="+5" />
             <source>错误详情已复制</source>
             <translation>エラー詳細をコピーしました</translation>
         </message>
@@ -6670,7 +6675,7 @@
     <context>
         <name>SystemNameCatalog</name>
         <message>
-            <location filename="../../desktop/presentation_messages.py" line="-392" />
+            <location filename="../../desktop/presentation_messages.py" line="-398" />
             <source>主序列</source>
             <translation>メインシーケンス</translation>
         </message>
@@ -7079,12 +7084,12 @@
             <translation>転写またはウォームアップによるモデルの解放を待機中</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+3" />
             <source>内存或显存不足，正在缩小批量重试</source>
             <translation>メモリ不足のためバッチを縮小して再試行中</translation>
         </message>
         <message>
-            <location line="+1" />
+            <location line="+3" />
             <source>CUDA 不可用，正在切换到 CPU</source>
             <translation>CUDA が利用できないため CPU に切り替えています</translation>
         </message>
@@ -7427,7 +7432,7 @@
     <context>
         <name>TaskStatusCatalog</name>
         <message>
-            <location line="-177" />
+            <location line="-181" />
             <source>等待中</source>
             <translation>待機中</translation>
         </message>

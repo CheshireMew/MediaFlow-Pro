@@ -9,6 +9,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明": (
+        "Download components updated. Restart the background service to apply them; see YouTube downloads in README for instructions.",
+        "ダウンロードコンポーネントを更新しました。バックグラウンドサービスの再起動後に有効になります。手順は README の YouTube ダウンロードの説明をご覧ください。",
+    ),
     "正在等待其它转录或预热释放模型": ("Waiting for transcription or prewarm to release the model", "転写またはウォームアップによるモデルの解放を待機中"),
     "内存或显存不足，正在缩小批量重试": ("Memory exhausted; retrying with a smaller batch", "メモリ不足のためバッチを縮小して再試行中"),
     "这项内容刚刚被其他协作者修改": (

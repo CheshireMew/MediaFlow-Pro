@@ -10,6 +10,7 @@ from mediaflow.domain.speech import (
     SpeechSynthesizeArguments,
     SpeechTranscribeArguments,
     SpeechTranscriptionResult,
+    SpeechWordResult,
 )
 from mediaflow.domain.subtitle_file import SubtitleCue
 from mediaflow.file_digest import sha256_file
@@ -57,6 +58,7 @@ class InfrastructureSpeechService:
         engine = FasterWhisperCliEngine(
             settings.asr.model_copy(update=updates),
             self._paths,
+            initial_prompt=request.initial_prompt,
         )
         with reserve_python_output(output, runtime_dir=self._paths.runtime_dir):
             result = engine.transcribe(source, language=request.language)
@@ -91,6 +93,15 @@ class InfrastructureSpeechService:
                     start_seconds=segment.start_seconds,
                     end_seconds=segment.end_seconds,
                     text=segment.text,
+                    words=[
+                        SpeechWordResult(
+                            start_seconds=word.start_seconds,
+                            end_seconds=word.end_seconds,
+                            text=word.text,
+                        )
+                        for word in segment.words
+                        if word.end_seconds > word.start_seconds
+                    ],
                 )
                 for segment in result.segments
             ],

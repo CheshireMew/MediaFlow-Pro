@@ -14,18 +14,38 @@ class SpeechTranscribeArguments(DomainModel):
     model: str | None = None
     device: Literal["auto", "cuda", "cpu"] | None = None
     compute_type: str | None = None
+    initial_prompt: str | None = Field(default=None, max_length=4000)
     overwrite: bool = False
+
+
+class SpeechWordResult(DomainModel):
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    text: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def positive_range(self) -> SpeechWordResult:
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("Speech word end must be after start")
+        return self
 
 
 class SpeechSegmentResult(DomainModel):
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
     text: str = Field(min_length=1)
+    words: list[SpeechWordResult] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def positive_range(self) -> SpeechSegmentResult:
         if self.end_seconds <= self.start_seconds:
             raise ValueError("Speech segment end must be after start")
+        if any(
+            word.start_seconds < self.start_seconds - 0.001
+            or word.end_seconds > self.end_seconds + 0.001
+            for word in self.words
+        ):
+            raise ValueError("Speech words must lie inside their segment")
         return self
 
 

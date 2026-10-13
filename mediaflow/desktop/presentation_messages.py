@@ -383,6 +383,12 @@ def status_message(source: str, *arguments: object) -> str:
         "转录设置已更新": QCoreApplication.translate("StatusMessageCatalog", "转录设置已更新"),
         "运行时工具操作已取消": QCoreApplication.translate("StatusMessageCatalog", "运行时工具操作已取消"),
         "运行时工具操作已完成": QCoreApplication.translate("StatusMessageCatalog", "运行时工具操作已完成"),
+        "下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明": (
+            QCoreApplication.translate(
+                "StatusMessageCatalog",
+                "下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明",
+            )
+        ),
         "错误详情已复制": QCoreApplication.translate("StatusMessageCatalog", "错误详情已复制"),
         "项目已关闭：%1": QCoreApplication.translate("StatusMessageCatalog", "项目已关闭：%1"),
         "项目已创建": QCoreApplication.translate("StatusMessageCatalog", "项目已创建"),

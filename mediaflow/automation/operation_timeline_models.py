@@ -57,6 +57,11 @@ class TimelineTrackAddArguments(SequenceArguments):
     name: str | None = None
 
 
+class TimelineTrackAudioRouteArguments(SequenceArguments):
+    track_id: str = Field(min_length=1)
+    bus_id: str | None = Field(min_length=1)
+
+
 class MulticamGroupCreateArguments(SequenceArguments):
     name: str = Field(min_length=1, max_length=120)
     angles: list[MulticamAngleSyncSpec] = Field(min_length=2, max_length=16)
