@@ -23,9 +23,11 @@ ColumnLayout {
             color: Theme.textMuted
             font.pixelSize: Theme.fontSizeCaption
             Layout.preferredWidth: 58
+            wrapMode: Text.Wrap
         }
         AppComboBox {
             id: format
+            Accessible.name: qsTr("格式")
             Layout.fillWidth: true
             model: root.formats
             textRole: "label"
@@ -40,6 +42,7 @@ ColumnLayout {
             color: Theme.textMuted
             font.pixelSize: Theme.fontSizeCaption
             Layout.preferredWidth: 58
+            wrapMode: Text.Wrap
         }
         PathDisplay {
             objectName: "exportDefaultPath"

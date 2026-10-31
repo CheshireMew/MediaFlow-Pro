@@ -14,6 +14,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
+from mediaflow.desktop.app import _qml_dll_search_path
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, ColorMode, ExportFormat, TrackKind
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.project import ProjectProfile
@@ -46,7 +47,7 @@ def test_desktop_startup_does_not_load_opencv_into_native_preview_process() -> N
 
 
 @pytest.fixture
-def native_qml_instances():
+def native_qml_instances(qapp: QGuiApplication):
     instances: list[tuple[QQmlApplicationEngine, QObject, QObject]] = []
     yield instances
     for engine, window, preview in reversed(instances):
@@ -56,6 +57,11 @@ def native_qml_instances():
         engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         QCoreApplication.processEvents()
+
+
+def _load_preview_qml(engine: QQmlApplicationEngine, source: bytes, url: QUrl) -> None:
+    with _qml_dll_search_path():
+        engine.loadData(source, url)
 
 
 def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
@@ -100,7 +106,8 @@ def test_native_qt_quick_item_decodes_real_mlt_frames_and_advances_clock(
         app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
         engine.addImportPath(str(paths.native_qml))
-        engine.loadData(
+        _load_preview_qml(
+            engine,
             b"""
 import QtQuick
 import QtQuick.Controls
@@ -505,7 +512,8 @@ def test_native_preview_handles_silent_video_audio_only_and_still_image(
         _app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
         engine.addImportPath(str(paths.native_qml))
-        engine.loadData(
+        _load_preview_qml(
+            engine,
             b"""
 import QtQuick
 import QtQuick.Controls
@@ -593,7 +601,8 @@ def test_native_preview_tone_maps_hdr_graph_on_sdr_output(
         app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
         engine.addImportPath(str(paths.native_qml))
-        engine.loadData(
+        _load_preview_qml(
+            engine,
             b"""
 import QtQuick
 import QtQuick.Controls

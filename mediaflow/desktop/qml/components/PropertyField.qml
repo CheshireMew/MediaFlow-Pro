@@ -14,9 +14,11 @@ RowLayout {
 
     Text {
         Layout.preferredWidth: 68
+        Layout.maximumWidth: 88
         text: root.label
         color: Theme.textMuted
         font.pixelSize: Theme.fontSizeCaption
+        wrapMode: Text.Wrap
     }
     AppTextField {
         id: editor
@@ -27,6 +29,7 @@ RowLayout {
         placeholderTextColor: Theme.textMuted
         selectByMouse: true
         font.pixelSize: Theme.fontSizeCaption
+        Accessible.name: root.label
         validator: DoubleValidator {
             notation: DoubleValidator.StandardNotation
         }

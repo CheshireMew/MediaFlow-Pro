@@ -280,6 +280,13 @@ def probe(root: Path, language: str, scale: str) -> dict:
             panel_items = (tool_panel, preview_panel, inspector, timeline)
             if any(float(panel.property("radius")) < 8 for panel in panel_items):
                 raise RuntimeError(f"Workspace panels lost their rounded boundary at {width}x{height}")
+            for panel in panel_items:
+                left, right = horizontal_bounds(panel, workspace)
+                if left < gutter - 2 or right > float(workspace.property("width")) - gutter + 2:
+                    raise RuntimeError(
+                        f"Workspace pane escapes the window at {width}x{height}: "
+                        f"{panel.objectName()}={left:.1f}..{right:.1f}"
+                    )
             tool_origin = tool_panel.mapToItem(workspace, QPointF(0, 0))
             preview_origin = preview_panel.mapToItem(workspace, QPointF(0, 0))
             inspector_origin = inspector.mapToItem(workspace, QPointF(0, 0))
@@ -454,6 +461,9 @@ def probe(root: Path, language: str, scale: str) -> dict:
         }
         window.setWidth(1920)
         window.setHeight(1080)
+        for _ in range(12):
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
         mode_results = []
         normal_tool_panel_width = float(tool_panel.property("width"))
         for mode in WORKSPACE_MODE_KEYS:

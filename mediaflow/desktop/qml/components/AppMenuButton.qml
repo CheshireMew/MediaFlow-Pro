@@ -11,13 +11,19 @@ AppButton {
         implicitWidth: contentRow.implicitWidth
         implicitHeight: Math.max(label.implicitHeight, indicator.implicitHeight)
 
-        Row {
+        Item {
             id: contentRow
             anchors.centerIn: parent
-            spacing: control.contentSpacing
+            width: Math.min(parent.width, implicitWidth)
+            height: implicitHeight
+            implicitWidth: label.implicitWidth + control.contentSpacing + indicator.width
+            implicitHeight: Math.max(label.implicitHeight, indicator.height)
 
             Text {
                 id: label
+                anchors.left: parent.left
+                anchors.right: indicator.left
+                anchors.rightMargin: control.contentSpacing
                 anchors.verticalCenter: parent.verticalCenter
                 text: control.text
                 color: control.foregroundColor
@@ -27,6 +33,7 @@ AppButton {
 
             AppIcon {
                 id: indicator
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 width: control.indicatorIconSize
                 height: control.indicatorIconSize
@@ -34,5 +41,7 @@ AppButton {
                 iconColor: control.foregroundColor
             }
         }
+
+        readonly property bool truncated: label.truncated
     }
 }

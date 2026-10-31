@@ -33,7 +33,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from mediaflow.application.asset_service import AssetService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.desktop.app import configure_application_identity
+from mediaflow.desktop.app import _qml_dll_search_path, configure_application_identity
 from mediaflow.domain.enums import TrackKind
 from mediaflow.environment import test_fixture_root
 from mediaflow.infrastructure.media_probe import MediaProbe
@@ -287,8 +287,9 @@ def verify(arguments: argparse.Namespace, run_dir: Path) -> dict[str, object]:
         _app = QGuiApplication.instance() or QGuiApplication([])
         engine = QQmlApplicationEngine()
         engine.addImportPath(str(paths.native_qml))
-        engine.loadData(
-            b"""
+        with _qml_dll_search_path():
+            engine.loadData(
+                b"""
 import QtQuick
 import QtQuick.Controls
 import MediaFlow.Native 1.0
@@ -300,8 +301,8 @@ ApplicationWindow {
     MltPreviewItem { objectName: "preview"; anchors.fill: parent }
 }
 """,
-            QUrl(),
-        )
+                QUrl(),
+            )
         if not engine.rootObjects():
             raise RuntimeError("The native preview verification window did not load")
         window = engine.rootObjects()[0]

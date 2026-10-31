@@ -17,6 +17,10 @@ ComboBox {
     palette.text: Theme.text
     palette.highlight: Theme.selectionSoft
     palette.highlightedText: Theme.text
+    FontMetrics {
+        id: optionMetrics
+        font: control.font
+    }
     contentItem: Text {
         text: control.displayText
         color: control.enabled ? Theme.text : Theme.textDisabled
@@ -54,8 +58,8 @@ ComboBox {
     delegate: ItemDelegate {
         id: delegateItem
         required property int index
-        width: control.width
-        implicitHeight: Theme.controlHeight
+        width: popup.availableWidth
+        implicitHeight: Math.max(Theme.controlHeight, implicitContentHeight + topPadding + bottomPadding)
         highlighted: control.highlightedIndex === index
         hoverEnabled: true
         contentItem: Text {
@@ -63,7 +67,7 @@ ComboBox {
             color: parent.enabled ? Theme.text : Theme.textDisabled
             font: control.font
             verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
         background: Rectangle {
             color: delegateItem.highlighted || delegateItem.hovered
@@ -75,7 +79,19 @@ ComboBox {
         id: popup
         objectName: "appComboBoxPopup"
         y: control.height + 2
-        width: control.width
+        // Measure only while opening. Long choices stay readable without
+        // expanding the field or escaping the application window.
+        readonly property real optionWidth: {
+            let widest = control.width;
+            if (visible) {
+                for (let index = 0; index < control.count; ++index)
+                    widest = Math.max(widest, optionMetrics.advanceWidth(control.textAt(index)) + 28);
+            }
+            return widest;
+        }
+        width: Math.min(optionWidth, Math.max(control.width, 480),
+            control.Window.window ? control.Window.window.width - 24 : 480)
+        margins: 6
         implicitHeight: Math.min(contentItem.implicitHeight + topPadding + bottomPadding, 320)
         topPadding: 2
         bottomPadding: 2
@@ -96,4 +112,9 @@ ComboBox {
             border.width: 1
         }
     }
+
+    ToolTip.visible: (control.hovered || control.visualFocus)
+        && control.contentItem.truncated && !popup.visible
+    ToolTip.text: control.displayText
+    ToolTip.delay: 350
 }

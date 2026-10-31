@@ -165,6 +165,7 @@ AppDialog {
                 color: root.explicitDraftDirty || mediaflow.settingsController.languageRestartRequired
                     ? Theme.warning : Theme.textMuted
                 font.pixelSize: Theme.fontSizeCaption
+                wrapMode: Text.Wrap
             }
             AppButton {
                 objectName: "settingsCloseButton"

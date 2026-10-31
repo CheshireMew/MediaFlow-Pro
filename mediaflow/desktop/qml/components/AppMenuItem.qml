@@ -24,10 +24,13 @@ MenuItem {
         Text {
             id: label
             anchors.left: parent.left
+            anchors.right: shortcut.visible ? shortcut.left : parent.right
+            anchors.rightMargin: shortcut.visible ? 24 : 0
             anchors.verticalCenter: parent.verticalCenter
             text: control.labelText
             color: parent.textColor
             font: control.font
+            elide: Text.ElideRight
         }
 
         Text {

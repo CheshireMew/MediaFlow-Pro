@@ -10,6 +10,7 @@ Rectangle {
     readonly property var modes: mediaflow.workspaceViewController.workspaceModes.filter(
         function (mode) { return Boolean(mode.navigationVisible); })
     property string activeMode: modes.length > 0 ? String(modes[0].key) : ""
+    readonly property bool compact: width < 520
     signal modeRequested(string mode)
     signal settingsRequested
 
@@ -37,11 +38,12 @@ Rectangle {
                     root.modeRequested(modelData.key);
                 }
 
-                Layout.minimumWidth: 52
-                Layout.preferredWidth: Math.max(52, navigationContent.implicitWidth + 12)
+                Layout.minimumWidth: root.compact ? 36 : 52
+                Layout.preferredWidth: root.compact ? 36 : Math.max(52, navigationContent.implicitWidth + 12)
                 Layout.fillHeight: true
                 radius: Theme.radiusSmall
-                color: navMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
+                color: navMouse.containsMouse ? Theme.surfaceHover
+                    : root.compact && selected ? Theme.selectionSoft : Theme.transparent
                 border.color: activeFocus
                     ? Theme.focusColor
                     : Theme.transparent
@@ -61,6 +63,7 @@ Rectangle {
                     }
 
                     Text {
+                        visible: !root.compact
                         Layout.alignment: Qt.AlignHCenter
                         text: modelData.label
                         color: navigationItem.selected ? Theme.accent : Theme.textSubtle
@@ -83,9 +86,15 @@ Rectangle {
 
                 Accessible.name: modelData.label
                 Accessible.role: Accessible.Button
+                Accessible.checkable: true
+                Accessible.checked: selected
+                Accessible.onPressAction: navigationItem.click()
                 activeFocusOnTab: true
                 Keys.onReturnPressed: navigationItem.click()
                 Keys.onSpacePressed: navigationItem.click()
+                ToolTip.visible: root.compact && (navMouse.containsMouse || navigationItem.activeFocus)
+                ToolTip.text: modelData.label
+                ToolTip.delay: 350
 
                 MouseArea {
                     id: navMouse
@@ -109,8 +118,8 @@ Rectangle {
                 root.settingsRequested();
             }
 
-            Layout.minimumWidth: 52
-            Layout.preferredWidth: Math.max(52, settingsContent.implicitWidth + 12)
+            Layout.minimumWidth: root.compact ? 36 : 52
+            Layout.preferredWidth: root.compact ? 36 : Math.max(52, settingsContent.implicitWidth + 12)
             Layout.fillHeight: true
             radius: Theme.radiusSmall
             color: settingsMouse.containsMouse ? Theme.surfaceHover : Theme.transparent
@@ -130,6 +139,7 @@ Rectangle {
                     iconColor: Theme.textSubtle
                 }
                 Text {
+                    visible: !root.compact
                     Layout.alignment: Qt.AlignHCenter
                     text: qsTr("设置")
                     color: Theme.textSubtle
@@ -139,9 +149,13 @@ Rectangle {
             }
             Accessible.name: qsTr("设置")
             Accessible.role: Accessible.Button
+            Accessible.onPressAction: settingsItem.click()
             activeFocusOnTab: true
             Keys.onReturnPressed: settingsItem.click()
             Keys.onSpacePressed: settingsItem.click()
+            ToolTip.visible: root.compact && (settingsMouse.containsMouse || settingsItem.activeFocus)
+            ToolTip.text: qsTr("设置")
+            ToolTip.delay: 350
 
             MouseArea {
                 id: settingsMouse

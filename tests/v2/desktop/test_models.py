@@ -153,8 +153,7 @@ def test_subject_tracking_modes_do_not_reuse_each_others_active_task() -> None:
     )
 
 
-def test_deferred_model_update_is_readable_before_qml_notification() -> None:
-    _application = QCoreApplication.instance() or QCoreApplication([])
+def test_deferred_model_update_is_readable_before_qml_notification(qapp: QCoreApplication) -> None:
     model = DictListModel(["id", "value"])
     model.set_items([{"id": "row", "value": 1}])
     changes: list[tuple[int, list[int]]] = []
@@ -164,12 +163,13 @@ def test_deferred_model_update_is_readable_before_qml_notification() -> None:
 
     assert model.get(0)["value"] == 2
     assert changes == []
-    QCoreApplication.processEvents()
+    qapp.processEvents()
     assert changes and changes[0][0] == 0
 
 
-def test_deferred_model_notification_is_cancelled_when_its_qt_owner_is_deleted() -> None:
-    _application = QCoreApplication.instance() or QCoreApplication([])
+def test_deferred_model_notification_is_cancelled_when_its_qt_owner_is_deleted(
+    qapp: QCoreApplication,
+) -> None:
     owner = QObject()
     model = DictListModel(["id", "value"], owner)
     model.set_items([{"id": "row", "value": 1}])
@@ -177,7 +177,7 @@ def test_deferred_model_notification_is_cancelled_when_its_qt_owner_is_deleted()
 
     owner.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    QCoreApplication.processEvents()
+    qapp.processEvents()
 
 
 def test_timeline_clip_viewport_keeps_large_fitted_timelines_bounded() -> None:

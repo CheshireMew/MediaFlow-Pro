@@ -11,6 +11,9 @@ from typing import Any, cast
 
 os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
+# SVG icons can be decoded after the temporary QML DLL search scope closes.
+# Preload QtSvg through PySide's Python loader so Windows resolves its Qt DLL.
+from PySide6 import QtSvg  # noqa: F401
 from PySide6.QtCore import QCoreApplication, QSettings, QTimer, QTranslator, QUrl
 from PySide6.QtGui import QColorSpace, QFontDatabase, QGuiApplication, QIcon, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine

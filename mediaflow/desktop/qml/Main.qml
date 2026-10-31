@@ -3,6 +3,9 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
+// Resolve the media plugin inside create_engine's Windows DLL search scope,
+// before Workspace and its resource player are loaded on demand.
+import QtMultimedia
 import "."
 import "components"
 

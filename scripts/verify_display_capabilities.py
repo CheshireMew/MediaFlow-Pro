@@ -16,7 +16,7 @@ from PySide6.QtGui import QColorSpace, QGuiApplication, QSurfaceFormat
 from PySide6.QtQml import QQmlApplicationEngine
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.desktop.app import configure_application_identity
+from mediaflow.desktop.app import _qml_dll_search_path, configure_application_identity
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from scripts.run_artifacts import verification_run
 
@@ -33,9 +33,12 @@ def verify(run_dir: Path) -> int:
     configure_application_identity()
     _app = QGuiApplication([])
     engine = QQmlApplicationEngine()
+    qml_errors: list[str] = []
+    engine.warnings.connect(lambda warnings: qml_errors.extend(item.toString() for item in warnings))
     engine.addImportPath(str(paths.native_qml))
-    engine.loadData(
-        b"""
+    with _qml_dll_search_path():
+        engine.loadData(
+            b"""
 import QtQuick
 import QtQuick.Controls
 import MediaFlow.Native 1.0
@@ -48,10 +51,10 @@ ApplicationWindow {
     MltPreviewItem { objectName: "preview"; anchors.fill: parent }
 }
 """,
-        QUrl(),
-    )
+            QUrl(),
+        )
     if not engine.rootObjects():
-        raise RuntimeError("The display capability window did not load")
+        raise RuntimeError("The display capability window did not load: " + "\n".join(qml_errors))
     window = engine.rootObjects()[0]
     preview = window.findChild(QObject, "preview")
     if preview is None:

@@ -19,7 +19,8 @@ AbstractButton {
         if (control.primary)
             return Theme.onAccent;
         if (control.danger)
-            return control.hovered || control.down ? Theme.dangerHover : Theme.text;
+            return control.down ? Theme.dangerForeground
+                : control.hovered ? Theme.dangerHover : Theme.text;
         if (control.checked)
             return Theme.accentHover;
         return Theme.text;
@@ -50,6 +51,7 @@ AbstractButton {
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     Accessible.role: Accessible.Button
+    Accessible.name: control.toolTipText || control.text
 
     contentItem: Item {
         implicitWidth: control.iconSize
@@ -76,9 +78,19 @@ AbstractButton {
         Behavior on color {
             ColorAnimation { duration: Theme.durationFast }
         }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -3
+            radius: Theme.radiusSmall + 3
+            color: Theme.transparent
+            border.color: Theme.focusColor
+            border.width: 2
+            visible: control.visualFocus
+        }
     }
 
-    ToolTip.visible: control.hovered && control.toolTipText.length > 0
+    ToolTip.visible: (control.hovered || control.visualFocus) && control.toolTipText.length > 0
     ToolTip.text: control.toolTipText
     ToolTip.delay: 350
 }

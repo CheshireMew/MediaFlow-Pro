@@ -72,12 +72,14 @@ Item {
             color: Theme.text
             font.pixelSize: titleFontSize
             font.weight: Font.DemiBold
+            wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
         }
         Text {
             objectName: "emptyStateDescription"
             Layout.fillWidth: true
             text: description
+            visible: description.length > 0
             color: Theme.textMuted
             font.pixelSize: descriptionFontSize
             wrapMode: Text.WordWrap

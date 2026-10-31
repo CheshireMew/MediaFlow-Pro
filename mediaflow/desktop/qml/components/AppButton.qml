@@ -16,7 +16,7 @@ Button {
         if (control.primary)
             return Theme.onAccent
         if (control.danger && (control.hovered || control.down))
-            return Theme.textStrong
+            return Theme.dangerForeground
         if (control.danger)
             return Theme.danger
         if (control.checked)
@@ -79,5 +79,20 @@ Button {
         Behavior on border.color {
             ColorAnimation { duration: Theme.durationFast }
         }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -3
+            radius: Theme.radiusSmall + 3
+            color: Theme.transparent
+            border.color: Theme.focusColor
+            border.width: 2
+            visible: control.visualFocus
+        }
     }
+
+    ToolTip.visible: (control.hovered || control.visualFocus)
+        && control.contentItem.truncated === true
+    ToolTip.text: control.text
+    ToolTip.delay: 350
 }

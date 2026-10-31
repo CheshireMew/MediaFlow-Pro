@@ -80,9 +80,9 @@ Rectangle {
                     quiet: root.previewMode !== "source"
                     primary: root.previewMode === "source"
                     compact: true
-                    Layout.preferredWidth: root.compactSourceActions ? 56
+                    Layout.preferredWidth: root.compactSourceActions ? Math.max(56, implicitWidth)
                         : Math.min(220, implicitWidth)
-                    Layout.maximumWidth: root.compactSourceActions ? 56 : 220
+                    Layout.maximumWidth: root.compactSourceActions ? Math.max(56, implicitWidth) : 220
                     enabled: Boolean(root.sourceMonitor.assetId)
                     ToolTip.visible: root.compactSourceActions && hovered
                         && Boolean(root.sourceMonitor.assetId)

@@ -12,6 +12,7 @@ ColumnLayout {
     spacing: 4
 
     readonly property var definition: field.descriptor || ({})
+    readonly property string accessibleLabel: String(definition.label || definition.id || "")
     readonly property var constraints: definition.constraints || ({})
     readonly property var choiceItems: options.length > 0
         ? options : (constraints.choices || [])
@@ -61,6 +62,7 @@ ColumnLayout {
         id: textEditor
         AppTextField {
             Layout.fillWidth: true
+            Accessible.name: root.accessibleLabel
             text: String(root.field.value ?? "")
             placeholderText: String(root.definition.kind || "")
             onEditingFinished: root.valueCommitted(text)
@@ -71,6 +73,7 @@ ColumnLayout {
         id: numberEditor
         AppTextField {
             Layout.fillWidth: true
+            Accessible.name: root.accessibleLabel
             text: String(root.field.value ?? root.definition.default ?? 0)
             onEditingFinished: root.valueCommitted(
                 root.definition.kind === "integer"
@@ -81,6 +84,7 @@ ColumnLayout {
     Component {
         id: toggleEditor
         AppCheckBox {
+            Accessible.name: root.accessibleLabel
             text: checked ? qsTr("已启用") : qsTr("未启用")
             checked: Boolean(root.field.value)
             onClicked: root.valueCommitted(checked)
@@ -91,6 +95,7 @@ ColumnLayout {
         id: selectEditor
         AppComboBox {
             Layout.fillWidth: true
+            Accessible.name: root.accessibleLabel
             model: root.choiceItems
             textRole: "label"
             valueRole: "value"
@@ -105,6 +110,7 @@ ColumnLayout {
             Layout.fillWidth: true
             AppSlider {
                 id: slider
+                Accessible.name: root.accessibleLabel
                 Layout.fillWidth: true
                 from: Number(root.constraints.minimum ?? 0)
                 to: Number(root.constraints.maximum ?? 1)
@@ -116,6 +122,7 @@ ColumnLayout {
             }
             AppTextField {
                 Layout.preferredWidth: 78
+                Accessible.name: root.accessibleLabel
                 text: root.definition.kind === "integer"
                     ? String(Math.round(slider.value))
                     : Number(slider.value).toFixed(

@@ -22,6 +22,7 @@ TextArea {
     selectedTextColor: Theme.onAccent
     font.pixelSize: Theme.fontSizeBody
     wrapMode: TextEdit.Wrap
+    Accessible.name: placeholderText
 
     background: Rectangle {
         radius: Theme.radiusSmall

@@ -145,7 +145,8 @@ Item {
                         ? "!"
                         : mediaflow.taskController.activeTaskCount > 99
                         ? "99+" : String(mediaflow.taskController.activeTaskCount)
-                    color: Theme.onAccent
+                    color: mediaflow.workspaceViewController.recentErrors.length > 0
+                        ? Theme.dangerForeground : Theme.onAccent
                     font.pixelSize: Theme.fontSizeCaption
                     font.weight: Font.Bold
                 }

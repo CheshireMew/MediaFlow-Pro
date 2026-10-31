@@ -28,9 +28,10 @@ QtObject {
     readonly property color textStrong: "#ffffff"
     readonly property color text: highContrast ? "#ffffff" : "#eeeeef"
     readonly property color textSubtle: highContrast ? "#f0f0f0" : "#b7b9bd"
-    readonly property color textMuted: highContrast ? "#dedede" : "#8e9197"
+    readonly property color textMuted: highContrast ? "#dedede" : "#a6a9af"
     readonly property color textDisabled: highContrast ? "#a8a8a8" : "#62656b"
-    readonly property color onAccent: highContrast ? "#ffffff" : "#ffffff"
+    readonly property color onAccent: highContrast ? "#001416" : "#061b1e"
+    readonly property color dangerForeground: "#260b10"
 
     // Cyan is the single interactive signal. It is not used as decoration.
     readonly property color accent: highContrast ? "#00f1ff" : "#20c7d4"

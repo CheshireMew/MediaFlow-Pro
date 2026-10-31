@@ -19,6 +19,7 @@ TextField {
     selectionColor: Theme.accent
     selectedTextColor: Theme.onAccent
     font.pixelSize: Theme.fontSizeBody
+    Accessible.name: placeholderText
     background: Rectangle {
         radius: Theme.radiusSmall
         color: control.enabled

@@ -81,23 +81,31 @@ Rectangle {
         property string labelText: ""
         property string valueText: ""
         Layout.fillWidth: true
+        Layout.minimumWidth: 0
         spacing: 12
 
         Text {
             Layout.preferredWidth: 92
+            Layout.alignment: Qt.AlignTop
             text: parent.labelText
             color: Theme.textMuted
             font.pixelSize: Theme.fontSizeBodySmall
+            wrapMode: Text.Wrap
             verticalAlignment: Text.AlignTop
         }
         Text {
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            Layout.preferredWidth: 0
             text: parent.valueText
             color: Theme.textSubtle
             font.pixelSize: Theme.fontSizeBodySmall
             wrapMode: Text.Wrap
             elide: Text.ElideRight
             maximumLineCount: 3
+            ToolTip.visible: valueHover.hovered && truncated
+            ToolTip.text: text
+            HoverHandler { id: valueHover }
         }
     }
 

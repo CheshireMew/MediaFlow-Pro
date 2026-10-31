@@ -58,6 +58,17 @@ Rectangle {
         ? maximizedPanel === "inspector" : inspectorPanelVisible
     readonly property bool timelineShown: maximizedPanel.length > 0
         ? maximizedPanel === "timeline" : timelinePanelVisible
+    // Fit saved side-pane widths around the preview's minimum, without
+    // overwriting the user's preferred widths when the window gets smaller.
+    readonly property real sidePanelBudget: Math.max(0, width
+        - workspaceGutter * (2 + (toolShown && previewShown ? 1 : 0)
+            + (previewShown && inspectorShown ? 1 : 0))
+        - (previewShown ? Theme.workspacePreviewMinimumWidth : 0))
+    readonly property real fittedToolPanelWidth: Math.max(Theme.workspaceToolMinimumWidth,
+        Math.min(toolPanelWidth, sidePanelBudget
+            - (inspectorShown ? Math.max(Theme.workspaceInspectorMinimumWidth, inspectorPanelWidth) : 0)))
+    readonly property real fittedInspectorPanelWidth: Math.max(Theme.workspaceInspectorMinimumWidth,
+        Math.min(inspectorPanelWidth, sidePanelBudget - (toolShown ? fittedToolPanelWidth : 0)))
 
     Connections {
         target: mediaflow.workspacePlaybackController
@@ -238,7 +249,7 @@ Rectangle {
                     Layout.rowSpan: root.maximizedPanel === "tool"
                         ? 3 : root.mediaLayout ? 3 : 1
                     Layout.columnSpan: root.maximizedPanel === "tool" ? 5 : 1
-                    Layout.preferredWidth: root.toolPanelWidth
+                    Layout.preferredWidth: root.fittedToolPanelWidth
                     Layout.minimumWidth: root.maximizedPanel === "tool"
                         ? 0 : Theme.workspaceToolMinimumWidth
                     Layout.fillWidth: root.maximizedPanel === "tool"
@@ -352,6 +363,7 @@ Rectangle {
 
                 Rectangle {
                     id: leftResizeHandle
+                    objectName: "toolPanelResizeHandle"
                     visible: root.toolShown && root.previewShown
                         && root.maximizedPanel.length === 0
                     Layout.row: 0
@@ -381,13 +393,15 @@ Rectangle {
                         yAxis.enabled: false
                         onActiveChanged: {
                             if (active)
-                                leftResizeHandle.startWidth = root.toolPanelWidth;
+                                leftResizeHandle.startWidth = toolPanelContainer.width;
                             else
                                 root.persistPanelLayout();
                         }
                         onTranslationChanged: root.toolPanelWidth = Math.max(
-                            root.width >= 1600 ? 460 : 420,
-                            Math.min(root.width >= 1600 ? 680 : 460,
+                            Theme.workspaceToolMinimumWidth,
+                            Math.min(680,
+                                Math.max(Theme.workspaceToolMinimumWidth, root.sidePanelBudget
+                                    - (root.inspectorShown ? inspectorPanel.width : 0)),
                                 leftResizeHandle.startWidth + translation.x))
                     }
                 }
@@ -440,13 +454,15 @@ Rectangle {
                         yAxis.enabled: false
                         onActiveChanged: {
                             if (active)
-                                inspectorResizeHandle.startWidth = root.inspectorPanelWidth;
+                                inspectorResizeHandle.startWidth = inspectorPanel.width;
                             else
                                 root.persistPanelLayout();
                         }
                         onTranslationChanged: root.inspectorPanelWidth = Math.max(
                             Theme.workspaceInspectorMinimumWidth,
                             Math.min(560,
+                                Math.max(Theme.workspaceInspectorMinimumWidth, root.sidePanelBudget
+                                    - (root.toolShown ? toolPanelContainer.width : 0)),
                                 inspectorResizeHandle.startWidth - translation.x))
                     }
                 }
@@ -459,7 +475,7 @@ Rectangle {
                     Layout.column: root.maximizedPanel === "inspector" ? 0 : 4
                     Layout.rowSpan: root.maximizedPanel === "inspector" ? 3 : 1
                     Layout.columnSpan: root.maximizedPanel === "inspector" ? 5 : 1
-                    Layout.preferredWidth: root.inspectorPanelWidth
+                    Layout.preferredWidth: root.fittedInspectorPanelWidth
                     Layout.minimumWidth: root.maximizedPanel === "inspector"
                         ? 0 : Theme.workspaceInspectorMinimumWidth
                     Layout.fillWidth: root.maximizedPanel === "inspector"
