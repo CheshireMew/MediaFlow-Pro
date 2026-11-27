@@ -3,12 +3,29 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from mediaflow.domain.collaboration import ProjectChange, ProjectChangeSet
+from mediaflow.domain.collaboration import ProjectChange, ProjectChangeSet, project_write_path_covers
 from mediaflow.domain.timeline import TimelineState
 
 
 def project_path_segment(value: object) -> str:
     return str(value).replace("~", "~0").replace("/", "~1")
+
+
+def project_scoped_history_changes(
+    change_set: ProjectChangeSet, scopes: list[str],
+) -> ProjectChangeSet:
+    """Expose web document edits at their public project observation paths."""
+    projected = []
+    for change in change_set.changes:
+        segments = change.path.split("/")
+        if len(segments) >= 5 and segments[1] == "sequences" and segments[3] == "web-states":
+            web_path = "/web/clips/" + "/".join(segments[4:])
+            if any(
+                scope.startswith("/web/") and project_write_path_covers(scope, web_path) for scope in scopes
+            ):
+                change = change.model_copy(update={"path": web_path})
+        projected.append(change)
+    return ProjectChangeSet(changes=projected)
 
 
 def timeline_change_set(

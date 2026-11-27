@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
@@ -44,6 +45,8 @@ class WebController(ControllerFacet[WebControllerScope]):
         self._browser_edit_mode = False
         self._browser_selected_layer_id = ""
         self._browser_ready = False
+        self._browser_binding_id = uuid.uuid4().hex
+        self._browser_binding_generation = session.state.binding.generation
         session.events.selectionChanged.connect(self._refresh)
         session.events.projectStateChanged.connect(self._refresh)
         session.events.historyChanged.connect(self._refresh)
@@ -112,6 +115,28 @@ class WebController(ControllerFacet[WebControllerScope]):
     @Property(dict, notify=webStateChanged)
     def manifestData(self) -> dict:
         return dict(self._web_manifest)
+
+    @Property(str, notify=webStateChanged)
+    def browserBindingJson(self) -> str:
+        return self.browser_binding_json()
+
+    def browser_binding_json(self) -> str:
+        return json.dumps({
+            "session": self._browser_binding_id,
+            "generation": self._session.state.binding.generation,
+            "clip_id": self._web_clip_id,
+        }, separators=(",", ":"))
+
+    @Slot()
+    def beginBrowserPage(self) -> None:
+        self._browser_binding_id = uuid.uuid4().hex
+        self._browser_ready = False
+        self._browser_values = {}
+        self.webStateChanged.emit()
+
+    @Slot(str)
+    def browserSynchronizationFailed(self, message: str) -> None:
+        self._session.updates.report_error(f"网页编辑状态同步失败：{message}")
 
     @Property(str, notify=webStateChanged)
     def stateJson(self) -> str:
@@ -323,8 +348,13 @@ class WebController(ControllerFacet[WebControllerScope]):
     @Slot(str)
     @report_ui_errors
     def commitBrowserState(self, payload: str) -> None:
+        message = json.loads(payload)
+        if not isinstance(message, dict) or set(message) != {"binding", "state"}:
+            raise ValueError("网页编辑提交缺少片段会话身份")
+        if message["binding"] != json.loads(self.browser_binding_json()):
+            return
         current = require_mutable_web_clip(self._session, self._web_clip_id)
-        browser_state = json.loads(payload)
+        browser_state = message["state"]
         if browser_state == self._runtime_web_state:
             return
         updated = current.commit_web_runtime_state(
@@ -480,7 +510,7 @@ class WebController(ControllerFacet[WebControllerScope]):
         self.webSelectionChanged.emit()
         self.webStateChanged.emit()
         self._session.updates.commit(history=True)
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     def _refresh_runtime_state(self) -> None:
         if self._session.state.binding.current and self._web_clip_id:
@@ -560,7 +590,14 @@ class WebController(ControllerFacet[WebControllerScope]):
                     self._web_state = state.model_dump(mode="json")
                     self._refresh_runtime_state()
                     self._refresh_edit_document()
-        if self._web_clip_id != previous_clip_id:
+        generation = self._session.state.binding.generation
+        if (
+            self._web_clip_id != previous_clip_id
+            or self._web_entry_url != previous_entry_url
+            or self._browser_binding_generation != generation
+        ):
+            self._browser_binding_generation = generation
+            self._browser_binding_id = uuid.uuid4().hex
             self._browser_values = {}
             self._browser_revision = 0
             self._browser_edit_mode = False

@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, TypeVar
 
+from pydantic import Field
+
+from mediaflow.domain.model_base import DomainModel
 from mediaflow.domain.timeline import TimelineState
 
 TIMELINE_HISTORY_MODE = "patch"
@@ -13,6 +16,25 @@ class _Identified(Protocol):
 
 
 _Entity = TypeVar("_Entity", bound=_Identified)
+
+
+class TimelineStateChange(DomainModel):
+    """Authoritative entity patches from one committed timeline command."""
+
+    base_revision: int = Field(ge=0)
+    before: TimelineState
+    after: TimelineState
+
+    @classmethod
+    def between(
+        cls,
+        before: TimelineState,
+        after: TimelineState,
+        *,
+        base_revision: int,
+    ) -> TimelineStateChange:
+        source, destination = compact_timeline_change(before, after)
+        return cls(base_revision=base_revision, before=source, after=destination)
 
 
 def compact_timeline_change(
@@ -116,7 +138,8 @@ def _changed_entities(
     changed_ids = {
         item_id
         for item_id in set(source_by_id) | set(destination_by_id)
-        if source_by_id.get(item_id) != destination_by_id.get(item_id)
+        if source_by_id.get(item_id) is not destination_by_id.get(item_id)
+        and source_by_id.get(item_id) != destination_by_id.get(item_id)
     }
     return (
         [item for item in source if item.id in changed_ids],

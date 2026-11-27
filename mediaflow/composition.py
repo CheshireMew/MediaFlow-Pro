@@ -25,6 +25,7 @@ from mediaflow.application.production_bundle_inspection import (
 )
 from mediaflow.application.project_collection_service import ProjectCollectionService
 from mediaflow.application.project_command_queue import ProjectCommandQueue
+from mediaflow.application.project_file_task_handlers import ProjectFileTaskHandlers
 from mediaflow.application.project_task_handlers import ProjectTaskHandlers
 from mediaflow.application.project_workflow_service import ProjectWorkflowService
 from mediaflow.application.review_package_service import ReviewPackageService
@@ -273,6 +274,7 @@ class EditorProject(
             TaskRepository(repository),
             recover_expired=not repository.read_only,
             preparation_scope=self._task_settlement.preparation_scope,
+            discard_preparation=self._task_settlement.discard_preparation,
             project_change_committer=self._task_settlement.commit_project_change,
             settlement_committer=self._task_settlement.commit_settlement,
         )
@@ -301,6 +303,12 @@ class EditorProject(
             settings=lambda: self._settings,
             active_llm_provider=self._active_llm_provider,
             timeline_provider=self.timeline,
+            project_files=ProjectFileTaskHandlers(
+                repository.project_dir, self._web_packages, self._collections,
+                lambda destination, check: self._project_archives.prepare(
+                    destination, check_cancelled=check,
+                ),
+            ),
         )
         self._task_handlers.register_with(self._tasks)
 

@@ -379,7 +379,9 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
         "arguments_schema"
     ]
     assert batch_clip_schema["properties"]["clips"]["minItems"] == 1
-    assert operations["timeline.clip.batch.add"]["idempotency"] == "optional"
+    assert operations["timeline.clip.batch.add"]["idempotency"] == "required"
+    batch_request_schema = operations["timeline.clip.batch.add"]["request_schema"]
+    assert {"request_id", "base_revision"} <= set(batch_request_schema["required"])
     assert set(operations["speech.synthesize"]["arguments_schema"]["required"]) == {
         "text",
         "text_language",
@@ -405,6 +407,7 @@ def test_cli_describes_ai_transcript_plan_shape_without_hidden_references() -> N
             "required_capabilities",
             "arguments_schema",
             "result_schema",
+            "request_schema",
         }
         for operation in operations.values()
     )

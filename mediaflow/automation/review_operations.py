@@ -118,7 +118,6 @@ def capture_snapshot(context: OperationContext) -> dict:
     state = context.project.timeline(sequence_id).state
     if not 0 <= frame < state.duration_frames:
         raise ValueError("审阅截图帧必须位于序列范围内")
-    context.project.prepare_web_sequence(state)
     _graph, rendered = context.application.render_preview_frames(
         context.project.project_dir,
         state,

@@ -5,18 +5,19 @@ from typing import Any, cast
 
 from PySide6.QtCore import Property, QUrl, Signal, Slot
 
+from mediaflow.desktop.presentation_review import review_filter_options, review_priority_options
 from mediaflow.domain.collaboration import ActorIdentity
 from mediaflow.domain.review import ReviewPriority, ReviewThread
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineReviewScope
 from .timeline_selection import selected_clip_id
 
 
-class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
+class TimelineReviewController(ControllerFacet[TimelineReviewScope]):
     reviewChanged = Signal()
 
-    def __init__(self, scope: TimelinePresentationScope) -> None:
+    def __init__(self, scope: TimelineReviewScope) -> None:
         super().__init__(scope)
         self._review_mode = False
         self._status_filter = "open"
@@ -64,21 +65,11 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(list, notify=reviewChanged)
     def filterOptions(self) -> list[dict[str, str]]:
-        return [
-            {"label": "待处理", "value": "open"},
-            {"label": "已解决", "value": "resolved"},
-            {"label": "已归档", "value": "archived"},
-            {"label": "全部", "value": "all"},
-        ]
+        return review_filter_options()
 
     @Property(list, notify=reviewChanged)
     def priorityOptions(self) -> list[dict[str, str]]:
-        return [
-            {"label": "普通", "value": "normal"},
-            {"label": "低", "value": "low"},
-            {"label": "高", "value": "high"},
-            {"label": "阻断交付", "value": "blocking"},
-        ]
+        return review_priority_options()
 
     @Property(int, notify=reviewChanged)
     def openCount(self) -> int:
@@ -86,10 +77,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(int, notify=reviewChanged)
     def blockingOpenCount(self) -> int:
-        return sum(
-            item.status == "open" and item.priority == "blocking"
-            for item in self._threads()
-        )
+        return sum(item.status == "open" and item.priority == "blocking" for item in self._threads())
 
     @Property(list, notify=reviewChanged)
     def visibleThreads(self) -> list[dict[str, Any]]:
@@ -109,12 +97,12 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
         body: str,
     ) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().add_review_thread(
+        self._session.project_binding.require_timeline().add_review_thread(
             start_frame,
             body,
             self._actor(),
             end_frame=end_frame if end_frame > start_frame else None,
-            clip_id=selected_clip_id(self._session) or None,
+            clip_id=selected_clip_id(self._session.read_selection()) or None,
             subject=subject,
             priority=cast(ReviewPriority, priority),
         )
@@ -125,7 +113,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def replyThread(self, thread_id: str, body: str) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().reply_review_thread(
+        self._session.project_binding.require_timeline().reply_review_thread(
             thread_id,
             body,
             self._actor(),
@@ -137,7 +125,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def resolveThread(self, thread_id: str) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().resolve_review_thread(
+        self._session.project_binding.require_timeline().resolve_review_thread(
             thread_id,
             self._actor(),
         )
@@ -148,7 +136,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def reopenThread(self, thread_id: str) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().reopen_review_thread(thread_id)
+        self._session.project_binding.require_timeline().reopen_review_thread(thread_id)
         self._after_change()
         self._session._set_status("审阅批注已重新打开")
 
@@ -156,7 +144,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def archiveThread(self, thread_id: str) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().archive_review_thread(thread_id)
+        self._session.project_binding.require_timeline().archive_review_thread(thread_id)
         self._after_change()
         self._session._set_status("审阅批注已归档，可随时恢复")
 
@@ -164,7 +152,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def restoreThread(self, thread_id: str) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().restore_review_thread(thread_id)
+        self._session.project_binding.require_timeline().restore_review_thread(thread_id)
         self._after_change()
         self._session._set_status("审阅批注已恢复")
 
@@ -172,7 +160,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def captureSnapshot(self, thread_id: str, frame: int) -> None:
         self._session._require_writable()
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         self._snapshot_request_id += 1
         request_id = self._snapshot_request_id
         self._snapshot_running = True
@@ -184,31 +172,27 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
                 "preview.frames.render",
                 current.project_dir,
                 {
-                    "sequence_id": self._session.state.binding.active_sequence_id,
+                    "sequence_id": self._session.project_binding.active_sequence_id,
                     "frames": [frame],
                     "use_proxies": True,
                 },
             ),
-            on_result=lambda result: self._finish_snapshot(
-                request_id, thread_id, frame, result
-            ),
+            on_result=lambda result: self._finish_snapshot(request_id, thread_id, frame, result),
             on_error=lambda error: self._fail_snapshot(request_id, error),
         )
 
     @Slot(str, str, list)
     @report_ui_errors
-    def setSnapshotMarkup(
-        self, thread_id: str, snapshot_id: str, markup: list[object]
-    ) -> None:
+    def setSnapshotMarkup(self, thread_id: str, snapshot_id: str, markup: list[object]) -> None:
         self._session._require_writable()
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         normalized: list[dict[str, Any]] = []
         for item in markup:
             if not isinstance(item, dict):
                 raise ValueError("审阅截图标注必须是对象列表")
             normalized.append(dict(item))
         current.set_review_snapshot_markup(
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
             thread_id,
             snapshot_id,
             normalized,
@@ -219,10 +203,10 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @Slot(str)
     @report_ui_errors
     def exportPackage(self, destination_url: str) -> None:
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         destination = self._local_path(destination_url)
         result = current.export_review_package(
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
             destination,
         )
         self._session._set_status("审阅包已导出：%1", result.path)
@@ -231,24 +215,24 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def importPackage(self, source_url: str) -> None:
         self._session._require_writable()
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         result = current.import_review_package(
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
             self._local_path(source_url),
         )
         self._after_change()
         self._session._set_status("已导入 %1 条审阅批注", result.thread_count)
 
     def _threads(self) -> list[ReviewThread]:
-        if not self._session.state.binding.timeline:
+        if not self._session.project_binding.timeline:
             return []
         return sorted(
-            self._session.state.binding.require_timeline().state.review_threads,
+            self._session.project_binding.require_timeline().state.review_threads,
             key=lambda item: (item.start_frame, item.id),
         )
 
     def _actor(self) -> ActorIdentity:
-        return self._session.state.binding.require_current().actor_identity
+        return self._session.project_binding.require_current().actor_identity
 
     def _thread_row(self, thread: ReviewThread) -> dict[str, Any]:
         return {
@@ -283,7 +267,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
                     "fileUrl": QUrl.fromLocalFile(
                         str(
                             (
-                                self._session.state.binding.require_current().project_dir
+                                self._session.project_binding.require_current().project_dir
                                 / Path(item.relative_path)
                             ).resolve()
                         )
@@ -298,7 +282,7 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
         }
 
     def _after_change(self) -> None:
-        self._session.projectors.timeline.refresh_timeline()
+        self._session.refresh_timeline()
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
         self.reviewChanged.emit()
@@ -320,9 +304,9 @@ class TimelineReviewController(ControllerFacet[TimelinePresentationScope]):
             self._fail_snapshot(request_id, RuntimeError("审阅截图数量不正确"))
             return
         proof = frames[0]
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         current.attach_review_snapshot(
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
             thread_id,
             frame=frame,
             rendered_path=str(proof["path"]),

@@ -53,12 +53,16 @@ class _ProjectEventStream:
         self.project_cursor = project_cursor
         self.task_cursor = 0
         self._project_handlers: dict[int, ProjectEventHandler] = {}
+        self._undelivered_project_events: list[ProjectChangeEvent] = []
         self._task_handlers: dict[int, TaskEventHandler] = {}
         self._workspace_handlers: dict[int, WorkspaceEventHandler] = {}
         self._workspace_session_id = workspace_session_id
         self._client_id = client_id
         self._next_token = 1
         self._lock = threading.RLock()
+        self._inflight_writes: set[str] = set()
+        self._projected_writes: dict[str, None] = {}
+        self._held_writes: dict[str, ProjectChangeEvent] = {}
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
@@ -70,6 +74,10 @@ class _ProjectEventStream:
             token = self._next_token
             self._next_token += 1
             self._project_handlers[token] = handler
+            pending = self._undelivered_project_events
+            self._undelivered_project_events = []
+            for pending_event in pending:
+                self._deliver((handler,), pending_event)
         self._ensure_ready()
         return token
 
@@ -96,11 +104,32 @@ class _ProjectEventStream:
             self._workspace_handlers.pop(token, None)
 
     def acknowledge_project_event(self, *, cursor: int, project_revision: int) -> None:
-        """Advance the durable cursor for an event already returned by a write."""
+        """Observe a write's revision without skipping earlier stream events."""
 
         with self._lock:
-            self.project_cursor = max(self.project_cursor, cursor)
             self.project_revision = max(self.project_revision, project_revision)
+
+    def begin_write(self, request_id: str) -> None:
+        with self._lock:
+            self._inflight_writes.add(request_id)
+
+    def finish_write(self, request_id: str, *, projected: bool) -> None:
+        with self._lock:
+            self._inflight_writes.discard(request_id)
+            event = self._held_writes.pop(request_id, None)
+            if projected:
+                self._projected_writes[request_id] = None
+                while len(self._projected_writes) > 256:
+                    self._projected_writes.pop(next(iter(self._projected_writes)))
+            elif event is not None:
+                self._deliver_project(event)
+
+    def _deliver_project(self, event: ProjectChangeEvent) -> None:
+        with self._lock:
+            handlers = tuple(self._project_handlers.values())
+            if not handlers:
+                self._undelivered_project_events.append(event)
+        self._deliver(handlers, event)
 
     def close(self) -> None:
         self._stop.set()
@@ -216,10 +245,17 @@ class _ProjectEventStream:
                 return
             project_event = ProjectChangeEvent.model_validate(payload)
             self.project_cursor = project_event.cursor
-            self.project_revision = project_event.project_revision
+            self.project_revision = max(self.project_revision, project_event.project_revision)
+            # Consume our own journal entry in order, but let the command
+            # response remain the sole owner of its desktop projection.
             with self._lock:
-                project_handlers = tuple(self._project_handlers.values())
-            self._deliver(project_handlers, project_event)
+                if project_event.request_id in self._projected_writes:
+                    self._projected_writes.pop(project_event.request_id)
+                    return
+                if project_event.request_id in self._inflight_writes:
+                    self._held_writes[project_event.request_id] = project_event
+                    return
+            self._deliver_project(project_event)
         elif event_type == "task.changed":
             cursor = int(payload.get("cursor", 0))
             if cursor <= self.task_cursor:

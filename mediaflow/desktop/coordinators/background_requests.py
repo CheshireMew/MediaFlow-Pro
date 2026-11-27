@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, wait
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from .background_result_router import BackgroundResult, BackgroundResultRouter
+from mediaflow.desktop.component_contexts import BackgroundRequestsContext
+from mediaflow.operation_cancellation import OperationCancelled
+
+from .background_result_router import BackgroundResult
 from .base import SessionCoordinator
 
 PROJECT_REQUEST_SHUTDOWN_TIMEOUT_SECONDS = 15.0
@@ -28,9 +32,9 @@ class _BackgroundBridge(QObject):
     resultReceived = Signal(object)
 
 
-class BackgroundRequests(SessionCoordinator):
-    def __init__(self, session):
-        super().__init__(session)
+class BackgroundRequests(SessionCoordinator[BackgroundRequestsContext]):
+    def __init__(self, context: BackgroundRequestsContext):
+        super().__init__(context)
         self._application_executor = ThreadPoolExecutor(
             max_workers=2,
             thread_name_prefix="mediaflow-desktop-io",
@@ -49,8 +53,7 @@ class BackgroundRequests(SessionCoordinator):
             tuple[str, object],
             tuple[Callable[[object | None], None], Callable[[BaseException], None]],
         ] = {}
-        self._result_router = BackgroundResultRouter(session)
-        self._bridge = _BackgroundBridge(session)
+        self._bridge = _BackgroundBridge(context.parent)
         self._bridge.resultReceived.connect(self._on_result)
 
     def submit(
@@ -62,7 +65,7 @@ class BackgroundRequests(SessionCoordinator):
         executor: ThreadPoolExecutor | None = None,
         publish_result: bool = True,
     ) -> Future[object] | None:
-        if self._session.state.requests.shutting_down:
+        if self._context.state.requests.shutting_down:
             return None
         worker = executor or (
             self._project_executor if kind in _PROJECT_REQUEST_KINDS else self._application_executor
@@ -136,11 +139,13 @@ class BackgroundRequests(SessionCoordinator):
     ) -> None:
         try:
             result = completed.result()
+        except asyncio.CancelledError as error:
+            payload = BackgroundResult(kind, request_id, None, OperationCancelled(str(error)))
         except Exception as error:
             payload = BackgroundResult(kind, request_id, None, error)
         else:
             payload = BackgroundResult(kind, request_id, result, None)
-        if not self._session.state.requests.shutting_down:
+        if not self._context.state.requests.shutting_down:
             self._bridge.resultReceived.emit(payload)
 
     def shutdown_project_requests(
@@ -169,12 +174,12 @@ class BackgroundRequests(SessionCoordinator):
         self._application_executor.shutdown(wait=True, cancel_futures=True)
 
     def raise_if_shutting_down(self) -> None:
-        if self._session.state.requests.shutting_down:
+        if self._context.state.requests.shutting_down:
             raise CancelledError("Desktop background requests are shutting down")
 
     @Slot(object)
     def _on_result(self, payload: object) -> None:
-        if self._session.state.requests.shutting_down:
+        if self._context.state.requests.shutting_down:
             return
         if not isinstance(payload, BackgroundResult):
             return
@@ -186,4 +191,4 @@ class BackgroundRequests(SessionCoordinator):
             else:
                 on_result(payload.result)
             return
-        self._result_router.dispatch(payload)
+        self._context.dispatch_result(payload)

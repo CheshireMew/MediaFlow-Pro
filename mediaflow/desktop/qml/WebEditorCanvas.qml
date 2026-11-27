@@ -10,6 +10,7 @@ Rectangle {
     clip: true
     property int playheadFrame: 0
     property int syncGeneration: 0
+    property bool bridgeReady: false
     readonly property bool webInputActive:
         visible && webView.activeFocus
 
@@ -21,12 +22,18 @@ Rectangle {
                 window.__mediaFlowBridgeInstalling = true;
                 const bind = () => new QWebChannel(qt.webChannelTransport, channel => {
                     const bridge = channel.objects.mediaflowWebController;
+                    window.__mediaFlowBridge = bridge;
                     window.addEventListener("editablemediaselection", event => {
                         if (!window.__mediaFlowSynchronizing)
                             bridge.selectBrowserLayer(String(event.detail.layerId || ""));
                     });
-                    window.addEventListener("editablemediachange", event =>
-                        bridge.commitBrowserState(JSON.stringify(event.detail.state)));
+                    window.addEventListener("editablemediachange", event => {
+                        if (!window.__mediaFlowSynchronizing && window.__mediaFlowBinding)
+                            bridge.commitBrowserState(JSON.stringify({
+                                binding: window.__mediaFlowBinding,
+                                state: event.detail.state
+                            }));
+                    });
                     window.__mediaFlowBridgeInstalled = true;
                     window.__mediaFlowBridgeInstalling = false;
                     bridge.browserBridgeReady();
@@ -44,7 +51,7 @@ Rectangle {
     }
 
     function synchronize() {
-        if (!visible || webView.loading || !mediaflow.webController.isWebClip)
+        if (!visible || webView.loading || !root.bridgeReady || !mediaflow.webController.isWebClip)
             return;
         const generation = ++root.syncGeneration;
         mediaflow.webTimelineController.setActiveFrame(root.playheadFrame);
@@ -59,6 +66,7 @@ Rectangle {
                         return false;
                     window.__mediaFlowSynchronizing = true;
                     try {
+                        window.__mediaFlowBinding = ${mediaflow.webController.browserBindingJson};
                         window.editableMedia.setState(${mediaflow.webController.stateJson});
                         window.editableMedia.setTime(${mediaflow.webTimelineController.timeMsForFrame(root.playheadFrame)});
                         if (typeof window.editableMedia.setEditCapabilities === "function")
@@ -68,18 +76,13 @@ Rectangle {
                     } finally {
                         window.__mediaFlowSynchronizing = false;
                     }
-                    return true;
+                    window.__mediaFlowBridge.synchronized(
+                        generation, ${mediaflow.webController.browserSnapshotScript});
+                }).catch(error => {
+                    window.__mediaFlowBridge.synchronizationFailed(generation, String(error));
                 });
             })()
-        `, function (applied) {
-            if (!applied || generation !== root.syncGeneration)
-                return;
-            root.installBridge();
-            webView.runJavaScript(mediaflow.webController.browserSnapshotScript, function (snapshot) {
-                if (snapshot && generation === root.syncGeneration)
-                    mediaflow.webController.applyBrowserSnapshot(String(snapshot));
-            });
-        });
+        `);
     }
 
     function synchronizeSelection(layerId) {
@@ -117,7 +120,17 @@ Rectangle {
             mediaflow.webController.commitBrowserState(String(payload || ""));
         }
         function browserBridgeReady() {
+            root.bridgeReady = true;
             mediaflow.webController.browserBridgeReady();
+            root.synchronize();
+        }
+        function synchronized(generation, snapshot) {
+            if (generation === root.syncGeneration && snapshot)
+                mediaflow.webController.applyBrowserSnapshot(String(snapshot));
+        }
+        function synchronizationFailed(generation, message) {
+            if (generation === root.syncGeneration)
+                mediaflow.webController.browserSynchronizationFailed(String(message));
         }
     }
 
@@ -141,14 +154,20 @@ Rectangle {
             1
         ))
         onLoadingChanged: function (request) {
+            if (request.status === WebEngineView.LoadStartedStatus) {
+                ++root.syncGeneration;
+                root.bridgeReady = false;
+                mediaflow.webController.beginBrowserPage();
+            }
             if (request.status === WebEngineView.LoadSucceededStatus)
-                root.synchronize();
+                root.installBridge();
         }
     }
 
     Connections {
         target: mediaflow.webController
         function onWebStateChanged() {
+            ++root.syncGeneration;
             Qt.callLater(root.synchronize);
         }
         function onBrowserSelectionRequested(layerId) {

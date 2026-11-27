@@ -22,6 +22,7 @@ class ExportQualityReport(DomainModel):
     passed: bool
     checks: list[ExportQualityCheck]
     proof_frames: list[str] = Field(default_factory=list)
+    subtitle_files: list[str] = Field(default_factory=list)
     sha256: str
     analyzed_at: int = Field(default_factory=now_ms)
 

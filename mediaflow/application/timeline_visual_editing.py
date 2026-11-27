@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, cast
 
+from mediaflow.application.keyframe_sequence_editing import (
+    move_timeline_keyframe,
+    paste_timeline_keyframes,
+    retime_timeline_keyframes,
+)
 from mediaflow.application.ports import TimelineEditorDocuments
 from mediaflow.domain.clip_transform_projection import project_clip_transform_keyframes
 from mediaflow.domain.enums import AssetKind, MaskShapeKind, VisualEffectKind
@@ -108,8 +113,7 @@ class TimelineVisualEditing:
             state.clips[index] = current.model_copy(
                 update={
                     "visual_effects": [
-                        updated if item.id == effect_id else item
-                        for item in current.visual_effects
+                        updated if item.id == effect_id else item for item in current.visual_effects
                     ]
                 }
             )
@@ -170,8 +174,7 @@ class TimelineVisualEditing:
             state.clips[index] = current.model_copy(
                 update={
                     "visual_effects": [
-                        updated if item.id == effect_id else item
-                        for item in current.visual_effects
+                        updated if item.id == effect_id else item for item in current.visual_effects
                     ]
                 }
             )
@@ -206,9 +209,7 @@ class TimelineVisualEditing:
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
             current = state.clips[index]
-            state.clips[index] = current.model_copy(
-                update={"masks": [*current.masks, mask]}
-            )
+            state.clips[index] = current.model_copy(update={"masks": [*current.masks, mask]})
 
         self.apply_change("添加蒙版", mutate)
         return self._mask(self._clip(clip_id), mask.id)
@@ -251,16 +252,11 @@ class TimelineVisualEditing:
         ordered = [item for item in ordered if item.id != mask_id]
         target = min(max(0, position), len(ordered))
         ordered.insert(target, moving)
-        reordered = [
-            item.model_copy(update={"position": index})
-            for index, item in enumerate(ordered)
-        ]
+        reordered = [item.model_copy(update={"position": index}) for index, item in enumerate(ordered)]
 
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
-            state.clips[index] = state.clips[index].model_copy(
-                update={"masks": reordered}
-            )
+            state.clips[index] = state.clips[index].model_copy(update={"masks": reordered})
 
         self.apply_change("调整蒙版顺序", mutate)
         return self._mask(self._clip(clip_id), mask_id)
@@ -269,10 +265,7 @@ class TimelineVisualEditing:
         clip = self._clip(clip_id)
         self._mask(clip, mask_id)
         remaining = [item for item in clip.masks if item.id != mask_id]
-        remaining = [
-            item.model_copy(update={"position": index})
-            for index, item in enumerate(remaining)
-        ]
+        remaining = [item.model_copy(update={"position": index}) for index, item in enumerate(remaining)]
 
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
@@ -281,11 +274,7 @@ class TimelineVisualEditing:
                 update={
                     "masks": remaining,
                     "visual_effects": [
-                        (
-                            effect.model_copy(update={"mask_id": None})
-                            if effect.mask_id == mask_id
-                            else effect
-                        )
+                        (effect.model_copy(update={"mask_id": None}) if effect.mask_id == mask_id else effect)
                         for effect in current.visual_effects
                     ],
                 }
@@ -306,9 +295,7 @@ class TimelineVisualEditing:
         self._require_clip_offset(clip, timeline_offset)
         mask = self._mask(clip, mask_id)
         keyframes = [
-            item
-            for item in project_mask_keyframes(clip, mask)
-            if item.timeline_offset != timeline_offset
+            item for item in project_mask_keyframes(clip, mask) if item.timeline_offset != timeline_offset
         ]
         keyframes.append(
             MaskKeyframe(
@@ -351,33 +338,16 @@ class TimelineVisualEditing:
         new_timeline_offset: int,
     ) -> ClipMask:
         clip = self._clip(clip_id)
-        self._require_clip_offset(clip, new_timeline_offset)
         mask = self._mask(clip, mask_id)
-        keyframes = list(project_mask_keyframes(clip, mask))
-        moving = next(
-            (item for item in keyframes if item.timeline_offset == old_timeline_offset),
-            None,
+        source = list(project_mask_keyframes(clip, mask))
+        updated = move_timeline_keyframe(
+            source,
+            old_timeline_offset,
+            new_timeline_offset,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            occupied_message="目标帧已经存在蒙版关键帧",
         )
-        if moving is None:
-            raise KeyError(old_timeline_offset)
-        if old_timeline_offset != new_timeline_offset and any(
-            item.timeline_offset == new_timeline_offset for item in keyframes
-        ):
-            raise ValueError("目标帧已经存在蒙版关键帧")
-        updated = [
-            (
-                moving.model_copy(update={"timeline_offset": new_timeline_offset})
-                if item.timeline_offset == old_timeline_offset
-                else item
-            )
-            for item in keyframes
-        ]
-        return self._replace_mask_keyframes(
-            clip_id,
-            mask,
-            sorted(updated, key=lambda item: item.timeline_offset or 0),
-            "移动蒙版关键帧",
-        )
+        return self._replace_mask_keyframes(clip_id, mask, updated, "移动蒙版关键帧")
 
     def retime_mask_keyframes(
         self,
@@ -388,35 +358,19 @@ class TimelineVisualEditing:
         anchor_offset: int,
         scale: float,
     ) -> ClipMask:
-        if scale <= 0:
-            raise ValueError("关键帧时间缩放必须大于零")
         clip = self._clip(clip_id)
         mask = self._mask(clip, mask_id)
-        keyframes = list(project_mask_keyframes(clip, mask))
-        selected = set(timeline_offsets)
-        if not selected:
-            raise ValueError("请至少选择一个蒙版关键帧")
-        available = {int(item.timeline_offset or 0) for item in keyframes}
-        missing = selected - available
-        if missing:
-            raise KeyError(min(missing))
-        retimed = []
-        for item in keyframes:
-            offset = int(item.timeline_offset or 0)
-            if offset in selected:
-                offset = round(anchor_offset + (offset - anchor_offset) * scale)
-                self._require_clip_offset(clip, offset)
-                item = item.model_copy(update={"timeline_offset": offset})
-            retimed.append(item)
-        offsets = [int(item.timeline_offset or 0) for item in retimed]
-        if len(offsets) != len(set(offsets)):
-            raise ValueError("时间缩放会让多个蒙版关键帧重叠")
-        return self._replace_mask_keyframes(
-            clip_id,
-            mask,
-            sorted(retimed, key=lambda item: item.timeline_offset or 0),
-            "缩放蒙版关键帧时间",
+        source = list(project_mask_keyframes(clip, mask))
+        updated = retime_timeline_keyframes(
+            source,
+            timeline_offsets,
+            anchor_offset=anchor_offset,
+            scale=scale,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            empty_message="请至少选择一个蒙版关键帧",
+            occupied_message="时间缩放会让多个蒙版关键帧重叠",
         )
+        return self._replace_mask_keyframes(clip_id, mask, updated, "缩放蒙版关键帧时间")
 
     def set_mask_keyframes(
         self,
@@ -426,10 +380,7 @@ class TimelineVisualEditing:
         *,
         expected_clip: Clip | None = None,
     ) -> ClipMask:
-        modes = {
-            "timeline" if item.timeline_offset is not None else "source"
-            for item in keyframes
-        }
+        modes = {"timeline" if item.timeline_offset is not None else "source" for item in keyframes}
         if len(modes) > 1:
             raise ValueError("蒙版关键帧不能混合源帧和时间线帧")
         clip = self._clip(clip_id)
@@ -456,9 +407,7 @@ class TimelineVisualEditing:
             state.clips[index] = current.model_copy(
                 update={
                     "masks": [
-                        item.model_copy(update={"keyframes": ordered})
-                        if item.id == mask_id
-                        else item
+                        item.model_copy(update={"keyframes": ordered}) if item.id == mask_id else item
                         for item in current.masks
                     ]
                 }
@@ -484,9 +433,7 @@ class TimelineVisualEditing:
             source="manual",
             curve=curve or KeyframeCurve(),
         )
-        keyframes = [
-            item for item in keyframes if item.timeline_offset != timeline_offset
-        ]
+        keyframes = [item for item in keyframes if item.timeline_offset != timeline_offset]
         keyframes.append(keyframe)
         return self._replace_transform_keyframes(
             clip_id,
@@ -497,9 +444,7 @@ class TimelineVisualEditing:
     def remove_transform_keyframe(self, clip_id: str, timeline_offset: int) -> Clip:
         clip = self._clip(clip_id)
         keyframes = list(project_clip_transform_keyframes(clip))
-        remaining = [
-            item for item in keyframes if item.timeline_offset != timeline_offset
-        ]
+        remaining = [item for item in keyframes if item.timeline_offset != timeline_offset]
         if len(remaining) == len(keyframes):
             raise KeyError(timeline_offset)
         return self._replace_transform_keyframes(
@@ -515,31 +460,15 @@ class TimelineVisualEditing:
         new_timeline_offset: int,
     ) -> Clip:
         clip = self._clip(clip_id)
-        self._require_clip_offset(clip, new_timeline_offset)
-        keyframes = list(project_clip_transform_keyframes(clip))
-        moving = next(
-            (item for item in keyframes if item.timeline_offset == old_timeline_offset),
-            None,
+        source = list(project_clip_transform_keyframes(clip))
+        updated = move_timeline_keyframe(
+            source,
+            old_timeline_offset,
+            new_timeline_offset,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            occupied_message="目标帧已经存在画面关键帧",
         )
-        if moving is None:
-            raise KeyError(old_timeline_offset)
-        if old_timeline_offset != new_timeline_offset and any(
-            item.timeline_offset == new_timeline_offset for item in keyframes
-        ):
-            raise ValueError("目标帧已经存在画面关键帧")
-        updated = [
-            (
-                moving.model_copy(update={"timeline_offset": new_timeline_offset})
-                if item.timeline_offset == old_timeline_offset
-                else item
-            )
-            for item in keyframes
-        ]
-        return self._replace_transform_keyframes(
-            clip_id,
-            sorted(updated, key=lambda item: item.timeline_offset or 0),
-            "移动画面关键帧",
-        )
+        return self._replace_transform_keyframes(clip_id, updated, "移动画面关键帧")
 
     def retime_transform_keyframes(
         self,
@@ -549,33 +478,18 @@ class TimelineVisualEditing:
         anchor_offset: int,
         scale: float,
     ) -> Clip:
-        if scale <= 0:
-            raise ValueError("关键帧时间缩放必须大于零")
         clip = self._clip(clip_id)
-        selected = set(timeline_offsets)
-        if not selected:
-            raise ValueError("请至少选择一个画面关键帧")
-        keyframes = list(project_clip_transform_keyframes(clip))
-        available = {int(item.timeline_offset or 0) for item in keyframes}
-        missing = selected - available
-        if missing:
-            raise KeyError(min(missing))
-        retimed = []
-        for item in keyframes:
-            offset = int(item.timeline_offset or 0)
-            if offset in selected:
-                offset = round(anchor_offset + (offset - anchor_offset) * scale)
-                self._require_clip_offset(clip, offset)
-                item = item.model_copy(update={"timeline_offset": offset})
-            retimed.append(item)
-        offsets = [int(item.timeline_offset or 0) for item in retimed]
-        if len(offsets) != len(set(offsets)):
-            raise ValueError("时间缩放会让多个画面关键帧重叠")
-        return self._replace_transform_keyframes(
-            clip_id,
-            sorted(retimed, key=lambda item: item.timeline_offset or 0),
-            "缩放画面关键帧时间",
+        source = list(project_clip_transform_keyframes(clip))
+        updated = retime_timeline_keyframes(
+            source,
+            timeline_offsets,
+            anchor_offset=anchor_offset,
+            scale=scale,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            empty_message="请至少选择一个画面关键帧",
+            occupied_message="时间缩放会让多个画面关键帧重叠",
         )
+        return self._replace_transform_keyframes(clip_id, updated, "缩放画面关键帧时间")
 
     def upsert_effect_parameter_keyframe(
         self,
@@ -592,9 +506,7 @@ class TimelineVisualEditing:
         effect = self._effect(clip, effect_id)
         keyframes = dict(effect.parameter_keyframes)
         field_keyframes = [
-            item
-            for item in keyframes.get(field_id, [])
-            if item.timeline_offset != timeline_offset
+            item for item in keyframes.get(field_id, []) if item.timeline_offset != timeline_offset
         ]
         field_keyframes.append(
             VisualEffectParameterKeyframe(
@@ -654,9 +566,7 @@ class TimelineVisualEditing:
         effect = self._effect(clip, effect_id)
         keyframes = dict(effect.parameter_keyframes)
         source = keyframes.get(field_id, [])
-        remaining = [
-            item for item in source if item.timeline_offset != timeline_offset
-        ]
+        remaining = [item for item in source if item.timeline_offset != timeline_offset]
         if len(remaining) == len(source):
             raise KeyError(timeline_offset)
         if remaining:
@@ -679,37 +589,18 @@ class TimelineVisualEditing:
         new_timeline_offset: int,
     ) -> ClipVisualEffect:
         clip = self._clip(clip_id)
-        self._require_clip_offset(clip, new_timeline_offset)
         effect = self._effect(clip, effect_id)
         keyframes = dict(effect.parameter_keyframes)
-        source = keyframes.get(field_id, [])
-        moving = next(
-            (item for item in source if item.timeline_offset == old_timeline_offset),
-            None,
+        source = effect.parameter_keyframes.get(field_id, [])
+        updated = move_timeline_keyframe(
+            source,
+            old_timeline_offset,
+            new_timeline_offset,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            occupied_message="目标帧已经存在视觉效果关键帧",
         )
-        if moving is None:
-            raise KeyError(old_timeline_offset)
-        if old_timeline_offset != new_timeline_offset and any(
-            item.timeline_offset == new_timeline_offset for item in source
-        ):
-            raise ValueError("目标帧已经存在视觉效果关键帧")
-        keyframes[field_id] = sorted(
-            [
-                (
-                    moving.model_copy(update={"timeline_offset": new_timeline_offset})
-                    if item.timeline_offset == old_timeline_offset
-                    else item
-                )
-                for item in source
-            ],
-            key=lambda item: item.timeline_offset,
-        )
-        return self._replace_effect_keyframes(
-            clip_id,
-            effect,
-            keyframes,
-            "移动视觉效果关键帧",
-        )
+        keyframes[field_id] = updated
+        return self._replace_effect_keyframes(clip_id, effect, keyframes, "移动视觉效果关键帧")
 
     def retime_effect_parameter_keyframes(
         self,
@@ -721,40 +612,21 @@ class TimelineVisualEditing:
         anchor_offset: int,
         scale: float,
     ) -> ClipVisualEffect:
-        if scale <= 0:
-            raise ValueError("关键帧时间缩放必须大于零")
         clip = self._clip(clip_id)
         effect = self._effect(clip, effect_id)
         keyframes = dict(effect.parameter_keyframes)
-        source = keyframes.get(field_id, [])
-        selected = set(timeline_offsets)
-        if not selected:
-            raise ValueError("请至少选择一个视觉效果关键帧")
-        available = {item.timeline_offset for item in source}
-        missing = selected - available
-        if missing:
-            raise KeyError(min(missing))
-        retimed = []
-        for item in source:
-            offset = item.timeline_offset
-            if offset in selected:
-                offset = round(anchor_offset + (offset - anchor_offset) * scale)
-                self._require_clip_offset(clip, offset)
-                item = item.model_copy(update={"timeline_offset": offset})
-            retimed.append(item)
-        offsets = [item.timeline_offset for item in retimed]
-        if len(offsets) != len(set(offsets)):
-            raise ValueError("时间缩放会让多个视觉效果关键帧重叠")
-        keyframes[field_id] = sorted(
-            retimed,
-            key=lambda item: item.timeline_offset,
+        source = effect.parameter_keyframes.get(field_id, [])
+        updated = retime_timeline_keyframes(
+            source,
+            timeline_offsets,
+            anchor_offset=anchor_offset,
+            scale=scale,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            empty_message="请至少选择一个视觉效果关键帧",
+            occupied_message="时间缩放会让多个视觉效果关键帧重叠",
         )
-        return self._replace_effect_keyframes(
-            clip_id,
-            effect,
-            keyframes,
-            "缩放视觉效果关键帧时间",
-        )
+        keyframes[field_id] = updated
+        return self._replace_effect_keyframes(clip_id, effect, keyframes, "缩放视觉效果关键帧时间")
 
     def set_transform_keyframes(
         self,
@@ -763,10 +635,7 @@ class TimelineVisualEditing:
         *,
         expected_clip: Clip | None = None,
     ) -> Clip:
-        modes = {
-            "timeline" if item.timeline_offset is not None else "source"
-            for item in keyframes
-        }
+        modes = {"timeline" if item.timeline_offset is not None else "source" for item in keyframes}
         if len(modes) > 1:
             raise ValueError("画面关键帧不能混合源帧和时间线帧")
         if modes == {"timeline"}:
@@ -788,12 +657,62 @@ class TimelineVisualEditing:
             index = self._clip_index(state, clip_id)
             if expected_clip is not None and state.clips[index] != expected_clip:
                 raise TimelineMergeConflict("clip", clip_id)
-            state.clips[index] = state.clips[index].model_copy(
-                update={"transform_keyframes": ordered}
-            )
+            state.clips[index] = state.clips[index].model_copy(update={"transform_keyframes": ordered})
 
         self.apply_change(label, mutate)
         return self._clip(clip_id)
+
+    def paste_transform_keyframes(
+        self,
+        clip_id: str,
+        keyframes: list[ClipTransformKeyframe],
+        *,
+        timeline_frame: int,
+        scale: float,
+    ) -> Clip:
+        clip = self._clip(clip_id)
+        updated = paste_timeline_keyframes(
+            project_clip_transform_keyframes(clip),
+            keyframes,
+            destination_offset=timeline_frame - clip.timeline_start,
+            scale=scale,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            prepare=lambda item, offset: item.model_copy(
+                update={
+                    "timeline_offset": offset,
+                    "source_frame": None,
+                    "source": "manual",
+                }
+            ),
+        )
+        return self._replace_transform_keyframes(clip_id, updated, "粘贴画面关键帧")
+
+    def paste_effect_parameter_keyframes(
+        self,
+        clip_id: str,
+        effect_id: str,
+        field_id: str,
+        keyframes: list[VisualEffectParameterKeyframe],
+        *,
+        timeline_frame: int,
+        scale: float,
+    ) -> ClipVisualEffect:
+        clip = self._clip(clip_id)
+        effect = self._effect(clip, effect_id)
+        updated = paste_timeline_keyframes(
+            effect.parameter_keyframes.get(field_id, []),
+            keyframes,
+            destination_offset=timeline_frame - clip.timeline_start,
+            scale=scale,
+            validate_offset=lambda offset: self._require_clip_offset(clip, offset),
+            prepare=lambda item, offset: item.model_copy(update={"timeline_offset": offset}),
+        )
+        return self._replace_effect_keyframes(
+            clip_id,
+            effect,
+            {**effect.parameter_keyframes, field_id: updated},
+            "粘贴视觉效果关键帧",
+        )
 
     def _replace_transform_keyframes(
         self,
@@ -803,9 +722,7 @@ class TimelineVisualEditing:
     ) -> Clip:
         def mutate(state: TimelineState) -> None:
             index = self._clip_index(state, clip_id)
-            state.clips[index] = state.clips[index].model_copy(
-                update={"transform_keyframes": keyframes}
-            )
+            state.clips[index] = state.clips[index].model_copy(update={"transform_keyframes": keyframes})
 
         self.apply_change(label, mutate)
         return self._clip(clip_id)
@@ -830,8 +747,7 @@ class TimelineVisualEditing:
             state.clips[index] = clip.model_copy(
                 update={
                     "visual_effects": [
-                        updated if item.id == effect.id else item
-                        for item in clip.visual_effects
+                        updated if item.id == effect.id else item for item in clip.visual_effects
                     ]
                 }
             )
@@ -862,9 +778,7 @@ class TimelineVisualEditing:
             index = self._clip_index(state, clip_id)
             clip = state.clips[index]
             state.clips[index] = clip.model_copy(
-                update={
-                    "masks": [mask if item.id == mask.id else item for item in clip.masks]
-                }
+                update={"masks": [mask if item.id == mask.id else item for item in clip.masks]}
             )
 
         self.apply_change(label, mutate)
@@ -888,6 +802,7 @@ class TimelineVisualEditing:
     def _require_clip_offset(clip: Clip, timeline_offset: int) -> None:
         if not 0 <= timeline_offset < clip.duration:
             raise ValueError("关键帧必须位于片段范围内")
+
     def _clip(self, clip_id: str) -> Clip:
         try:
             return next(item for item in self.snapshot().clips if item.id == clip_id)

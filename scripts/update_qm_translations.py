@@ -9,6 +9,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TRANSLATIONS: dict[str, tuple[str, str]] = {
+    "创建项目归档": ("Create project archive", "プロジェクトアーカイブを作成"),
+    "归集项目素材": ("Collect project media", "プロジェクト素材を収集"),
     "下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明": (
         "Download components updated. Restart the background service to apply them; see YouTube downloads in README for instructions.",
         "ダウンロードコンポーネントを更新しました。バックグラウンドサービスの再起動後に有効になります。手順は README の YouTube ダウンロードの説明をご覧ください。",
@@ -3368,6 +3370,26 @@ TRANSLATIONS.update(
         "音频波形": ("Audio waveform", "音声波形"),
     }
 )
+
+
+TRANSLATIONS.update({
+    "待处理": ("Open", "未対応"),
+    "已解决": ("Resolved", "解決済み"),
+    "已归档": ("Archived", "アーカイブ済み"),
+    "全部": ("All", "すべて"),
+    "普通": ("Normal", "通常"),
+    "低": ("Low", "低"),
+    "高": ("High", "高"),
+    "阻断交付": ("Blocks delivery", "納品をブロック"),
+    "正在归集项目素材": ("Collecting project media", "プロジェクト素材を収集中"),
+    "正在创建可迁移项目归档": ("Creating portable project archive", "移行用プロジェクトアーカイブを作成中"),
+    "正在导出 FCPXML": ("Exporting FCPXML", "FCPXML を書き出し中"),
+    "正在准备预览…": ("Preparing preview…", "プレビューを準備中…"),
+    "预览准备失败": ("Preview preparation failed", "プレビューの準備に失敗しました"),
+    "预览准备已取消": ("Preview preparation cancelled", "プレビューの準備をキャンセルしました"),
+    "预览准备已暂停": ("Preview preparation paused", "プレビューの準備を一時停止中"),
+    "重试预览": ("Retry preview", "プレビューを再試行"),
+})
 
 
 def normalize(value: str) -> str:

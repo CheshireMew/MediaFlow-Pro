@@ -481,7 +481,10 @@ def test_short_sequence_clock_is_shared_by_mlt_and_fcpxml(tmp_path: Path) -> Non
 
 def test_fcpxml_long_destination_uses_a_short_atomic_sibling(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from mediaflow.infrastructure import output_reservation
+
     source = tmp_path / "long-handoff-source.mp4"
     source.write_bytes(b"long-handoff-source")
     with ProjectRepository.create(
@@ -515,24 +518,34 @@ def test_fcpxml_long_destination_uses_a_short_atomic_sibling(
             duration=30,
         )
 
-        parent = tmp_path
         filename = f"{'feature-handoff-' * 6}timeline.fcpxml"
-        while len(str(parent / filename)) < 240:
-            parent /= "deep-user-export-folder"
+        path_units = WINDOWS_INTEROP_PATH_UTF16_LIMIT + 24
+        padding = path_units - utf16_units(str(tmp_path)) - utf16_units(filename) - 2
+        assert padding > 0
+        parent = tmp_path / ("d" * padding)
         parent.mkdir(parents=True)
         destination = (parent / filename).resolve()
-        output = FcpxmlExportService(repository, RuntimeContext.discover().paths).export(
-            editor.state,
-            destination,
-        )
+        assert utf16_units(str(destination)) == path_units
+        exporter = FcpxmlExportService(repository, RuntimeContext.discover().paths)
+        output = exporter.export(editor.state, destination)
 
         assert output == destination
         assert ET.parse(python_io_path(output)).getroot().attrib["version"] == "1.11"
-        assert not [
-            item
-            for item in parent.iterdir()
-            if item.is_file() and item.name.startswith(".mf-")
-        ]
+        previous = python_io_path(output).read_bytes()
+        original_publish = output_reservation.publish_python_output
+
+        def interrupt_publish(source: str | Path, target: str | Path) -> None:
+            if Path(source).name.startswith(".mf-fcpxml-") and Path(target) == destination:
+                raise OSError("long FCPXML publication interrupted")
+            original_publish(source, target)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(output_reservation, "publish_python_output", interrupt_publish)
+            with pytest.raises(OSError, match="long FCPXML publication interrupted"):
+                exporter.export(editor.state, destination, overwrite=True)
+        assert python_io_path(output).read_bytes() == previous
+        assert exporter.export(editor.state, destination, overwrite=True) == destination
+        assert not [item for item in parent.iterdir() if item.is_file() and item.name.startswith(".mf-")]
 
 
 def test_fcpxml_preserves_linked_mute_detached_components_and_adjustments(

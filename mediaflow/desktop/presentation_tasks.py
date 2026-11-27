@@ -8,15 +8,22 @@ from mediaflow.domain.task_commands import (
     AnalyzeLoudnessCommand,
     AnalyzeScenesCommand,
     AnalyzeSequenceBoundsCommand,
+    ArchiveProjectCommand,
+    BuildSequenceCommand,
+    CollectProjectAssetsCommand,
     CommitDubbingCommand,
     DiagnosticsBundleCommand,
     DownloadMediaCommand,
+    ExportFcpxmlCommand,
     ExportHighlightsCommand,
     ExportSequenceCommand,
+    ExportWebClipCommand,
     GenerateProxyCommand,
     GenerateWaveformCommand,
     ImportAssetCommand,
+    ImportWebPackageCommand,
     PrepareDubbingCommand,
+    PrepareWebSequenceCommand,
     RenderWebClipCommand,
     SynthesizeDubbingCommand,
     TrackMaskCommand,
@@ -30,9 +37,14 @@ from mediaflow.domain.tasks import ExportTaskOutcome, Task
 
 def task_title(task: Task) -> str:
     command = task.command
-    if isinstance(command, ImportAssetCommand):
+    if isinstance(command, (ImportAssetCommand, ImportWebPackageCommand)):
         template = QCoreApplication.translate("TaskCatalog", "导入素材 %1")
-        return template.replace("%1", command.source_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+        source = command.source_path if isinstance(command, ImportAssetCommand) else command.source
+        return template.replace("%1", source.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+    if isinstance(command, CollectProjectAssetsCommand):
+        return QCoreApplication.translate("TaskCatalog", "归集项目素材")
+    if isinstance(command, ArchiveProjectCommand):
+        return QCoreApplication.translate("TaskCatalog", "创建项目归档")
     if isinstance(command, GenerateProxyCommand):
         return QCoreApplication.translate("TaskCatalog", "准备流畅预览")
     if isinstance(command, GenerateWaveformCommand):
@@ -42,12 +54,20 @@ def task_title(task: Task) -> str:
         return template.replace("%1", f"{command.request.entry.index:03d}").replace(
             "%2", command.request.entry.title
         )
-    if isinstance(command, ExportSequenceCommand):
+    if isinstance(command, (ExportSequenceCommand, BuildSequenceCommand, ExportFcpxmlCommand)):
         template = QCoreApplication.translate("TaskCatalog", "导出 %1")
-        return template.replace("%1", command.format.value.upper())
+        return template.replace(
+            "%1",
+            command.format.value.upper()
+            if isinstance(command, (ExportSequenceCommand, BuildSequenceCommand))
+            else "FCPXML",
+        )
+    if isinstance(command, ExportWebClipCommand):
+        template = QCoreApplication.translate("TaskCatalog", "导出 %1")
+        return template.replace("%1", command.format.upper())
     if isinstance(command, ExportHighlightsCommand):
         return QCoreApplication.translate("TaskCatalog", "批量导出短视频")
-    if isinstance(command, RenderWebClipCommand):
+    if isinstance(command, (RenderWebClipCommand, PrepareWebSequenceCommand)):
         return QCoreApplication.translate("TaskCatalog", "渲染网页片段")
     if isinstance(command, TranscribeSequenceCommand):
         return QCoreApplication.translate("TaskCatalog", "转录当前时间轴")
@@ -220,15 +240,9 @@ def task_message_label(code: str) -> str:
         "subject_tracking_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在准备画面分析"),
         "subject_tracking_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在跟踪画面主体"),
         "subject_tracking_saving": QCoreApplication.translate("TaskMessageCatalog", "正在保存画面跟踪结果"),
-        "mask_tracking_preparing": QCoreApplication.translate(
-            "TaskMessageCatalog", "正在准备蒙版跟踪"
-        ),
-        "mask_tracking_analyzing": QCoreApplication.translate(
-            "TaskMessageCatalog", "正在跟踪蒙版区域"
-        ),
-        "mask_tracking_saving": QCoreApplication.translate(
-            "TaskMessageCatalog", "正在保存蒙版跟踪结果"
-        ),
+        "mask_tracking_preparing": QCoreApplication.translate("TaskMessageCatalog", "正在准备蒙版跟踪"),
+        "mask_tracking_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在跟踪蒙版区域"),
+        "mask_tracking_saving": QCoreApplication.translate("TaskMessageCatalog", "正在保存蒙版跟踪结果"),
         "clip_export_items": QCoreApplication.translate("TaskMessageCatalog", "正在导出短视频"),
         "download_analyzing": QCoreApplication.translate("TaskMessageCatalog", "正在分析下载链接"),
         "download_analysis_saving": QCoreApplication.translate("TaskMessageCatalog", "正在保存下载分析结果"),

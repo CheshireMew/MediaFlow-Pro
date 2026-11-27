@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING
-
-from mediaflow.application.ports import TimelineEditorDocuments
+from mediaflow.application.project_storage_ports import (
+    AudioDocuments,
+)
 from mediaflow.application.timeline_change_session import TimelineChangeSession
+from mediaflow.application.timeline_entities import (
+    track_by_id,
+)
 from mediaflow.application.timeline_rules import TimelineRules
 from mediaflow.domain.enums import TrackKind
 from mediaflow.domain.exports import SubtitleStyle
@@ -13,23 +15,10 @@ from mediaflow.domain.timeline import TimelineState, Track
 
 
 class TimelineTrackEditing:
-    repository: TimelineEditorDocuments
-    sequence_id: str
-    _changes: TimelineChangeSession
+    def __init__(self, changes: TimelineChangeSession, audio: AudioDocuments) -> None:
+        self._changes = changes
+        self.audio = audio
 
-    if TYPE_CHECKING:
-        @property
-        def state(self) -> TimelineState: ...
-
-        def _commit(
-            self,
-            label: str,
-            mutate: Callable[[TimelineState], None],
-            *,
-            allow_locked_changes: bool = False,
-        ) -> None: ...
-
-        def _track(self, track_id: str) -> Track: ...
     def add_track(
         self,
         kind: TrackKind,
@@ -43,7 +32,7 @@ class TimelineTrackEditing:
             raise ValueError("Track position is outside the timeline")
         count = sum(track.kind == kind for track in self._changes.current.tracks) + 1
         track = Track(
-            sequence_id=self.sequence_id,
+            sequence_id=self._changes.sequence_id,
             name=name or f"{TimelineRules.track_label(kind)} {count}",
             kind=kind,
             position=insert_position,
@@ -54,7 +43,7 @@ class TimelineTrackEditing:
             state.tracks.insert(insert_position, track)
             TimelineRules.renumber_tracks(state)
 
-        self._commit("添加轨道", mutate)
+        self._changes.commit_change("添加轨道", mutate)
         return track
 
     def set_track_state(
@@ -67,11 +56,11 @@ class TimelineTrackEditing:
         solo: bool,
         audio_bus_id: str | None = None,
     ) -> Track:
-        source = self._track(track_id)
+        source = track_by_id(self._changes.current, track_id)
         if source.kind == TrackKind.SUBTITLE and audio_bus_id is not None:
             raise ValueError("Subtitle tracks cannot route to an audio bus")
         if audio_bus_id is not None:
-            buses = {bus.id for bus in self.repository.audio.list_audio_buses(self.sequence_id)}
+            buses = {bus.id for bus in self.audio.list_audio_buses(self._changes.sequence_id)}
             if audio_bus_id not in buses:
                 raise ValueError("Track audio bus does not belong to this sequence")
 
@@ -87,15 +76,15 @@ class TimelineTrackEditing:
                 }
             )
 
-        self._commit("调整轨道", mutate)
-        return self._track(track_id)
+        self._changes.commit_change("调整轨道", mutate)
+        return track_by_id(self._changes.current, track_id)
 
     def set_subtitle_track_style(
         self,
         track_id: str,
         style: SubtitleStyle,
     ) -> Track:
-        source = self._track(track_id)
+        source = track_by_id(self._changes.current, track_id)
         if source.kind != TrackKind.SUBTITLE:
             raise ValueError("Subtitle styles can only be assigned to subtitle tracks")
 
@@ -105,11 +94,11 @@ class TimelineTrackEditing:
                 for track in state.tracks
             ]
 
-        self._commit("调整字幕轨样式", mutate)
-        return self._track(track_id)
+        self._changes.commit_change("调整字幕轨样式", mutate)
+        return track_by_id(self._changes.current, track_id)
 
     def set_primary_dialogue_track(self, track_id: str) -> Track:
-        source = self._track(track_id)
+        source = track_by_id(self._changes.current, track_id)
         if source.kind != TrackKind.AUDIO:
             raise ValueError("主要对白只能指定到音频轨")
 
@@ -121,8 +110,8 @@ class TimelineTrackEditing:
                 for track in state.tracks
             ]
 
-        self._commit("指定主要对白轨", mutate)
-        return self._track(track_id)
+        self._changes.commit_change("指定主要对白轨", mutate)
+        return track_by_id(self._changes.current, track_id)
 
     def move_track(self, track_id: str, position: int) -> Track:
         if not 0 <= position < len(self._changes.current.tracks):
@@ -136,8 +125,8 @@ class TimelineTrackEditing:
                 item.model_copy(update={"position": index}) for index, item in enumerate(state.tracks)
             ]
 
-        self._commit("排序轨道", mutate)
-        return self._track(track_id)
+        self._changes.commit_change("排序轨道", mutate)
+        return track_by_id(self._changes.current, track_id)
 
     def set_sequence_profile(self, profile: ProjectProfile) -> TimelineState:
         return self._changes.set_sequence_profile(profile)
@@ -154,12 +143,48 @@ class TimelineTrackEditing:
         def mutate(state: TimelineState) -> None:
             state.sequence = state.sequence.model_copy(update={"in_out": bounds})
 
-        self._commit("设置序列入出点", mutate, allow_locked_changes=True)
-        return self.state
+        self._changes.commit_change("设置序列入出点", mutate, allow_locked_changes=True)
+        return self._changes.snapshot
 
     def clear_sequence_in_out(self) -> TimelineState:
         def mutate(state: TimelineState) -> None:
             state.sequence = state.sequence.model_copy(update={"in_out": None})
 
-        self._commit("清除序列入出点", mutate, allow_locked_changes=True)
-        return self.state
+        self._changes.commit_change("清除序列入出点", mutate, allow_locked_changes=True)
+        return self._changes.snapshot
+
+
+def insert_audio_track_after(state: TimelineState, video_track: Track) -> Track:
+    count = sum(track.kind == TrackKind.AUDIO for track in state.tracks) + 1
+    video_index = next(index for index, track in enumerate(state.tracks) if track.id == video_track.id)
+    audio_track = Track(
+        sequence_id=state.sequence.id,
+        name=f"{TimelineRules.track_label(TrackKind.AUDIO)} {count}",
+        kind=TrackKind.AUDIO,
+        position=video_index + 1,
+        audio_bus_id=video_track.audio_bus_id,
+    )
+    state.tracks.insert(video_index + 1, audio_track)
+    TimelineRules.renumber_tracks(state)
+    return audio_track
+
+
+def ensure_linked_audio_track(state: TimelineState, video_track_id: str) -> Track:
+    video_index = next(index for index, track in enumerate(state.tracks) if track.id == video_track_id)
+    video_track = state.tracks[video_index]
+    linked = next(
+        (
+            track
+            for track in state.tracks
+            if track.id == video_track.linked_audio_track_id and track.kind == TrackKind.AUDIO
+        ),
+        None,
+    )
+    if linked is not None:
+        return linked
+    linked = insert_audio_track_after(state, video_track)
+    video_index = next(index for index, track in enumerate(state.tracks) if track.id == video_track_id)
+    state.tracks[video_index] = state.tracks[video_index].model_copy(
+        update={"linked_audio_track_id": linked.id}
+    )
+    return linked

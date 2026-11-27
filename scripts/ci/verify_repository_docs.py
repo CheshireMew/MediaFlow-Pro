@@ -111,9 +111,9 @@ def verify_readme_fact_parity() -> list[str]:
         "scripts\\update_documentation_screenshots.py",
     )
     localized_facts = {
-        "README.md": ("多级二进制波形", "标签触发的完整质量门"),
-        "README.en.md": ("multilevel binary waveforms", "tag-triggered full quality gate"),
-        "README.ja.md": ("多段バイナリ波形", "タグ起動の完全品質ゲート"),
+        "README.md": ("多级二进制波形", "完整验收不是发布前置条件"),
+        "README.en.md": ("multilevel binary waveforms", "Full acceptance is not a release prerequisite"),
+        "README.ja.md": ("多段バイナリ波形", "完全検証はリリースの前提条件ではありません"),
     }
     for relative, localized in localized_facts.items():
         document = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")

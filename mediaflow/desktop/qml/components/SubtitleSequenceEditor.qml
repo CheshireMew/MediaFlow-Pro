@@ -94,7 +94,7 @@ ColumnLayout {
                 collaborationPath: "/subtitles/placements/" + mediaflow.subtitleViewController.selectedSubtitlePlacementId + "/text"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                text: mediaflow.subtitleViewController.selectedSubtitlePlacementData.text || ""
+                sourceText: mediaflow.subtitleViewController.selectedSubtitlePlacementData.text || ""
                 wrapMode: TextEdit.Wrap
                 readOnly: !editor.canEdit
             }

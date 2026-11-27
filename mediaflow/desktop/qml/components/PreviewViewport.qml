@@ -13,6 +13,10 @@ Rectangle {
     clip: true
 
     property string source: ""
+    property string preparationState: "empty"
+    property string preparationError: ""
+    signal retryRequested()
+    signal tasksRequested()
     property string runtimeRoot: ""
     property string mltLibrary: ""
     property string mltRepository: ""
@@ -383,15 +387,40 @@ Rectangle {
             profileHeight: root.profileHeight
         }
 
-        Text {
+        Column {
             anchors.centerIn: parent
             visible: root.source.length === 0 || preview.errorString.length > 0
-            text: preview.errorString.length > 0 ? qsTr("预览不可用：") + preview.errorString : qsTr("把素材添加到时间线开始创作")
-            color: Theme.textMuted
-            font.pixelSize: Theme.fontSizeBodyLarge
-            wrapMode: Text.WordWrap
-            horizontalAlignment: Text.AlignHCenter
+                || ["preparing", "failed", "cancelled", "paused"].indexOf(root.preparationState) >= 0
             width: Math.min(parent.width - 40, 520)
+            spacing: 10
+            Text {
+                objectName: "previewStateMessage"
+                width: parent.width
+                text: preview.errorString.length > 0 ? qsTr("预览不可用：") + preview.errorString
+                    : root.preparationState === "preparing" ? qsTr("正在准备预览…")
+                    : root.preparationState === "failed" ? qsTr("预览准备失败")
+                        + (root.preparationError.length ? "：" + root.preparationError : "")
+                    : root.preparationState === "cancelled" ? qsTr("预览准备已取消")
+                    : root.preparationState === "paused" ? qsTr("预览准备已暂停")
+                    : qsTr("把素材添加到时间线开始创作")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSizeBodyLarge
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+            AppButton {
+                objectName: "retryPreviewButton"
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: root.preparationState === "failed" || root.preparationState === "cancelled"
+                text: qsTr("重试预览")
+                onClicked: root.retryRequested()
+            }
+            AppButton {
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: root.preparationState === "paused" || root.preparationState === "failed"
+                text: qsTr("任务中心")
+                onClicked: root.tasksRequested()
+            }
         }
 
         Rectangle {

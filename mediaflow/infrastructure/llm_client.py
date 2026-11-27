@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from json_repair import loads as repair_json
-from openai import OpenAI
-
 from mediaflow.domain.settings import LlmProviderSettings
 
 
@@ -15,6 +12,8 @@ class OpenAIJsonClient:
             raise ValueError("LLM provider is disabled")
         if not provider.api_key:
             raise ValueError("LLM provider API key is missing")
+        from openai import OpenAI
+
         self.provider = provider
         self.client = OpenAI(api_key=provider.api_key, base_url=provider.base_url, timeout=20.0)
 
@@ -24,6 +23,8 @@ class OpenAIJsonClient:
             raise RuntimeError("LLM provider returned an invalid model list")
 
     def complete_json(self, *, system: str, payload: dict[str, Any]) -> dict[str, Any]:
+        from json_repair import loads as repair_json
+
         response = self.client.chat.completions.create(
             model=self.provider.model,
             temperature=0,

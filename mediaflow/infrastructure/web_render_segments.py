@@ -169,37 +169,39 @@ class WebRenderSegments:
         progress,
         check_cancelled,
     ) -> bool:
-        self.lifecycle.reserve(segment, label="MediaFlow editable web segment cache")
-        segment.path.parent.mkdir(parents=True, exist_ok=True)
-        lock = self.lifecycle.acquire_lock(
-            segment.path.with_name(f"{segment.path.name}.lock"),
-            segment,
-            segment_plan,
-            check_cancelled=check_cancelled,
-        )
-        if lock is None:
-            return True
-        try:
-            if self.lifecycle.cache_is_ready(segment, segment_plan):
-                return True
-            self.renderer.render(
-                entry,
-                spec,
-                clip_state,
-                state,
+        with self.lifecycle.reserve(
+            segment, label="MediaFlow editable web segment cache", check_cancelled=check_cancelled,
+        ):
+            segment.path.parent.mkdir(parents=True, exist_ok=True)
+            lock = self.lifecycle.acquire_lock(
+                segment.path.with_name(f"{segment.path.name}.lock"),
                 segment,
                 segment_plan,
-                progress=self._progress_adapter(
-                    progress,
-                    start_frame=start_frame,
-                    total_frames=target.frame_count,
-                ),
                 check_cancelled=check_cancelled,
-                capture_start_frame=start_frame,
             )
-            return False
-        finally:
-            lock.release()
+            if lock is None:
+                return True
+            try:
+                if self.lifecycle.cache_is_ready(segment, segment_plan):
+                    return True
+                self.renderer.render(
+                    entry,
+                    spec,
+                    clip_state,
+                    state,
+                    segment,
+                    segment_plan,
+                    progress=self._progress_adapter(
+                        progress,
+                        start_frame=start_frame,
+                        total_frames=target.frame_count,
+                    ),
+                    check_cancelled=check_cancelled,
+                    capture_start_frame=start_frame,
+                )
+                return False
+            finally:
+                lock.release()
 
     @staticmethod
     def _progress_adapter(progress, *, start_frame: int, total_frames: int):

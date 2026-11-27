@@ -7,7 +7,7 @@ import struct
 import threading
 import time
 import wave
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -33,6 +33,7 @@ from mediaflow.infrastructure.project_operation_repository import (
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
+from mediaflow.operation_cancellation import OperationCancelled
 from mediaflow.service.client import (
     EditorServiceClient,
     EditorServiceRpcError,
@@ -76,6 +77,33 @@ def _request(
         "actor": {"kind": "agent", "id": "service-test", "name": "Service Test"},
         "client_id": "pytest-service-client",
     }
+
+
+async def test_cancelled_presentation_rpc_preserves_cancellation_without_an_unexpected_error_log(
+    tmp_path: Path, monkeypatch, caplog,
+) -> None:
+    server = EditorServiceServer(paths=_paths(tmp_path / "service"))
+    discovery = await server.start()
+    monkeypatch.setenv("MEDIAFLOW_SERVICE_STATE_DIR", str(tmp_path / "service"))
+    original_dispatch = server._dispatch
+
+    def superseded():
+        raise OperationCancelled("Presentation request was superseded")
+
+    async def cancelled(method, params):
+        if method == "desktop.application.call":
+            return await server._execution.run("preview", superseded)
+        return await original_dispatch(method, params)
+
+    monkeypatch.setattr(server, "_dispatch", cancelled)
+    try:
+        with pytest.raises(CancelledError, match="superseded"):
+            await EditorServiceClient(discovery).call("desktop.application.call")
+        with pytest.raises(CancelledError, match="superseded"):
+            await asyncio.to_thread(call_sync, "desktop.application.call")
+        assert not any("RPC" in record.message and "failed" in record.message for record in caplog.records)
+    finally:
+        await server.stop()
 
 
 def test_editor_service_deadlines_cover_loaded_windows_runtime_and_stay_bounded() -> None:
@@ -186,6 +214,7 @@ def test_sync_shutdown_waits_until_the_resident_service_process_exits(
 def test_service_discovery_does_not_treat_a_zombie_as_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(service_discovery_module.sys, "platform", "linux")
     started_at = time.time() - 1
     discovery = ServiceDiscovery(
         pid=1234,
@@ -211,6 +240,35 @@ def test_service_discovery_does_not_treat_a_zombie_as_live(
         lambda _pid: ZombieProcess(),
     )
 
+    assert discovery.belongs_to_live_process() is False
+
+
+def test_windows_service_discovery_checks_process_identity_without_scanning_thread_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started_at = time.time() - 1
+    discovery = ServiceDiscovery(
+        pid=1234,
+        process_started_at=started_at,
+        started_at=started_at,
+        port=49_152,
+        token="x" * 32,
+    )
+
+    class LiveProcess:
+        def is_running(self) -> bool:
+            return True
+
+        def status(self) -> str:
+            pytest.fail("Windows discovery should not scan thread suspension")
+
+        def create_time(self) -> float:
+            return started_at
+
+    monkeypatch.setattr(service_discovery_module.sys, "platform", "win32")
+    monkeypatch.setattr(service_discovery_module.psutil, "Process", lambda _pid: LiveProcess())
+    assert discovery.belongs_to_live_process() is True
+    discovery.process_started_at -= 1
     assert discovery.belongs_to_live_process() is False
 
 
@@ -2157,3 +2215,116 @@ def test_desktop_session_refs_release_only_the_registered_last_client(
         ):
             pass
         call_sync("service.shutdown", start_if_needed=False)
+
+
+def test_existing_desktop_subscription_recovers_its_workspace_after_service_restart(tmp_path: Path) -> None:
+    application = DesktopEditorApplication()
+    project = application.create_project(tmp_path / "Reconnect", "Reconnect")
+    observed = []
+    token = project.subscribe_project_events(observed.append, include_snapshot=False)
+    workspace_id = application.workspace_session_id
+    try:
+        previous_pid = call_sync("system.hello")["pid"]
+        shutdown_sync_service()
+        assert call_sync("system.hello")["pid"] != previous_pid
+        deadline = time.monotonic() + 15
+        while True:
+            workspaces = call_sync("workspace.list")["workspaces"]
+            if any(item["workspace_session_id"] == workspace_id for item in workspaces):
+                break
+            assert time.monotonic() < deadline, "The existing desktop event stream did not reconnect"
+            time.sleep(.02)
+        assert call_sync("service.status")["desktop_client_count"] == 1
+        document = project.get_project()
+        reply = execute_sync(_request(
+            "timeline.track.add", project=str(project.project_dir), request_id="after-restart-agent-edit",
+            base_revision=project.content_revision(),
+            arguments={"sequence_id": document.main_sequence_id, "kind": "video", "name": "After restart"},
+        ))
+        deadline = time.monotonic() + 5
+        while not any(event.request_id == "after-restart-agent-edit" for event in observed):
+            assert time.monotonic() < deadline, "The reconnected desktop missed a committed project event"
+            time.sleep(.02)
+        assert project.known_content_revision == reply["project_revision"]
+        assert any(
+            track.name == "After restart"
+            for track in project.timeline(document.main_sequence_id).state.tracks
+        )
+    finally:
+        project.unsubscribe_project_events(token)
+        project.close()
+        application.close_client_transport()
+        shutdown_sync_service()
+
+
+def test_web_edit_history_survives_restart_for_single_and_batch_edits(tmp_path: Path) -> None:
+    application = DesktopEditorApplication()
+    project = application.create_project(tmp_path / "Web history", "Web history")
+    project_path = project.project_dir
+    try:
+        starter = Path(__file__).resolve().parents[2] / "fixtures/editable-media-v6"
+        asset = project.import_web_package(starter)
+        sequence_id = project.get_project().main_sequence_id
+        timeline = project.timeline(sequence_id)
+        track = timeline.add_track(TrackKind.VIDEO, "Web")
+        clip = timeline.add_clip(
+            track_id=track.id, asset_id=asset.id, timeline_start=0, source_in=0, duration=30,
+        )
+        before = project.get_web_clip(clip.id)
+        common = {"sequence_id": sequence_id, "clip_id": clip.id, "parameter_id": "spring_strength"}
+        changed = execute_sync(_request(
+            "web.clip.parameter.update", project=str(project_path), request_id="web-single-edit",
+            base_revision=project.content_revision(), arguments={**common, "value": 0.8},
+        ))
+        history_items = call_sync("history.list", {"project": str(project_path)})["items"]
+        assert history_items[-1]["id"] == "web-single-edit"
+        assert all(path.startswith(f"/web/clips/{clip.id}/") for path in changed["event"]["write_set"])
+        batch = call_sync("operation.execute_batch", {
+            "batch_id": "web-batch-edit", "label": "Web parameter and animation",
+            "requests": [
+                _request(
+                    "web.clip.parameter.update", project=str(project_path), request_id="web-batch-parameter",
+                    base_revision=changed["project_revision"], arguments={**common, "value": 0.6},
+                ),
+                _request(
+                    "web.clip.parameter.keyframe.set", project=str(project_path),
+                    request_id="web-batch-keyframe",
+                    base_revision=changed["project_revision"],
+                    arguments={**common, "scene_id": "opening", "time_ms": 500, "value": 0.7},
+                ),
+            ],
+        })
+        after = project.get_web_clip(clip.id)
+        assert after.parameters["spring_strength"] == 0.6
+        assert after.scenes["opening"].parameter_animations["spring_strength"].keyframes[0].value == 0.7
+        assert batch["event"]["undo_group_id"] == "web-batch-edit"
+        project.close()
+        application.close_client_transport()
+        shutdown_sync_service()
+        application = DesktopEditorApplication()
+        project = application.open_project(project_path)
+
+        def history(action: str, request_id: str) -> None:
+            call_sync(f"history.{action}", {
+                "project": str(project_path), "request_id": request_id,
+                "base_revision": project.content_revision(),
+                "actor": _request("web.clip.get", request_id="actor")["actor"],
+            })
+
+        history("undo", "undo-web-batch")
+        restored = project.get_web_clip(clip.id)
+        assert restored.parameters["spring_strength"] == 0.8
+        assert restored.scenes == before.scenes
+        history("undo", "undo-web-single")
+        restored = project.get_web_clip(clip.id)
+        assert restored.parameters == before.parameters
+        assert restored.scenes == before.scenes
+        history("redo", "redo-web-single")
+        history("redo", "redo-web-batch")
+        restored = project.get_web_clip(clip.id)
+        assert restored.parameters == after.parameters
+        assert restored.scenes == after.scenes
+    finally:
+        project.close()
+        application.close_client_transport()
+        shutdown_sync_service()

@@ -133,6 +133,8 @@ class PresentationState:
     recent_errors: list[dict] = field(default_factory=list)
     collaboration_conflict: dict = field(default_factory=dict)
     preview_graph_path: str = ""
+    preview_status: str = "empty"
+    preview_error: str = ""
     hdr_preview_active: bool = False
     preview_subtitles: list[tuple[int, int, str]] = field(default_factory=list)
     preview_subtitles_by_track: dict[

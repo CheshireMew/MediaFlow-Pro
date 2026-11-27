@@ -218,6 +218,11 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
             destination,
             plan,
         )
+        def discard_analysis() -> None:
+            self.runtime.archive_failed_visual_analysis(
+                (destination,), self.project_dir / "archive" / "failed-task-artifacts", context.task.id,
+            )
+        context.on_discard(discard_analysis)
         return self.completion(
             destination,
             outcome=DownloadAnalysisTaskOutcome(plan=plan),
@@ -238,6 +243,21 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
         )
         publication = output_scope.__enter__()
         staged = publication.temporary_path(destination, "analysis")
+        closed = False
+
+        def discard(error: BaseException | None = None) -> None:
+            nonlocal closed
+            if closed:
+                return
+            closed = True
+            reason = error or RuntimeError("Task result was not committed")
+            output_scope.__exit__(type(reason), reason, reason.__traceback__)
+            self._archive_visual_analysis_failures(publication, context.task.id, reason)
+
+        def discard_result() -> None:
+            discard()
+
+        context.on_discard(discard_result)
         context.report(OperationProgress.indeterminate(message_code))
         context.cancellation.raise_if_requested()
         try:
@@ -245,12 +265,7 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
             if written != staged:
                 raise RuntimeError("Visual analysis runtime wrote outside the staged result path")
         except BaseException as error:
-            output_scope.__exit__(type(error), error, error.__traceback__)
-            self._archive_visual_analysis_failures(
-                publication,
-                context.task.id,
-                error,
-            )
+            discard(error)
             raise
 
         def commit_result() -> None:
@@ -258,35 +273,19 @@ class AnalysisTaskHandlers(ProjectTaskHandler):
                 apply_result()
                 publication.publish()
             except BaseException as error:
-                output_scope.__exit__(
-                    type(error),
-                    error,
-                    error.__traceback__,
-                )
-                self._archive_visual_analysis_failures(
-                    publication,
-                    context.task.id,
-                    error,
-                )
+                discard(error)
                 raise
 
             def rollback(error: BaseException) -> None:
-                output_scope.__exit__(
-                    type(error),
-                    error,
-                    error.__traceback__,
-                )
-                self._archive_visual_analysis_failures(
-                    publication,
-                    context.task.id,
-                    error,
-                )
+                discard(error)
+
+            def finish() -> None:
+                nonlocal closed
+                self._finish_visual_analysis_publication(output_scope, publication)
+                closed = True
 
             self.documents.enlist_transaction_publication(
-                on_commit=lambda: self._finish_visual_analysis_publication(
-                    output_scope,
-                    publication,
-                ),
+                on_commit=finish,
                 on_rollback=rollback,
             )
 

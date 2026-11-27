@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,8 +55,12 @@ class EditorProjectDocumentCommands:
     def owns_project_writer(self) -> bool:
         return self._repository.owns_project_lock and not self._repository.read_only
 
-    def list_project_events(self, *, after_cursor: int = 0) -> list[ProjectChangeEvent]:
-        return self._repository.events.list_events(after_cursor=after_cursor)
+    def list_project_events(
+        self, *, after_cursor: int = 0, limit: int = 500, through_cursor: int | None = None,
+    ) -> list[ProjectChangeEvent]:
+        return self._repository.events.list_events(
+            after_cursor=after_cursor, limit=limit, through_cursor=through_cursor,
+        )
 
     def project_event_cursor(self) -> int:
         return self._repository.events.latest_cursor()
@@ -66,8 +71,13 @@ class EditorProjectDocumentCommands:
     ) -> ProjectChangeEvent | None:
         return self._repository.events.for_undo_group(undo_group_id)
 
-    def list_project_events_after_revision(self, revision: int) -> list[ProjectChangeEvent]:
-        return self._repository.events.list_after_revision(revision)
+    def list_project_events_after_revision(
+        self, revision: int, *, limit: int = 500, actor_kind: str | None = None,
+    ) -> list[ProjectChangeEvent]:
+        return self._repository.events.list_after_revision(revision, limit=limit, actor_kind=actor_kind)
+
+    def iter_project_events_after_revision(self, revision: int) -> Iterator[ProjectChangeEvent]:
+        return self._repository.events.iter_after_revision(revision)
 
     def has_pending_project_upgrade(self) -> bool:
         return self._repository.events.has_pending_upgrade()

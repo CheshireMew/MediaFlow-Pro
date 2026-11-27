@@ -15,6 +15,7 @@ from mediaflow.desktop.coordinators import (
     TaskOperations,
     TimelineAssetOperations,
 )
+from mediaflow.desktop.coordinators.preview_graph import PreviewGraphCoordinator
 from mediaflow.desktop.presenters import PresentationProjectors
 from mediaflow.desktop.session_events import SessionEvents
 from mediaflow.desktop.session_state import DesktopSessionState, SessionModels
@@ -24,18 +25,27 @@ from mediaflow.service.desktop_application_proxy import DesktopEditorApplication
 
 if TYPE_CHECKING:
     from mediaflow.desktop.controllers.project_controller import ProjectSession
+from .controller_context import ControllerScope
+from .timeline_controller_scopes import (
+    TimelineAnalysisScope,
+    TimelineClipScope,
+    TimelineColorScope,
+    TimelineEffectsScope,
+    TimelineInterchangeScope,
+    TimelineKeyframeScope,
+    TimelineMaskScope,
+    TimelineMulticamScope,
+    TimelineReviewScope,
+    TimelineStructureScope,
+    TimelineViewportScope,
+    TimelineViewScope,
+    TimelineVoiceoverScope,
+)
 
 Operation = Callable[..., Any]
 
 
 class _SupportValues(TypedDict):
-    parent: QObject
-    updates: SessionUpdates
-    _present_collaboration_conflict: Callable[[EditorServiceRpcError], None]
-
-
-@dataclass(frozen=True, slots=True)
-class ControllerScope:
     parent: QObject
     updates: SessionUpdates
     _present_collaboration_conflict: Callable[[EditorServiceRpcError], None]
@@ -51,6 +61,8 @@ class WorkspaceViewScope(ControllerScope):
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceProjectScope(ControllerScope):
+    tasks: TaskOperations
+    preview: PreviewGraphCoordinator
     state: DesktopSessionState
     background: BackgroundRequests
     lifecycle: ProjectLifecycle
@@ -64,6 +76,7 @@ class WorkspaceProjectScope(ControllerScope):
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceSequenceScope(ControllerScope):
+    preview: PreviewGraphCoordinator
     state: DesktopSessionState
     timeline_assets: TimelineAssetOperations
     projectors: PresentationProjectors
@@ -128,6 +141,7 @@ class WorkspaceSettingsControllerScope(ControllerScope):
 
 @dataclass(frozen=True, slots=True)
 class MediaControllerScope(ControllerScope):
+    preview: PreviewGraphCoordinator
     state: DesktopSessionState
     models: SessionModels
     background: BackgroundRequests
@@ -142,26 +156,8 @@ class MediaControllerScope(ControllerScope):
 
 
 @dataclass(frozen=True, slots=True)
-class TimelinePresentationScope(ControllerScope):
-    state: DesktopSessionState
-    events: SessionEvents
-    models: SessionModels
-    background: BackgroundRequests
-    projectors: PresentationProjectors
-    timeline_assets: TimelineAssetOperations
-    tasks: TaskOperations
-    _api: DesktopEditorApplication
-    _finish_sequence_in_out_edit: Operation
-    _require_writable: Callable[[], None]
-    _set_status: Operation
-    _snap_timeline_frame: Operation
-    _snap_tolerance_frames: Operation
-    _timeline_snap_targets: Operation
-    _updated_selection: Operation
-
-
-@dataclass(frozen=True, slots=True)
 class SubtitlePresentationScope(ControllerScope):
+    preview: PreviewGraphCoordinator
     state: DesktopSessionState
     events: SessionEvents
     models: SessionModels
@@ -181,6 +177,7 @@ class SubtitlePresentationScope(ControllerScope):
 
 @dataclass(frozen=True, slots=True)
 class CreativeControllerScope(ControllerScope):
+    preview: PreviewGraphCoordinator
     state: DesktopSessionState
     models: SessionModels
     projectors: PresentationProjectors
@@ -238,6 +235,7 @@ class DownloadControllerScope(ControllerScope):
 
 @dataclass(frozen=True, slots=True)
 class WebControllerScope(ControllerScope):
+    preview: PreviewGraphCoordinator
     state: DesktopSessionState
     events: SessionEvents
     models: SessionModels
@@ -267,6 +265,7 @@ def workspace_view_scope(session: ProjectSession) -> WorkspaceViewScope:
 def workspace_project_scope(session: ProjectSession) -> WorkspaceProjectScope:
     return WorkspaceProjectScope(
         **_support(session),
+        tasks=session.tasks,
         state=session.state,
         background=session.background,
         lifecycle=session.lifecycle,
@@ -276,6 +275,7 @@ def workspace_project_scope(session: ProjectSession) -> WorkspaceProjectScope:
         _local_path=session._local_path,
         _require_writable=session._require_writable,
         _set_status=session._set_status,
+        preview=session.preview,
     )
 
 
@@ -287,6 +287,7 @@ def workspace_sequence_scope(session: ProjectSession) -> WorkspaceSequenceScope:
         projectors=session.projectors,
         _require_writable=session._require_writable,
         _set_status=session._set_status,
+        preview=session.preview,
     )
 
 
@@ -300,11 +301,7 @@ def workspace_workflow_scope(session: ProjectSession) -> WorkspaceWorkflowScope:
 
 
 def workspace_playback_scope(session: ProjectSession) -> WorkspacePlaybackScope:
-    return WorkspacePlaybackScope(
-        **_support(session),
-        events=session.events,
-        state=session.state,
-    )
+    return WorkspacePlaybackScope(**_support(session), events=session.events, state=session.state)
 
 
 def settings_scope(session: ProjectSession) -> SettingsFormControllerScope:
@@ -353,9 +350,7 @@ def download_settings_scope(session: ProjectSession) -> DownloadSettingsControll
 
 def workspace_settings_scope(session: ProjectSession) -> WorkspaceSettingsControllerScope:
     return WorkspaceSettingsControllerScope(
-        **_support(session),
-        state=session.state,
-        settings_persistence=session.settings_persistence,
+        **_support(session), state=session.state, settings_persistence=session.settings_persistence
     )
 
 
@@ -373,27 +368,7 @@ def media_scope(session: ProjectSession) -> MediaControllerScope:
         _require_writable=session._require_writable,
         _set_status=session._set_status,
         _updated_selection=session._updated_selection,
-    )
-
-
-def timeline_scope(session: ProjectSession) -> TimelinePresentationScope:
-    return TimelinePresentationScope(
-        **_support(session),
-        state=session.state,
-        events=session.events,
-        models=session.models,
-        background=session.background,
-        projectors=session.projectors,
-        timeline_assets=session.timeline_assets,
-        tasks=session.tasks,
-        _api=session._api,
-        _finish_sequence_in_out_edit=session._finish_sequence_in_out_edit,
-        _require_writable=session._require_writable,
-        _set_status=session._set_status,
-        _snap_timeline_frame=session._timeline_snapping.snap,
-        _snap_tolerance_frames=session._snap_tolerance_frames,
-        _timeline_snap_targets=session._timeline_snapping.targets,
-        _updated_selection=session._updated_selection,
+        preview=session.preview,
     )
 
 
@@ -415,6 +390,7 @@ def subtitle_scope(session: ProjectSession) -> SubtitlePresentationScope:
         _snap_tolerance_frames=session._snap_tolerance_frames,
         _timeline_snap_targets=session._timeline_snapping.targets,
         _updated_selection=session._updated_selection,
+        preview=session.preview,
     )
 
 
@@ -429,6 +405,7 @@ def creative_scope(session: ProjectSession) -> CreativeControllerScope:
         _local_path=session._local_path,
         _require_writable=session._require_writable,
         _set_status=session._set_status,
+        preview=session.preview,
     )
 
 
@@ -494,4 +471,185 @@ def web_scope(session: ProjectSession) -> WebControllerScope:
         projectors=session.projectors,
         tasks=session.tasks,
         _require_writable=session._require_writable,
+        preview=session.preview,
+    )
+
+
+def timeline_analysis_scope(session: ProjectSession) -> TimelineAnalysisScope:
+    return TimelineAnalysisScope(
+        **_support(session),
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        task_view_state=session.state.tasks,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        tasks=session.tasks,
+    )
+
+
+def timeline_clip_scope(session: ProjectSession) -> TimelineClipScope:
+    return TimelineClipScope(
+        **_support(session),
+        refresh_known_clip_membership=session.projectors.timeline.refresh_known_clip_membership,
+        refresh_clip_structure=session.projectors.timeline.refresh_clip_structure,
+        invalidate_audio_metrics=session.projectors.audio.invalidate_audio_metrics,
+        refresh_clip_rows=session.projectors.timeline.refresh_clip_rows,
+        refresh_timeline=session.projectors.timeline.refresh_timeline,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        clips_model=session.models.clips,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        _snap_timeline_frame=session._timeline_snapping.snap,
+        _snap_tolerance_frames=session._snap_tolerance_frames,
+        _timeline_snap_targets=session._timeline_snapping.targets,
+        preview=session.preview,
+        timeline_assets=session.timeline_assets,
+    )
+
+
+def timeline_color_scope(session: ProjectSession) -> TimelineColorScope:
+    return TimelineColorScope(
+        **_support(session),
+        project_binding=session.state.binding,
+        _api=session._api,
+        _set_status=session._set_status,
+        background=session.background,
+    )
+
+
+def timeline_effects_scope(session: ProjectSession) -> TimelineEffectsScope:
+    return TimelineEffectsScope(
+        **_support(session),
+        refresh_timeline=session.projectors.timeline.refresh_timeline,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        preview=session.preview,
+    )
+
+
+def timeline_interchange_scope(session: ProjectSession) -> TimelineInterchangeScope:
+    return TimelineInterchangeScope(
+        **_support(session),
+        refresh_active_sequence=session.projectors.refresh_active_sequence,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _api=session._api,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        background=session.background,
+    )
+
+
+def timeline_keyframe_scope(session: ProjectSession) -> TimelineKeyframeScope:
+    return TimelineKeyframeScope(
+        **_support(session),
+        refresh_clip_rows=session.projectors.timeline.refresh_clip_rows,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        preview=session.preview,
+    )
+
+
+def timeline_mask_scope(session: ProjectSession) -> TimelineMaskScope:
+    return TimelineMaskScope(
+        **_support(session),
+        refresh_clip_rows=session.projectors.timeline.refresh_clip_rows,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        preview=session.preview,
+        tasks=session.tasks,
+    )
+
+
+def timeline_multicam_scope(session: ProjectSession) -> TimelineMulticamScope:
+    return TimelineMulticamScope(
+        **_support(session),
+        refresh_timeline=session.projectors.timeline.refresh_timeline,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _api=session._api,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        background=session.background,
+    )
+
+
+def timeline_review_scope(session: ProjectSession) -> TimelineReviewScope:
+    return TimelineReviewScope(
+        **_support(session),
+        refresh_timeline=session.projectors.timeline.refresh_timeline,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _api=session._api,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        background=session.background,
+    )
+
+
+def timeline_structure_scope(session: ProjectSession) -> TimelineStructureScope:
+    return TimelineStructureScope(
+        **_support(session),
+        refresh_preview_subtitles=session.projectors.timeline_subtitles.refresh_preview_subtitles,
+        refresh_documents=session.projectors.subtitles.refresh_documents,
+        refresh_sequences=session.projectors.timeline.refresh_sequences,
+        refresh_timeline=session.projectors.timeline.refresh_timeline,
+        refresh_active_sequence=session.projectors.refresh_active_sequence,
+        refresh_assets=session.projectors.assets.refresh_assets,
+        project_binding=session.state.binding,
+        read_selection=lambda: session.state.selection,
+        _finish_sequence_in_out_edit=session._finish_sequence_in_out_edit,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        preview=session.preview,
+        timeline_assets=session.timeline_assets,
+    )
+
+
+def timeline_view_scope(session: ProjectSession) -> TimelineViewScope:
+    return TimelineViewScope(
+        **_support(session),
+        project_binding=session.state.binding,
+        presentation_state=session.state.presentation,
+        request_state=session.state.requests,
+        read_selection=lambda: session.state.selection,
+        read_service_settings=lambda: session.state.service_settings,
+        clips_model=session.models.clips,
+        compound_clips_model=session.models.compound_clips,
+        markers_model=session.models.markers,
+        ranges_model=session.models.ranges,
+        tracks_model=session.models.tracks,
+        transitions_model=session.models.transitions,
+        task_view_state=session.state.tasks,
+        _api=session._api,
+        _updated_selection=session._updated_selection,
+        background=session.background,
+        preview=session.preview,
+    )
+
+
+def timeline_viewport_scope(session: ProjectSession) -> TimelineViewportScope:
+    return TimelineViewportScope(
+        **_support(session),
+        read_selection=lambda: session.state.selection,
+        visible_clips_model=session.models.visible_clips,
+    )
+
+
+def timeline_voiceover_scope(session: ProjectSession) -> TimelineVoiceoverScope:
+    return TimelineVoiceoverScope(
+        **_support(session),
+        refresh_timeline=session.projectors.timeline.refresh_timeline,
+        refresh_assets=session.projectors.assets.refresh_assets,
+        project_binding=session.state.binding,
+        _require_writable=session._require_writable,
+        _set_status=session._set_status,
+        preview=session.preview,
     )

@@ -71,7 +71,7 @@ def encode_transport(value: Any) -> Any:
                 }
         return [encode_transport(item) for item in value]
     if isinstance(value, dict):
-        if all(isinstance(key, str) for key in value):
+        if TYPE_KEY not in value and all(isinstance(key, str) for key in value):
             return {str(key): encode_transport(item) for key, item in value.items()}
         return {
             TYPE_KEY: "mapping",

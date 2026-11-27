@@ -37,6 +37,7 @@ _DOMAIN_MODULES = {
     "task-commands": "mediaflow.domain.task_commands",
     "tasks": "mediaflow.domain.tasks",
     "timeline": "mediaflow.domain.timeline",
+    "timeline-history": "mediaflow.domain.timeline_history",
     "transcript-edits": "mediaflow.domain.transcript_edits",
     "translation": "mediaflow.domain.translation",
     "visual-effects": "mediaflow.domain.visual_effects",

@@ -18,9 +18,9 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QUrl
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtQuick import QQuickWindow
+from PySide6.QtQuick import QQuickItem, QQuickWindow
 from shiboken6 import getCppPointer, wrapInstance
 
 from mediaflow.atomic_file import atomic_write_text
@@ -49,6 +49,19 @@ INTERACTIVE_CLIP_LIMIT = 640
 MEMORY_DELTA_LIMIT_BYTES = 512 * 1024 * 1024
 MAX_PERFORMANCE_ATTEMPTS = 3
 PERFORMANCE_RETRY_COOLDOWN_SECONDS = 2.0
+
+
+def visual_clip_delegates(window: QQuickWindow) -> list[QQuickItem]:
+    """QML Repeater delegates belong to the visual tree, not the QObject tree."""
+
+    found = []
+    pending = [window.contentItem()]
+    while pending:
+        item = pending.pop()
+        if item.objectName() == "timelineClip":
+            found.append(item)
+        pending.extend(item.childItems())
+    return found
 
 
 def create_fixture(root: Path) -> Path:
@@ -196,9 +209,12 @@ def verify(
             )
         if controllers.subtitle_view.subtitleTextAtFrame(SUBTITLE_COUNT - 1) != f"字幕 {SUBTITLE_COUNT}":
             raise RuntimeError("The final subtitle did not reach the preview consumer")
-        interactive_clip_count = len(
-            engine.rootObjects()[0].findChildren(QObject, "timelineClip")
-        )
+        window = wrapInstance(getCppPointer(engine.rootObjects()[0])[0], QQuickWindow)
+        interactive_clip_count = len(visual_clip_delegates(window))
+        if interactive_clip_count != controllers.timeline_viewport.visibleClipsModel.rowCount():
+            raise RuntimeError("The visual timeline delegates do not match the viewport projection")
+        if interactive_clip_count == 0:
+            raise RuntimeError("The large-project timeline did not instantiate any interactive clips")
         if interactive_clip_count > INTERACTIVE_CLIP_LIMIT:
             raise RuntimeError(
                 f"Timeline instantiated {interactive_clip_count} interactive clip delegates"

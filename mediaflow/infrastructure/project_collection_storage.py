@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from mediaflow.application.project_collection_storage import (
@@ -28,6 +29,7 @@ class LocalProjectCollectionStorage(ProjectCollectionStorage):
         self,
         collection_id: str,
         sources: list[tuple[str, Path]],
+        *, check_cancelled: Callable[[], None] | None = None,
     ) -> list[CollectedAssetCopy]:
         destination = self.collection_root / collection_id
         staging = self.collection_root / f".{collection_id}.partial"
@@ -37,17 +39,29 @@ class LocalProjectCollectionStorage(ProjectCollectionStorage):
         copied: list[CollectedAssetCopy] = []
         try:
             for asset_id, source_value in sources:
+                if check_cancelled is not None:
+                    check_cancelled()
                 source = source_value.resolve(strict=True)
                 self._validate_source(source)
                 asset_dir = staging / asset_id
                 asset_dir.mkdir(parents=True, exist_ok=False)
                 target = asset_dir / source.name
-                source_size, source_hash = self._content_identity(source)
+                source_size, source_hash = self._content_identity(source, check_cancelled)
+                def copy_file(src, dst):
+                    with Path(src).open("rb") as reader, Path(dst).open("wb") as writer:
+                        while chunk := reader.read(1024 * 1024):
+                            if check_cancelled is not None:
+                                check_cancelled()
+                            writer.write(chunk)
+                    shutil.copystat(src, dst)
+                    return dst
                 if source.is_dir():
-                    shutil.copytree(source, target, copy_function=shutil.copy2)
+                    shutil.copytree(source, target, copy_function=copy_file)
                 else:
-                    shutil.copy2(source, target)
-                copied_size, copied_hash = self._content_identity(target)
+                    copy_file(source, target)
+                copied_size, copied_hash = self._content_identity(target, check_cancelled)
+                if check_cancelled is not None:
+                    check_cancelled()
                 if (copied_size, copied_hash) != (source_size, source_hash):
                     raise RuntimeError(f"归集后的素材校验失败：{source.name}")
                 copied.append(
@@ -87,10 +101,12 @@ class LocalProjectCollectionStorage(ProjectCollectionStorage):
         source.replace(archive)
         return archive
 
-    def _content_identity(self, source: Path) -> tuple[int, str]:
+    def _content_identity(
+        self, source: Path, check_cancelled: Callable[[], None] | None = None,
+    ) -> tuple[int, str]:
         digest = hashlib.sha256()
         if source.is_file():
-            size = self._hash_file(source, digest)
+            size = self._hash_file(source, digest, check_cancelled)
             return size, digest.hexdigest()
         if not source.is_dir():
             raise ValueError(f"素材不是文件或目录：{source}")
@@ -99,14 +115,16 @@ class LocalProjectCollectionStorage(ProjectCollectionStorage):
             relative = file_path.relative_to(source).as_posix().encode("utf-8")
             digest.update(len(relative).to_bytes(4, "big"))
             digest.update(relative)
-            size += self._hash_file(file_path, digest)
+            size += self._hash_file(file_path, digest, check_cancelled)
         return size, digest.hexdigest()
 
     @staticmethod
-    def _hash_file(path: Path, digest) -> int:
+    def _hash_file(path: Path, digest, check_cancelled: Callable[[], None] | None = None) -> int:
         size = 0
         with path.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
+                if check_cancelled is not None:
+                    check_cancelled()
                 digest.update(chunk)
                 size += len(chunk)
         return size

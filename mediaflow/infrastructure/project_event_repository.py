@@ -203,16 +203,20 @@ class ProjectEventRepository(ProjectRepositoryComponent):
             created_at=created_at,
         )
 
-    def list_events(self, *, after_cursor: int = 0) -> list[ProjectChangeEvent]:
+    def list_events(
+        self, *, after_cursor: int = 0, limit: int = 500, through_cursor: int | None = None,
+    ) -> list[ProjectChangeEvent]:
+        if after_cursor < 0 or not 1 <= limit <= 1000:
+            raise ValueError("Event cursor must be nonnegative and page size must be between 1 and 1000")
         project_id = self.project_id()
         rows = self._fetchall(
             """SELECT cursor, base_revision, project_revision, operation, actor_json,
                       request_id, undo_group_id, write_set_json, changes_json,
                       result_json, inverse_command_json, created_at
                FROM project_event
-               WHERE project_id=? AND cursor>?
-               ORDER BY cursor""",
-            (project_id, after_cursor),
+               WHERE project_id=? AND cursor>? AND (? IS NULL OR cursor<=?)
+               ORDER BY cursor LIMIT ?""",
+            (project_id, after_cursor, through_cursor, through_cursor, limit),
         )
         return self._documents(rows, project_id)
 
@@ -220,7 +224,11 @@ class ProjectEventRepository(ProjectRepositoryComponent):
         row = self._fetchone("SELECT COALESCE(MAX(cursor), 0) AS cursor FROM project_event")
         return 0 if row is None else int(row["cursor"])
 
-    def list_after_revision(self, revision: int) -> list[ProjectChangeEvent]:
+    def list_after_revision(
+        self, revision: int, *, limit: int = 500, actor_kind: str | None = None,
+    ) -> list[ProjectChangeEvent]:
+        if revision < 0 or not 1 <= limit <= 1000:
+            raise ValueError("Revision must be nonnegative and page size must be between 1 and 1000")
         project_id = self.project_id()
         rows = self._fetchall(
             """SELECT cursor, base_revision, project_revision, operation,
@@ -228,10 +236,19 @@ class ProjectEventRepository(ProjectRepositoryComponent):
                       changes_json, result_json, inverse_command_json, created_at
                FROM project_event
                WHERE project_id=? AND project_revision>?
-               ORDER BY project_revision""",
-            (project_id, revision),
+                 AND (? IS NULL OR json_extract(actor_json, '$.kind')=?)
+               ORDER BY project_revision LIMIT ?""",
+            (project_id, revision, actor_kind, actor_kind, limit),
         )
         return self._documents(rows, project_id)
+
+    def iter_after_revision(self, revision: int) -> Iterator[ProjectChangeEvent]:
+        while True:
+            page = self.list_after_revision(revision)
+            yield from page
+            if len(page) < 500:
+                return
+            revision = page[-1].project_revision
 
     def for_request(self, request_id: str) -> ProjectChangeEvent | None:
         project_id = self.project_id()

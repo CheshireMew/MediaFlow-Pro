@@ -10,9 +10,9 @@ from mediaflow.domain.timeline import TimelineState
 from mediaflow.domain.web_exports import WebClipExportResult, WebExportFormat
 from mediaflow.domain.web_rendering import WebRenderActualCapture, WebRenderPlan
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
+from mediaflow.infrastructure.project_cache_reservations import ProjectCacheReservation
 from mediaflow.infrastructure.project_lock import ProcessFileLock
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.storage_budget import ProjectCacheReservation
 from mediaflow.infrastructure.web_browser_cache_renderer import WebBrowserCacheRenderer
 from mediaflow.infrastructure.web_capture_prewarm import prewarm_web_capture_engine
 from mediaflow.infrastructure.web_clip_export_writer import WebClipExportWriter
@@ -157,6 +157,7 @@ class WebRenderService:
         reservation = self._reserve_cache(
             target,
             label="MediaFlow editable web render cache",
+            check_cancelled=check_cancelled,
         )
         try:
             target.path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,12 +168,13 @@ class WebRenderService:
                 render_plan,
                 check_cancelled=check_cancelled,
             )
-        except BaseException:
-            reservation.release()
+        except BaseException as error:
+            reservation.release(error=error)
             raise
         if cache_lock is None:
             reservation.release()
             return target.path
+        failure: BaseException | None = None
         try:
             if self._cache_is_ready(target, render_plan):
                 return target.path
@@ -206,9 +208,19 @@ class WebRenderService:
             if not self._cache_is_ready(target, render_plan):
                 raise RuntimeError("Editable web media renderer did not produce a cache file")
             return target.path
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            cache_lock.release()
-            reservation.release()
+            try:
+                cache_lock.release()
+            except BaseException as cleanup_error:
+                if failure is None:
+                    failure = cleanup_error
+                    raise
+                failure.add_note(f"Web cache lock release failed: {cleanup_error}")
+            finally:
+                reservation.release(error=failure)
 
     def render_filmstrip_source(
         self,
@@ -313,8 +325,9 @@ class WebRenderService:
         target: WebRenderTarget,
         *,
         label: str,
+        check_cancelled=None,
     ) -> ProjectCacheReservation:
-        return self.cache_lifecycle.reserve(target, label=label)
+        return self.cache_lifecycle.reserve(target, label=label, check_cancelled=check_cancelled)
 
     @classmethod
     def _acquire_cache_lock(

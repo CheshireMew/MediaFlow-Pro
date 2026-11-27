@@ -13,11 +13,11 @@ from mediaflow.domain.task_commands import TrackMaskCommand
 from mediaflow.domain.timeline import Clip
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineMaskScope
 from .timeline_selection import selected_clip_id
 
 
-class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
+class TimelineMaskController(ControllerFacet[TimelineMaskScope]):
     selectionChanged = Signal()
 
     @Property(list, notify=selectionChanged)
@@ -92,7 +92,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
                     MaskPoint(x=0.25, y=0.75),
                 )
             )
-        self._session.state.binding.require_timeline().add_clip_mask(
+        self._session.project_binding.require_timeline().add_clip_mask(
             clip.id,
             shape,
             name={
@@ -128,7 +128,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
         self._session._require_writable()
         clip = self._selected_clip()
         mask = next(item for item in clip.masks if item.id == mask_id)
-        self._session.state.binding.require_timeline().update_clip_mask(
+        self._session.project_binding.require_timeline().update_clip_mask(
             clip.id,
             mask_id,
             name=name.strip(),
@@ -156,9 +156,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     def moveSelectedClipMask(self, mask_id: str, position: int) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().move_clip_mask(
-            clip.id, mask_id, position
-        )
+        self._session.project_binding.require_timeline().move_clip_mask(clip.id, mask_id, position)
         self._after_change(clip.id)
         self._session._set_status("蒙版顺序已更新")
 
@@ -167,7 +165,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     def removeSelectedClipMask(self, mask_id: str) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().remove_clip_mask(clip.id, mask_id)
+        self._session.project_binding.require_timeline().remove_clip_mask(clip.id, mask_id)
         self._after_change(clip.id)
         self._session._set_status("蒙版已移除")
 
@@ -176,7 +174,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     def assignSelectedEffectMask(self, effect_id: str, mask_id: str) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().assign_clip_visual_effect_mask(
+        self._session.project_binding.require_timeline().assign_clip_visual_effect_mask(
             clip.id,
             effect_id,
             mask_id or None,
@@ -205,7 +203,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
         self._session._require_writable()
         clip = self._selected_clip()
         mask = next(item for item in clip.masks if item.id == mask_id)
-        self._session.state.binding.require_timeline().upsert_clip_mask_keyframe(
+        self._session.project_binding.require_timeline().upsert_clip_mask_keyframe(
             clip.id,
             mask_id,
             self._local_offset(clip, timeline_frame),
@@ -234,7 +232,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     def removeMaskKeyframe(self, mask_id: str, timeline_offset: int) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().remove_clip_mask_keyframe(
+        self._session.project_binding.require_timeline().remove_clip_mask_keyframe(
             clip.id,
             mask_id,
             timeline_offset,
@@ -252,7 +250,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().move_clip_mask_keyframe(
+        self._session.project_binding.require_timeline().move_clip_mask_keyframe(
             clip.id,
             mask_id,
             old_timeline_offset,
@@ -272,7 +270,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().retime_clip_mask_keyframes(
+        self._session.project_binding.require_timeline().retime_clip_mask_keyframes(
             clip.id,
             mask_id,
             [int(value) for value in timeline_offsets],
@@ -290,12 +288,12 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
         next(item for item in clip.masks if item.id == mask_id)
         self._session.tasks.start(
             TrackMaskCommand(
-                sequence_id=self._session.state.binding.active_sequence_id,
+                sequence_id=self._session.project_binding.active_sequence_id,
                 clip_id=clip.id,
                 mask_id=mask_id,
             ),
             [clip.asset_id],
-            sequence_id=self._session.state.binding.active_sequence_id,
+            sequence_id=self._session.project_binding.active_sequence_id,
         )
         self._session._set_status("正在跟踪蒙版")
 
@@ -306,15 +304,15 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     def _selected_clip(self, *, required: Literal[False]) -> Clip | None: ...
 
     def _selected_clip(self, *, required: bool = True) -> Clip | None:
-        clip_id = selected_clip_id(self._session)
-        if not self._session.state.binding.timeline or not clip_id:
+        clip_id = selected_clip_id(self._session.read_selection())
+        if not self._session.project_binding.timeline or not clip_id:
             if required:
                 raise ValueError("请先选择一个片段")
             return None
         try:
             return next(
                 item
-                for item in self._session.state.binding.require_timeline().state.clips
+                for item in self._session.project_binding.require_timeline().state.clips
                 if item.id == clip_id
             )
         except StopIteration as error:
@@ -347,9 +345,7 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
                 raise ValueError("多边形点必须是 JSON 数组")
             points = tuple(
                 MaskPoint.model_validate(
-                    {"x": float(item[0]), "y": float(item[1])}
-                    if isinstance(item, list)
-                    else item
+                    {"x": float(item[0]), "y": float(item[1])} if isinstance(item, list) else item
                 )
                 for item in raw_points
             )
@@ -380,11 +376,11 @@ class TimelineMaskController(ControllerFacet[TimelinePresentationScope]):
     def _after_change(self, clip_id: str) -> None:
         clip = self._selected_clip()
         assert clip is not None and clip.id == clip_id
-        self._session.projectors.timeline.refresh_clip_rows(
+        self._session.refresh_clip_rows(
             [clip.id],
             clips=[clip],
             refresh_relations=False,
         )
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)

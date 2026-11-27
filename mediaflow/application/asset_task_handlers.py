@@ -27,6 +27,7 @@ from mediaflow.domain.task_commands import (
     GenerateProxyCommand,
     GenerateWaveformCommand,
     ImportAssetCommand,
+    PrepareWebSequenceCommand,
     RenderWebClipCommand,
 )
 from mediaflow.domain.tasks import ImportedAssetTaskOutcome
@@ -43,7 +44,19 @@ class WebRenderTaskHandler(ProjectTaskHandler):
         self.runtime = runtime
 
     def handle(self, context: TaskContext) -> TaskCompletion:
+        with self.runtime.snapshot() as (documents, runtime):
+            return WebRenderTaskHandler(documents, runtime)._handle_snapshot(context)
+
+    def _handle_snapshot(self, context: TaskContext) -> TaskCompletion:
         command = context.task.command
+        if isinstance(command, PrepareWebSequenceCommand):
+            if self.documents.timeline.load_timeline(command.sequence_id) != command.state:
+                raise ValueError("网页渲染输入已变化，请从当前时间线重新准备")
+            outputs = self.runtime.prepare_sequence(
+                command.state, progress=context.report,
+                check_cancelled=context.cancellation.raise_if_requested,
+            )
+            return self.completion(*outputs)
         if not isinstance(command, (RenderWebClipCommand, ExportWebClipCommand)):
             raise TypeError(f"Unexpected web render command: {type(command).__name__}")
         state = self.documents.timeline.load_timeline(command.sequence_id)
@@ -57,7 +70,7 @@ class WebRenderTaskHandler(ProjectTaskHandler):
                     command.format,
                     time_ms=command.time_ms,
                     background=command.background,
-                    overwrite=command.overwrite or context.recovered,
+                    overwrite=command.overwrite,
                     progress=context.report,
                     check_cancelled=context.cancellation.raise_if_requested,
                 ).output_path

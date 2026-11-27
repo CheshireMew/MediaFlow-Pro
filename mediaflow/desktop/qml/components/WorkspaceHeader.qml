@@ -8,6 +8,7 @@ Item {
     signal exportRequested
     signal shortcutReferenceRequested
     property var workspaceItem: null
+    property bool compact: false
     readonly property string layoutPreset: workspaceItem
         ? String(workspaceItem.layoutPreset) : "standard"
     readonly property real statusControlWidth: Math.max(
@@ -25,15 +26,15 @@ Item {
         }
     }
 
-    implicitWidth: statusControlWidth
+    implicitWidth: (compact ? 0 : statusControlWidth)
         + undoButton.implicitWidth
         + redoButton.implicitWidth
         + taskActivity.implicitWidth
         + layoutButton.implicitWidth
-        + versionsButton.implicitWidth
+        + (compact ? 0 : versionsButton.implicitWidth)
         + closeProjectButton.implicitWidth
         + exportButton.implicitWidth
-        + controls.spacing * 7
+        + controls.spacing * (compact ? 5 : 7)
     implicitHeight: 42
 
     RowLayout {
@@ -42,6 +43,7 @@ Item {
         spacing: 5
 
         Rectangle {
+            visible: !root.compact
             Layout.minimumWidth: 112
             Layout.preferredWidth: root.statusControlWidth
             Layout.preferredHeight: 28
@@ -198,13 +200,18 @@ Item {
                     text: qsTr("键盘快捷键") + "\tCtrl+/"
                     onTriggered: root.shortcutReferenceRequested()
                 }
+                AppMenuItem {
+                    visible: root.compact
+                    text: qsTr("版本")
+                    onTriggered: projectVersionsDialog.open()
+                }
                 AppMenuSeparator {}
                 AppMenuItem {
                     objectName: "workspaceToggleTools"
                     text: qsTr("工具面板")
                     checkable: true
                     checked: Boolean(root.workspaceItem)
-                        && Boolean(root.workspaceItem.toolPanelVisible)
+                        && Boolean(root.workspaceItem.toolShown)
                     onTriggered: root.workspaceItem.toggleWorkspacePanel("tool")
                 }
                 AppMenuItem {
@@ -212,7 +219,7 @@ Item {
                     text: qsTr("检查器")
                     checkable: true
                     checked: Boolean(root.workspaceItem)
-                        && Boolean(root.workspaceItem.inspectorPanelVisible)
+                        && Boolean(root.workspaceItem.inspectorShown)
                     onTriggered: root.workspaceItem.toggleWorkspacePanel("inspector")
                 }
                 AppMenuItem {
@@ -220,7 +227,7 @@ Item {
                     text: qsTr("时间线")
                     checkable: true
                     checked: Boolean(root.workspaceItem)
-                        && Boolean(root.workspaceItem.timelinePanelVisible)
+                        && Boolean(root.workspaceItem.timelineShown)
                     onTriggered: root.workspaceItem.toggleWorkspacePanel("timeline")
                 }
                 AppMenuSeparator {}
@@ -251,6 +258,7 @@ Item {
 
         AppIconButton {
             id: versionsButton
+            visible: !root.compact
             objectName: "openProjectVersionsButton"
             iconName: "duplicate"
             compact: true

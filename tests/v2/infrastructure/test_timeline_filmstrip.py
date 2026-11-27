@@ -10,12 +10,12 @@ import pytest
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, TrackKind
 from mediaflow.domain.project import MediaMetadata
 from mediaflow.domain.timeline import Clip, Track
+from mediaflow.infrastructure.presentation_requests import PresentationRequestCoordinator
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.timeline_filmstrip import (
     TimelineFilmstripService,
     _FilmstripMemoryLru,
-    _FilmstripRequestCoordinator,
 )
 from mediaflow.infrastructure.web_native_media import (
     WebNativeMediaPlan,
@@ -269,7 +269,7 @@ def test_web_native_plan_slice_uses_requested_frame_and_frozen_tail(tmp_path: Pa
 
 
 def test_new_filmstrip_generation_cancels_unclaimed_work() -> None:
-    coordinator = _FilmstripRequestCoordinator()
+    coordinator = PresentationRequestCoordinator()
     key = ("project", "desktop-actor")
 
     with coordinator.request(key, 1) as first:
@@ -281,15 +281,31 @@ def test_new_filmstrip_generation_cancels_unclaimed_work() -> None:
 
 
 def test_owner_cancellation_rejects_running_and_late_filmstrip_work() -> None:
-    coordinator = _FilmstripRequestCoordinator()
+    coordinator = PresentationRequestCoordinator()
     key = ("project", "desktop-actor")
 
     with coordinator.request(key, 4) as running:
         coordinator.cancel(key, 5)
         with pytest.raises(CancelledError, match="superseded"):
             running()
-    with coordinator.request(key, 4) as late:
-        with pytest.raises(CancelledError, match="superseded"):
+    with pytest.raises(CancelledError, match="superseded"):
+        with coordinator.request(key, 4) as late:
             late()
     with coordinator.request(key, 6) as reopened:
+        reopened()
+
+
+def test_repeated_owner_and_project_release_does_not_advance_the_clients_generation() -> None:
+    coordinator = PresentationRequestCoordinator()
+    key = ("project", "desktop-actor")
+    with coordinator.request(key, 4) as running:
+        coordinator.cancel_current(key)
+        coordinator.cancel_project("project")
+        coordinator.cancel_current(key)
+        with pytest.raises(CancelledError):
+            running()
+    with pytest.raises(CancelledError):
+        with coordinator.request(key, 4):
+            pass
+    with coordinator.request(key, 5) as reopened:
         reopened()

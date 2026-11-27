@@ -16,6 +16,7 @@ from .workspace_capabilities import workspace_action_capabilities
 
 class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
     projectStateChanged = Signal()
+    homeSummaryChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()
     previewGraphChanged = Signal()
@@ -33,6 +34,14 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
     def workspaceModes(self) -> list[dict[str, object]]:
         return workspace_mode_catalog()
 
+    @Property(str, notify=previewGraphChanged)
+    def previewStatus(self) -> str:
+        return self._session.state.presentation.preview_status
+
+    @Property(str, notify=previewGraphChanged)
+    def previewError(self) -> str:
+        return self._session.state.presentation.preview_error
+
     @Property(QObject, constant=True)
     def sequencesModel(self) -> QObject:
         return self._session.models.sequences
@@ -41,7 +50,7 @@ class WorkspaceViewController(ControllerFacet[WorkspaceViewScope]):
     def recentProjectsModel(self) -> QObject:
         return self._session.models.recent_projects
 
-    @Property(dict, notify=projectStateChanged)
+    @Property(dict, notify=homeSummaryChanged)
     def homeSummary(self) -> dict:
         return self._session.state.presentation.home_summary
 

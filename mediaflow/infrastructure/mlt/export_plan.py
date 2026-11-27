@@ -41,6 +41,7 @@ class MltExportPlanner:
                 request.output_path,
                 start_frame=request.start_frame,
                 end_frame=request.end_frame,
+                duration_frames=request.duration_frames,
             )
             for request in requests
         )
@@ -59,6 +60,7 @@ class MltExportPlanner:
         *,
         start_frame: int | None = None,
         end_frame: int | None = None,
+        duration_frames: int | None = None,
     ) -> MltExportPlan:
         if self.paths.melt is None:
             raise FileNotFoundError("MLT melt runtime is not installed")
@@ -73,6 +75,7 @@ class MltExportPlanner:
             state,
             start_frame=start_frame,
             end_frame=end_frame,
+            duration_frames=duration_frames,
         )
         return MltExportPlan(
             output=output,
@@ -93,8 +96,13 @@ def resolve_export_range(
     *,
     start_frame: int | None = None,
     end_frame: int | None = None,
+    duration_frames: int | None = None,
 ) -> tuple[int, int]:
     duration = max(1, state.duration_frames)
+    if duration_frames is not None:
+        if duration_frames < duration:
+            raise ValueError("Export duration cannot truncate its timeline content")
+        duration = duration_frames
     if (start_frame is None) != (end_frame is None):
         raise ValueError("Explicit export range requires both start_frame and end_frame")
     if start_frame is not None and end_frame is not None:

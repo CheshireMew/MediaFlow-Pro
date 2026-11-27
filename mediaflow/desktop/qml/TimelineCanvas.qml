@@ -461,13 +461,20 @@ Flickable {
         }
     }
 
+    TimelineOverview {
+        id: sharedOverview
+        sourceModel: mediaflow.timelineViewportController.visibleClipsModel
+    }
+
     TimelineClipLayer {
+        clipRows: sharedOverview.rows
         view: canvas.view
         timelineCanvas: canvas
         tracksHeight: tracksColumn.height
     }
 
     TimelineAudioClipLayer {
+        clipRows: sharedOverview.rows
         view: canvas.view
         timelineCanvas: canvas
         tracksHeight: tracksColumn.height

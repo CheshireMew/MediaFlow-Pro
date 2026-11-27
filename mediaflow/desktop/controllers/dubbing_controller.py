@@ -197,7 +197,7 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
             )
         )
 
-    @Slot(str, str, int, str, str, str)
+    @Slot(str, str, int, str, str, str, result=bool)
     @report_ui_errors
     def updateSpeaker(
         self,
@@ -207,7 +207,7 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
         display_name: str,
         review_status: str,
         primary_reference_id: str,
-    ) -> None:
+    ) -> bool:
         self._session._require_writable()
         current = self._session.state.binding.current
         assert current is not None
@@ -220,8 +220,9 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
             primary_reference_id=primary_reference_id,
         )
         self._session.updates.commit(project=True)
+        return True
 
-    @Slot(str, str, str, int, str, str)
+    @Slot(str, str, str, int, str, str, result=bool)
     @report_ui_errors
     def updateReference(
         self,
@@ -231,7 +232,7 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
         revision: int,
         text: str,
         language: str,
-    ) -> None:
+    ) -> bool:
         self._session._require_writable()
         current = self._session.state.binding.current
         assert current is not None
@@ -244,8 +245,9 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
             language=language,
         )
         self._session.updates.commit(project=True)
+        return True
 
-    @Slot(str, str, int, str, str, str)
+    @Slot(str, str, int, str, str, str, result=bool)
     @report_ui_errors
     def updateUtterance(
         self,
@@ -255,7 +257,7 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
         target_text: str,
         speaker_id: str,
         review_status: str,
-    ) -> None:
+    ) -> bool:
         self._session._require_writable()
         current = self._session.state.binding.current
         assert current is not None
@@ -268,6 +270,7 @@ class DubbingController(ControllerFacet[CreativeControllerScope]):
             review_status=review_status,
         )
         self._session.updates.commit(project=True)
+        return True
 
     @Slot(int, int)
     def previewRange(self, start_frame: int, end_frame: int) -> None:

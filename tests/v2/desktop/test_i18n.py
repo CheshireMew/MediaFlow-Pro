@@ -33,6 +33,7 @@ from mediaflow.desktop.presentation_catalogs import (
     transcription_configuration_label,
     transcription_plan_error_label,
 )
+from mediaflow.desktop.presentation_review import review_filter_options, review_priority_options
 from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.task_commands import ExportSequenceCommand, TranscribeSequenceCommand
@@ -55,6 +56,7 @@ def _catalog_keys(path: Path) -> set[tuple[str, str]]:
 
 def test_translation_catalogs_cover_current_qml_and_presentation_sources(
     tmp_path: Path,
+    qapp,
 ) -> None:
     root = Path(__file__).resolve().parents[3]
     desktop = root / "mediaflow" / "desktop"
@@ -80,6 +82,14 @@ def test_translation_catalogs_cover_current_qml_and_presentation_sources(
     i18n = root / "mediaflow" / "resources" / "i18n"
     assert _catalog_keys(i18n / "mediaflow_en.ts") == source_keys
     assert _catalog_keys(i18n / "mediaflow_ja.ts") == source_keys
+    for language, translations in {
+        "en": ("Create project archive", "Collect project media"),
+        "ja": ("プロジェクトアーカイブを作成", "プロジェクト素材を収集"),
+    }.items():
+        translator = QTranslator(qapp)
+        assert translator.load(str(i18n / f"mediaflow_{language}.qm"))
+        for source, expected in zip(("创建项目归档", "归集项目素材"), translations, strict=True):
+            assert translator.translate("TaskCatalog", source) == expected
 
 
 def test_llm_provider_presets_publish_model_variants_from_one_catalog() -> None:
@@ -146,6 +156,13 @@ def test_english_and_japanese_catalogs_are_complete_and_loadable() -> None:
         translator = QTranslator(app)
         assert translator.load(str(catalog.with_suffix(".qm")))
         assert app.installTranslator(translator)
+        assert [option["value"] for option in review_filter_options()] == [
+            "open", "resolved", "archived", "all",
+        ]
+        assert review_filter_options()[0]["label"] == ("Open" if language == "en" else "未対応")
+        assert review_priority_options()[-1]["label"] == (
+            "Blocks delivery" if language == "en" else "納品をブロック"
+        )
         assert QCoreApplication.translate("HomeView", "新建项目") == translations[0]
         assert QCoreApplication.translate("InspectorPanel", "音频") == translations[1]
         assert QCoreApplication.translate("ExportFileDialogs", "导出序列") == translations[2]

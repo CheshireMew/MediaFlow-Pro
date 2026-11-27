@@ -2,61 +2,31 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
 
 from .enums import MaskShapeKind
-from .keyframes import KeyframeCurve, interpolate_number, keyframe_progress
+from .keyframe_projection import (
+    KeyframeProjection,
+    project_keyframe_values,
+    project_timeline_keyframes,
+    sample_keyframe_values,
+)
+from .keyframes import interpolate_number
 from .masks import ClipMask, MaskGeometry, MaskKeyframe, MaskPoint
-from .timebase import timeline_offset_for_source_frame
 from .timeline import Clip
-
-
-@dataclass(frozen=True, slots=True)
-class MaskProjection:
-    points: tuple[tuple[int, MaskGeometry], ...]
-    curves: tuple[tuple[int, KeyframeCurve], ...]
-    has_keyframes: bool
 
 
 def project_mask_keyframes(
     clip: Clip,
     mask: ClipMask,
 ) -> tuple[MaskKeyframe, ...]:
-    converted: dict[int, MaskKeyframe] = {}
-    for item in mask.keyframes:
-        if item.timeline_offset is not None:
-            offset = item.timeline_offset
-        else:
-            assert item.source_frame is not None
-            try:
-                offset = timeline_offset_for_source_frame(
-                    clip.source_in,
-                    item.source_frame,
-                    clip.speed_numerator,
-                    clip.speed_denominator,
-                    freeze_source_frame=clip.freeze_source_frame,
-                )
-            except ValueError:
-                continue
-        if 0 <= offset < clip.duration:
-            converted[offset] = item.model_copy(
-                update={"source_frame": None, "timeline_offset": offset}
-            )
-    return tuple(converted[offset] for offset in sorted(converted))
+    return project_timeline_keyframes(clip, mask.keyframes)
 
 
-def project_mask_points(clip: Clip, mask: ClipMask) -> MaskProjection:
-    points: dict[int, MaskGeometry] = {0: mask.geometry}
-    curves: dict[int, KeyframeCurve] = {0: KeyframeCurve()}
-    keyframes = project_mask_keyframes(clip, mask)
-    for item in keyframes:
-        assert item.timeline_offset is not None
-        points[item.timeline_offset] = item.geometry
-        curves[item.timeline_offset] = item.curve
-    return MaskProjection(
-        points=tuple(sorted(points.items())),
-        curves=tuple(sorted(curves.items())),
-        has_keyframes=bool(keyframes),
+def project_mask_points(clip: Clip, mask: ClipMask) -> KeyframeProjection[MaskGeometry]:
+    return project_keyframe_values(
+        mask.geometry,
+        project_mask_keyframes(clip, mask),
+        lambda item: item.geometry,
     )
 
 
@@ -64,31 +34,7 @@ def sampled_mask_points(
     clip: Clip,
     mask: ClipMask,
 ) -> tuple[tuple[int, MaskGeometry], ...]:
-    projection = project_mask_points(clip, mask)
-    curves = dict(projection.curves)
-    ordered = list(projection.points)
-    compiled: dict[int, MaskGeometry] = {}
-    for index, (start_frame, start_geometry) in enumerate(ordered):
-        compiled[start_frame] = start_geometry
-        if index + 1 >= len(ordered):
-            continue
-        end_frame, end_geometry = ordered[index + 1]
-        curve = curves[start_frame]
-        if curve.interpolation == "linear":
-            compiled[end_frame] = end_geometry
-            continue
-        span = end_frame - start_frame
-        for frame in range(start_frame + 1, end_frame + 1):
-            progress = keyframe_progress(curve, (frame - start_frame) / span)
-            compiled[frame] = _interpolate_geometry(
-                start_geometry,
-                end_geometry,
-                progress,
-            )
-    final_frame = clip.duration - 1
-    if final_frame not in compiled:
-        compiled[final_frame] = ordered[-1][1]
-    return tuple(sorted(compiled.items()))
+    return sample_keyframe_values(project_mask_points(clip, mask), clip.duration, _interpolate_geometry)
 
 
 def mask_spline_json(
@@ -145,8 +91,7 @@ def _geometry_spline(
         return [_linear_bpoint(point.x, point.y) for point in geometry.points]
     if kind == MaskShapeKind.BEZIER:
         return [
-            [list(point.incoming()), [point.x, point.y], list(point.outgoing())]
-            for point in geometry.points
+            [list(point.incoming()), [point.x, point.y], list(point.outgoing())] for point in geometry.points
         ]
     half_width = geometry.width / 2.0
     half_height = geometry.height / 2.0
@@ -157,10 +102,7 @@ def _geometry_spline(
             (half_width, half_height),
             (-half_width, half_height),
         )
-        return [
-            _linear_bpoint(*_rotate(point, geometry))
-            for point in local
-        ]
+        return [_linear_bpoint(*_rotate(point, geometry)) for point in local]
 
     kappa = 0.5522847498307936
     anchors = (

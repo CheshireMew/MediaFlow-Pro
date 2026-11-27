@@ -148,7 +148,7 @@ class HighlightController(ControllerFacet[CreativeControllerScope]):
         if sequence_changed:
             self._session.projectors.refresh_active_sequence()
         else:
-            self._session.projectors.timeline.schedule_preview_graph()
+            self._session.preview.schedule()
 
     @Slot(str)
     @report_ui_errors
@@ -176,7 +176,7 @@ class HighlightController(ControllerFacet[CreativeControllerScope]):
             if sequence_changed:
                 self._session.projectors.refresh_active_sequence()
             else:
-                self._session.projectors.timeline.schedule_preview_graph()
+                self._session.preview.schedule()
             self._session._set_status("该高光区间已经位于主序列中")
             return
         editor = self._session.state.binding.require_current().timeline(main_sequence_id)

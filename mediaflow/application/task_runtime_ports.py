@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from mediaflow.application.project_task_document_ports import ExportTaskDocuments, WebTaskDocuments
 from mediaflow.domain.asr import RegionAsrPipeline
 from mediaflow.domain.downloads import DownloadPlan, DownloadRequest
 from mediaflow.domain.dubbing import DiarizationResult, DiarizationSpeechInterval
@@ -57,6 +58,12 @@ class AnalysisOutputTransaction(
 
 
 class WebTaskRuntime(Protocol):
+    def snapshot(self) -> AbstractContextManager[tuple[WebTaskDocuments, WebTaskRuntime]]: ...
+
+    def prepare_sequence(
+        self, state: TimelineState, *, progress: ProgressCallback, check_cancelled: CancellationCheck,
+    ) -> tuple[Path, ...]: ...
+
     def render_web_export(
         self,
         state: TimelineState,
@@ -195,6 +202,13 @@ class SequenceBuildResult:
 
 
 class ExportTaskRuntime(Protocol):
+    def snapshot(self) -> AbstractContextManager[tuple[ExportTaskDocuments, ExportTaskRuntime]]: ...
+
+    def export_fcpxml(
+        self, state: TimelineState, output_path: str | Path, *, overwrite: bool,
+        progress: ProgressCallback, check_cancelled: CancellationCheck,
+    ) -> tuple[Path, str]: ...
+
     def preflight_sequence_exports(
         self,
         requests: list[ExportSequenceRequest],

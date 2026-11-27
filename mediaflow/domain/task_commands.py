@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import (
     Field,
@@ -16,6 +16,7 @@ from mediaflow.domain.dubbing import DubbingSettings
 from mediaflow.domain.enums import ExportFormat, TaskKind, WorkflowStage
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.model_base import DomainModel
+from mediaflow.domain.timeline import TimelineState
 from mediaflow.domain.translation import TranslationMode
 from mediaflow.domain.web_exports import (
     WebExportFormat,
@@ -57,6 +58,33 @@ class ImportAssetCommand(CommandModel):
     @property
     def task_kind(self) -> TaskKind:
         return TaskKind.IMPORT
+
+
+class ImportWebPackageCommand(CommandModel):
+    command_type: Literal["import_web_package"] = "import_web_package"
+    source: NonEmptyText
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.IMPORT
+
+
+class CollectProjectAssetsCommand(CommandModel):
+    command_type: Literal["collect_project_assets"] = "collect_project_assets"
+    asset_ids: list[NonEmptyText] | None = None
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.IMPORT
+
+
+class ArchiveProjectCommand(CommandModel):
+    command_type: Literal["archive_project"] = "archive_project"
+    destination: NonEmptyText
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.EXPORT
 
 
 class GenerateProxyCommand(CommandModel):
@@ -186,6 +214,30 @@ class RenderWebClipCommand(CommandModel):
     @property
     def task_kind(self) -> TaskKind:
         return TaskKind.WEB_RENDER
+
+
+class PrepareWebSequenceCommand(CommandModel):
+    command_type: Literal["prepare_web_sequence"] = "prepare_web_sequence"
+    state: TimelineState
+
+    @property
+    def sequence_id(self) -> str:
+        return self.state.sequence.id
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.WEB_RENDER
+
+
+class ExportFcpxmlCommand(CommandModel):
+    command_type: Literal["export_fcpxml"] = "export_fcpxml"
+    sequence_id: NonEmptyText
+    output_path: NonEmptyText
+    overwrite: bool = False
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return TaskKind.EXPORT
 
 
 class ExportWebClipCommand(CommandModel):
@@ -391,6 +443,9 @@ class TrackMaskCommand(CommandModel):
 
 type TaskCommand = Annotated[
     ImportAssetCommand
+    | ImportWebPackageCommand
+    | CollectProjectAssetsCommand
+    | ArchiveProjectCommand
     | GenerateProxyCommand
     | GenerateWaveformCommand
     | DownloadMediaCommand
@@ -398,6 +453,8 @@ type TaskCommand = Annotated[
     | BuildSequenceCommand
     | ExportHighlightsCommand
     | RenderWebClipCommand
+    | PrepareWebSequenceCommand
+    | ExportFcpxmlCommand
     | ExportWebClipCommand
     | TranscribeSequenceCommand
     | DiagnosticsBundleCommand
@@ -415,3 +472,15 @@ type TaskCommand = Annotated[
     | TrackMaskCommand,
     Field(discriminator="command_type"),
 ]
+
+
+# This is a query projection of the command union, not a second routing table.
+# The command models' constant task_kind properties remain the only owners.
+TASK_COMMAND_TYPES_BY_KIND = {
+    kind: tuple(
+        model.model_fields["command_type"].default
+        for model in get_args(get_args(TaskCommand.__value__)[0])
+        if model.model_construct().task_kind == kind
+    )
+    for kind in TaskKind
+}

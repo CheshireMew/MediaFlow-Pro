@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from pathlib import Path
 
 from mediaflow.domain.exports import ExportPreset
@@ -90,6 +91,7 @@ class MltExportService:
         archive_replaced_to: str | Path | None = None,
         progress=None,
         check_cancelled=None,
+        duration_frames: int | None = None,
     ) -> ExportResult:
         return self.export_many(
             (
@@ -97,6 +99,7 @@ class MltExportService:
                     state=state,
                     preset=preset,
                     output_path=output_path,
+                    duration_frames=duration_frames,
                 ),
             ),
             overwrite=overwrite,
@@ -138,6 +141,7 @@ class MltExportService:
                         plan.preset,
                         plan.output,
                         progress=progress,
+                        duration_frames=request.duration_frames,
                     )
                 )
             for plan in plans:
@@ -224,6 +228,31 @@ class MltExportService:
     def execution_identity(self, preset: ExportPreset) -> dict[str, object]:
         return self.encoder.execution_identity(preset)
 
+    def publish_existing(
+        self, state: TimelineState, preset: ExportPreset, source: Path,
+        output_path: str | Path, *, overwrite: bool,
+    ) -> tuple[Path, dict, tuple[Path, ...]]:
+        """Publish an assembled render using the ordinary delivery contract."""
+        plan = self.planner.plans_for_requests(
+            (MltExportRequest(state, preset, output_path),), overwrite=overwrite,
+        )[0]
+        with output_set_transaction(
+            plan.destinations, overwrite=overwrite, runtime_dir=self.paths.runtime_dir,
+        ) as output_set:
+            for destination in plan.destinations:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+            staged = output_set.temporary_path(plan.output, "sequence-build")
+            shutil.copyfile(source, staged)
+            probe = self.probe(staged)
+            self.validate_probe(
+                state, preset, probe,
+                expected_duration_frames=plan.end_frame - plan.start_frame,
+            )
+            subtitles = self.sidecars.stage(plan.subtitle_outputs, output_set)
+            output_set.publish()
+            output_set.finalize()
+        return plan.output, probe, subtitles
+
     def _compile_graph(
         self,
         state: TimelineState,
@@ -231,6 +260,7 @@ class MltExportService:
         output: Path,
         *,
         progress=None,
+        duration_frames: int | None = None,
     ) -> Path:
         graph_key = hashlib.sha256(os.path.normcase(str(output)).encode("utf-8")).hexdigest()[:12]
         graph_path = (
@@ -248,6 +278,7 @@ class MltExportService:
             subtitle_track_id=preset.burn_subtitle_track_id,
             subtitle_style=preset.subtitle_style,
             watermark=preset.watermark,
+            duration_frames=duration_frames,
         )
         return graph_path
 

@@ -5,9 +5,7 @@ import math
 import tempfile
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
-from concurrent.futures import CancelledError
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +14,7 @@ from mediaflow.domain.enums import AssetKind, TrackKind
 from mediaflow.domain.timebase import source_frame_at_timeline_offset
 from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.ffmpeg_runner import FfmpegRunner
+from mediaflow.infrastructure.presentation_requests import PresentationRequestCoordinator
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.visual_source_resolver import resolve_visual_source
@@ -81,38 +80,7 @@ class _FilmstripMemoryLru:
 _MEMORY_CACHE = _FilmstripMemoryLru(FILMSTRIP_MEMORY_LIMIT_BYTES)
 
 
-class _FilmstripRequestCoordinator:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._current: dict[tuple[str, str], int] = {}
-
-    @contextmanager
-    def request(
-        self,
-        key: tuple[str, str],
-        generation: int,
-    ) -> Iterator[Callable[[], None]]:
-        with self._lock:
-            current = self._current.get(key)
-            if current is None or generation > current:
-                self._current[key] = generation
-
-        def check_cancelled() -> None:
-            with self._lock:
-                current = self._current.get(key)
-            if current != generation:
-                raise CancelledError("Timeline filmstrip request was superseded")
-
-        yield check_cancelled
-
-    def cancel(self, key: tuple[str, str], generation: int) -> None:
-        with self._lock:
-            current = self._current.get(key)
-            if current is None or generation > current:
-                self._current[key] = generation
-
-
-FILMSTRIP_REQUESTS = _FilmstripRequestCoordinator()
+FILMSTRIP_REQUESTS = PresentationRequestCoordinator()
 
 
 class TimelineFilmstripService:

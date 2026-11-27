@@ -50,11 +50,12 @@ _OPERATION_LABELS = {
 def _change_payload(context: OperationContext, since_revision: int) -> dict:
     current_revision = context.project.content_revision()
     actor_kind = context.arguments.get("actor_kind")
-    events = [
-        event
-        for event in context.project.list_project_events_after_revision(since_revision)
-        if actor_kind is None or event.actor.kind == actor_kind
-    ]
+    limit = int(context.arguments.get("limit", 500))
+    page = context.project.list_project_events_after_revision(
+        since_revision, limit=limit + 1, actor_kind=actor_kind,
+    )
+    has_more = len(page) > limit
+    events = page[:limit]
     summaries = []
     for event in events:
         label = _OPERATION_LABELS.get(event.operation, event.operation)
@@ -76,6 +77,8 @@ def _change_payload(context: OperationContext, since_revision: int) -> dict:
         "current_revision": current_revision,
         "events": events,
         "summaries": summaries,
+        "has_more": has_more,
+        "next_revision": events[-1].project_revision if has_more else current_revision,
     }
 
 
@@ -209,7 +212,8 @@ def preview_project_collection(context: OperationContext) -> ProjectCollectionPr
 def collect_project_assets(context: OperationContext) -> ProjectCollectionResult:
     asset_ids = context.arguments.get("asset_ids")
     return context.project.collect_project_assets(
-        list(asset_ids) if asset_ids is not None else None
+        list(asset_ids) if asset_ids is not None else None,
+        idempotency_key=context.task_idempotency(),
     )
 
 
@@ -225,7 +229,9 @@ def set_project_collection_state(context: OperationContext) -> ProjectCollection
 
 
 def create_project_archive(context: OperationContext) -> dict:
-    return context.project.create_project_archive(str(context.required("destination"))).model_dump(
+    return context.project.create_project_archive(
+        str(context.required("destination")), idempotency_key=context.task_idempotency(),
+    ).model_dump(
         mode="json"
     )
 

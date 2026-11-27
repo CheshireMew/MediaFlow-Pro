@@ -15,10 +15,9 @@ from mediaflow.domain.web_exports import (
 
 from .ffmpeg_runner import FfmpegRunner
 from .output_reservation import (
-    archive_failed_output,
+    OutputSetTransaction,
+    output_set_transaction,
     require_output_transaction_path,
-    reserve_output,
-    temporary_output_path,
 )
 from .runtime_paths import RuntimePaths
 from .web_render_target import WebRenderCache, WebRenderTarget
@@ -64,7 +63,9 @@ class WebClipExportWriter:
         if destination.exists() and not overwrite:
             raise FileExistsError(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with reserve_output(destination, runtime_dir=self.paths.runtime_dir):
+        with output_set_transaction(
+            (destination,), overwrite=overwrite, runtime_dir=self.paths.runtime_dir,
+        ) as output_set:
             return self._export_reserved(
                 state,
                 clip_id,
@@ -72,6 +73,7 @@ class WebClipExportWriter:
                 format,
                 clip=clip,
                 target=target,
+                output_set=output_set,
                 time_ms=time_ms,
                 background=background,
                 overwrite=overwrite,
@@ -88,6 +90,7 @@ class WebClipExportWriter:
         *,
         clip: Clip,
         target: WebRenderTarget,
+        output_set: OutputSetTransaction,
         time_ms: int,
         background: str,
         overwrite: bool,
@@ -103,9 +106,8 @@ class WebClipExportWriter:
             progress=progress,
             check_cancelled=check_cancelled,
         )
-        temporary = temporary_output_path(destination, f"web-{format}")
-        try:
-            self._write(
+        temporary = output_set.temporary_path(destination, f"web-{format}")
+        self._write(
                 format=format,
                 cache_path=cache_path,
                 target=target,
@@ -116,13 +118,10 @@ class WebClipExportWriter:
                 background=background,
                 progress=progress,
                 check_cancelled=check_cancelled,
-            )
-            if not temporary.is_file() or temporary.stat().st_size == 0:
-                raise RuntimeError("Editable media export did not produce an output file")
-            temporary.replace(destination)
-        except Exception:
-            archive_failed_output(temporary, destination)
-            raise
+        )
+        if check_cancelled:
+            check_cancelled()
+        output_set.commit()
         return WebClipExportResult(
             clip_id=clip_id,
             format=format,

@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, Signal
 
 SESSION_EVENT_NAMES = (
     "projectStateChanged",
+    "homeSummaryChanged",
     "selectionChanged",
     "historyChanged",
     "statusChanged",
@@ -26,6 +27,7 @@ SESSION_EVENT_NAMES = (
 
 class SessionEvents(QObject):
     projectStateChanged = Signal()
+    homeSummaryChanged = Signal()
     selectionChanged = Signal()
     historyChanged = Signal()
     statusChanged = Signal()

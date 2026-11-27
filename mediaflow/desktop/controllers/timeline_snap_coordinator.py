@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
+from mediaflow.desktop.component_contexts import TimelineSnappingContext
 from mediaflow.domain.enums import TrackKind
 
 from .timeline_snap_index import TimelineSnapTargetIndex
@@ -11,8 +11,8 @@ from .timeline_snap_index import TimelineSnapTargetIndex
 class TimelineSnappingCoordinator:
     """Own timeline snap indexing and the legacy full-target projection."""
 
-    def __init__(self, session: Any) -> None:
-        self._session = session
+    def __init__(self, context: TimelineSnappingContext) -> None:
+        self._context = context
         self._index = TimelineSnapTargetIndex()
 
     @property
@@ -27,18 +27,18 @@ class TimelineSnappingCoordinator:
         excluded_subtitle_placement_ids: Iterable[str] = (),
     ) -> list[int]:
         targets = [0, max(0, playhead_frame)]
-        if not self._session.state.binding.timeline:
+        if not self._context.state.binding.timeline:
             return targets
         excluded = set(excluded_clip_ids)
         excluded_placements = set(excluded_subtitle_placement_ids)
-        state = self._session.state.binding.require_timeline().state
+        state = self._context.state.binding.require_timeline().state
         for clip in state.clips:
             if clip.id not in excluded:
                 targets.extend([clip.timeline_start, clip.timeline_end])
         subtitle_track_ids = {
             track.id for track in state.tracks if track.kind == TrackKind.SUBTITLE
         }
-        for placement in self._session.models.subtitle_placements.snapshot():
+        for placement in self._context.models.subtitle_placements.snapshot():
             if (
                 placement["trackId"] in subtitle_track_ids
                 and placement["placementId"] not in excluded_placements
@@ -58,14 +58,14 @@ class TimelineSnappingCoordinator:
         *,
         excluded_subtitle_placement_ids: Iterable[str] = (),
     ) -> int:
-        if not self._session.state.binding.timeline:
+        if not self._context.state.binding.timeline:
             return max(0, frame)
-        state = self._session.state.binding.require_timeline().state
-        revision = self._session.models.subtitle_placements.revision
+        state = self._context.state.binding.require_timeline().state
+        revision = self._context.models.subtitle_placements.revision
         if not self._index.is_current(state, revision):
             self._index.rebuild(
                 state,
-                self._session.models.subtitle_placements.snapshot(),
+                self._context.models.subtitle_placements.snapshot(),
                 revision,
             )
         return self._index.snap(
@@ -77,13 +77,13 @@ class TimelineSnappingCoordinator:
         )
 
     def rebuild(self) -> None:
-        if not self._session.state.binding.timeline:
+        if not self._context.state.binding.timeline:
             self._index.invalidate()
             return
         self._index.rebuild(
-            self._session.state.binding.require_timeline().state,
-            self._session.models.subtitle_placements.snapshot(),
-            self._session.models.subtitle_placements.revision,
+            self._context.state.binding.require_timeline().state,
+            self._context.models.subtitle_placements.snapshot(),
+            self._context.models.subtitle_placements.revision,
         )
 
     def invalidate(self) -> None:
@@ -96,9 +96,9 @@ class TimelineSnappingCoordinator:
         *,
         state: object | None = None,
     ) -> None:
-        if self._session.state.binding.timeline:
+        if self._context.state.binding.timeline:
             self._index.update_clips(
-                state or self._session.state.binding.require_timeline().state,
+                state or self._context.state.binding.require_timeline().state,
                 clips,
                 removed_clip_ids,
             )

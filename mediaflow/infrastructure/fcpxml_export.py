@@ -30,11 +30,8 @@ from mediaflow.domain.timeline import (
     Transition,
 )
 from mediaflow.infrastructure.output_reservation import (
-    archive_failed_output,
-    publish_python_output,
+    output_set_transaction,
     require_python_output_transaction_path,
-    reserve_python_output,
-    temporary_output_path,
 )
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.web_render_target import WebRenderCache
@@ -72,8 +69,13 @@ class FcpxmlExportService:
             overwrite=overwrite,
         )
         python_io_path(output.parent).mkdir(parents=True, exist_ok=True)
-        with reserve_python_output(output):
-            return self._export_reserved(state, output, overwrite=overwrite)
+        with output_set_transaction(
+            (output,), overwrite=overwrite, python_only=True, runtime_dir=self.paths.runtime_dir,
+        ) as output_set:
+            temporary = output_set.temporary_path(output, "fcpxml")
+            result = self._export_reserved(state, output, overwrite=overwrite, staged_output=temporary)
+            output_set.commit()
+            return result
 
     def preflight(
         self,
@@ -166,6 +168,7 @@ class FcpxmlExportService:
         output: Path,
         *,
         overwrite: bool,
+        staged_output: Path,
     ) -> Path:
         if python_io_path(output).exists() and not overwrite:
             raise FileExistsError(output)
@@ -315,13 +318,7 @@ class FcpxmlExportService:
         )
 
         ET.indent(root, space="  ")
-        temporary = temporary_output_path(output, "fcpxml")
-        try:
-            ET.ElementTree(root).write(temporary, encoding="utf-8", xml_declaration=True)
-            publish_python_output(temporary, output)
-        except Exception:
-            archive_failed_output(temporary, output)
-            raise
+        ET.ElementTree(root).write(staged_output, encoding="utf-8", xml_declaration=True)
         return output
 
     def _clip_presentations(

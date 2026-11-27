@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,7 +17,7 @@ from mediaflow.application.subtitle_acquisition import (
 from mediaflow.application.subtitle_publication import (
     SubtitlePublicationService,
 )
-from mediaflow.application.task_service import TaskContext, TaskService
+from mediaflow.application.task_service import TaskService
 from mediaflow.domain.enums import ColorMode, TaskKind, TaskStatus
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile
@@ -50,7 +52,7 @@ def test_two_phase_output_set_archives_replaced_files_only_after_finalize(
     with output_set_transaction(
         (first, second),
         overwrite=True,
-        runtime_dir=tmp_path / "runtime",
+        runtime_dir=Path(os.environ["MEDIAFLOW_TEST_ROOT"]) / "rt",
     ) as publication:
         publication.temporary_path(
             first,
@@ -84,7 +86,9 @@ def test_two_phase_output_set_archives_replaced_files_only_after_finalize(
 def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
     tmp_path: Path,
 ) -> None:
-    paths = RuntimeContext.discover().paths
+    paths = replace(
+        RuntimeContext.discover().paths, runtime_dir=Path(os.environ["MEDIAFLOW_TEST_ROOT"]) / "rt"
+    )
     source = tmp_path / "proxy-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     repository = ProjectRepository.create(
@@ -110,21 +114,12 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
                 LocalSubtitleFileStore(),
             ),
         )
-        published = threading.Event()
-        allow_return = threading.Event()
-
-        def delay_after_publication(context: TaskContext):
-            completion = handlers.proxy(context)
-            published.set()
-            assert allow_return.wait(timeout=10)
-            return completion
-
         tasks = TaskService(
             TaskRepository(repository),
             max_workers=1,
             recover_expired=False,
         )
-        tasks.register(TaskKind.PROXY, delay_after_publication)
+        tasks.register(TaskKind.PROXY, handlers.proxy)
         try:
             cancellation_requested = threading.Event()
 
@@ -152,16 +147,27 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
             assert unpublished.sdr_preview_proxy_path is None
             assert list((repository.project_dir / "proxies").glob("*.mp4")) == []
 
+            cancellation_after_commit = threading.Event()
+
+            def cancel_after_committed_completion(event) -> None:
+                # Returning from the handler only prepares the project change.
+                # The completed event is published after the deferred commit.
+                if event.event_type == "completed" and not cancellation_after_commit.is_set():
+                    with pytest.raises(ValueError, match="Only active tasks can be cancelled"):
+                        tasks.cancel(event.task_id)
+                    cancellation_after_commit.set()
+
+            completed_subscription = tasks.events.subscribe(cancel_after_committed_completion)
+
             started = tasks.start(
                 project_id=project.id,
                 sequence_id=sequence.id,
                 command=GenerateProxyCommand(asset_id=asset.id),
                 input_asset_ids=[asset.id],
             )
-            assert published.wait(timeout=30)
-            tasks.cancel(started.id)
-            allow_return.set()
+            assert cancellation_after_commit.wait(timeout=30)
             completed = tasks.wait(started.id, timeout=10)
+            tasks.events.unsubscribe(completed_subscription)
 
             assert completed.status == TaskStatus.COMPLETED
             assert len(completed.artifacts) == 1
@@ -181,7 +187,6 @@ def test_proxy_cancel_before_publish_has_no_result_and_after_publish_completes(
                 is True
             )
         finally:
-            allow_return.set()
             tasks.shutdown()
     finally:
         repository.close()
@@ -191,7 +196,9 @@ def test_hdr_proxy_db_commit_failure_restores_both_registered_outputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = RuntimeContext.discover().paths
+    paths = replace(
+        RuntimeContext.discover().paths, runtime_dir=Path(os.environ["MEDIAFLOW_TEST_ROOT"]) / "rt"
+    )
     source = tmp_path / "hdr-proxy-source.mp4"
     generate_real_media(source, paths, width=320, height=180)
     profile = ProjectProfile(
@@ -266,13 +273,7 @@ def test_hdr_proxy_db_commit_failure_restores_both_registered_outputs(
 
         final_outputs = set((repository.project_dir / "proxies").glob("*.mp4"))
         assert final_outputs == {hdr_path, sdr_path}
-        withdrawn = list(
-            (
-                repository.project_dir
-                / "archive"
-                / "failed-proxies"
-            ).glob("*.mp4")
-        )
+        withdrawn = list((repository.project_dir / "archive" / "failed-proxies").glob("*.mp4"))
         assert len(withdrawn) == 2
         assert all(path.stat().st_size > 0 for path in withdrawn)
         assert (

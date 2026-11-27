@@ -21,6 +21,7 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.storage_names import export_quality_directory
 from mediaflow.domain.task_commands import (
+    ExportFcpxmlCommand,
     ExportSequenceCommand,
     WorkflowTaskLink,
 )
@@ -151,12 +152,14 @@ class ExportController(ControllerFacet[ExportControllerScope]):
     @report_ui_errors
     def exportFcpxml(self, path_url: str) -> None:
         self._session._require_exportable_sequence()
-        output = self._session.state.binding.require_current().export_fcpxml(
-            self._session.state.binding.active_sequence_id,
-            self._session._local_path(path_url),
-            overwrite=True,
+        self._session._set_status("正在导出 FCPXML")
+        self._session.tasks.create(
+            ExportFcpxmlCommand(
+                sequence_id=self._session.state.binding.active_sequence_id,
+                output_path=str(self._session._local_path(path_url)),
+                overwrite=True,
+            )
         )
-        self._session._set_status("已导出 FCPXML：%1", output.name)
 
     @Slot(str, str, "QVariantMap")
     @report_ui_errors

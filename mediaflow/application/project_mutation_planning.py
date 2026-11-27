@@ -287,6 +287,8 @@ def _conflict_set(
         "timeline.set_clip_speed",
         "timeline.set_clip_transform_keyframes",
         "timeline.set_clip_effect_parameter_keyframes",
+        "timeline.paste_clip_transform_keyframes",
+        "timeline.paste_clip_effect_parameter_keyframes",
         "timeline.set_clip_mask_keyframes",
         "timeline.replace_scene_markers",
     }:
@@ -318,11 +320,7 @@ def _conflict_set(
         return [f"{root}/reviews/create"]
     if operation.startswith("review."):
         thread_id = arguments.get("thread_id")
-        return [
-            f"{root}/reviews/{_path(thread_id)}"
-            if thread_id
-            else f"{root}/reviews"
-        ]
+        return [f"{root}/reviews/{_path(thread_id)}" if thread_id else f"{root}/reviews"]
     if operation in {"timeline.update_range", "timeline.remove_range"}:
         return [f"{root}/ranges/{_path(arguments.get('range_id'))}"]
     if operation == "timeline.add_range":

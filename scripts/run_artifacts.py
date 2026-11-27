@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import time
 import traceback
 import uuid
@@ -19,20 +18,18 @@ from typing import Literal
 from mediaflow.atomic_file import atomic_write_text
 from mediaflow.environment import test_run_root
 from mediaflow.infrastructure.project_lock import ProcessFileLock
-from mediaflow.infrastructure.storage_budget import (
-    directory_inventory,
-    require_test_artifact_budget,
-)
+from mediaflow.infrastructure.storage_budget import require_test_artifact_budget
+from mediaflow.infrastructure.storage_inventory import directory_inventory, run_payload_inventory
+from mediaflow.infrastructure.storage_processes import storage_process_owner
+from mediaflow.infrastructure.storage_receipts import storage_terminal_status
+from mediaflow.infrastructure.storage_roots import managed_root_ownership, register_owned_storage_roots
 
 MANIFEST_FILENAME = "run-result.json"
 MANIFEST_SCHEMA = "mediaflow-script-run/v1"
 VERIFICATION_WORK_ROOT_VARIABLE = "MEDIAFLOW_VERIFICATION_WORK_ROOT"
 
 _CATEGORY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_MANAGED_RUN_PATTERN = re.compile(
-    r"^r-\d{8}T\d{6}\.\d{6}Z-\d+-[0-9a-f]{8}$"
-)
-_RunStatus = Literal["running", "passed", "failed"]
+_RunStatus = Literal["running", "passed", "failed", "interrupted"]
 _LIFECYCLE_LOCK_TIMEOUT_SECONDS = 5.0
 _LIFECYCLE_LOCK_POLL_SECONDS = 0.01
 
@@ -49,10 +46,17 @@ def verification_workspace_root(evidence_root: Path) -> Path:
     configured = os.environ.get(VERIFICATION_WORK_ROOT_VARIABLE, "").strip()
     if not configured:
         return evidence_root.expanduser().resolve()
-    identity = hashlib.sha256(
-        str(evidence_root.expanduser().resolve()).encode("utf-8")
-    ).hexdigest()[:12]
+    identity = hashlib.sha256(str(evidence_root.expanduser().resolve()).encode("utf-8")).hexdigest()[:12]
     workspace = Path(configured).expanduser().resolve() / identity
+    require_test_artifact_budget(
+        workspace, expected_new_bytes=1024**3, label="MediaFlow verification workspace"
+    )
+    register_owned_storage_roots(
+        (workspace,),
+        ownership=managed_root_ownership(workspace),
+        producer="pytest-and-verification-evidence",
+        receipt=evidence_root / MANIFEST_FILENAME,
+    )
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
 
@@ -60,16 +64,13 @@ def verification_workspace_root(evidence_root: Path) -> Path:
 def _validate_category(category: str) -> str:
     if not _CATEGORY_PATTERN.fullmatch(category):
         raise ValueError(
-            "Verification run category must contain only lowercase letters, "
-            "numbers, and single hyphens"
+            "Verification run category must contain only lowercase letters, numbers, and single hyphens"
         )
     return category
 
 
 def _is_link(path: Path) -> bool:
-    return path.is_symlink() or (
-        hasattr(path, "is_junction") and path.is_junction()
-    )
+    return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
 
 
 @contextmanager
@@ -79,9 +80,7 @@ def _lifecycle_lock(category_root: Path) -> Iterator[None]:
     deadline = time.monotonic() + _LIFECYCLE_LOCK_TIMEOUT_SECONDS
     while not lock.acquire():
         if time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"Timed out waiting for verification run lifecycle lock: {lock_path}"
-            )
+            raise RuntimeError(f"Timed out waiting for verification run lifecycle lock: {lock_path}")
         time.sleep(_LIFECYCLE_LOCK_POLL_SECONDS)
     try:
         yield
@@ -94,74 +93,6 @@ def _write_manifest(path: Path, payload: dict[str, object]) -> None:
         path,
         json.dumps(payload, ensure_ascii=False, indent=2),
     )
-
-
-def _read_manifest(path: Path) -> dict[str, object]:
-    if _is_link(path):
-        raise RuntimeError(f"Refusing to read a linked run manifest: {path}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Invalid verification run manifest: {path}") from error
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"Invalid verification run manifest object: {path}")
-    return payload
-
-
-def _owned_passed_manifest(
-    category_root: Path,
-    candidate: Path,
-    category: str,
-) -> dict[str, object]:
-    root = category_root.resolve(strict=True)
-    if _is_link(candidate):
-        raise RuntimeError(f"Refusing to follow a linked verification run: {candidate}")
-    resolved = candidate.resolve(strict=True)
-    if (
-        resolved == root
-        or resolved.parent != root
-        or not _MANAGED_RUN_PATTERN.fullmatch(candidate.name)
-    ):
-        raise RuntimeError(f"Refusing to inspect an unmanaged verification path: {resolved}")
-    manifest = _read_manifest(candidate / MANIFEST_FILENAME)
-    expected = {
-        "schema": MANIFEST_SCHEMA,
-        "category": category,
-        "run_id": candidate.name,
-        "managed": True,
-        "status": "passed",
-    }
-    if any(manifest.get(key) != value for key, value in expected.items()):
-        raise RuntimeError(f"Verification run ownership mismatch: {candidate}")
-    if not isinstance(manifest.get("finished_at"), str):
-        raise RuntimeError(f"Passed verification run has no finish time: {candidate}")
-    return manifest
-
-
-def _remove_managed_run(
-    category_root: Path,
-    candidate: Path,
-    category: str,
-) -> None:
-    _owned_passed_manifest(category_root, candidate, category)
-    shutil.rmtree(candidate)
-
-
-def _retain_latest_success(category_root: Path, category: str) -> None:
-    successful: list[tuple[str, str, Path]] = []
-    for candidate in category_root.iterdir():
-        if not candidate.is_dir():
-            continue
-        try:
-            manifest = _owned_passed_manifest(category_root, candidate, category)
-        except RuntimeError:
-            continue
-        successful.append(
-            (str(manifest["finished_at"]), candidate.name, candidate)
-        )
-    successful.sort()
-    for _, _, obsolete in successful[:-1]:
-        _remove_managed_run(category_root, obsolete, category)
 
 
 def _archive_failed_run_creation(
@@ -189,6 +120,7 @@ class VerificationRun:
         default_factory=dict,
         init=False,
     )
+    _workspace_root: Path | None = field(default=None, init=False, repr=False)
 
     def __enter__(self) -> Path:
         if self._finished:
@@ -196,20 +128,15 @@ class VerificationRun:
         if self._entered:
             raise RuntimeError(f"Verification run is already active: {self.path}")
         workspace = verification_workspace_root(self.path)
+        self._workspace_root = workspace
         isolated = {
-            "MEDIAFLOW_SERVICE_SETTINGS_PATH": (
-                workspace / "settings" / "service-settings.json"
-            ),
-            "MEDIAFLOW_DESKTOP_SETTINGS_PATH": (
-                workspace / "settings" / "desktop-settings.json"
-            ),
+            "MEDIAFLOW_SERVICE_SETTINGS_PATH": (workspace / "settings" / "service-settings.json"),
+            "MEDIAFLOW_DESKTOP_SETTINGS_PATH": (workspace / "settings" / "desktop-settings.json"),
             "MEDIAFLOW_MEDIA_ROOT": workspace / "media",
             "MEDIAFLOW_PROJECT_ROOT": workspace / "projects",
             "MEDIAFLOW_SERVICE_STATE_DIR": workspace / "editor-service",
         }
-        self._previous_environment = {
-            name: os.environ.get(name) for name in isolated
-        }
+        self._previous_environment = {name: os.environ.get(name) for name in isolated}
         for name, value in isolated.items():
             os.environ[name] = str(value)
         self._entered = True
@@ -259,11 +186,13 @@ class VerificationRun:
                 )
             ),
         }
-        self._finish("failed", error=error)
+        self._finish(
+            "interrupted" if storage_terminal_status(exception) == "interrupted" else "failed", error=error
+        )
 
     def _finish(
         self,
-        status: Literal["passed", "failed"],
+        status: Literal["passed", "failed", "interrupted"],
         *,
         error: dict[str, str] | None = None,
     ) -> None:
@@ -277,8 +206,6 @@ class VerificationRun:
                 raise RuntimeError("Managed verification run has no category root")
             with _lifecycle_lock(self.category_root):
                 _write_manifest(self.path / MANIFEST_FILENAME, payload)
-                if status == "passed":
-                    _retain_latest_success(self.category_root, self.category)
         else:
             _write_manifest(self.path / MANIFEST_FILENAME, payload)
         self._finished = True
@@ -292,12 +219,26 @@ class VerificationRun:
             "status": status,
             "started_at": self.started_at,
             "process_id": os.getpid(),
+            "owner": storage_process_owner(),
+            "registered_roots": [
+                str(self.path),
+                *(
+                    [str(self._workspace_root)]
+                    if self._workspace_root is not None and self._workspace_root != self.path
+                    else []
+                ),
+            ],
         }
         if status != "running":
             payload["finished_at"] = _finished_at()
             payload["storage"] = {
                 "preflight": self.storage_preflight,
-                "final_inventory": directory_inventory(self.path),
+                "final_inventory": run_payload_inventory(self.path),
+                "workspace_inventory": (
+                    directory_inventory(self._workspace_root)
+                    if self._workspace_root is not None and self._workspace_root != self.path
+                    else None
+                ),
                 "cleanup": "report-only-until-authorized",
             }
         return payload
@@ -321,9 +262,7 @@ def verification_run(
         selected_root = managed_root if managed_root is not None else test_run_root() / "scripts"
         requested_base = selected_root.expanduser().absolute()
         if requested_base.exists() and _is_link(requested_base):
-            raise RuntimeError(
-                f"Managed script run root cannot be linked: {requested_base}"
-            )
+            raise RuntimeError(f"Managed script run root cannot be linked: {requested_base}")
         base = requested_base.resolve()
         storage_preflight = require_test_artifact_budget(
             base,
@@ -334,27 +273,27 @@ def verification_run(
         category_root = base / category
         category_root.mkdir(exist_ok=True)
         if _is_link(category_root):
-            raise RuntimeError(
-                f"Managed script category root cannot be linked: {category_root}"
-            )
+            raise RuntimeError(f"Managed script category root cannot be linked: {category_root}")
         with _lifecycle_lock(category_root):
             run_id = f"r-{started_at}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
             path = category_root / run_id
             path.mkdir(exist_ok=False)
     elif explicit_root is not None:
         path = explicit_root.expanduser().resolve()
+        storage_preflight = require_test_artifact_budget(
+            path, expected_new_bytes=1024**3, label=f"MediaFlow {category} verification evidence"
+        )
         path.mkdir(parents=True, exist_ok=False)
-        storage_preflight = {}
     else:
         if explicit_parent is None:
             raise AssertionError("Explicit parent resolution is inconsistent")
         parent = explicit_parent.expanduser().resolve()
-        parent.mkdir(parents=True, exist_ok=True)
-        path = parent / (
-            f"{category}-{started_at}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        storage_preflight = require_test_artifact_budget(
+            parent, expected_new_bytes=1024**3, label=f"MediaFlow {category} verification evidence"
         )
+        parent.mkdir(parents=True, exist_ok=True)
+        path = parent / (f"{category}-{started_at}-{os.getpid()}-{uuid.uuid4().hex[:8]}")
         path.mkdir(exist_ok=False)
-        storage_preflight = {}
 
     run = VerificationRun(
         category=category,
@@ -365,6 +304,12 @@ def verification_run(
         storage_preflight=storage_preflight,
     )
     try:
+        register_owned_storage_roots(
+            (path,),
+            ownership=managed_root_ownership(path),
+            producer="pytest-and-verification-evidence",
+            receipt=path / MANIFEST_FILENAME,
+        )
         _write_manifest(
             path / MANIFEST_FILENAME,
             run._manifest("running"),
@@ -377,14 +322,8 @@ def verification_run(
                         category_root,
                         path,
                     )
-                error.add_note(
-                    "未完成的验证运行目录已移到："
-                    f"{archived}"
-                )
+                error.add_note(f"未完成的验证运行目录已移到：{archived}")
             except BaseException as archive_error:
-                error.add_note(
-                    "验证运行清单写入失败，且未完成目录归档失败："
-                    f"{archive_error}"
-                )
+                error.add_note(f"验证运行清单写入失败，且未完成目录归档失败：{archive_error}")
         raise
     return run

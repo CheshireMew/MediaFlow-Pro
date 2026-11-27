@@ -25,6 +25,7 @@ from mediaflow.domain.timeline import Clip, TimelineState
 class SequenceAudioSelection:
     track_ids: tuple[str, ...]
     asset_ids: tuple[str, ...]
+    clip_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,23 +515,25 @@ def select_audible_sequence_audio(
 
     track_ids: list[str] = []
     asset_ids: list[str] = []
+    clip_ids: list[str] = []
     for track in state.effective_tracks(TrackKind.AUDIO):
         if track.muted:
             continue
         if not bus_reaches_master(track.audio_bus_id or master.id):
             continue
-        audible_assets = [
-            clip.asset_id
+        audible_clips = [
+            clip
             for clip in output_audio_clips_for_track(state, track.id)
             if clip.timeline_start < end
             and clip.timeline_end > start
             and clip.asset_id in assets
             and assets[clip.asset_id].metadata.has_audio
         ]
-        if not audible_assets:
+        if not audible_clips:
             continue
         track_ids.append(track.id)
-        for asset_id in audible_assets:
+        clip_ids.extend(clip.id for clip in audible_clips)
+        for asset_id in (clip.asset_id for clip in audible_clips):
             if asset_id not in asset_ids:
                 asset_ids.append(asset_id)
-    return SequenceAudioSelection(tuple(track_ids), tuple(asset_ids))
+    return SequenceAudioSelection(tuple(track_ids), tuple(asset_ids), tuple(clip_ids))

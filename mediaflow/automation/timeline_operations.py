@@ -4,6 +4,7 @@ from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.enums import (
     ExportFormat,
     MaskShapeKind,
+    TaskStatus,
     TrackKind,
     TransitionKind,
     VisualEffectKind,
@@ -14,16 +15,18 @@ from mediaflow.domain.masks import MaskGeometry
 from mediaflow.domain.multicam import MulticamAngleSyncSpec
 from mediaflow.domain.task_commands import (
     BuildSequenceCommand,
+    ExportFcpxmlCommand,
     ExportSequenceCommand,
+    PrepareWebSequenceCommand,
     SequenceBuildUnit,
 )
+from mediaflow.domain.tasks import InterchangeExportTaskOutcome
 from mediaflow.domain.timeline import (
     ClipAddRequest,
     ClipAudio,
     ClipTransform,
     FreezeClipAddRequest,
 )
-from mediaflow.file_digest import sha256_file
 
 
 def get_timeline(context: OperationContext) -> dict:
@@ -176,7 +179,6 @@ def analyze_color_scopes(context: OperationContext) -> dict:
     frame = int(context.required("frame"))
     if not 0 <= frame < state.duration_frames:
         raise ValueError("示波器帧必须位于时间线内容范围内")
-    context.project.prepare_web_sequence(state)
     _graph, rendered = context.application.render_preview_frames(
         context.project.project_dir,
         state,
@@ -592,19 +594,29 @@ def retime_clip_mask_keyframes(context: OperationContext) -> dict:
 
 
 def render_preview(context: OperationContext) -> dict:
-    state = context.project.timeline(context.sequence_id()).state
-    context.project.prepare_web_sequence(state)
+    with context.project.write_gate:
+        state = context.project.timeline(context.sequence_id()).state.model_copy(deep=True)
+    task = context.project.start_task(
+        PrepareWebSequenceCommand(state=state), sequence_id=state.sequence.id,
+        idempotency_key=context.task_idempotency(),
+    )
+    completed = context.project.wait_for_task(task.id)
+    if completed.status != TaskStatus.COMPLETED:
+        raise RuntimeError(completed.error or "预览准备已停止")
     path = context.application.write_preview_snapshot(
         context.project.project_dir,
         state,
         use_proxies=bool(context.arguments.get("use_proxies", True)),
         prefer_sdr_preview_proxy=True,
+        request_owner=context.envelope.client_id or context.envelope.actor.id,
     )
     return {"preview_graph": str(path)}
 
 
 def render_preview_frames(context: OperationContext) -> dict:
-    state = context.project.timeline(context.sequence_id()).state
+    with context.project.write_gate:
+        state = context.project.timeline(context.sequence_id()).state.model_copy(deep=True)
+        content_revision = context.project.content_revision()
     frames = [int(frame) for frame in context.required("frames")]
     if state.duration_frames <= 0:
         raise ValueError("Cannot render proof frames from an empty timeline")
@@ -614,7 +626,6 @@ def render_preview_frames(context: OperationContext) -> dict:
             "Proof frames must be inside the timeline duration; invalid frames: "
             + ", ".join(str(frame) for frame in outside)
         )
-    context.project.prepare_web_sequence(state)
     graph, rendered = context.application.render_preview_frames(
         context.project.project_dir,
         state,
@@ -623,7 +634,7 @@ def render_preview_frames(context: OperationContext) -> dict:
         prefer_sdr_preview_proxy=True,
     )
     return {
-        "content_revision": context.project.known_content_revision,
+        "content_revision": content_revision,
         "preview_graph": str(graph),
         "frames": rendered,
     }
@@ -670,17 +681,24 @@ def build_sequence(context: OperationContext) -> dict:
 
 def export_fcpxml(context: OperationContext) -> dict:
     sequence_id = context.sequence_id()
-    state = context.project.timeline(sequence_id).state
-    output = context.project.export_fcpxml(
-        sequence_id,
-        str(context.required("output_path")),
-        overwrite=bool(context.arguments.get("overwrite", False)),
+    task = context.project.start_task(
+        ExportFcpxmlCommand(
+            sequence_id=sequence_id, output_path=str(context.required("output_path")),
+            overwrite=bool(context.arguments.get("overwrite", False)),
+        ),
+        sequence_id=sequence_id, idempotency_key=context.task_idempotency(),
     )
+    completed = context.project.wait_for_task(task.id)
+    if completed.status != TaskStatus.COMPLETED or not isinstance(
+        completed.outcome, InterchangeExportTaskOutcome
+    ):
+        raise RuntimeError(completed.error or "FCPXML 导出已停止")
+    outcome = completed.outcome
     return {
         "format": "fcpxml",
         "project_id": context.project.get_project().id,
         "sequence_id": sequence_id,
-        "timeline_revision": state.sequence.timeline_revision,
-        "output_path": str(output),
-        "sha256": sha256_file(output),
+        "timeline_revision": outcome.timeline_revision,
+        "output_path": outcome.output.display_path(context.project.project_dir),
+        "sha256": outcome.sha256,
     }

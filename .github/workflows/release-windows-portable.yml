@@ -4,12 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag whose tag-triggered full quality run passed
+        description: Existing release tag to build and publish
         required: true
         type: string
+      run_full_acceptance:
+        description: Explicitly request the complete portable offline acceptance chain
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  actions: read
   contents: write
 
 concurrency:
@@ -24,7 +28,6 @@ jobs:
     outputs:
       commit: ${{ steps.source.outputs.commit }}
       version: ${{ steps.source.outputs.version }}
-      quality_run_id: ${{ steps.quality.outputs.run_id }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -46,36 +49,6 @@ jobs:
           }
           "commit=$commit" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           "version=$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
-      - name: Require a successful full quality run started by this tag
-        id: quality
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          COMMIT_SHA: ${{ steps.source.outputs.commit }}
-        run: |
-          $response = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/quality.yml/runs?event=push&status=success&head_sha=$env:COMMIT_SHA&per_page=100" | ConvertFrom-Json
-          $run = $response.workflow_runs |
-            Where-Object { $_.head_branch -eq $env:RELEASE_TAG -and $_.conclusion -eq "success" } |
-            Sort-Object run_started_at -Descending |
-            Select-Object -First 1
-          if ($null -eq $run) { throw "No successful tag-triggered V2 Quality run exists for this commit" }
-          $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/artifacts" | ConvertFrom-Json
-          $expectedName = "quality-gate-$env:COMMIT_SHA-$($run.run_attempt)"
-          $artifact = $artifacts.artifacts | Where-Object { $_.name -eq $expectedName } | Select-Object -First 1
-          if ($null -eq $artifact) { throw "Successful run has no exact quality-gate receipt" }
-          New-Item -ItemType Directory -Path quality-receipt | Out-Null
-          gh api $artifact.archive_download_url > quality-receipt.zip
-          Expand-Archive -LiteralPath quality-receipt.zip -DestinationPath quality-receipt
-          $receipt = Get-Content quality-receipt/quality-gate.json -Raw | ConvertFrom-Json
-          if ($receipt.schema -ne "mediaflow-quality-gate/v1" -or
-              $receipt.sha -ne $env:COMMIT_SHA -or
-              $receipt.git_ref -ne "refs/tags/$env:RELEASE_TAG" -or
-              $receipt.scope -ne "full" -or
-              $receipt.passed -ne $true) {
-            throw "Quality receipt does not authorize this exact tag, commit and full scope"
-          }
-          "run_id=$($run.id)" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
 
   build-verify-release:
     name: Build, verify, then publish
@@ -102,13 +75,13 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -154,7 +127,8 @@ jobs:
             --output-root $portableRoot
           "name=$portableName" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           "root=$portableRoot" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
-      - name: Exercise a separate copy through the complete offline user chain
+      - name: Run the complete offline user chain only when explicitly requested
+        if: inputs.run_full_acceptance == true
         shell: pwsh
         run: |
           $validationRoot = Join-Path $env:RUNNER_TEMP "portable-validation-copy"

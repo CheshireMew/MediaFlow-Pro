@@ -89,6 +89,6 @@ def test_download_operations_declare_task_execution_and_mutation_scope(operation
     definition = OPERATIONS[operation]
     assert definition.project_access == "write"
     assert definition.execution_mode == "task"
-    assert definition.idempotency == "optional"
+    assert definition.idempotency == "required"
     plan = plan_automation_project_mutation(operation, {}, default_sequence_id="main")
     assert plan.change_scopes == [f"/tasks/{operation.replace('.', '-')}:main"]

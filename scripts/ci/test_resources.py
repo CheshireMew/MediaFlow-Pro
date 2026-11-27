@@ -18,6 +18,7 @@ RUNTIME_TEST_SOURCES = frozenset(
         "tests/v2/infrastructure/test_reference_video_comparison.py",
         "tests/v2/infrastructure/test_release_runtime.py",
         "tests/v2/infrastructure/test_segmented_export.py",
+        "tests/v2/infrastructure/test_segmented_export_contract.py",
         "tests/v2/infrastructure/test_web_capture_engine.py",
         "tests/v2/infrastructure/test_web_media.py",
         "tests/v2/application/test_portable_timeline_import.py",
@@ -25,6 +26,13 @@ RUNTIME_TEST_SOURCES = frozenset(
 )
 RUNTIME_TEST_PREFIXES = ("tests/v2/desktop/", "tests/v2/integration/")
 RUNTIME_TEST_NODE_PREFIXES = (
+    "tests/v2/application/test_remote_timeline_cache.py::"
+    "test_remote_commands_apply_the_actual_committed_patch_and_replay_invalidates_cache",
+    "tests/v2/infrastructure/test_archive_recovery_contract.py::"
+    "test_archive_restores_real_web_package_with_runtime_and_receipt",
+    "tests/v2/infrastructure/test_script_run_artifacts.py::test_script_run_retention_is_cross_process_safe",
+    "tests/v2/infrastructure/test_script_run_artifacts.py::"
+    "test_pytest_runner_retains_only_failed_case_after_collection_success_and_failure",
     "tests/v2/application/test_editor_api.py::test_cli_and_desktop_composition_api_share_real_persisted_task_chain",
     "tests/v2/application/test_editor_api.py::test_fcpxml_export_runs_through_the_public_cli_contract",
     "tests/v2/application/test_editor_api.py::test_preview_frame_render_returns_real_revision_bound_png_evidence",
@@ -33,6 +41,9 @@ RUNTIME_TEST_NODE_PREFIXES = (
     "tests/v2/application/test_editor_service.py::test_async_task_receipt_recovers_after_scheduling_persistence_fault",
     "tests/v2/application/test_editor_service.py::test_task_request_releases_foreground_gate_but_keeps_real_writes_serialized",
     "tests/v2/application/test_editor_service.py::test_websocket_stream_delivers_real_task_and_committed_project_events",
+    "tests/v2/application/test_editor_service.py::"
+    "test_existing_desktop_subscription_recovers_its_workspace_after_service_restart",
+    "tests/v2/application/test_editor_service.py::test_web_edit_history_survives_restart_for_single_and_batch_edits",
     "tests/v2/application/test_subtitle_services.py::test_imported_subtitle_auto_imports_adjacent_media_and_follows_its_clip",
     "tests/v2/application/test_subtitle_services.py::test_new_translation_commit_failure_leaves_no_document_or_visible_srt",
     "tests/v2/application/test_subtitle_services.py::test_overlap_fix_and_clipboard_replacement_persist_through_srt_boundary",
@@ -49,6 +60,10 @@ RUNTIME_TEST_NODE_PREFIXES = (
     "tests/v2/infrastructure/test_download_features.py::test_real_browser_sniffer_observes_page_media_request_and_title",
     "tests/v2/infrastructure/test_openchatcut_extensions.py::test_fcpxml_exports_real_media_timing_markers_and_captions",
     "tests/v2/infrastructure/test_openchatcut_extensions.py::test_scene_and_subject_tasks_write_observable_timeline_results",
+    "tests/v2/infrastructure/test_storage_capacity_contract.py::"
+    "test_abandoned_cache_producer_is_reconciled_from_real_files_after_process_exit",
+    "tests/v2/infrastructure/test_storage_capacity_contract.py::"
+    "test_real_public_build_reuses_cache_blocks_over_budget_and_reports_cancelled_residue",
 )
 RESOURCE_PROFILES = ("all", "lightweight", "runtime")
 
@@ -65,10 +80,7 @@ def requires_reviewed_runtime(node_id: str) -> bool:
     return (
         source in RUNTIME_TEST_SOURCES
         or source.startswith(RUNTIME_TEST_PREFIXES)
-        or any(
-            node_id == prefix or node_id.startswith(f"{prefix}[")
-            for prefix in RUNTIME_TEST_NODE_PREFIXES
-        )
+        or any(node_id == prefix or node_id.startswith(f"{prefix}[") for prefix in RUNTIME_TEST_NODE_PREFIXES)
     )
 
 

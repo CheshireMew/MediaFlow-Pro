@@ -40,6 +40,9 @@ class EditorProjectTaskWorkflowCommands:
     def task_events_after(self, cursor: int, *, limit: int = 500) -> list[TaskEvent]:
         return self._tasks.events_after(cursor, limit=limit)
 
+    def task_event_cursor(self) -> int:
+        return self._tasks.event_cursor()
+
     def get_task(self, task_id: str) -> Task:
         return self._tasks.get(task_id)
 

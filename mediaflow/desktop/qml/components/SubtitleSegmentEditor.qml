@@ -19,6 +19,9 @@ Panel {
         const segmentId = String(mediaflow.subtitleViewController.selectedSubtitleSegmentId || "");
         if (loadingSegmentDraft || segmentId.length === 0 || loadedSegmentId !== segmentId)
             return;
+        mediaflow.workspaceProjectController.beginCollaborationDraft(
+            "/subtitles/documents/" + mediaflow.subtitleViewController.selectedDocumentId
+            + "/segments/" + segmentId);
         const next = Object.assign({}, segmentDrafts);
         next[segmentDraftKey(segmentId)] = {
             "startFrame": segmentStart.value,

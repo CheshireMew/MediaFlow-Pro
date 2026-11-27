@@ -13,7 +13,6 @@ from scripts import run_artifacts
 from scripts.run_artifacts import (
     MANIFEST_FILENAME,
     VERIFICATION_WORK_ROOT_VARIABLE,
-    _remove_managed_run,
     verification_run,
     verification_workspace_root,
 )
@@ -68,7 +67,7 @@ def _release_file_holder(process: subprocess.Popen[str]) -> None:
     assert (process.returncode, stdout, stderr) == (0, "", "")
 
 
-def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
+def test_script_run_retention_preserves_every_outcome(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,7 +133,7 @@ def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
     with verification_run("policy", managed_root=managed_root) as latest_success:
         (latest_success / "success.txt").write_text("latest", encoding="utf-8")
 
-    assert not first_success.exists()
+    assert first_success.is_dir()
     assert latest_success.is_dir()
     assert _manifest(latest_success)["status"] == "passed"
     assert failed.is_dir()
@@ -145,10 +144,8 @@ def test_script_run_retention_keeps_failures_interruptions_and_latest_success(
     assert _manifest(explicit_root)["managed"] is False
     assert _manifest(explicit_child)["managed"] is False
 
-    with pytest.raises(RuntimeError, match="unmanaged verification path"):
-        _remove_managed_run(category_root, category_root, "policy")
-    with pytest.raises(RuntimeError, match="unmanaged verification path"):
-        _remove_managed_run(category_root, historical, "policy")
+    assert _manifest(first_success)["storage"]["cleanup"] == "report-only-until-authorized"
+    assert (first_success / "success.txt").read_text(encoding="utf-8") == "first"
 
 
 def test_verification_run_separates_long_evidence_from_short_native_workspace(
@@ -247,167 +244,97 @@ def test_script_run_retention_is_cross_process_safe(tmp_path: Path) -> None:
 
     category_root = managed_root / "concurrent"
     retained = [path for path in category_root.iterdir() if path.is_dir()]
-    assert len(retained) == 1
-    assert _manifest(retained[0])["status"] == "passed"
+    assert len(retained) == 2
+    assert all(_manifest(path)["status"] == "passed" for path in retained)
     assert (category_root / ".lifecycle.lock").is_file()
 
 
-def test_pytest_retention_preserves_status_when_windows_files_are_still_open(
+@pytest.mark.parametrize("exitstatus", [pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED])
+def test_pytest_retention_preserves_failures_locked_files_and_unregistered_prior_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    exitstatus: pytest.ExitCode,
 ) -> None:
-    managed_root = tmp_path / "managed-pytest"
-    managed_root.mkdir()
-    monkeypatch.setattr(
-        pytest_retention,
-        "MANAGED_PYTEST_ROOT",
-        managed_root,
-    )
-    legacy_success = (
-        managed_root
-        / "pytest-run-20260728T040000.000000Z-100-aaaaaaaa"
-    )
-    (legacy_success / "cases" / "legacy-case").mkdir(
-        parents=True
-    )
-    (
-        legacy_success
-        / "cases"
-        / "legacy-case"
-        / "result.txt"
-    ).write_text("old success", encoding="utf-8")
-    (
-        legacy_success / "run-result.json"
-    ).write_text(
-        json.dumps(
-            {
-                "status": "passed",
-                "finished_at": (
-                    "2026-07-28T04:00:00+00:00"
-                ),
-                "process_id": 100,
-                "exit_status": 0,
-                "failed_nodes": [],
-                "case_count": 1,
-                "retained_nodes": [],
-                "retained_case_count": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
-    legacy_failure = (
-        managed_root
-        / "pytest-run-20260728T040100.000000Z-101-bbbbbbbb"
-    )
-    (legacy_failure / "cases" / "failed-case").mkdir(
-        parents=True
-    )
-    (
-        legacy_failure / "run-result.json"
-    ).write_text(
-        json.dumps(
-            {
-                "status": "failed",
-                "finished_at": (
-                    "2026-07-28T04:01:00+00:00"
-                ),
-                "process_id": 101,
-                "exit_status": 1,
-                "failed_nodes": ["suite::failed"],
-                "case_count": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    failed_root = managed_root / "r-20260728T050000-101-aaaaaaaa"
-    passed_case = failed_root / "cases" / "c-passed"
-    failed_case = failed_root / "cases" / "c-failed"
-    passed_case.mkdir(parents=True)
-    failed_case.mkdir()
-    locked_case_file = passed_case / "still-open.bin"
-    locked_case_file.write_bytes(b"locked")
-    (failed_case / "failure.txt").write_text(
-        "retain failure",
-        encoding="utf-8",
-    )
-    failed_state = pytest_retention.TestRunState(
-        failed_root,
-        cases={
-            "suite::passed": passed_case,
-            "suite::failed": failed_case,
-        },
-        failed_nodes={"suite::failed"},
+    managed_root = tmp_path / "p"
+    monkeypatch.setattr(pytest_retention, "MANAGED_PYTEST_ROOT", managed_root)
+    prior = managed_root / "prior-run" / "result.txt"
+    prior.parent.mkdir(parents=True)
+    prior.write_text("retain prior evidence", encoding="utf-8")
+    root = managed_root / "r-000000000001"
+    passed = root / "c" / "c-000000000001"
+    failed = root / "c" / "c-000000000002"
+    passed.mkdir(parents=True)
+    failed.mkdir()
+    locked = passed / "still-open.bin"
+    locked.write_bytes(b"locked")
+    state = pytest_retention.TestRunState(
+        root,
+        cases={"suite::passed": passed, "suite::failed": failed},
+        failed_nodes={"suite::failed"} if exitstatus else set(),
         finished_nodes={"suite::passed", "suite::failed"},
     )
-    holder = _hold_file_without_delete_sharing(locked_case_file)
+    (root / "run-result.json").write_text(
+        json.dumps({"schema": pytest_retention.MANIFEST_SCHEMA, "run_id": root.name,
+                    "managed": True, "status": "running", "process_id": os.getpid()}),
+        encoding="utf-8",
+    )
+    holder = _hold_file_without_delete_sharing(locked)
     try:
-        pytest_retention._finish_failed_run(
-            failed_state,
-            pytest.ExitCode.TESTS_FAILED,
-        )
+        with pytest.warns(pytest.PytestWarning, match="cleanup was incomplete"):
+            pytest_retention._finish_run(state, exitstatus)
     finally:
         _release_file_holder(holder)
+    manifest = _manifest(root)
+    assert manifest["status"] == ("passed" if not exitstatus else "failed")
+    assert manifest["exit_status"] == int(exitstatus)
+    assert manifest["retention_status"] == "incomplete"
+    assert manifest["retention_errors"]
+    assert set(manifest["retained_nodes"]) == (
+        {"suite::passed", "suite::failed"} if exitstatus else {"suite::passed"}
+    )
+    assert prior.read_text(encoding="utf-8") == "retain prior evidence"
+    assert locked.read_bytes() == b"locked"
+    assert failed.is_dir() == bool(exitstatus)
 
-    failed_manifest = _manifest(failed_root)
-    assert failed_manifest["status"] == "failed"
-    assert failed_manifest["exit_status"] == int(
-        pytest.ExitCode.TESTS_FAILED
-    )
-    assert failed_manifest["retention_status"] == "incomplete"
-    assert set(failed_manifest["retained_nodes"]) == {
-        "suite::failed",
-        "suite::passed",
-    }
-    assert failed_manifest["retention_errors"][0]["node_id"] == (
-        "suite::passed"
-    )
 
-    first_root = managed_root / "r-20260728T050100-102-bbbbbbbb"
-    (first_root / "cases").mkdir(parents=True)
-    first_state = pytest_retention.TestRunState(first_root)
-    pytest_retention._finish_passed_run(
-        first_state,
-        pytest.ExitCode.OK,
+def test_pytest_runner_retains_only_failed_case_after_collection_success_and_failure(tmp_path: Path) -> None:
+    source = tmp_path / "test_retention_case.py"
+    source.write_text(
+        "import os\n"
+        "def test_evidence(tmp_path):\n"
+        "    (tmp_path / 'result.txt').write_text('retained')\n"
+        "    assert os.environ.get('FAIL_RETENTION_CASE') != '1'\n",
+        encoding="utf-8",
     )
-    assert not legacy_success.exists()
-    assert legacy_failure.is_dir()
-    first_manifest_path = first_root / "run-result.json"
-    success_holder = _hold_file_without_delete_sharing(first_manifest_path)
-    second_root = managed_root / "r-20260728T050200-103-cccccccc"
-    (second_root / "cases").mkdir(parents=True)
-    try:
-        pytest_retention._finish_passed_run(
-            pytest_retention.TestRunState(second_root),
-            pytest.ExitCode.OK,
+    evidence_root = tmp_path / "child-runs"
+    environment = {**os.environ, "MEDIAFLOW_TEST_ROOT": str(evidence_root)}
+    command = [sys.executable, "-B", "-m", "pytest", "-p", "tests.v2.conftest",
+               "--noconftest", "-p", "no:cacheprovider", "-q", str(source)]
+    before_files: dict[Path, bytes] = {}
+    for extra, expected, failure in [(["--collect-only"], 0, False), ([], 0, False), ([], 1, True)]:
+        completed = subprocess.run(
+            [*command, *extra],
+            env={**environment, "FAIL_RETENTION_CASE": "1" if failure else "0"},
+            cwd=Path(__file__).resolve().parents[3],
+            capture_output=True, text=True, encoding="utf-8", timeout=30,
         )
-    finally:
-        _release_file_holder(success_holder)
+        assert completed.returncode == expected, completed.stdout + completed.stderr
+        assert all(path.read_bytes() == contents for path, contents in before_files.items())
+        before_files = {path: path.read_bytes() for path in evidence_root.rglob("result.txt")}
+    manifests = [json.loads(path.read_text(encoding="utf-8"))
+                 for path in (evidence_root / "p").glob("r-*/run-result.json")]
+    assert len(manifests) == 3
+    assert sorted(item["status"] for item in manifests) == ["failed", "passed", "passed"]
+    assert len(before_files) == 1
+    assert all(item["retained_case_count"] == 0 for item in manifests if item["status"] == "passed")
 
-    second_manifest = _manifest(second_root)
-    assert second_manifest["status"] == "passed"
-    assert second_manifest["exit_status"] == int(pytest.ExitCode.OK)
-    assert second_manifest["retention_status"] == "incomplete"
-    assert first_root.exists()
-
-    third_root = managed_root / "r-20260728T050300-104-dddddddd"
-    (third_root / "cases").mkdir(parents=True)
-    pytest_retention._finish_passed_run(
-        pytest_retention.TestRunState(third_root),
-        pytest.ExitCode.OK,
-    )
-
-    assert not first_root.exists()
-    assert not second_root.exists()
-    assert third_root.is_dir()
-    assert _manifest(third_root)["retention_status"] == "complete"
 
 
 def test_pytest_manifest_creation_failure_archives_unpublished_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    managed_root = tmp_path / "managed-pytest"
+    managed_root = tmp_path / "p"
     monkeypatch.setattr(
         pytest_retention,
         "MANAGED_PYTEST_ROOT",

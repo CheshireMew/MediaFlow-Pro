@@ -35,8 +35,6 @@ from mediaflow.domain.task_commands import (
     TrackSubjectCommand,
 )
 from mediaflow.domain.tasks import (
-    DownloadAnalysisTaskOutcome,
-    ImportedAssetTaskOutcome,
     Task,
 )
 from mediaflow.domain.timeline import ClipTransform, ClipTransformKeyframe
@@ -370,7 +368,7 @@ def test_import_cancelled_during_probe_never_registers_asset(
         repository.close()
 
 
-def test_import_cancelled_after_publication_completes_with_readable_asset(
+def test_import_cancelled_after_preparation_does_not_register_asset(
     tmp_path: Path,
 ) -> None:
     repository = ProjectRepository.create(
@@ -406,11 +404,10 @@ def test_import_cancelled_after_publication_completes_with_readable_asset(
         allow_return.set()
         completed = service.wait(started.id, timeout=5)
 
-        assert completed.status == TaskStatus.COMPLETED
-        assert isinstance(completed.outcome, ImportedAssetTaskOutcome)
-        asset = repository.assets.get_asset(completed.outcome.asset_id)
-        assert repository.assets.resolve_asset_path(asset).read_bytes() == (b"published source")
-        assert completed.artifacts[0].resolve(repository.project_dir) == (source.resolve())
+        assert completed.status == TaskStatus.CANCELLED
+        assert completed.outcome is None
+        assert repository.assets.list_assets() == []
+        assert source.read_bytes() == b"published source"
     finally:
         allow_return.set()
         service.shutdown()
@@ -662,7 +659,7 @@ def test_visual_analysis_timeline_failure_rolls_back_db_and_archives_json(
         repository.close()
 
 
-def test_visual_analysis_cancelled_after_publication_completes_and_is_consumable(
+def test_visual_analysis_cancelled_after_preparation_discards_file_and_markers(
     tmp_path: Path,
 ) -> None:
     repository = ProjectRepository.create(
@@ -702,12 +699,13 @@ def test_visual_analysis_cancelled_after_publication_completes_and_is_consumable
         allow_return.set()
         completed = service.wait(started.id, timeout=5)
 
-        assert completed.status == TaskStatus.COMPLETED
-        artifact = completed.artifacts[0].resolve(repository.project_dir)
-        payload = json.loads(artifact.read_text(encoding="utf-8"))
-        markers = repository.timeline.load_timeline(sequence_id).markers
-        assert payload["frames"] == [10, 30]
-        assert [marker.frame for marker in markers] == payload["frames"]
+        assert completed.status == TaskStatus.CANCELLED
+        assert completed.artifacts == []
+        assert repository.timeline.load_timeline(sequence_id).markers == []
+        assert not (repository.project_dir / "generated" / "visual-analysis" / f"{started.id}.json").exists()
+        archived = list((repository.project_dir / "archive" / "failed-task-artifacts").glob("*.json"))
+        assert len(archived) == 1
+        assert json.loads(archived[0].read_text(encoding="utf-8"))["frames"] == [10, 30]
     finally:
         allow_return.set()
         service.shutdown()
@@ -758,7 +756,7 @@ def test_download_analysis_cancellation_reaches_runtime_before_artifact_write(
         repository.close()
 
 
-def test_download_analysis_cancelled_after_write_completes_with_persisted_outcome(
+def test_download_analysis_cancelled_after_write_discards_uncommitted_outcome(
     tmp_path: Path,
 ) -> None:
     repository = ProjectRepository.create(
@@ -792,11 +790,10 @@ def test_download_analysis_cancelled_after_write_completes_with_persisted_outcom
         allow_return.set()
         completed = service.wait(started.id, timeout=5)
 
-        assert completed.status == TaskStatus.COMPLETED
-        assert isinstance(completed.outcome, DownloadAnalysisTaskOutcome)
-        assert completed.outcome.plan == plan
-        artifact = completed.artifacts[0].resolve(repository.project_dir)
-        assert DownloadPlan.model_validate_json(artifact.read_text(encoding="utf-8")) == plan
+        assert completed.status == TaskStatus.CANCELLED
+        assert completed.outcome is None
+        assert completed.artifacts == []
+        assert not (repository.project_dir / "cache" / "download-analysis" / f"{started.id}.json").exists()
     finally:
         allow_return.set()
         service.shutdown()

@@ -27,6 +27,12 @@ _TERMINAL_TASK_STATUSES = tuple(
     status.value for status in TaskStatus if status.is_terminal
 )
 
+# These describe committed execution and collaboration, not editable content.
+# Restoring a version must never erase a receipt or move an event cursor back.
+OPERATIONAL_TABLES = frozenset({
+    "automation_request", "project_event", "task", "task_event", "task_consumption", "undo_group",
+})
+
 
 class ProjectRecordsRepository(ProjectRepositoryComponent):
     def __init__(
@@ -305,8 +311,9 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
         tables = [
             table
             for table in self._application_tables(connection, "main")
-            if table != "schema_info"
+            if table not in OPERATIONAL_TABLES | {"schema_info", "project"}
         ]
+        task_sequences = connection.execute("SELECT id, sequence_id FROM task").fetchall()
         insertion_order = self._foreign_key_insertion_order(connection, tables)
         connection.execute("PRAGMA defer_foreign_keys=ON")
         for table in tables:
@@ -336,6 +343,22 @@ class ProjectRecordsRepository(ProjectRepositoryComponent):
                 f"INSERT INTO main.{identifier} VALUES ({placeholders})",
                 (tuple(row) for row in rows),
             )
+        restored_project = snapshot.execute("SELECT * FROM project WHERE id=?", (project_id,)).fetchone()
+        if restored_project is None:
+            raise RuntimeError("命名版本快照不属于当前项目")
+        columns = [str(row[1]) for row in connection.execute("PRAGMA table_info(project)")
+                   if str(row[1]) not in {"id", "content_revision"}]
+        assignments = ", ".join(f"{self._quote_identifier(column)}=?" for column in columns)
+        connection.execute(
+            f"UPDATE project SET {assignments} WHERE id=?",
+            (*[restored_project[column] for column in columns], project_id),
+        )
+        for row in task_sequences:
+            connection.execute(
+                "UPDATE task SET sequence_id=(SELECT id FROM sequence WHERE id=?) WHERE id=?",
+                (row["sequence_id"], row["id"]),
+            )
+        connection.execute("UPDATE undo_group SET state='discarded' WHERE state!='discarded'")
         for preserved in preserved_versions:
             self._insert_project_version(
                 connection,

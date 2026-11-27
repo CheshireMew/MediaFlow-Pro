@@ -12,13 +12,13 @@ from mediaflow.domain.timeline import Clip, ClipTransform, ClipTransformKeyframe
 from mediaflow.domain.visual_effects import VisualEffectParameterKeyframe
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineKeyframeScope
 from .timeline_selection import selected_clip_id
 
 _CLIPBOARD_SCHEMA = "mediaflow-native-keyframes/v1"
 
 
-class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
+class TimelineKeyframeController(ControllerFacet[TimelineKeyframeScope]):
     selectionChanged = Signal()
 
     @Property(list, notify=selectionChanged)
@@ -109,7 +109,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._clip(clip_id)
-        changed = self._session.state.binding.require_timeline().upsert_clip_transform_keyframe(
+        changed = self._session.project_binding.require_timeline().upsert_clip_transform_keyframe(
             clip_id,
             self._local_offset(clip, timeline_frame),
             ClipTransform(
@@ -133,7 +133,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def removeTransformKeyframe(self, clip_id: str, timeline_offset: int) -> None:
         self._session._require_writable()
-        changed = self._session.state.binding.require_timeline().remove_clip_transform_keyframe(
+        changed = self._session.project_binding.require_timeline().remove_clip_transform_keyframe(
             clip_id,
             timeline_offset,
         )
@@ -149,7 +149,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
         new_timeline_offset: int,
     ) -> None:
         self._session._require_writable()
-        changed = self._session.state.binding.require_timeline().move_clip_transform_keyframe(
+        changed = self._session.project_binding.require_timeline().move_clip_transform_keyframe(
             clip_id,
             old_timeline_offset,
             new_timeline_offset,
@@ -169,8 +169,16 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         allowed = {
-            "x", "y", "scale_x", "scale_y", "rotation", "opacity",
-            "crop_left", "crop_top", "crop_right", "crop_bottom",
+            "x",
+            "y",
+            "scale_x",
+            "scale_y",
+            "rotation",
+            "opacity",
+            "crop_left",
+            "crop_top",
+            "crop_right",
+            "crop_bottom",
         }
         if channel not in allowed:
             raise ValueError("不支持的画面关键帧通道")
@@ -205,7 +213,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
             else item
             for item in keyframes
         ]
-        changed = self._session.state.binding.require_timeline().set_clip_transform_keyframes(
+        changed = self._session.project_binding.require_timeline().set_clip_transform_keyframes(
             clip_id,
             sorted(updated, key=lambda item: int(item.timeline_offset or 0)),
         )
@@ -236,12 +244,10 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
             y2=y2,
         )
         updated = [
-            item.model_copy(update={"curve": curve})
-            if item.timeline_offset == timeline_offset
-            else item
+            item.model_copy(update={"curve": curve}) if item.timeline_offset == timeline_offset else item
             for item in keyframes
         ]
-        changed = self._session.state.binding.require_timeline().set_clip_transform_keyframes(
+        changed = self._session.project_binding.require_timeline().set_clip_transform_keyframes(
             clip_id, updated
         )
         self._after_change(changed)
@@ -257,7 +263,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
         scale: float,
     ) -> None:
         self._session._require_writable()
-        changed = self._session.state.binding.require_timeline().retime_clip_transform_keyframes(
+        changed = self._session.project_binding.require_timeline().retime_clip_transform_keyframes(
             clip_id,
             [int(value) for value in timeline_offsets],
             anchor_offset=anchor_offset,
@@ -291,36 +297,12 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         payload = self._clipboard("transform")
-        clip = self._clip(clip_id)
         source = [ClipTransformKeyframe.model_validate(item) for item in payload["keyframes"]]
-        source_start = min(int(item.timeline_offset or 0) for item in source)
-        destination_start = self._local_offset(clip, timeline_frame)
-        pasted: list[ClipTransformKeyframe] = []
-        for item in source:
-            offset = destination_start + round(
-                (int(item.timeline_offset or 0) - source_start) * scale
-            )
-            if not 0 <= offset < clip.duration:
-                raise ValueError("粘贴后的画面关键帧超出片段范围")
-            pasted.append(
-                item.model_copy(
-                    update={
-                        "timeline_offset": offset,
-                        "source_frame": None,
-                        "source": "manual",
-                    }
-                )
-            )
-        replacements = {int(item.timeline_offset or 0): item for item in pasted}
-        merged = [
-            item
-            for item in project_clip_transform_keyframes(clip)
-            if item.timeline_offset not in replacements
-        ]
-        merged.extend(replacements.values())
-        changed = self._session.state.binding.require_timeline().set_clip_transform_keyframes(
+        changed = self._session.project_binding.require_timeline().paste_clip_transform_keyframes(
             clip_id,
-            sorted(merged, key=lambda item: item.timeline_offset or 0),
+            source,
+            timeline_frame=timeline_frame,
+            scale=scale,
         )
         self._after_change(changed)
         self._session._set_status("已粘贴画面关键帧")
@@ -341,7 +323,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().upsert_clip_effect_parameter_keyframe(
+        self._session.project_binding.require_timeline().upsert_clip_effect_parameter_keyframe(
             clip.id,
             effect_id,
             field_id,
@@ -362,7 +344,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().remove_clip_effect_parameter_keyframe(
+        self._session.project_binding.require_timeline().remove_clip_effect_parameter_keyframe(
             clip.id,
             effect_id,
             field_id,
@@ -382,7 +364,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().move_clip_effect_parameter_keyframe(
+        self._session.project_binding.require_timeline().move_clip_effect_parameter_keyframe(
             clip.id,
             effect_id,
             field_id,
@@ -404,7 +386,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     ) -> None:
         self._session._require_writable()
         clip = self._selected_clip()
-        self._session.state.binding.require_timeline().retime_clip_effect_parameter_keyframes(
+        self._session.project_binding.require_timeline().retime_clip_effect_parameter_keyframes(
             clip.id,
             effect_id,
             field_id,
@@ -456,32 +438,14 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
         if str(payload.get("field_id")) != field_id:
             raise ValueError("剪贴板中的视觉效果参数不匹配")
         clip = self._selected_clip()
-        effect = next(item for item in clip.visual_effects if item.id == effect_id)
-        source = [
-            VisualEffectParameterKeyframe.model_validate(item)
-            for item in payload["keyframes"]
-        ]
-        source_start = min(item.timeline_offset for item in source)
-        destination_start = self._local_offset(clip, timeline_frame)
-        replacements: dict[int, VisualEffectParameterKeyframe] = {}
-        for item in source:
-            offset = destination_start + round(
-                (item.timeline_offset - source_start) * scale
-            )
-            if not 0 <= offset < clip.duration:
-                raise ValueError("粘贴后的视觉效果关键帧超出片段范围")
-            replacements[offset] = item.model_copy(update={"timeline_offset": offset})
-        merged = [
-            item
-            for item in effect.parameter_keyframes.get(field_id, [])
-            if item.timeline_offset not in replacements
-        ]
-        merged.extend(replacements.values())
-        self._session.state.binding.require_timeline().set_clip_effect_parameter_keyframes(
+        source = [VisualEffectParameterKeyframe.model_validate(item) for item in payload["keyframes"]]
+        self._session.project_binding.require_timeline().paste_clip_effect_parameter_keyframes(
             clip.id,
             effect_id,
             field_id,
-            sorted(merged, key=lambda item: item.timeline_offset),
+            source,
+            timeline_frame=timeline_frame,
+            scale=scale,
         )
         self._after_change(self._clip(clip.id))
         self._session._set_status("已粘贴视觉效果关键帧")
@@ -493,8 +457,8 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     def _selected_clip(self, *, required: Literal[False]) -> Clip | None: ...
 
     def _selected_clip(self, *, required: bool = True) -> Clip | None:
-        clip_id = selected_clip_id(self._session)
-        if not self._session.state.binding.timeline or not clip_id:
+        clip_id = selected_clip_id(self._session.read_selection())
+        if not self._session.project_binding.timeline or not clip_id:
             if required:
                 raise ValueError("请先选择一个片段")
             return None
@@ -504,7 +468,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
         try:
             return next(
                 item
-                for item in self._session.state.binding.require_timeline().state.clips
+                for item in self._session.project_binding.require_timeline().state.clips
                 if item.id == clip_id
             )
         except StopIteration as error:
@@ -551,9 +515,7 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
     @staticmethod
     def _set_clipboard(payload: dict[str, Any]) -> None:
         document = {"schema": _CLIPBOARD_SCHEMA, **payload}
-        QGuiApplication.clipboard().setText(
-            json.dumps(document, ensure_ascii=False, separators=(",", ":"))
-        )
+        QGuiApplication.clipboard().setText(json.dumps(document, ensure_ascii=False, separators=(",", ":")))
 
     @staticmethod
     def _clipboard(expected_kind: str) -> dict[str, Any]:
@@ -568,11 +530,11 @@ class TimelineKeyframeController(ControllerFacet[TimelinePresentationScope]):
         return value
 
     def _after_change(self, clip: Clip) -> None:
-        self._session.projectors.timeline.refresh_clip_rows(
+        self._session.refresh_clip_rows(
             [clip.id],
             clips=[clip],
             refresh_relations=False,
         )
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)

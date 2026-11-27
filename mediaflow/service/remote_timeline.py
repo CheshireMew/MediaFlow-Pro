@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Any
 
 from mediaflow.application.timeline_snapping import snap_frame
 from mediaflow.domain.timeline import TimelineState
+from mediaflow.domain.timeline_history import TimelineStateChange
 
 from .commands import DESKTOP_COMMANDS, desktop_command
-from .remote_timeline_cache import project_timeline_write
+from .remote_timeline_cache import apply_timeline_change
 
 if TYPE_CHECKING:
     from mediaflow.application.timeline_editor import TimelineEditor as _TimelineCommandSurface
@@ -31,15 +33,13 @@ class _RemoteTimelineMethod:
             return self
 
         def invoke(*args: Any, **kwargs: Any) -> Any:
-            result = instance._project._call(
+            result, _revision = instance._project._call_revisioned(
                 "timeline",
                 self.definition.name,
                 instance.sequence_id,
                 *args,
                 **kwargs,
             )
-            if self.definition.access == "write":
-                instance._apply_write(self.definition.name, result, args=args, kwargs=kwargs)
             return result
 
         return invoke
@@ -51,28 +51,41 @@ class RemoteTimelineEditor(_TimelineCommandSurface):
     def __init__(self, project: RemoteEditorProject, sequence_id: str):
         self._project = project
         self.sequence_id = sequence_id
+        self._cache_lock = threading.RLock()
         self._cached_state: TimelineState | None = None
         self._cached_revision = -1
         self._cached_duration_frames: int | None = None
 
     @property
     def state(self):
-        revision = self._project.known_content_revision
-        if self._cached_state is None or self._cached_revision != revision:
-            value = self._project._call("timeline", "state", self.sequence_id)
+        with self._cache_lock:
+            if self._cached_state is not None and (
+                self._cached_revision == self._project.known_content_revision
+            ):
+                return self._cached_state
+        return self._read_state("state")
+
+    def _read_state(self, command: str) -> TimelineState:
+        for _attempt in range(3):
+            value, revision = self._project._call_revisioned("timeline", command, self.sequence_id)
             if not isinstance(value, TimelineState):
                 raise RuntimeError("Editor Service returned an invalid timeline state")
-            self._cached_state = value
-            self._cached_revision = self._project.known_content_revision
-            self._cached_duration_frames = value.duration_frames
-        return self._cached_state
+            with self._cache_lock:
+                if revision == self._project.known_content_revision:
+                    self._cached_state = value
+                    self._cached_revision = revision
+                    self._cached_duration_frames = value.duration_frames
+                    return value
+        self.invalidate()
+        raise RuntimeError("项目持续变化，无法取得当前时间线，请重试")
 
     @property
     def duration_frames(self) -> int:
         state = self.state
-        if self._cached_duration_frames is None:
-            self._cached_duration_frames = state.duration_frames
-        return self._cached_duration_frames
+        with self._cache_lock:
+            if self._cached_state is state and self._cached_duration_frames is not None:
+                return self._cached_duration_frames
+        return state.duration_frames
 
     @property
     def can_undo(self) -> bool:
@@ -91,49 +104,52 @@ class RemoteTimelineEditor(_TimelineCommandSurface):
         return self.reload()
 
     def reload(self) -> TimelineState:
-        value = self._project._call("timeline", "reload", self.sequence_id)
-        if not isinstance(value, TimelineState):
-            raise RuntimeError("Editor Service returned an invalid reloaded timeline")
-        self._cached_state = value
-        self._cached_revision = self._project.known_content_revision
-        self._cached_duration_frames = value.duration_frames
-        return value
+        return self._read_state("reload")
 
     def invalidate(self) -> None:
-        self._cached_state = None
-        self._cached_revision = -1
-        self._cached_duration_frames = None
+        with self._cache_lock:
+            self._cached_state = None
+            self._cached_revision = -1
+            self._cached_duration_frames = None
 
-    def advance_revision(self, revision: int) -> None:
+    def advance_revision(self, revision: int, *, base_revision: int) -> None:
         """Keep an exact cached timeline across a proven unrelated project write."""
 
-        if self._cached_state is not None:
-            self._cached_revision = int(revision)
+        with self._cache_lock:
+            if self._cached_state is not None:
+                if self._cached_revision == base_revision and revision in {base_revision, base_revision + 1}:
+                    self._cached_revision = int(revision)
+                else:
+                    self.invalidate()
 
-    def _apply_write(
+    def apply_committed_change(
         self,
-        command: str,
-        result: Any,
+        change: TimelineStateChange | None,
         *,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        revision: int,
     ) -> None:
-        state = self._cached_state
-        if state is None:
-            return
-        projected = project_timeline_write(
-            state,
-            command,
-            result,
-            args=args,
-            kwargs=kwargs,
-        )
-        if projected is None:
-            self.invalidate()
-            return
-        self._cached_state = projected
-        self._cached_revision = self._project.known_content_revision
-        self._cached_duration_frames = projected.duration_frames
+        with self._cache_lock:
+            if self._cached_state is None:
+                return
+            # A reentrant UI read may have fetched the committed snapshot while
+            # the write response was in flight. That exact revision is already
+            # authoritative; applying its patch again would discard fresh data.
+            if (
+                change is not None
+                and self._cached_revision == revision == self._project.known_content_revision
+            ):
+                return
+            if (
+                change is None
+                or self._cached_revision != change.base_revision
+                or revision not in {change.base_revision, change.base_revision + 1}
+                or revision != self._project.known_content_revision
+            ):
+                self.invalidate()
+                return
+            self._cached_state = apply_timeline_change(self._cached_state, change)
+            self._cached_revision = revision
+            self._cached_duration_frames = self._cached_state.duration_frames
 
 
 def _install_timeline_commands() -> None:

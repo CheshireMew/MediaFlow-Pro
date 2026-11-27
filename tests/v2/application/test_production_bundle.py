@@ -244,7 +244,7 @@ def test_required_audio_provenance_rejects_generated_or_inactive_audio(
     }
 
     with pytest.raises(RuntimeError, match=message):
-        _required_audio_provenance(imported, timeline, ["original-voice"])
+        _required_audio_provenance(imported, timeline, ["original-voice"], [] if muted else ["dialogue-clip"])
 
 
 def test_production_runner_stops_before_project_creation_when_review_is_required(
@@ -273,10 +273,12 @@ def test_production_runner_stops_before_project_creation_when_review_is_required
 
 @pytest.mark.parametrize("segmented", [False, True])
 @pytest.mark.parametrize("reuse_project", [False, True])
+@pytest.mark.parametrize("paged_history", [False, True])
 def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
     tmp_path: Path,
     segmented: bool,
     reuse_project: bool,
+    paged_history: bool,
 ) -> None:
     bundle = _bundle(tmp_path, tmp_path / "timeline.json")
     bundle["speech_review"]["block_on_candidates"] = False
@@ -331,7 +333,9 @@ def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
         else []
     )
     persisted_tasks: list[dict[str, Any]] = []
-    revision = 1 if reuse_project else 0
+    if paged_history:
+        persisted_events[:0] = [{"operation": "timeline.marker.add"} for _ in range(500)]
+    revision = len(persisted_events)
 
     def execute(
         request: dict[str, Any],
@@ -405,7 +409,13 @@ def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
                 "tasks": list(persisted_tasks),
             }
         elif operation == "project.changes.list":
-            result = {"events": list(persisted_events), "current_revision": revision}
+            start = request["arguments"]["since_revision"]
+            result = {
+                "events": list(persisted_events[start:start + 500]),
+                "current_revision": revision,
+                "has_more": len(persisted_events) > start + 500,
+                "next_revision": start + 500,
+            }
         elif operation == "timeline.portable.import":
             revision += 1
             result = imported_result
@@ -479,6 +489,8 @@ def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
             result = {"task": task}
         elif operation == "timeline.get":
             result = {"timeline": imported_result["timeline"]}
+        elif operation == "audio.inspect":
+            result = {"buses": [], "audible_clip_ids": ["music-clip"]}
         elif operation == "project.handoff.inspect":
             result = {
                 "latest_export": {
@@ -504,12 +516,16 @@ def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
     assert result["status"] == "completed"
     assert result["project_created"] is (not reuse_project)
     assert result["project_reused"] is reuse_project
-    assert result["internal_operation_count"] == (8 if reuse_project else 9)
+    assert result["internal_operation_count"] == (9 if reuse_project else 10) + bool(
+        paged_history and reuse_project
+    )
     expected_first_operations = [
         "production.bundle.inspect",
         "project.inspect" if reuse_project else "project.create",
         "project.changes.list",
     ]
+    if paged_history and reuse_project:
+        expected_first_operations.append("project.changes.list")
     if not reuse_project:
         expected_first_operations.append("timeline.portable.import")
     expected_first_operations.extend(
@@ -518,6 +534,7 @@ def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
             export_operation,
             "task.wait",
             "timeline.get",
+            "audio.inspect",
             "project.handoff.inspect",
         ]
     )
@@ -563,10 +580,12 @@ def test_production_runner_executes_the_whole_delivery_chain_from_one_bundle(
         "project.inspect" if reuse_project else "project.create",
         "project.changes.list",
     ]
+    if paged_history:
+        expected_repeat_operations.append("project.changes.list")
     if not reuse_project:
         expected_repeat_operations.append(export_operation)
     expected_repeat_operations.extend(
-        ["task.wait", "timeline.get", "project.handoff.inspect"]
+            ["task.wait", "timeline.get", "audio.inspect", "project.handoff.inspect"]
     )
     assert repeated["internal_operation_count"] == len(expected_repeat_operations)
     assert operations == expected_repeat_operations

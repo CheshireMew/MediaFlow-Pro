@@ -3081,15 +3081,15 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         )
         assert engine.rootObjects()[0].title() == "UI Test"
         assert (
-            controllers.session.projectors.timeline._preview_timer.isActive()
+            controllers.session.preview._preview_timer.isActive()
             or controllers.session.state.requests.preview_id > 0
         )
         assert _process_until(
             lambda: controllers.session.state.requests.preview_id > 0,
             timeout=5,
         ), {
-            "timer_active": controllers.session.projectors.timeline._preview_timer.isActive(),
-            "timer_remaining_ms": (controllers.session.projectors.timeline._preview_timer.remainingTime()),
+            "timer_active": controllers.session.preview._preview_timer.isActive(),
+            "timer_remaining_ms": (controllers.session.preview._preview_timer.remainingTime()),
         }
 
         preview_ready = _process_until(
@@ -3099,9 +3099,9 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
         preview_future = controllers.session.state.requests.preview_future
         assert preview_ready, {
             "preview_request_id": controllers.session.state.requests.preview_id,
-            "preview_timer_active": (controllers.session.projectors.timeline._preview_timer.isActive()),
+            "preview_timer_active": (controllers.session.preview._preview_timer.isActive()),
             "preview_timer_remaining_ms": (
-                controllers.session.projectors.timeline._preview_timer.remainingTime()
+                controllers.session.preview._preview_timer.remainingTime()
             ),
             "future": repr(preview_future),
             "future_done": preview_future.done() if preview_future is not None else None,
@@ -3659,7 +3659,7 @@ def test_qml_real_project_chain_is_visible_in_models(tmp_path: Path, monkeypatch
                 controllers.tasks.tasksModel.get(index)["status"] not in active_task_statuses
                 for index in range(controllers.tasks.tasksModel.rowCount())
             )
-            and not controllers.session.projectors.timeline._preview_timer.isActive()
+            and not controllers.session.preview._preview_timer.isActive()
             and (
                 controllers.session.state.requests.preview_future is None
                 or controllers.session.state.requests.preview_future.done()

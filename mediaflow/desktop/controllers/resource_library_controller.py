@@ -301,7 +301,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         )
         self._session.projectors.assets.refresh_assets()
         self._session.projectors.timeline.refresh_timeline()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
         self._session._set_status("LUT 已从资源库添加")
@@ -359,7 +359,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         else:
             raise ValueError(f"当前资源预设类型暂不受支持：{target}")
         self._session.projectors.timeline.refresh_timeline()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
         if target == "transition":
@@ -404,7 +404,7 @@ class ResourceLibraryController(ControllerFacet[MediaControllerScope]):
         self._session.state.selection.audio_effect_id = effect.id
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
         self._session.updates.commit(history=True)
         self._session._set_status("音频效果已从资源库添加")

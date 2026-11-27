@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import wave
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QObject
 from PySide6.QtGui import QColor, QImage
 
 from mediaflow.application.events import TaskEvent
+from mediaflow.application.presentation_models import RecentProjectSnapshot
 from mediaflow.application.task_service import TaskCompletion
 from mediaflow.application.workflow_coordinator import WorkflowCoordinator
 from mediaflow.composition import EditorApplication
@@ -28,14 +30,14 @@ from mediaflow.desktop.controllers.timeline_view_controller import (
     FILMSTRIP_MAX_IDLE_MS,
     filmstrip_idle_delay_ms,
 )
-from mediaflow.desktop.coordinators.project_lifecycle import ProjectLifecycle
-from mediaflow.desktop.coordinators.task_events import TaskOperations
-from mediaflow.desktop.list_model_base import DictListModel
-from mediaflow.desktop.presenters.timeline_projector import (
+from mediaflow.desktop.coordinators.preview_graph import (
     PREVIEW_GRAPH_BASE_IDLE_MS,
     PREVIEW_GRAPH_MAX_IDLE_MS,
     preview_graph_idle_delay_ms,
 )
+from mediaflow.desktop.coordinators.project_lifecycle import ProjectLifecycle
+from mediaflow.desktop.coordinators.task_events import TaskOperations
+from mediaflow.desktop.list_model_base import DictListModel
 from mediaflow.desktop.session_events import SessionEvents
 from mediaflow.desktop.session_state import ImportDropBatch, TimelinePlacement
 from mediaflow.desktop.timeline_list_models import TimelineClipViewportModel
@@ -83,6 +85,22 @@ from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.ytdlp_service import YtDlpDownloadService
 from tests.v2.desktop_application_adapter import DesktopPresentationApplication
 from tests.v2.real_media import generate_real_media
+
+
+def test_home_summary_refresh_does_not_notify_open_project_bindings(qapp: QCoreApplication) -> None:
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
+    home_notifications = []
+    project_notifications = []
+    controllers.workspace.homeSummaryChanged.connect(lambda: home_notifications.append(True))
+    controllers.session.events.projectStateChanged.connect(lambda: project_notifications.append(True))
+    try:
+        snapshot = RecentProjectSnapshot(items=[], totals={"failedTaskCount": 3})
+        controllers.session.projectors.workspace.apply_recent_projects(snapshot)
+        assert controllers.workspace.homeSummary == snapshot.totals
+        assert home_notifications == [True]
+        assert project_notifications == []
+    finally:
+        controllers.shutdown()
 
 
 def test_transcription_plan_projection_is_computed_once_per_change(
@@ -138,6 +156,34 @@ def test_transcription_plan_projection_is_computed_once_per_change(
     assert notifications == []
     qapp.processEvents()
     assert notifications == [None]
+
+
+def test_timeline_contexts_read_replaced_selection_without_exposing_session_aggregates(
+    qapp: QCoreApplication,
+) -> None:
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
+    try:
+        timeline_controllers = [
+            controller
+            for name, controller in controllers._controller_objects().items()
+            if name.startswith("timeline")
+        ]
+        assert len(timeline_controllers) == 13
+        for controller in timeline_controllers:
+            scope = controller._session
+            assert not any(hasattr(scope, name) for name in ("state", "models", "projectors"))
+        original = controllers.session.state.selection
+        current = replace(original, clip_ids=["replacement"])
+        controllers.session.state.selection = current
+        assert controllers.timeline_view.selectedClipIds == ["replacement"]
+        assert controllers.timeline_clips._session.read_selection() is current
+        assert original.clip_ids == []
+        settings = controllers.session.state.service_settings.model_copy(deep=True)
+        controllers.session.state.service_settings = settings
+        assert controllers.timeline_view._session.read_service_settings() is settings
+        qapp.processEvents()
+    finally:
+        controllers.shutdown()
 
 
 def test_subject_tracking_modes_do_not_reuse_each_others_active_task() -> None:
@@ -858,9 +904,7 @@ def test_timeline_drop_recovers_when_import_finishes_before_batch_registration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
         controllers.workspace_project.createProject(str(tmp_path), "Fast Import")
         session = controllers.session
@@ -969,7 +1013,10 @@ def test_runtime_status_refresh_is_submitted_without_blocking_the_ui_thread(
             submitted.append((kind, request_id, operation))
             return None
 
-        monkeypatch.setattr(session._api, "runtime_tool_status", fail_if_called_on_ui_thread)
+        session.projectors.workspace._context = replace(
+            session.projectors.workspace._context,
+            runtime_tool_status=fail_if_called_on_ui_thread,
+        )
         monkeypatch.setattr(session.background, "submit", record_submit)
 
         session.projectors.workspace.refresh_runtime_tool_status(preserve_cuda=True)
@@ -1177,7 +1224,7 @@ def test_subtitle_preview_fallback_reframes_main_clock_but_placement_stays_autho
             end_frame=109,
         )
         project._repository.subtitles.add_subtitle_placements([placement])
-        controllers.session.projectors.timeline.refresh_preview_subtitles()
+        controllers.session.projectors.timeline_subtitles.refresh_preview_subtitles()
         assert controllers.subtitle_view.subtitlePlacementsModel.rowCount() == 1
 
         preview_ranges.clear()
@@ -1810,18 +1857,14 @@ def test_desktop_timer_repairs_a_missed_fast_terminal_task_event(
     qapp: QCoreApplication,
 ) -> None:
     assert qapp is QCoreApplication.instance()
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
         controllers.workspace_project.createProject(str(tmp_path), "Missed Task Event")
         session = controllers.session
         current = session.state.binding.current
         monkeypatch.setattr(session.tasks, "publish", lambda _event: None)
 
-        started = session.tasks.create(
-            AnalyzeDownloadCommand(url="https://example.invalid/media")
-        )
+        started = session.tasks.create(AnalyzeDownloadCommand(url="https://example.invalid/media"))
         completed = current.wait_for_task(started.id, timeout=5)
         assert completed.status == TaskStatus.FAILED
         assert session.state.tasks.items[started.id].status.is_active
@@ -1845,9 +1888,7 @@ def test_desktop_task_creation_does_not_overwrite_a_reentrant_newer_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
         controllers.workspace_project.createProject(str(tmp_path), "Reentrant Task Event")
         session = controllers.session
@@ -1890,9 +1931,7 @@ def test_desktop_reconciliation_repairs_task_state_at_an_already_seen_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
         controllers.workspace_project.createProject(str(tmp_path), "Stale Task Projection")
         session = controllers.session
@@ -1934,16 +1973,12 @@ def test_desktop_reconciliation_skips_an_already_projected_terminal_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    controllers = EditorControllers(
-        application=DesktopPresentationApplication(EditorApplication())
-    )
+    controllers = EditorControllers(application=DesktopPresentationApplication(EditorApplication()))
     try:
         controllers.workspace_project.createProject(str(tmp_path), "Observed Task Event")
         session = controllers.session
         current = session.state.binding.current
-        started = session.tasks.create(
-            AnalyzeDownloadCommand(url="https://example.invalid/media")
-        )
+        started = session.tasks.create(AnalyzeDownloadCommand(url="https://example.invalid/media"))
         completed = current.wait_for_task(started.id, timeout=5)
         assert completed.status == TaskStatus.FAILED
         session.lifecycle.reconcile_task_events()

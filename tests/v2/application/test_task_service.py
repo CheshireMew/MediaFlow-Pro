@@ -381,7 +381,7 @@ def test_cancel_before_handler_publish_keeps_sqlite_cancelled_and_no_file(
         project_repository.close()
 
 
-def test_cancel_after_file_publish_cannot_rewrite_success_as_cancelled(
+def test_cancel_after_preparing_file_discards_result_before_reporting_cancelled(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "Post Publish Cancel"
@@ -399,6 +399,7 @@ def test_cancel_after_file_publish_cannot_rewrite_success_as_cancelled(
     def publish(context: TaskContext) -> TaskCompletion:
         context.cancellation.raise_if_requested()
         output.write_text("committed output", encoding="utf-8")
+        context.on_discard(lambda: output.unlink(missing_ok=True))
         published.set()
         assert allow_handler_return.wait(timeout=5)
         return TaskCompletion.with_artifacts(ArtifactReference.project(root, output))
@@ -414,18 +415,17 @@ def test_cancel_after_file_publish_cannot_rewrite_success_as_cancelled(
         allow_handler_return.set()
         completed = service.wait(started.id, timeout=5)
 
-        assert completed.status == TaskStatus.COMPLETED
+        assert completed.status == TaskStatus.CANCELLED
         assert repository.get(started.id) == completed
-        artifact = completed.artifacts[0].resolve(root)
-        assert artifact == output.resolve()
-        assert artifact.read_text(encoding="utf-8") == "committed output"
+        assert completed.artifacts == []
+        assert not output.exists()
     finally:
         allow_handler_return.set()
         service.shutdown()
         project_repository.close()
 
 
-def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
+def test_cancel_before_completed_sqlite_cas_prevents_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -461,6 +461,7 @@ def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
     def publish(context: TaskContext) -> TaskCompletion:
         context.cancellation.raise_if_requested()
         output.write_text("returned completion", encoding="utf-8")
+        context.on_discard(lambda: output.unlink(missing_ok=True))
         return TaskCompletion.with_artifacts(ArtifactReference.project(root, output))
 
     service.register(TaskKind.ANALYZE, publish)
@@ -474,11 +475,11 @@ def test_cancel_after_handler_return_loses_to_completed_sqlite_cas(
         allow_completion_cas.set()
         completed = service.wait(started.id, timeout=5)
 
-        assert completed.status == TaskStatus.COMPLETED
+        assert completed.status == TaskStatus.CANCELLED
         assert completed.stop_request is None
         assert repository.get(started.id) == completed
-        artifact = completed.artifacts[0].resolve(root)
-        assert artifact.read_text(encoding="utf-8") == ("returned completion")
+        assert completed.artifacts == []
+        assert not output.exists()
     finally:
         allow_completion_cas.set()
         service.shutdown()
@@ -1060,7 +1061,7 @@ def test_recovery_poll_logs_throttled_storage_failures_and_keeps_running(
     attempts = 0
     recovered_after_failures = threading.Event()
 
-    def flaky_list_claimable(_at_ms: int) -> list[Task]:
+    def flaky_list_claimable(_at_ms: int, **_selection: object) -> list[Task]:
         nonlocal attempts
         attempts += 1
         if attempts <= 3:
@@ -1081,6 +1082,7 @@ def test_recovery_poll_logs_throttled_storage_failures_and_keeps_running(
         repository,
         recovery_poll_interval=0.01,
     )
+    service.register(TaskKind.ANALYZE, lambda _context: TaskCompletion())
     try:
         assert recovered_after_failures.wait(2)
     finally:

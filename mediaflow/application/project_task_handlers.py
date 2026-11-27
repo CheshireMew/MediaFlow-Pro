@@ -18,10 +18,11 @@ from mediaflow.application.ports import (
     ProjectTaskDocuments,
     ProjectTaskRuntimePorts,
 )
+from mediaflow.application.project_file_task_handlers import ProjectFileTaskHandlers
 from mediaflow.application.subtitle_acquisition import SubtitleAcquisitionService
 from mediaflow.application.subtitle_editing import SubtitleEditingService
 from mediaflow.application.subtitle_publication import SubtitlePublicationService
-from mediaflow.application.task_service import TaskService
+from mediaflow.application.task_service import TaskCompletion, TaskContext, TaskService
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.application.transcription_task_handler import (
     TranscriptionTaskHandler,
@@ -29,6 +30,11 @@ from mediaflow.application.transcription_task_handler import (
 from mediaflow.application.translation_service import TranslationService
 from mediaflow.domain.enums import TaskKind
 from mediaflow.domain.settings import LlmProviderSettings, ServiceSettings
+from mediaflow.domain.task_commands import (
+    ArchiveProjectCommand,
+    CollectProjectAssetsCommand,
+    ImportWebPackageCommand,
+)
 
 
 class ProjectTaskHandlers:
@@ -47,8 +53,10 @@ class ProjectTaskHandlers:
         settings: Callable[[], ServiceSettings],
         active_llm_provider: Callable[[], LlmProviderSettings],
         timeline_provider: Callable[[str], TimelineEditor],
+        project_files: ProjectFileTaskHandlers,
     ):
         self._web = WebRenderTaskHandler(documents, runtimes.web)
+        self._project_files = project_files
         self._assets = AssetTaskHandlers(
             documents,
             assets,
@@ -105,11 +113,11 @@ class ProjectTaskHandlers:
 
     def register_with(self, tasks: TaskService) -> None:
         tasks.register(TaskKind.ANALYZE, self._analysis.handle)
-        tasks.register(TaskKind.IMPORT, self._assets.import_asset)
+        tasks.register(TaskKind.IMPORT, self._import)
         tasks.register(TaskKind.PROXY, self._assets.proxy)
         tasks.register(TaskKind.WAVEFORM, self._assets.waveform)
         tasks.register(TaskKind.DOWNLOAD, self._downloads.handle)
-        tasks.register(TaskKind.EXPORT, self._exports.handle)
+        tasks.register(TaskKind.EXPORT, self._export)
         tasks.register(TaskKind.TRANSCRIBE, self._transcription.handle)
         tasks.register(TaskKind.TRANSLATE, self._language.translate)
         tasks.register(TaskKind.HIGHLIGHT, self._language.highlight)
@@ -117,3 +125,13 @@ class ProjectTaskHandlers:
         tasks.register(TaskKind.DIAGNOSTICS, self._diagnostics.handle)
         tasks.register(TaskKind.DUBBING, self._dubbing.handle)
         tasks.recover_claimable()
+
+    def _import(self, context: TaskContext) -> TaskCompletion:
+        if isinstance(context.task.command, (ImportWebPackageCommand, CollectProjectAssetsCommand)):
+            return self._project_files.handle(context)
+        return self._assets.import_asset(context)
+
+    def _export(self, context: TaskContext) -> TaskCompletion:
+        if isinstance(context.task.command, ArchiveProjectCommand):
+            return self._project_files.handle(context)
+        return self._exports.handle(context)

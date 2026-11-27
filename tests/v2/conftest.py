@@ -3,10 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
-import shutil
 import time
 import uuid
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -25,9 +24,17 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.environment import test_run_root
 from mediaflow.infrastructure.project_lock import ProcessFileLock
-from mediaflow.infrastructure.storage_budget import (
-    directory_inventory,
-    require_test_artifact_budget,
+from mediaflow.infrastructure.storage_budget import require_test_artifact_budget
+from mediaflow.infrastructure.storage_inventory import run_payload_inventory
+from mediaflow.infrastructure.storage_roots import managed_root_ownership, register_owned_storage_roots
+from tests.pytest_artifacts import (
+    CLEANUP,
+    RetentionPolicy,
+    checked_root,
+    collect_runs,
+    process_owner,
+    remove_owned,
+    trim_run_cases,
 )
 
 if TYPE_CHECKING:
@@ -48,19 +55,11 @@ def qapp_cls():
 
     return QGuiApplication
 
+
 TEST_RUN_ROOT = test_run_root()
 MANAGED_PYTEST_ROOT = TEST_RUN_ROOT / "p"
 MANIFEST_SCHEMA = "mediaflow-pytest-run/v1"
-_LEGACY_MANAGED_RUN_PATTERN = re.compile(
-    r"^(?:"
-    r"r-[0-9a-f]{12}"
-    r"|"
-    r"r-\d{8}T\d{6}-\d+-[0-9a-f]{8}"
-    r"|pytest-run-\d{8}T\d{6}\.\d{6}Z-\d+-[0-9a-f]{8}"
-    r")$"
-)
 RUN_STATE_KEY: pytest.StashKey[TestRunState] = pytest.StashKey()
-_REMOVE_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.1, 0.2, 0.4)
 
 
 @dataclass
@@ -70,6 +69,10 @@ class TestRunState:
     cases: dict[str, Path] = field(default_factory=dict)
     failed_nodes: set[str] = field(default_factory=set)
     finished_nodes: set[str] = field(default_factory=set)
+    owner: dict[str, int | float] = field(default_factory=process_owner)
+    retention: RetentionPolicy = field(default_factory=RetentionPolicy.from_environment)
+    cleanup_errors: list[dict[str, str]] = field(default_factory=list)
+    startup_cleanup: dict[str, object] = field(default_factory=dict)
 
 
 def _safe_case_name(node_id: str) -> str:
@@ -85,112 +88,6 @@ def _write_manifest(path: Path, payload: dict[str, object]) -> None:
         path,
         json.dumps(payload, ensure_ascii=False, indent=2),
     )
-
-
-def _remove_managed_directory(path: Path) -> None:
-    managed_root = MANAGED_PYTEST_ROOT.resolve()
-    resolved = path.resolve()
-    if resolved == managed_root or not resolved.is_relative_to(managed_root):
-        raise RuntimeError(f"Refusing to remove unmanaged test path: {resolved}")
-    if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
-        raise RuntimeError(f"Refusing to follow a linked test path: {path}")
-    if not path.is_dir():
-        return
-    last_error: OSError | None = None
-    for delay in _REMOVE_RETRY_DELAYS_SECONDS:
-        if delay:
-            time.sleep(delay)
-        try:
-            shutil.rmtree(path)
-            return
-        except FileNotFoundError:
-            return
-        except PermissionError as error:
-            last_error = error
-        except OSError as error:
-            if getattr(error, "winerror", None) != 32:
-                raise
-            last_error = error
-    if last_error is not None:
-        raise last_error
-
-
-def _retention_error(
-    path: Path,
-    error: BaseException,
-    *,
-    node_id: str | None = None,
-) -> dict[str, str]:
-    payload = {
-        "path": str(path),
-        "type": type(error).__name__,
-        "message": str(error),
-    }
-    if node_id is not None:
-        payload["node_id"] = node_id
-    return payload
-
-
-def _try_remove_managed_directory(
-    path: Path,
-    *,
-    node_id: str | None = None,
-) -> dict[str, str] | None:
-    try:
-        _remove_managed_directory(path)
-    except Exception as error:
-        return _retention_error(path, error, node_id=node_id)
-    return None
-
-
-def _owned_passed_manifest(candidate: Path) -> dict[str, object]:
-    managed_root = MANAGED_PYTEST_ROOT.resolve(strict=True)
-    if candidate.is_symlink() or (hasattr(candidate, "is_junction") and candidate.is_junction()):
-        raise RuntimeError(f"Refusing to follow a linked pytest run: {candidate}")
-    resolved = candidate.resolve(strict=True)
-    if resolved.parent != managed_root or not _LEGACY_MANAGED_RUN_PATTERN.fullmatch(candidate.name):
-        raise RuntimeError(f"Refusing to inspect an unmanaged pytest run: {resolved}")
-    manifest = candidate / "run-result.json"
-    try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Invalid pytest run manifest: {manifest}") from error
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"Pytest run ownership mismatch: {candidate}")
-    if payload.get("schema") == MANIFEST_SCHEMA:
-        expected = {
-            "run_id": candidate.name,
-            "managed": True,
-            "status": "passed",
-        }
-        if any(payload.get(key) != value for key, value in expected.items()):
-            raise RuntimeError(f"Pytest run ownership mismatch: {candidate}")
-    elif not _is_legacy_passed_manifest(payload):
-        raise RuntimeError(f"Pytest run ownership mismatch: {candidate}")
-    if not isinstance(payload.get("finished_at"), str):
-        raise RuntimeError(f"Passed pytest run has no finish time: {candidate}")
-    return payload
-
-
-def _is_legacy_passed_manifest(
-    payload: dict[str, object],
-) -> bool:
-    return (
-        "schema" not in payload
-        and payload.get("status") == "passed"
-        and payload.get("exit_status") == 0
-        and payload.get("failed_nodes") == []
-        and isinstance(payload.get("finished_at"), str)
-        and type(payload.get("process_id")) is int
-        and int(payload["process_id"]) > 0
-        and type(payload.get("case_count")) is int
-        and int(payload["case_count"]) >= 0
-    )
-
-
-def _remove_owned_passed_run(candidate: Path) -> None:
-    _owned_passed_manifest(candidate)
-    _remove_managed_directory(candidate)
 
 
 @contextmanager
@@ -209,23 +106,31 @@ def _retention_lock() -> Iterator[None]:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    storage_preflight = require_test_artifact_budget(
-        MANAGED_PYTEST_ROOT,
-        expected_new_bytes=1024**3,
-        label="MediaFlow pytest evidence",
-    )
+    checked_root(MANAGED_PYTEST_ROOT)
+    retention = RetentionPolicy.from_environment()
     MANAGED_PYTEST_ROOT.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    run_identity = hashlib.sha256(
-        f"{stamp}:{os.getpid()}:{uuid.uuid4().hex}".encode()
-    ).hexdigest()[:12]
+    run_identity = hashlib.sha256(f"{stamp}:{os.getpid()}:{uuid.uuid4().hex}".encode()).hexdigest()[:12]
     run_root = MANAGED_PYTEST_ROOT / f"r-{run_identity}"
+    os.environ["MEDIAFLOW_STORAGE_REGISTRY_PATH"] = str(run_root / "root-registry.json")
     with _retention_lock():
+        startup_cleanup = collect_runs(MANAGED_PYTEST_ROOT, retention)
+        storage_preflight = require_test_artifact_budget(
+            MANAGED_PYTEST_ROOT,
+            expected_new_bytes=1024**3,
+            label="MediaFlow pytest evidence",
+        )
         (run_root / "c").mkdir(
             parents=True,
             exist_ok=False,
         )
         try:
+            register_owned_storage_roots(
+                (run_root,),
+                ownership=managed_root_ownership(run_root),
+                producer="pytest-and-verification-evidence",
+                receipt=run_root / "run-result.json",
+            )
             _write_manifest(
                 run_root / "run-result.json",
                 {
@@ -239,7 +144,8 @@ def pytest_configure(config: pytest.Config) -> None:
                     "case_count": 0,
                     "cases": {},
                     "storage_preflight": storage_preflight,
-                    "cleanup": "report-only-until-authorized",
+                    "cleanup": CLEANUP,
+                    "owner": process_owner(),
                 },
             )
         except BaseException as error:
@@ -255,6 +161,9 @@ def pytest_configure(config: pytest.Config) -> None:
     config.stash[RUN_STATE_KEY] = TestRunState(
         run_root,
         storage_preflight=storage_preflight,
+        retention=retention,
+        startup_cleanup=startup_cleanup,
+        cleanup_errors=list(startup_cleanup["errors"]),
     )
 
 
@@ -265,7 +174,14 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     if report.failed:
         item.config.stash[RUN_STATE_KEY].failed_nodes.add(item.nodeid)
     if report.when == "teardown":
-        item.config.stash[RUN_STATE_KEY].finished_nodes.add(item.nodeid)
+        state = item.config.stash[RUN_STATE_KEY]
+        state.finished_nodes.add(item.nodeid)
+        case = state.cases.get(item.nodeid)
+        if case is not None and item.nodeid not in state.failed_nodes:
+            try:
+                remove_owned(MANAGED_PYTEST_ROOT, state.root, case)
+            except (OSError, ValueError) as error:
+                state.cleanup_errors.append({"path": str(case), "error": str(error)})
 
 
 def _run_manifest(
@@ -286,6 +202,8 @@ def _run_manifest(
         "status": status,
         "finished_at": finished_at,
         "process_id": os.getpid(),
+        "owner": state.owner,
+        "cleanup": CLEANUP,
         "exit_status": int(exitstatus),
         "failed_nodes": failed_nodes,
         "case_count": len(state.cases),
@@ -295,8 +213,9 @@ def _run_manifest(
         "retention_errors": retention_errors,
         "storage": {
             "preflight": state.storage_preflight,
-            "final_inventory": directory_inventory(state.root),
-            "cleanup": "report-only-until-authorized",
+            "final_inventory": run_payload_inventory(state.root),
+            "cleanup": CLEANUP,
+            "startup_cleanup": state.startup_cleanup,
         },
         "cases": {
             node_id: str(case_path.relative_to(state.root)).replace("\\", "/")
@@ -306,86 +225,59 @@ def _run_manifest(
     }
 
 
-def _finish_failed_run(
-    state: TestRunState,
-    exitstatus: int | pytest.ExitCode,
-) -> None:
-    retained_nodes = {
-        node_id
-        for node_id in state.cases
-        if node_id in state.failed_nodes or node_id not in state.finished_nodes
-    }
-    retention_errors: list[dict[str, str]] = []
-    for node_id, case_path in state.cases.items():
-        if node_id in retained_nodes:
-            continue
-        error = _try_remove_managed_directory(
-            case_path,
-            node_id=node_id,
-        )
-        if error is not None:
-            retained_nodes.add(node_id)
-            retention_errors.append(error)
-    _write_manifest(
-        state.root / "run-result.json",
-        _run_manifest(
-            state,
-            status="failed",
-            exitstatus=exitstatus,
-            finished_at=datetime.now(UTC).isoformat(),
-            retained_nodes=retained_nodes,
-            retention_errors=retention_errors,
-        ),
-    )
-
-
-def _finish_passed_run(
-    state: TestRunState,
-    exitstatus: int | pytest.ExitCode,
-) -> None:
+def _finish_run(state: TestRunState, exitstatus: int | pytest.ExitCode) -> None:
     with _retention_lock():
-        finished_at = datetime.now(UTC).isoformat()
-        retained_nodes = set(state.cases)
-        manifest = _run_manifest(
-            state,
-            status="passed",
-            exitstatus=exitstatus,
-            finished_at=finished_at,
-            retained_nodes=retained_nodes,
-            retention_errors=[],
+        for node in state.finished_nodes - state.failed_nodes:
+            case = state.cases.get(node)
+            if case is None or not case.exists():
+                continue
+            try:
+                remove_owned(MANAGED_PYTEST_ROOT, state.root, case)
+            except (OSError, ValueError) as error:
+                state.cleanup_errors.append({"path": str(case), "error": str(error)})
+        state.cleanup_errors.extend(trim_run_cases(MANAGED_PYTEST_ROOT, state.root, state.retention))
+        retained = {node for node, path in state.cases.items() if path.exists()}
+        status = (
+            "passed" if int(exitstatus) == 0 else ("interrupted" if int(exitstatus) in {2, 3} else "failed")
         )
-        manifest["retention_status"] = "pending"
-        _write_manifest(state.root / "run-result.json", manifest)
-        successful_runs: list[tuple[str, str, Path]] = []
-        for candidate in MANAGED_PYTEST_ROOT.iterdir():
-            if not candidate.is_dir():
-                continue
-            try:
-                payload = _owned_passed_manifest(candidate)
-            except RuntimeError:
-                continue
-            successful_runs.append((str(payload["finished_at"]), candidate.name, candidate))
-        successful_runs.sort()
-        retention_errors: list[dict[str, str]] = []
-        for _, _, obsolete in successful_runs[:-1]:
-            try:
-                _remove_owned_passed_run(obsolete)
-            except Exception as error:
-                retention_errors.append(_retention_error(obsolete, error))
-        manifest["retention_status"] = "complete" if not retention_errors else "incomplete"
-        manifest["retention_errors"] = retention_errors
-        _write_manifest(state.root / "run-result.json", manifest)
+        _write_manifest(
+            state.root / "run-result.json",
+            _run_manifest(
+                state,
+                status=status,
+                exitstatus=exitstatus,
+                finished_at=datetime.now(UTC).isoformat(),
+                retained_nodes=retained,
+                retention_errors=state.cleanup_errors,
+            ),
+        )
+        cleanup = collect_runs(MANAGED_PYTEST_ROOT, state.retention, exclude=state.root)
+        state.cleanup_errors.extend(cleanup["errors"])
+        if cleanup["errors"]:
+            _write_manifest(
+                state.root / "run-result.json",
+                _run_manifest(
+                    state,
+                    status=status,
+                    exitstatus=exitstatus,
+                    finished_at=datetime.now(UTC).isoformat(),
+                    retained_nodes=retained,
+                    retention_errors=state.cleanup_errors,
+                ),
+            )
+    if state.cleanup_errors:
+        warnings.warn(
+            pytest.PytestWarning(f"Test artifact cleanup was incomplete: {state.cleanup_errors}"),
+            stacklevel=2,
+        )
 
 
 def pytest_sessionfinish(
     session: pytest.Session,
     exitstatus: int | pytest.ExitCode,
 ) -> None:
-    state = session.config.stash[RUN_STATE_KEY]
-    if int(exitstatus) == int(pytest.ExitCode.OK):
-        _finish_passed_run(state, exitstatus)
-    else:
-        _finish_failed_run(state, exitstatus)
+    if RUN_STATE_KEY in session.config.stash:
+        _finish_run(session.config.stash[RUN_STATE_KEY], exitstatus)
 
 
 @pytest.fixture
@@ -425,6 +317,7 @@ def isolated_storage_paths(
     monkeypatch.setenv("MEDIAFLOW_MEDIA_ROOT", str(path.parent / "media"))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ROOT", str(tmp_path / "_projects"))
     monkeypatch.setenv("MEDIAFLOW_SERVICE_STATE_DIR", str(tmp_path / "_service"))
+    monkeypatch.setenv("MEDIAFLOW_STORAGE_REGISTRY_PATH", str(tmp_path / "_settings" / "root-registry.json"))
     monkeypatch.setenv("MEDIAFLOW_MINIMUM_FREE_BYTES", "1")
     monkeypatch.setenv("MEDIAFLOW_RUNTIME_MAX_BYTES", str(8 * 1024**3))
     monkeypatch.setenv("MEDIAFLOW_PROJECT_ARTIFACT_MAX_BYTES", str(8 * 1024**3))

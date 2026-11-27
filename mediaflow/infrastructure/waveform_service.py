@@ -24,8 +24,8 @@ from mediaflow.waveform_cache import (
     write_waveform_cache,
 )
 
+from .project_cache_budget import reserve_project_cache
 from .runtime_paths import RuntimePaths
-from .storage_budget import reserve_project_cache
 
 
 class WaveformService:
@@ -58,16 +58,15 @@ class WaveformService:
             project_cache,
             self.repository.project_dir,
             expected_new_bytes=self._estimated_peak_bytes(duration_seconds),
+            expected_files=len(self.BLOCK_SIZES) + 3,
             label="MediaFlow waveform cache",
             case_sensitive_paths=self.paths.target.case_sensitive_paths,
+            check_cancelled=check_cancelled,
         )
         try:
             output_dir = project_cache / "waveforms"
             output_dir.mkdir(parents=True, exist_ok=True)
-            output = (
-                output_dir
-                / f"{asset.id}-{self._cache_key(asset, source)}{WAVEFORM_CACHE_SUFFIX}"
-            )
+            output = output_dir / f"{asset.id}-{self._cache_key(asset, source)}{WAVEFORM_CACHE_SUFFIX}"
             fragments = {
                 block_size: unique_temporary_sibling(
                     output_dir / f"{asset.id}-{block_size}.peaks",
@@ -76,16 +75,16 @@ class WaveformService:
                 for block_size in self.BLOCK_SIZES
             }
             temporary_output = unique_temporary_sibling(output, label="waveform")
-        except BaseException:
-            reservation.release()
+        except BaseException as error:
+            reservation.release(error=error)
             raise
+        failure: BaseException | None = None
         try:
             if progress:
                 progress(OperationProgress.indeterminate("waveform_decoding"))
             with ExitStack() as stack:
                 fragment_streams = {
-                    block_size: stack.enter_context(path.open("xb"))
-                    for block_size, path in fragments.items()
+                    block_size: stack.enter_context(path.open("xb")) for block_size, path in fragments.items()
                 }
                 level_counts = {block_size: 0 for block_size in self.BLOCK_SIZES}
                 pending_peaks = {
@@ -125,11 +124,7 @@ class WaveformService:
                     if check_cancelled is not None:
                         check_cancelled()
                     sample_count += int(samples.size)
-                    combined = (
-                        np.concatenate((base_carry, samples))
-                        if base_carry.size
-                        else samples
-                    )
+                    combined = np.concatenate((base_carry, samples)) if base_carry.size else samples
                     base_size = self.BLOCK_SIZES[0]
                     complete_length = combined.size - combined.size % base_size
                     if complete_length:
@@ -188,11 +183,7 @@ class WaveformService:
                                 raise RuntimeError("Waveform decoder returned an invalid sample rate")
                             source_chunk_samples = max(
                                 1,
-                                round(
-                                    target_chunk_samples
-                                    * decoded_frame.sample_rate
-                                    / self.SAMPLE_RATE
-                                ),
+                                round(target_chunk_samples * decoded_frame.sample_rate / self.SAMPLE_RATE),
                             )
                             passthrough = (
                                 decoded_frame.format.name == "s16"
@@ -280,11 +271,21 @@ class WaveformService:
             )
             temporary_output.replace(output)
             return output
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            temporary_output.unlink(missing_ok=True)
-            for path in fragments.values():
-                path.unlink(missing_ok=True)
-            reservation.release()
+            try:
+                temporary_output.unlink(missing_ok=True)
+                for path in fragments.values():
+                    path.unlink(missing_ok=True)
+            except BaseException as cleanup_error:
+                if failure is None:
+                    failure = cleanup_error
+                    raise
+                failure.add_note(f"Waveform temporary-file cleanup failed: {cleanup_error}")
+            finally:
+                reservation.release(error=failure)
 
     def generate(
         self,
@@ -312,9 +313,7 @@ class WaveformService:
         payload = {
             "version": cls.CACHE_VERSION,
             "fingerprint": (
-                asset.fingerprint.model_dump(mode="json")
-                if asset.fingerprint is not None
-                else None
+                asset.fingerprint.model_dump(mode="json") if asset.fingerprint is not None else None
             ),
             "source_size": source_stat.st_size,
             "source_modified_ns": source_stat.st_mtime_ns,
@@ -327,15 +326,12 @@ class WaveformService:
     @classmethod
     def _estimated_peak_bytes(cls, duration_seconds: float) -> int:
         if not math.isfinite(duration_seconds) or duration_seconds <= 0:
-            raise ValueError(
-                "Waveform storage preflight requires a known positive media duration"
-            )
+            raise ValueError("Waveform storage preflight requires a known positive media duration")
         # Keep one second of decoder/metadata tolerance. During publication the
         # four peak fragments and the assembled cache coexist, so reserve both
         # complete payloads before creating either one.
         sample_count = math.ceil(duration_seconds * cls.SAMPLE_RATE) + cls.SAMPLE_RATE
         level_counts = {
-            block_size: (sample_count + block_size - 1) // block_size
-            for block_size in cls.BLOCK_SIZES
+            block_size: (sample_count + block_size - 1) // block_size for block_size in cls.BLOCK_SIZES
         }
         return waveform_cache_size(level_counts) * 2

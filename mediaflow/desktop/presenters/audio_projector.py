@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mediaflow.desktop.component_contexts import AudioProjectorContext
 from mediaflow.desktop.presentation_messages import system_name
 from mediaflow.desktop.presentation_timeline import audio_effect_label
 from mediaflow.domain.audio import audio_effect_definition
@@ -7,12 +8,12 @@ from mediaflow.domain.audio import audio_effect_definition
 from .base import Projector
 
 
-class AudioProjector(Projector):
+class AudioProjector(Projector[AudioProjectorContext]):
     def refresh_audio_buses(self) -> None:
-        if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
-            self._session.models.audio_buses.set_items([])
+        if not self._context.state.binding.current or not self._context.state.binding.active_sequence_id:
+            self._context.models.audio_buses.set_items([])
             return
-        self._session.models.audio_buses.set_items(
+        self._context.models.audio_buses.set_items(
             [
                 {
                     "busId": bus.id,
@@ -24,31 +25,31 @@ class AudioProjector(Projector):
                     "solo": bus.solo,
                     "channelLayout": bus.channel_layout,
                 }
-                for bus in self._session.state.binding.require_current().list_audio_buses(
-                    self._session.state.binding.active_sequence_id
+                for bus in self._context.state.binding.require_current().list_audio_buses(
+                    self._context.state.binding.active_sequence_id
                 )
             ]
         )
         bus_ids = {
             bus.id
-            for bus in self._session.state.binding.require_current().list_audio_buses(
-                self._session.state.binding.active_sequence_id
+            for bus in self._context.state.binding.require_current().list_audio_buses(
+                self._context.state.binding.active_sequence_id
             )
         }
-        if self._session.state.selection.audio_bus_id not in bus_ids:
-            self._session.state.selection.audio_bus_id = ""
+        if self._context.state.selection.audio_bus_id not in bus_ids:
+            self._context.state.selection.audio_bus_id = ""
         self.refresh_audio_effects()
 
     def refresh_audio_effects(self) -> None:
-        if not self._session.state.binding.current or not self._session.state.selection.audio_bus_id:
-            self._session.models.audio_effects.set_items([])
-            self._session.state.selection.audio_effect_id = ""
+        if not self._context.state.binding.current or not self._context.state.selection.audio_bus_id:
+            self._context.models.audio_effects.set_items([])
+            self._context.state.selection.audio_effect_id = ""
             self.refresh_audio_effect_parameters()
             return
-        effects = self._session.state.binding.require_current().list_audio_effects(
-            self._session.state.selection.audio_bus_id
+        effects = self._context.state.binding.require_current().list_audio_effects(
+            self._context.state.selection.audio_bus_id
         )
-        self._session.models.audio_effects.set_items(
+        self._context.models.audio_effects.set_items(
             [
                 {
                     "effectId": effect.id,
@@ -62,33 +63,33 @@ class AudioProjector(Projector):
                 for effect in effects
             ]
         )
-        if self._session.state.selection.audio_effect_id not in {effect.id for effect in effects}:
-            self._session.state.selection.audio_effect_id = ""
+        if self._context.state.selection.audio_effect_id not in {effect.id for effect in effects}:
+            self._context.state.selection.audio_effect_id = ""
         self.refresh_audio_effect_parameters()
 
     def refresh_audio_effect_parameters(self) -> None:
         if (
-            not self._session.state.binding.current
-            or not self._session.state.selection.audio_bus_id
-            or not self._session.state.selection.audio_effect_id
+            not self._context.state.binding.current
+            or not self._context.state.selection.audio_bus_id
+            or not self._context.state.selection.audio_effect_id
         ):
-            self._session.models.audio_effect_parameters.set_items([])
+            self._context.models.audio_effect_parameters.set_items([])
             return
         try:
             effect = next(
                 effect
-                for effect in self._session.state.binding.require_current().list_audio_effects(
-                    self._session.state.selection.audio_bus_id
+                for effect in self._context.state.binding.require_current().list_audio_effects(
+                    self._context.state.selection.audio_bus_id
                 )
-                if effect.id == self._session.state.selection.audio_effect_id
+                if effect.id == self._context.state.selection.audio_effect_id
             )
         except StopIteration:
-            self._session.models.audio_effect_parameters.set_items([])
+            self._context.models.audio_effect_parameters.set_items([])
             return
-        buses = self._session.state.binding.require_current().list_audio_buses(
-            self._session.state.binding.active_sequence_id
+        buses = self._context.state.binding.require_current().list_audio_buses(
+            self._context.state.binding.active_sequence_id
         )
-        self._session.models.audio_effect_parameters.set_items(
+        self._context.models.audio_effect_parameters.set_items(
             [
                 {
                     "key": descriptor.id,
@@ -106,20 +107,20 @@ class AudioProjector(Projector):
 
     def refresh_audio_metrics(self) -> None:
         self.invalidate_audio_metrics()
-        request_id = self._session.state.requests.audio_metrics_id
-        if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
+        request_id = self._context.state.requests.audio_metrics_id
+        if not self._context.state.binding.current or not self._context.state.binding.active_sequence_id:
             return
-        generation = self._session.state.binding.generation
-        project = self._session.state.binding.current
-        sequence_id = self._session.state.binding.active_sequence_id
-        self._session.background.submit(
+        generation = self._context.state.binding.generation
+        project = self._context.state.binding.current
+        sequence_id = self._context.state.binding.active_sequence_id
+        self._context.submit_background(
             "audio_metrics",
             (generation, request_id, sequence_id),
             lambda: project.read_loudness_metrics(sequence_id),
         )
 
     def invalidate_audio_metrics(self) -> None:
-        self._session.state.requests.audio_metrics_id += 1
-        if self._session.state.presentation.audio_metrics:
-            self._session.state.presentation.audio_metrics = {}
-        self._session.updates.commit(audio_metrics=True)
+        self._context.state.requests.audio_metrics_id += 1
+        if self._context.state.presentation.audio_metrics:
+            self._context.state.presentation.audio_metrics = {}
+        self._context.updates.commit(audio_metrics=True)

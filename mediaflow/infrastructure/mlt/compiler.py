@@ -63,9 +63,14 @@ class TimelineCompiler:
         watermark: WatermarkOverlay | None = None,
         native_preview: bool = False,
         prefer_sdr_preview_proxy: bool = False,
+        duration_frames: int | None = None,
     ) -> MltDocument:
         profile = state.sequence.profile
         duration = max(1, state.duration_frames)
+        if duration_frames is not None:
+            if duration_frames < duration:
+                raise ValueError("Compilation duration cannot truncate timeline content")
+            duration = duration_frames
         root = ET.Element(
             "mlt",
             {
@@ -266,6 +271,7 @@ class TimelineCompiler:
         watermark: WatermarkOverlay | None = None,
         native_preview: bool = False,
         prefer_sdr_preview_proxy: bool = False,
+        duration_frames: int | None = None,
     ) -> MltDocument:
         document = self.compile(
             state,
@@ -275,6 +281,7 @@ class TimelineCompiler:
             watermark=watermark,
             native_preview=native_preview,
             prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+            duration_frames=duration_frames,
         )
         path = Path(destination)
         atomic_write_text(path, document.xml)

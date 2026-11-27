@@ -45,6 +45,7 @@ Rectangle {
 
         Text {
             objectName: "applicationProductName"
+            visible: root.width >= 1100 || !mediaflow.workspaceViewController.hasProject
             text: Qt.application.name
             color: Theme.textStrong
             font.pixelSize: Theme.fontSizeTitleSmall
@@ -73,6 +74,7 @@ Rectangle {
         }
 
         WorkspaceHeader {
+            compact: root.width < 1100
             visible: mediaflow.workspaceViewController.hasProject
             workspaceItem: root.workspaceItem
             Layout.fillHeight: true

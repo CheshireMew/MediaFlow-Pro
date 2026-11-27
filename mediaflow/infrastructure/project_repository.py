@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,7 +34,7 @@ from .project_schema_definition import (
     PROJECT_SCHEMA_VERSION,
     SCHEMA_SQL,
 )
-from .sqlite_connections import open_project_database
+from .sqlite_connections import open_project_database, open_project_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,8 @@ class ProjectRepository:
         self._task_preparation_state = threading.local()
         self._mutation_gate: Any | None = None
         self._transaction_depth = 0
+        self._transaction_thread_id: int | None = None
+        self._detached_snapshot = False
         self._transaction_observes_project = True
         self._revision_coalescing_depth = 0
         self._revision_dirty = False
@@ -410,6 +412,7 @@ class ProjectRepository:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 self._transaction_depth = 1
+                self._transaction_thread_id = threading.get_ident()
                 self._transaction_observes_project = observe_project
                 transaction_base_revision = self._content_revision_if_available()
                 fallback_observation = None
@@ -463,6 +466,7 @@ class ProjectRepository:
                 self._commit_publications()
             finally:
                 self._transaction_depth = 0
+                self._transaction_thread_id = None
                 self._transaction_observes_project = True
                 self._transaction_publications.clear()
 
@@ -470,6 +474,74 @@ class ProjectRepository:
         """Persist task lifecycle state without observing or revising project content."""
 
         return self.transaction(observe_project=False)
+
+    @contextmanager
+    def task_read_connection(self) -> Iterator[sqlite3.Connection]:
+        """Read our own transaction; other threads see only committed records."""
+        if self._detached_snapshot or (
+            self._transaction_depth and self._transaction_thread_id == threading.get_ident()
+        ):
+            with self._connection_lock:
+                yield self._connection
+        else:
+            with closing(open_project_database(self.database_path, read_only=True)) as connection:
+                yield connection
+
+    def after_commit(self, action: Callable[[], None]) -> None:
+        if self._transaction_depth and self._transaction_thread_id == threading.get_ident():
+            self.enlist_transaction_publication(on_commit=action, on_rollback=lambda _error: None)
+        else:
+            action()
+
+    @contextmanager
+    def command_scope(self) -> Iterator[None]:
+        """Acquire project ownership before any task execution lock, without a transaction."""
+        with self._mutation_gate or nullcontext():
+            yield
+
+    @contextmanager
+    def read_snapshot(self, *, include_history: bool = False) -> Iterator[ProjectRepository]:
+        """Freeze runtime inputs without copying unrelated journals and receipts."""
+        connection: sqlite3.Connection | None = None
+        try:
+            with self.command_scope(), self._connection_lock:
+                if include_history:
+                    connection = open_project_snapshot(self._connection.serialize())
+                else:
+                    connection = open_project_database(":memory:", read_only=False, check_same_thread=False)
+                    connection.executescript(SCHEMA_SQL)
+                    connection.execute("PRAGMA foreign_keys=OFF")
+                    excluded = {
+                        "project_event", "task_event", "undo_group", "automation_request",
+                        "task_consumption", "task", "workflow_run", "project_version", "export_history",
+                    }
+                    tables = self._connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                    for table in tables:
+                        name = str(table["name"])
+                        if name in excluded:
+                            continue
+                        cursor = self._connection.execute(f'SELECT * FROM "{name}"')
+                        placeholders = ",".join("?" for _ in cursor.description or ())
+                        columns = ",".join(
+                            '"' + column[0].replace('"', '""') + '"'
+                            for column in cursor.description or ()
+                        )
+                        while rows := cursor.fetchmany(256):
+                            connection.executemany(
+                                f'INSERT INTO "{name}" ({columns}) VALUES ({placeholders})', rows
+                            )
+                    connection.commit()
+                    connection.execute("PRAGMA foreign_keys=ON")
+                    connection.execute("PRAGMA query_only=ON")
+            snapshot = ProjectRepository(self.project_dir, connection, read_only=True, write_lock=None)
+            snapshot._detached_snapshot = True
+            snapshot.acknowledge_content_revision()
+            yield snapshot
+        finally:
+            if connection is not None:
+                connection.close()
 
     def enlist_transaction_publication(
         self,

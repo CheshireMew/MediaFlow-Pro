@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ class WorkspaceSession:
     attached_at: int
     revision: int = 0
     connections: int = 0
+    last_access: int = field(default_factory=now_ms)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -51,12 +52,13 @@ class WorkspaceRegistry:
             str(Path(project).expanduser().resolve()) if project else None
         )
         with self._lock:
-            if workspace_session_id:
+            if workspace_session_id and workspace_session_id in self._sessions:
                 session = self._require_owned(workspace_session_id, normalized_client)
                 session.project = normalized_project
+                session.last_access = now_ms()
             else:
                 session = WorkspaceSession(
-                    id=f"workspace-{uuid.uuid4().hex}",
+                    id=workspace_session_id or f"workspace-{uuid.uuid4().hex}",
                     client_id=normalized_client,
                     project=normalized_project,
                     attached_at=now_ms(),
@@ -68,6 +70,7 @@ class WorkspaceRegistry:
         with self._lock:
             session = self._require_owned(workspace_session_id, client_id)
             session.connections += 1
+            session.last_access = now_ms()
             return session.snapshot()
 
     def disconnect(self, workspace_session_id: str, client_id: str) -> None:
@@ -76,9 +79,21 @@ class WorkspaceRegistry:
             if session is None or session.client_id != client_id:
                 return
             session.connections = max(0, session.connections - 1)
+            session.last_access = now_ms()
+
+    def reap_idle(self, *, now: int | None = None) -> int:
+        observed = now_ms() if now is None else now
+        with self._lock:
+            stale = [key for key, session in self._sessions.items()
+                     if not session.connections and observed - session.last_access >= 60_000]
+            for key in stale:
+                self._sessions.pop(key)
+            return len(stale)
 
     def detach(self, workspace_session_id: str, client_id: str) -> None:
         with self._lock:
+            if workspace_session_id not in self._sessions:
+                return
             session = self._require_owned(workspace_session_id, client_id)
             if session.connections:
                 raise RuntimeError("Workspace still has an active event connection")

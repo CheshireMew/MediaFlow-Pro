@@ -21,6 +21,7 @@ class MediaController(ControllerFacet[MediaControllerScope]):
     errorOccurred = Signal(str)
     sourceMonitorChanged = Signal()
     searchChanged = Signal()
+    binFilterChanged = Signal()
 
     def __init__(self, session: MediaControllerScope):
         super().__init__(session)
@@ -31,6 +32,30 @@ class MediaController(ControllerFacet[MediaControllerScope]):
         self._source_in = 0
         self._source_out = 0
         self._asset_search_text = ""
+        self._asset_bin_id = ""
+        self._source_sequence_id = ""
+        self.projectStateChanged.connect(self._refresh_context)
+
+    def prepare_project_unbind(self) -> None:
+        self.closeSourceMonitor()
+        self.setAssetSearchText("")
+        self.setAssetBinFilter("")
+
+    def _refresh_context(self) -> None:
+        if self._source_sequence_id != self._session.state.binding.active_sequence_id:
+            self.closeSourceMonitor()
+        self.setAssetBinFilter(self._asset_bin_id)
+
+    @Property(str, notify=binFilterChanged)
+    def assetBinId(self) -> str:
+        return self._asset_bin_id
+
+    @Property(list, notify=projectStateChanged)
+    def assetBinOptions(self) -> list[dict]:
+        return [
+            {"label": f"{row['displayName']}  ({row['assetCount']})", "value": row["binId"]}
+            for row in self._session.models.asset_bins.snapshot()
+        ]
 
     @Property(QObject, constant=True)
     def assetsModel(self) -> QObject:
@@ -65,8 +90,10 @@ class MediaController(ControllerFacet[MediaControllerScope]):
     @Slot(str)
     def setAssetBinFilter(self, bin_id: str) -> None:
         normalized = bin_id.strip()
-        descendants = {normalized} if normalized not in {"", "__unfiled__"} else set()
         rows = self._session.models.asset_bins.snapshot()
+        if normalized not in {"", "__unfiled__"} and not any(row["binId"] == normalized for row in rows):
+            normalized = ""
+        descendants = {normalized} if normalized not in {"", "__unfiled__"} else set()
         changed = True
         while changed:
             changed = False
@@ -75,6 +102,9 @@ class MediaController(ControllerFacet[MediaControllerScope]):
                     descendants.add(row["binId"])
                     changed = True
         self._session.models.filtered_assets.set_bin_scope(normalized, descendants)
+        if self._asset_bin_id != normalized:
+            self._asset_bin_id = normalized
+            self.binFilterChanged.emit()
 
     @Slot(str, str)
     @report_ui_errors
@@ -131,9 +161,8 @@ class MediaController(ControllerFacet[MediaControllerScope]):
     @Property(dict, notify=selectionChanged)
     def selectedAssetData(self) -> dict:
         row = self._session.models.assets.findRow(
-            "assetId", self._session.state.selection.asset_ids[-1]
-            if self._session.state.selection.asset_ids
-            else ""
+            "assetId",
+            self._session.state.selection.asset_ids[-1] if self._session.state.selection.asset_ids else "",
         )
         return self._session.models.assets.get(row)
 
@@ -169,6 +198,7 @@ class MediaController(ControllerFacet[MediaControllerScope]):
             asset.id,
         )
         self._source_asset_id = asset.id
+        self._source_sequence_id = self._session.state.binding.active_sequence_id
         self._source_graph_path = str(graph)
         self._source_name = asset.name
         self._source_duration = duration
@@ -178,6 +208,7 @@ class MediaController(ControllerFacet[MediaControllerScope]):
 
     @Slot()
     def closeSourceMonitor(self) -> None:
+        self._source_sequence_id = ""
         self._source_asset_id = ""
         self._source_graph_path = ""
         self._source_name = ""
@@ -323,7 +354,7 @@ class MediaController(ControllerFacet[MediaControllerScope]):
             return
         self._session.state.selection.asset_ids = [asset.id]
         self._session.projectors.assets.refresh_assets()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(project=True)
         self._session.updates.commit(selection=True)
         self._session._set_status("离线素材已重新关联")
@@ -346,7 +377,7 @@ class MediaController(ControllerFacet[MediaControllerScope]):
         )
         self._session.state.selection.asset_ids = [asset_id]
         self._session.projectors.assets.refresh_assets()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(project=True)
         self._session.updates.commit(selection=True)
         self._session._set_status("已替换素材内容，预览缓存和音频波形将重新生成")

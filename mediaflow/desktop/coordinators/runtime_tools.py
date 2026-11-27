@@ -5,6 +5,7 @@ import threading
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from mediaflow.desktop.component_contexts import RuntimeToolOperationsContext
 from mediaflow.desktop.presentation_tasks import task_message_label
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.runtime_capabilities import RuntimeComponentInstallResult
@@ -18,29 +19,29 @@ class _RuntimeToolBridge(QObject):
     eventReceived = Signal(object)
 
 
-class RuntimeToolOperations(SessionCoordinator):
-    def __init__(self, session):
-        super().__init__(session)
-        self._bridge = _RuntimeToolBridge(session)
+class RuntimeToolOperations(SessionCoordinator[RuntimeToolOperationsContext]):
+    def __init__(self, context: RuntimeToolOperationsContext):
+        super().__init__(context)
+        self._bridge = _RuntimeToolBridge(context.parent)
         self._bridge.eventReceived.connect(self._on_event)
 
     def start(self, operation: str, arguments: dict | None = None) -> None:
-        if self._session.state.runtime_state.thread and self._session.state.runtime_state.thread.is_alive():
-            self._session.updates.report_error("已有运行时工具操作正在执行")
+        if self._context.state.runtime_state.thread and self._context.state.runtime_state.thread.is_alive():
+            self._context.updates.report_error("已有运行时工具操作正在执行")
             return
-        self._session.state.runtime_state.cancel.clear()
-        self._session.state.runtime_state.status = {
-            **self._session.state.runtime_state.status,
+        self._context.state.runtime_state.cancel.clear()
+        self._context.state.runtime_state.status = {
+            **self._context.state.runtime_state.status,
             "busy": True,
             "progressMode": "indeterminate",
             "progressValue": 0.0,
             "message": "starting",
             "operation": operation,
         }
-        self._session.updates.commit(runtime_tools=True)
+        self._context.updates.commit(runtime_tools=True)
 
         def check_cancelled() -> None:
-            if self._session.state.runtime_state.cancel.is_set():
+            if self._context.state.runtime_state.cancel.is_set():
                 raise RuntimeError("运行时工具操作已取消")
 
         def report(progress: OperationProgress) -> None:
@@ -57,7 +58,7 @@ class RuntimeToolOperations(SessionCoordinator):
 
         def run() -> None:
             try:
-                result = self._session._api.run_runtime_tool(
+                result = self._context.run_runtime_tool(
                     operation,
                     arguments=arguments,
                     progress=report,
@@ -70,65 +71,65 @@ class RuntimeToolOperations(SessionCoordinator):
                 self._bridge.eventReceived.emit(
                     {
                         "type": "cancelled"
-                        if self._session.state.runtime_state.cancel.is_set()
+                        if self._context.state.runtime_state.cancel.is_set()
                         else "failed",
                         "operation": operation,
                         "error": str(error),
                     }
                 )
 
-        self._session.state.runtime_state.thread = threading.Thread(
+        self._context.state.runtime_state.thread = threading.Thread(
             target=run,
             name=f"mediaflow-runtime-{operation}",
             daemon=True,
         )
-        self._session.state.runtime_state.thread.start()
+        self._context.state.runtime_state.thread.start()
 
     @Slot(object)
     def _on_event(self, event: dict) -> None:
         event_type = event.get("type")
         if event_type == "progress":
             progress = OperationProgress.model_validate(event.get("progress"))
-            self._session.state.runtime_state.status = {
-                **self._session.state.runtime_state.status,
+            self._context.state.runtime_state.status = {
+                **self._context.state.runtime_state.status,
                 "progressMode": progress.mode,
                 "progressValue": progress.percent or 0.0,
                 "message": task_message_label(progress.message_code),
             }
-            self._session.updates.commit(runtime_tools=True)
+            self._context.updates.commit(runtime_tools=True)
             return
         operation = str(event.get("operation") or "")
         if event_type == "completed" and operation == "install_components":
             installed = dict(event.get("result") or {})
-            candidate = self._session.state.service_settings.model_copy(deep=True)
+            candidate = self._context.state.service_settings.model_copy(deep=True)
             if xxl_result := installed.get("faster-whisper-xxl"):
                 installation = RuntimeComponentInstallResult.model_validate(xxl_result)
                 candidate.asr.cli_path = installation.entrypoint
             if gpt_result := installed.get("gpt-sovits-v2pro"):
                 installation = RuntimeComponentInstallResult.model_validate(gpt_result)
                 candidate.speech_synthesis.gpt_sovits_root = installation.root
-            self._session.settings_persistence.commit(candidate)
+            self._context.commit(candidate)
         if event_type == "completed" and operation == "install_speaker_clustering":
             installed = dict(event.get("result") or {})
-            candidate = self._session.state.service_settings.model_copy(deep=True)
+            candidate = self._context.state.service_settings.model_copy(deep=True)
             candidate.speaker_diarization.backend = "transcript_clustering"
             candidate.speaker_diarization.clustering_python_executable = str(installed["python"])
             candidate.speaker_diarization.embedding_model_path = str(installed["model"])
-            self._session.settings_persistence.commit(candidate)
+            self._context.commit(candidate)
         if event_type == "completed" and operation == "inspect":
-            self._session.state.runtime_state.status = {
-                **self._session.state.runtime_state.status,
+            self._context.state.runtime_state.status = {
+                **self._context.state.runtime_state.status,
                 **dict(event.get("result") or {}),
             }
-        self._session.projectors.workspace.refresh_runtime_tool_status(preserve_cuda=True)
-        self._session.projectors.workspace.refresh_installed_asr_models()
+        self._context.refresh_runtime_tool_status(preserve_cuda=True)
+        self._context.refresh_installed_asr_models()
         if event_type == "failed":
-            self._session.updates.report_error(str(event.get("error") or "运行时工具操作失败"))
+            self._context.updates.report_error(str(event.get("error") or "运行时工具操作失败"))
         elif event_type == "cancelled":
-            self._session._set_status("运行时工具操作已取消")
+            self._context.set_status("运行时工具操作已取消")
         elif isinstance(event.get("result"), dict) and event["result"].get("restart_required"):
-            self._session._set_status(
+            self._context.set_status(
                 "下载组件已更新，重启后台服务后生效；重启方法见 README 的 YouTube 下载说明"
             )
         else:
-            self._session._set_status("运行时工具操作已完成")
+            self._context.set_status("运行时工具操作已完成")

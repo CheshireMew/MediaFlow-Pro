@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -20,6 +21,7 @@ class ProjectCollectionStorage(Protocol):
         self,
         collection_id: str,
         sources: list[tuple[str, Path]],
+        *, check_cancelled: Callable[[], None] | None = None,
     ) -> list[CollectedAssetCopy]: ...
 
     def verify(self, path: Path, expected_sha256: str) -> bool: ...

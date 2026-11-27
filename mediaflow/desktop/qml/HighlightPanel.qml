@@ -381,7 +381,7 @@ AppScrollView {
                 collaborationPath: "/highlights/"
                     + mediaflow.highlightController.selectedHighlightId + "/title"
                 Layout.fillWidth: true
-                text: mediaflow.highlightController.selectedHighlightData.title || ""
+                sourceText: mediaflow.highlightController.selectedHighlightData.title || ""
             }
             RowLayout {
                 Layout.fillWidth: true

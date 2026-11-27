@@ -18,7 +18,19 @@ from .controller_scopes import (
     settings_scope,
     subtitle_scope,
     task_scope,
-    timeline_scope,
+    timeline_analysis_scope,
+    timeline_clip_scope,
+    timeline_color_scope,
+    timeline_effects_scope,
+    timeline_interchange_scope,
+    timeline_keyframe_scope,
+    timeline_mask_scope,
+    timeline_multicam_scope,
+    timeline_review_scope,
+    timeline_structure_scope,
+    timeline_view_scope,
+    timeline_viewport_scope,
+    timeline_voiceover_scope,
     web_scope,
     workspace_playback_scope,
     workspace_project_scope,
@@ -82,7 +94,6 @@ class EditorControllers(QObject):
         workspace_view = workspace_view_scope(self.session)
         settings = settings_scope(self.session)
         media = media_scope(self.session)
-        timeline = timeline_scope(self.session)
         subtitles = subtitle_scope(self.session)
         creative = creative_scope(self.session)
         tasks = task_scope(self.session)
@@ -99,20 +110,22 @@ class EditorControllers(QObject):
         self.download_settings = DownloadSettingsController(download_settings_scope(self.session))
         self.workspace_settings = WorkspaceSettingsController(workspace_settings_scope(self.session))
         self.media = MediaController(media)
+        self.session.lifecycle.add_unbind_handler(self.media.prepare_project_unbind)
         self.resources = ResourceLibraryController(media)
-        self.timeline_view = TimelineViewController(timeline)
-        self.timeline_viewport = TimelineViewportController(timeline)
-        self.timeline_clips = TimelineClipController(timeline)
-        self.timeline_color = TimelineColorController(timeline)
-        self.timeline_structure = TimelineStructureController(timeline)
-        self.timeline_effects = TimelineEffectsController(timeline)
-        self.timeline_keyframes = TimelineKeyframeController(timeline)
-        self.timeline_interchange = TimelineInterchangeController(timeline)
-        self.timeline_masks = TimelineMaskController(timeline)
-        self.timeline_multicam = TimelineMulticamController(timeline)
-        self.timeline_review = TimelineReviewController(timeline)
-        self.timeline_voiceover = TimelineVoiceoverController(timeline)
-        self.timeline_analysis = TimelineAnalysisController(timeline)
+        self.timeline_view = TimelineViewController(timeline_view_scope(self.session))
+        self.timeline_viewport = TimelineViewportController(timeline_viewport_scope(self.session))
+        self.timeline_clips = TimelineClipController(timeline_clip_scope(self.session))
+        self.timeline_color = TimelineColorController(timeline_color_scope(self.session))
+        self.timeline_structure = TimelineStructureController(timeline_structure_scope(self.session))
+        self.timeline_effects = TimelineEffectsController(timeline_effects_scope(self.session))
+        self.timeline_keyframes = TimelineKeyframeController(timeline_keyframe_scope(self.session))
+        self.timeline_interchange = TimelineInterchangeController(timeline_interchange_scope(self.session))
+        self.timeline_masks = TimelineMaskController(timeline_mask_scope(self.session))
+        self.timeline_multicam = TimelineMulticamController(timeline_multicam_scope(self.session))
+        self.timeline_review = TimelineReviewController(timeline_review_scope(self.session))
+        self.timeline_voiceover = TimelineVoiceoverController(timeline_voiceover_scope(self.session))
+        self.session.lifecycle.add_unbind_handler(self.timeline_voiceover.prepare_project_unbind)
+        self.timeline_analysis = TimelineAnalysisController(timeline_analysis_scope(self.session))
         self.subtitle_view = SubtitleViewController(subtitles)
         self.subtitle_placement = SubtitlePlacementController(subtitles)
         self.subtitle_transcription = SubtitleTranscriptionController(subtitles)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,7 @@ from mediaflow.domain.tasks import (
     Task,
 )
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.infrastructure.task_output_journal import TaskOutputCoordinator
 from mediaflow.project_collaboration import require_planned_changes
 
 
@@ -101,6 +103,7 @@ class ProjectTaskSettlement:
         self._settle_followups = settle_followups
         self._sequence_boundary_snapshot_hash = sequence_boundary_snapshot_hash
         self._read_loudness_metrics = read_loudness_metrics
+        self._outputs = TaskOutputCoordinator(repository)
 
     def committed_result(self, task_id: str) -> ProjectTaskResult | None:
         stored = self._repository.operations.committed_task_result(task_id)
@@ -125,6 +128,7 @@ class ProjectTaskSettlement:
                 before_revision = self._repository.content_revision()
                 with self._repository.coalesced_revision():
                     completed = persist()
+                    self._outputs.enlist(completed)
                     for change in project_changes:
                         change()
                     if completed.status.is_terminal:
@@ -193,8 +197,13 @@ class ProjectTaskSettlement:
         ):
             change()
 
-    def preparation_scope(self, task: Task):
-        return self._repository._task_preparation_scope(task.id)
+    @contextmanager
+    def preparation_scope(self, task: Task) -> Iterator[None]:
+        with self._repository._task_preparation_scope(task.id), self._outputs.preparation(task):
+            yield
+
+    def discard_preparation(self, task: Task) -> None:
+        self._outputs.discard(task.id)
 
     def change_scope(self, task: Task):
         write_set = task_project_write_set(task)
@@ -283,6 +292,10 @@ def task_project_write_set(task: Task) -> list[str]:
         paths.append("/assets")
         if str(getattr(command, "purpose", "media")) == "subtitle":
             paths.append("/subtitles")
+    elif command_type == "import_web_package":
+        paths.append("/assets")
+    elif command_type == "collect_project_assets":
+        paths.extend(("/assets", "/project/collections"))
     elif command_type == "download_media":
         paths.extend(("/assets", "/subtitles"))
     elif command_type in {"generate_proxy", "generate_waveform"}:

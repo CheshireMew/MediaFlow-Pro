@@ -27,21 +27,11 @@ Item {
         mediaflow.workspaceViewController.actionCapabilities.canEdit
     readonly property bool modalOpen: replaceDialog.opened
         || newBinDialog.opened
-    property string selectedBinId: ""
-    readonly property var binOptions: {
-        const options = [
+    readonly property string selectedBinId: mediaflow.mediaController.assetBinId
+    readonly property var binOptions: [
             {label: qsTr("全部素材"), value: ""},
             {label: qsTr("未归档"), value: "__unfiled__"}
-        ];
-        for (let index = 0; index < mediaflow.mediaController.assetBinsModel.rowCount(); ++index) {
-            const item = mediaflow.mediaController.assetBinsModel.get(index);
-            options.push({
-                label: String(item.displayName) + "  (" + item.assetCount + ")",
-                value: String(item.binId)
-            });
-        }
-        return options;
-    }
+        ].concat(mediaflow.mediaController.assetBinOptions)
 
     function openImportDialog() {
         if (mediaflow.workspaceViewController.actionCapabilities.canImport)
@@ -275,7 +265,8 @@ Item {
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 leftPadding: 12
-                onTextChanged: mediaflow.mediaController.setAssetSearchText(text)
+                text: mediaflow.mediaController.assetSearchText
+                onTextEdited: mediaflow.mediaController.setAssetSearchText(text)
                 background: Rectangle {
                     radius: Theme.radiusSmall
                     color: Theme.field
@@ -345,9 +336,10 @@ Item {
                 model: root.binOptions
                 textRole: "label"
                 valueRole: "value"
+                currentIndex: Math.max(0, root.binOptions.findIndex(
+                    option => String(option.value) === root.selectedBinId))
                 onActivated: {
-                    root.selectedBinId = String(currentValue);
-                    mediaflow.mediaController.setAssetBinFilter(root.selectedBinId);
+                    mediaflow.mediaController.setAssetBinFilter(String(currentValue));
                 }
             }
             AppIconButton {

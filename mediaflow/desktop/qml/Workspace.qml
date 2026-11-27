@@ -22,6 +22,16 @@ Rectangle {
         ? root.Window.window.activeFocusItem : null
     readonly property bool textInputActive: focusedItem instanceof TextInput
         || focusedItem instanceof TextEdit
+    readonly property bool controlInputActive: {
+        let item = focusedItem;
+        while (item && item !== root) {
+            if (item instanceof AbstractButton || item instanceof Slider
+                    || item instanceof SpinBox || item instanceof ComboBox || item instanceof Dial)
+                return true;
+            item = item.parent;
+        }
+        return false;
+    }
     readonly property bool modalOpen: workspaceChrome.modalOpen
         || Boolean(mediaPanelLoader.item && mediaPanelLoader.item.modalOpen)
         || Boolean(highlightPanelLoader.item && highlightPanelLoader.item.modalOpen)
@@ -38,6 +48,7 @@ Rectangle {
     readonly property bool shortcutsEnabled: !root.textInputActive
         && !previewPanel.webInputActive
         && !root.modalOpen
+    readonly property bool navigationShortcutsEnabled: root.shortcutsEnabled && !root.controlInputActive
     readonly property bool canEdit:
         mediaflow.workspaceViewController.actionCapabilities.canEdit
     property string layoutPreset: String(
@@ -49,15 +60,32 @@ Rectangle {
     property bool toolPanelVisible: true
     property bool inspectorPanelVisible: true
     property bool timelinePanelVisible: true
+    property string compactPanel: ""
+    readonly property bool compactWidth: width < Theme.workspaceToolMinimumWidth
+        + Theme.workspacePreviewMinimumWidth + Theme.workspaceInspectorMinimumWidth + workspaceGutter * 4
+    readonly property bool narrowWidth: width < Theme.workspaceToolMinimumWidth
+        + Theme.workspacePreviewMinimumWidth + workspaceGutter * 3
+    readonly property int previewMinimumHeight: 190
+    readonly property int panelMinimumHeight: !root.mediaLayout
+        && ((!narrowWidth && (toolPanelVisible || inspectorPanelVisible)) || compactPanel.length > 0)
+        ? 320 : previewMinimumHeight
+    readonly property bool compactHeight: height < panelMinimumHeight
+        + Theme.workspaceTimelineMinimumHeight + workspaceGutter * 3
+    readonly property real fittedTimelineHeight: Math.max(Theme.workspaceTimelineMinimumHeight,
+        Math.min(timelinePanelHeight, height - workspaceGutter * 3 - panelMinimumHeight))
     readonly property bool mediaLayout: layoutPreset === "media"
     readonly property bool toolShown: maximizedPanel.length > 0
         ? maximizedPanel === "tool" : toolPanelVisible
+            && (!compactWidth || compactPanel !== "inspector")
+            && (!narrowWidth || compactPanel === "tool")
     readonly property bool previewShown: maximizedPanel.length > 0
-        ? maximizedPanel === "preview" : true
+        ? maximizedPanel === "preview" : !narrowWidth || compactPanel.length === 0
     readonly property bool inspectorShown: maximizedPanel.length > 0
         ? maximizedPanel === "inspector" : inspectorPanelVisible
+            && (!compactWidth || compactPanel === "inspector" || !toolPanelVisible)
+            && (!narrowWidth || compactPanel === "inspector")
     readonly property bool timelineShown: maximizedPanel.length > 0
-        ? maximizedPanel === "timeline" : timelinePanelVisible
+        ? maximizedPanel === "timeline" : timelinePanelVisible && !compactHeight
     // Fit saved side-pane widths around the preview's minimum, without
     // overwriting the user's preferred widths when the window gets smaller.
     readonly property real sidePanelBudget: Math.max(0, width
@@ -104,12 +132,36 @@ Rectangle {
 
     function setWorkspaceLayoutPreset(preset) {
         root.maximizedPanel = "";
+        root.compactPanel = "";
         mediaflow.workspaceSettingsController.setWorkspaceLayoutPreset(String(preset));
     }
 
     function toggleWorkspacePanel(panel) {
+        if (root.compactHeight && panel === "timeline" && root.maximizedPanel === "timeline") {
+            root.maximizedPanel = "";
+            return;
+        }
         if (root.maximizedPanel.length > 0)
             root.maximizedPanel = "";
+        if (panel === "timeline" && root.compactHeight) {
+            root.maximizedPanel = "timeline";
+            return;
+        }
+        if (root.compactWidth && panel === "inspector" && !root.inspectorShown) {
+            root.compactPanel = "inspector";
+            root.inspectorPanelVisible = true;
+            return;
+        }
+        if (root.compactWidth && panel === "tool" && !root.toolShown) {
+            root.compactPanel = "tool";
+            root.toolPanelVisible = true;
+            return;
+        }
+        if (root.compactWidth && panel === root.compactPanel) {
+            root.compactPanel = "";
+            if (root.narrowWidth || panel === "inspector")
+                return;
+        }
         if (panel === "tool")
             root.toolPanelVisible = !root.toolPanelVisible;
         else if (panel === "inspector")
@@ -198,8 +250,7 @@ Rectangle {
     function openSourceMonitor(assetId, frame) {
         mediaflow.mediaController.openSourceMonitor(String(assetId));
         if (mediaflow.mediaController.sourceMonitorData.assetId) {
-            root.previewMode = "source";
-            Qt.callLater(function () { previewViewport.seek(Math.max(0, frame || 0)); });
+            previewPanel.openSource(Math.max(0, frame || 0));
         }
     }
 
@@ -222,7 +273,7 @@ Rectangle {
     Connections {
         target: mediaflow.workspaceViewController
         function onPreviewRangeRequested(startFrame, endFrame) {
-            previewViewport.playRequestedRange(startFrame, endFrame);
+            previewPanel.playProgramRange(startFrame, endFrame);
         }
     }
 
@@ -316,11 +367,11 @@ Rectangle {
                                 active: root.activeMode === "transcript"
                                     || status === Loader.Ready
                                 sourceComponent: TranscriptWorkspace {
-                                    playheadFrame: previewViewport.position
-                                    playbackActive: previewViewport.playing
+                                    playheadFrame: previewPanel.programFrame
+                                    playbackActive: root.previewMode === "program" && previewViewport.playing
                                     onImportRequested: root.openMediaImportDialog()
                                     onSeekRequested: function (frame) {
-                                        previewViewport.seek(frame);
+                                        previewPanel.seekProgram(frame);
                                     }
                                 }
                             }
@@ -330,7 +381,7 @@ Rectangle {
                                 active: root.activeMode === "highlight"
                                     || status === Loader.Ready
                                 sourceComponent: HighlightPanel {
-                                    playheadFrame: previewViewport.position
+                                    playheadFrame: previewPanel.programFrame
                                 }
                             }
                             Loader {
@@ -421,6 +472,7 @@ Rectangle {
                     Layout.fillHeight: true
                     Layout.minimumWidth: root.maximizedPanel === "preview"
                         ? 0 : Theme.workspacePreviewMinimumWidth
+                    Layout.minimumHeight: root.maximizedPanel === "preview" ? 0 : root.previewMinimumHeight
                 }
 
                 Rectangle {
@@ -480,10 +532,10 @@ Rectangle {
                         ? 0 : Theme.workspaceInspectorMinimumWidth
                     Layout.fillWidth: root.maximizedPanel === "inspector"
                     Layout.fillHeight: true
-                    playheadFrame: previewViewport.position
+                    playheadFrame: previewPanel.programFrame
                     onEditProfileRequested: workspaceChrome.openSequenceProfile()
                     onSeekRequested: function(frame) {
-                        previewViewport.seek(frame);
+                        previewPanel.seekProgram(frame);
                     }
                 }
                 Rectangle {
@@ -539,10 +591,10 @@ Rectangle {
                     ? 5 : root.mediaLayout ? 3 : 5
                 Layout.fillWidth: true
                 Layout.fillHeight: root.maximizedPanel === "timeline"
-                Layout.preferredHeight: root.timelinePanelHeight
+                Layout.preferredHeight: root.fittedTimelineHeight
                 Layout.minimumHeight: root.maximizedPanel === "timeline"
                     ? 0 : Theme.workspaceTimelineMinimumHeight
-                playheadFrame: previewViewport.position
+                playheadFrame: previewPanel.programFrame
                 shortcutsEnabled: root.shortcutsEnabled
                 onPlayheadScrubbingChanged: {
                     if (timeline.playheadScrubbing)
@@ -551,7 +603,7 @@ Rectangle {
                         root.endPreviewScrub();
                 }
                 onSeekRequested: function (frame) {
-                    previewViewport.seek(frame);
+                    previewPanel.seekProgram(frame);
                 }
                 onEditProfileRequested: workspaceChrome.openSequenceProfile()
                 onCreateVariantsRequested: workspaceChrome.openSequenceVariants()

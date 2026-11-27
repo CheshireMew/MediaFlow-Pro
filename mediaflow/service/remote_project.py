@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mediaflow.application.project_changes import project_path_segment
 from mediaflow.domain.collaboration import ActorIdentity, project_write_paths_overlap
+from mediaflow.domain.timeline_history import TimelineStateChange
 
-from .client import EditorServiceRpcError, call_sync
+from .client import EditorServiceRpcError, EditorServiceUnavailable, call_sync
 from .codec import decode_transport, encode_transport
 from .commands import DESKTOP_COMMANDS, DesktopTarget, desktop_command
 from .desktop_event_stream import (
@@ -127,8 +130,11 @@ class RemoteEditorProject(_ProjectCommandSurface):
         )
         self._remote_timelines: dict[str, RemoteTimelineEditor] = {}
         self._drafts: dict[str, int] = {}
+        self._draft_context = threading.local()
+        self._draft_versions: dict[str, int] = {}
+        self._uncertain_writes: dict[str, dict[str, Any]] = {}
         self._draft_lock = threading.RLock()
-        self._read_cache: dict[str, Any] = {}
+        self._read_cache: dict[str, tuple[Any, int]] = {}
         self._read_cache_revision = self.known_content_revision
         self._pending_write: _PendingDesktopWrite | None = None
         self._closed = False
@@ -250,8 +256,15 @@ class RemoteEditorProject(_ProjectCommandSurface):
         include_snapshot: bool = False,
     ) -> int:
         if include_snapshot:
-            for event in self.list_project_events(after_cursor=0):
-                handler(event)
+            cursor = 0
+            head = self.project_event_cursor()
+            while cursor < head:
+                page = self.list_project_events(after_cursor=cursor, through_cursor=head)
+                if not page:
+                    break
+                for event in page:
+                    handler(event)
+                cursor = page[-1].cursor
         return self._events.subscribe_project(handler)
 
     def subscribe_task_events(
@@ -289,10 +302,30 @@ class RemoteEditorProject(_ProjectCommandSurface):
             return
         with self._draft_lock:
             self._drafts.setdefault(normalized, self.known_content_revision)
+            self._draft_versions[normalized] = self._draft_versions.get(normalized, 0) + 1
+
+    def capture_drafts(self) -> dict[str, tuple[int, int]]:
+        with self._draft_lock:
+            return {path: (revision, self._draft_versions[path]) for path, revision in self._drafts.items()}
+
+    @contextmanager
+    def use_drafts(self, snapshot: dict[str, tuple[int, int]]) -> Iterator[None]:
+        previous = getattr(self._draft_context, "snapshot", None)
+        self._draft_context.snapshot = snapshot
+        try:
+            yield
+        finally:
+            self._draft_context.snapshot = previous
+
+    @property
+    def draft_paths(self) -> tuple[str, ...]:
+        with self._draft_lock:
+            return tuple(self._drafts)
 
     def end_draft(self, path: str) -> None:
         with self._draft_lock:
             self._drafts.pop(path.rstrip("/"), None)
+            self._draft_versions.pop(path.rstrip("/"), None)
 
     def resolve_pending_conflict(self, resolution: str) -> Any:
         pending = self._pending_write
@@ -341,9 +374,22 @@ class RemoteEditorProject(_ProjectCommandSurface):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        return self._call_revisioned(target, command, timeline_sequence_id, *args, **kwargs)[0]
+
+    def _call_revisioned(
+        self,
+        target: DesktopTarget,
+        command: str,
+        timeline_sequence_id: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, int]:
         definition = desktop_command(target, command)
+        if self._closed:
+            raise RuntimeError("项目会话已经关闭")
         request = definition.validate_request(list(args), kwargs)
         arguments = definition.request_arguments(request)
+        durable_intent = definition.access == "write" or definition.starts_task
         cache_key = ""
         if target == "project" and command in REVISION_CACHED_PROJECT_READS:
             self._ensure_read_cache_revision()
@@ -353,47 +399,64 @@ class RemoteEditorProject(_ProjectCommandSurface):
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            if cache_key in self._read_cache:
-                return self._read_cache[cache_key]
+            cached = self._read_cache.get(cache_key)
+            if cached is not None and cached[1] == self.known_content_revision:
+                return cached
         write_set: list[str] = []
         base_revision = self.known_content_revision
         previous_revision = base_revision
+        draft_versions: dict[str, int] = {}
+        draft_state = getattr(self._draft_context, "snapshot", None)
+        if draft_state is None:
+            draft_state = self.capture_drafts()
         if definition.access == "write":
             write_set = definition.mutation_plan(
                 sequence_id=timeline_sequence_id,
                 args=[],
                 kwargs=arguments,
             ).conflict_set
-            with self._draft_lock:
-                draft_revisions = [
-                    revision
-                    for path, revision in self._drafts.items()
-                    if any(project_write_paths_overlap(path, changed) for changed in write_set)
-                ]
+            draft_versions = {path: version for path, (_revision, version) in draft_state.items()}
+            draft_revisions = [
+                revision for path, (revision, _version) in draft_state.items()
+                if any(project_write_paths_overlap(path, changed) for changed in write_set)
+            ]
             if draft_revisions:
                 base_revision = min(draft_revisions)
         request_id = f"desktop-{uuid.uuid4().hex}"
+        call_arguments = {
+            "project": str(self.project_dir), "target": target,
+            "sequence_id": timeline_sequence_id, "command": command,
+            "arguments": encode_transport(arguments), "base_revision": base_revision,
+            "request_id": request_id, "actor": self._actor.model_dump(mode="json"),
+        }
+        intent_key = json.dumps([target, command, timeline_sequence_id, call_arguments["arguments"]],
+                                sort_keys=True, ensure_ascii=False)
+        if durable_intent:
+            call_arguments = self._uncertain_writes.get(intent_key, call_arguments)
+            request_id = str(call_arguments["request_id"])
+            self._events.begin_write(request_id)
         try:
             rpc_timeout = None
             if command == "wait_for_task":
                 requested_timeout = arguments.get("timeout")
                 requested_timeout = 3600.0 if requested_timeout is None else requested_timeout
                 rpc_timeout = float(requested_timeout) + 5.0
-            response = call_sync(
-                "desktop.project.call",
-                {
-                    "project": str(self.project_dir),
-                    "target": target,
-                    "sequence_id": timeline_sequence_id,
-                    "command": command,
-                    "arguments": encode_transport(arguments),
-                    "base_revision": base_revision,
-                    "request_id": request_id,
-                    "actor": self._actor.model_dump(mode="json"),
-                },
-                timeout_seconds=rpc_timeout,
-            )
+            for attempt in range(2):
+                try:
+                    response = call_sync("desktop.project.call", call_arguments,
+                                         timeout_seconds=rpc_timeout)
+                    break
+                except EditorServiceUnavailable:
+                    if not durable_intent or attempt:
+                        raise
+        except EditorServiceUnavailable:
+            if durable_intent:
+                self._uncertain_writes[intent_key] = call_arguments
+                self._events.finish_write(request_id, projected=False)
+            raise
         except EditorServiceRpcError as error:
+            self._uncertain_writes.pop(intent_key, None)
+            self._events.finish_write(request_id, projected=False)
             if isinstance(error.data, dict) and "current_revision" in error.data:
                 self._known_content_revision = int(error.data["current_revision"])
             if error.code == -32009 and definition.access == "write":
@@ -406,39 +469,92 @@ class RemoteEditorProject(_ProjectCommandSurface):
                     write_set=tuple(write_set),
                 )
             raise
-        if not isinstance(response, dict):
-            raise RuntimeError("Editor Service returned an invalid desktop command response")
-        event_ack = response.get("event_ack")
-        if definition.access == "write" and isinstance(event_ack, dict):
-            cursor = event_ack.get("cursor")
-            project_revision = event_ack.get("project_revision")
-            if isinstance(cursor, int) and isinstance(project_revision, int):
-                self._events.acknowledge_project_event(
-                    cursor=cursor,
-                    project_revision=project_revision,
-                )
-        self._known_content_revision = max(
-            self._known_content_revision,
-            int(response.get("project_revision", self._known_content_revision)),
-        )
-        result = definition.validate_result(decode_transport(response.get("value")))
-        if definition.access == "write":
-            history = response.get("history")
-            if (
-                not isinstance(history, dict)
-                or not isinstance(history.get("can_undo"), bool)
-                or not isinstance(history.get("can_redo"), bool)
-            ):
-                raise RuntimeError("Editor Service omitted the history state for a desktop write")
-            self._can_undo = history["can_undo"]
-            self._can_redo = history["can_redo"]
-        if definition.access == "write" and self.known_content_revision != previous_revision:
-            if target != "timeline":
-                self._synchronize_timeline_caches(write_set)
-            self._invalidate_read_cache(invalidate_timelines=False)
-        elif cache_key:
-            self._read_cache[cache_key] = result
-        return result
+        except Exception:
+            if durable_intent:
+                self._uncertain_writes[intent_key] = call_arguments
+                self._events.finish_write(request_id, projected=False)
+            raise
+        try:
+            if not isinstance(response, dict):
+                raise RuntimeError("Editor Service returned an invalid desktop command response")
+            response_revision = response.get("project_revision")
+            if not isinstance(response_revision, int) or isinstance(response_revision, bool):
+                raise RuntimeError("Editor Service omitted the command snapshot revision")
+            event_ack = response.get("event_ack")
+            if definition.access == "write" and isinstance(event_ack, dict):
+                cursor = event_ack.get("cursor")
+                project_revision = event_ack.get("project_revision")
+                if isinstance(cursor, int) and isinstance(project_revision, int):
+                    self._events.acknowledge_project_event(
+                        cursor=cursor,
+                        project_revision=project_revision,
+                    )
+            self._known_content_revision = max(
+                self._known_content_revision,
+                response_revision,
+            )
+            result = definition.validate_result(decode_transport(response.get("value")))
+            if definition.starts_task:
+                self._uncertain_writes.pop(intent_key, None)
+            if definition.access == "write":
+                history = response.get("history")
+                if (
+                    not isinstance(history, dict)
+                    or not isinstance(history.get("can_undo"), bool)
+                    or not isinstance(history.get("can_redo"), bool)
+                ):
+                    raise RuntimeError("Editor Service omitted the history state for a desktop write")
+                self._can_undo = history["can_undo"]
+                self._can_redo = history["can_redo"]
+                if target == "timeline":
+                    if "timeline_change" not in response:
+                        raise RuntimeError("Editor Service omitted the committed timeline change")
+                    change = decode_transport(response["timeline_change"])
+                    if change is not None and not isinstance(change, TimelineStateChange):
+                        raise RuntimeError("Editor Service returned an invalid timeline change")
+                    editor = self._remote_timelines.get(timeline_sequence_id)
+                    if editor is not None:
+                        editor.apply_committed_change(change, revision=response_revision)
+                self._uncertain_writes.pop(intent_key, None)
+                with self._draft_lock:
+                    for path, version in draft_versions.items():
+                        if (
+                            self._draft_versions.get(path) == version
+                            and any(project_write_paths_overlap(path, changed) for changed in write_set)
+                        ):
+                            self._drafts.pop(path, None)
+                            self._draft_versions.pop(path, None)
+                        elif (
+                            path in self._drafts
+                            and self._drafts[path] == draft_state[path][0]
+                            and any(project_write_paths_overlap(path, changed) for changed in write_set)
+                        ):
+                            self._drafts[path] = (
+                                int(event_ack["project_revision"])
+                                if (
+                                    isinstance(event_ack, dict)
+                                    and isinstance(event_ack.get("project_revision"), int)
+                                )
+                                else response_revision
+                            )
+            if definition.access == "write" and self.known_content_revision != previous_revision:
+                if target != "timeline":
+                    self._synchronize_timeline_caches(
+                        write_set, base_revision=previous_revision, revision=response_revision,
+                    )
+                self._invalidate_read_cache(invalidate_timelines=False)
+            elif cache_key:
+                self._ensure_read_cache_revision()
+                if response_revision == self.known_content_revision:
+                    self._read_cache[cache_key] = result, response_revision
+        except Exception:
+            if durable_intent:
+                self._uncertain_writes[intent_key] = call_arguments
+                self._events.finish_write(request_id, projected=False)
+            raise
+        if durable_intent:
+            self._events.finish_write(request_id, projected=True)
+        return result, response_revision
 
     def _ensure_read_cache_revision(self) -> None:
         if self._read_cache_revision != self.known_content_revision:
@@ -454,13 +570,17 @@ class RemoteEditorProject(_ProjectCommandSurface):
     def invalidate_task_result_cache(self) -> None:
         self._invalidate_read_cache(invalidate_timelines=False)
 
-    def _synchronize_timeline_caches(self, write_set: list[str]) -> None:
-        revision = self.known_content_revision
+    def _synchronize_timeline_caches(
+        self, write_set: list[str], *, base_revision: int, revision: int,
+    ) -> None:
         for sequence_id, editor in self._remote_timelines.items():
-            if project_write_affects_timeline(write_set, sequence_id):
+            if (
+                project_write_affects_timeline(write_set, sequence_id)
+                or revision != self.known_content_revision
+            ):
                 editor.invalidate()
             else:
-                editor.advance_revision(revision)
+                editor.advance_revision(revision, base_revision=base_revision)
 
 
 def _install_project_commands() -> None:

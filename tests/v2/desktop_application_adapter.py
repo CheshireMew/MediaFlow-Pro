@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 from mediaflow.composition import EditorApplication
@@ -53,6 +54,16 @@ class DesktopPresentationProject:
 
     def end_draft(self, path: str) -> None:
         del path
+
+    @property
+    def draft_paths(self) -> tuple[str, ...]:
+        return ()
+
+    def capture_drafts(self) -> dict[str, tuple[int, int]]:
+        return {}
+
+    def use_drafts(self, _snapshot: dict[str, tuple[int, int]]) -> nullcontext[None]:
+        return nullcontext()
 
     def resolve_pending_conflict(self, resolution: str) -> None:
         raise RuntimeError(

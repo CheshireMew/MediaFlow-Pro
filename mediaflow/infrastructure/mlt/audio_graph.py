@@ -40,10 +40,17 @@ class MltAudioGraph:
         assets: dict[str, Asset],
         *,
         clip_sources: Mapping[str, Path],
-    ) -> str | None:
+    ) -> str:
+        # A full-length silent bed keeps requested audio streams and trailing
+        # silence deterministic even when every source ends before the picture.
+        silence_id = "audio_silence"
+        silence = ET.SubElement(root, "producer", {"id": silence_id, "in": "0", "out": str(duration - 1)})
+        MltGraph.property(silence, "mlt_service", "color")
+        MltGraph.property(silence, "resource", "black")
+        MltGraph.property(silence, "length", str(duration))
         buses = self.repository.audio.list_audio_buses(state.sequence.id)
         if not buses:
-            return None
+            return silence_id
         by_id = {bus.id: bus for bus in buses}
         roots = [bus for bus in buses if bus.parent_bus_id is None]
         if len(roots) != 1:
@@ -65,7 +72,7 @@ class MltAudioGraph:
         for bus in sorted(buses, key=lambda item: self.bus_depth(item, by_id), reverse=True):
             if bus.muted or bus.id not in allowed_buses:
                 continue
-            sources: list[str] = []
+            sources: list[str] = [silence_id] if bus.id == master.id else []
             for track in tracks:
                 if track.id not in audible_track_ids:
                     continue
@@ -100,7 +107,7 @@ class MltAudioGraph:
             self.append_audio_mixers(tractor, len(sources))
             self.append_bus_filters(tractor, bus, state, buses)
             bus_tractor_ids[bus.id] = tractor_id
-        return bus_tractor_ids.get(master.id)
+        return bus_tractor_ids.get(master.id, silence_id)
 
     def append_audio_playlist(
         self,

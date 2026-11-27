@@ -297,7 +297,9 @@ def test_background_results_are_routed_by_focused_handlers() -> None:
         "_on_result",
         class_name="BackgroundRequests",
     )
-    assert "dispatch" in request_calls
+    assert "dispatch_result" in request_calls
+    composition = _source("mediaflow/desktop/session_components.py")
+    assert "dispatch_result=background_results.dispatch" in composition
     router_methods = _class_methods(
         "mediaflow/desktop/coordinators/background_result_router.py",
         "BackgroundResultRouter",
@@ -505,7 +507,11 @@ def test_project_sqlite_connections_share_one_contract() -> None:
         "mediaflow/infrastructure/task_repository.py",
     ):
         source = _source(relative)
-        assert "open_project_database(" in source
+        if relative.endswith("/task_repository.py"):
+            assert "self._project.task_read_connection()" in source
+            assert "open_project_database(" not in source
+        else:
+            assert "open_project_database(" in source
         assert "sqlite3.connect(" not in source
     records = _source("mediaflow/infrastructure/project_records_repository.py")
     assert "open_project_database(" in records
@@ -522,6 +528,7 @@ def test_editor_service_routes_to_focused_services_without_a_forwarding_manager(
         "__init__",
         "service_status",
         "prepare_shutdown",
+        "reap_idle",
         "close",
     }
     dispatcher = _source("mediaflow/service/request_dispatcher.py")

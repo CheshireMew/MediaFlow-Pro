@@ -27,13 +27,11 @@ from .output_reservation import (
 from .platform_media import PlatformMediaResolver
 from .runtime_paths import RuntimePaths
 from .runtime_tools import prepare_ytdlp_import
-from .storage_budget import (
-    estimate_download_peak_bytes,
-    finalize_storage_receipt,
-    load_storage_policy,
-    require_download_budget,
-    start_storage_receipt,
-)
+from .storage_budget import require_download_budget
+from .storage_estimates import estimate_download_peak_bytes
+from .storage_policy import load_storage_policy
+from .storage_receipts import finalize_storage_receipt, start_storage_receipt, storage_terminal_status
+from .storage_roots import download_staging_ownership
 from .youtube_runtime import youtube_runtime_options
 
 DownloadProgress = Callable[[OperationProgress], None]
@@ -137,9 +135,7 @@ class YtDlpDownloadService:
     ) -> DownloadPlan:
         """Analyze through the single configured cookie and proxy path."""
         managed_cookie = cookies.resolve_for_url(url)
-        cookie_file = settings.cookie_file or (
-            str(managed_cookie) if managed_cookie is not None else None
-        )
+        cookie_file = settings.cookie_file or (str(managed_cookie) if managed_cookie is not None else None)
         return cls(paths).analyze(
             url,
             cookie_file=cookie_file,
@@ -176,19 +172,24 @@ class YtDlpDownloadService:
             expected_new_bytes=estimated_peak,
             label=f"MediaFlow download {request.entry.title}",
         )
+        staging_root = _plan_download_staging_root(output_dir)
         receipt = start_storage_receipt(
             self.paths.runtime_dir,
             producer="media-download",
-            operation_id=f"{uuid.uuid4().hex}:{request.entry.page_url}",
-            owned_root=output_dir,
+            operation_id=uuid.uuid4().hex,
+            owned_root=staging_root,
             preflight=preflight,
+            artifact_classes=("temporary", "deliverable", "evidence"),
+            ownership=download_staging_ownership(output_dir, staging_root),
         )
         maximum_file_bytes = max(
             64 * 1024**2,
             (estimated_peak - 64 * 1024**2) // 4,
         )
-        staging_root = _create_download_staging_root(output_dir)
+        staging_created = False
         try:
+            staging_root.mkdir(parents=True, exist_ok=False)
+            staging_created = True
             staged_paths = self._download_to_directory(
                 request,
                 staging_root,
@@ -208,24 +209,23 @@ class YtDlpDownloadService:
             )
         except BaseException as error:
             try:
-                archived = _archive_download_staging(
-                    staging_root,
-                    output_dir,
+                archived = (
+                    _archive_download_staging(
+                        staging_root,
+                        output_dir,
+                    )
+                    if staging_created
+                    else None
                 )
             except BaseException as archive_error:
-                error.add_note(
-                    "未完成的下载内容无法移入失败归档："
-                    f"{archive_error}"
-                )
+                error.add_note(f"未完成的下载内容无法移入失败归档：{archive_error}")
                 archived = None
             if archived is not None:
-                error.add_note(
-                    f"未完成的下载内容已保留在：{archived}"
-                )
-            retained = archived or (staging_root if staging_root.exists() else None)
+                error.add_note(f"未完成的下载内容已保留在：{archived}")
+            retained = archived or (staging_root if staging_created and staging_root.exists() else None)
             finalize_storage_receipt(
                 receipt,
-                status=("interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed"),
+                status=storage_terminal_status(error),
                 outputs=(() if retained is None else (retained,)),
                 error=str(error),
             )
@@ -638,10 +638,7 @@ def _collection_output_template(output_dir: Path, request: DownloadRequest) -> P
     )
     collection_budget = min(
         _COLLECTION_BUDGET,
-        WINDOWS_INTEROP_PATH_UTF16_LIMIT
-        - utf16_units(str(output_dir))
-        - 1
-        - minimum_filename_units,
+        WINDOWS_INTEROP_PATH_UTF16_LIMIT - utf16_units(str(output_dir)) - 1 - minimum_filename_units,
     )
     # The collection component and file component share the same 240-unit path
     # budget.  Reserve the file first and then choose the longest collection
@@ -655,13 +652,7 @@ def _collection_output_template(output_dir: Path, request: DownloadRequest) -> P
         target_dir = output_dir / collection
         try:
             filename_units = _available_filename_units(target_dir)
-            fixed_units = (
-                utf16_units(index)
-                + 1
-                + 4
-                + _COLLECTION_ID_BUDGET
-                + _EXTENSION_BUDGET
-            )
+            fixed_units = utf16_units(index) + 1 + 4 + _COLLECTION_ID_BUDGET + _EXTENSION_BUDGET
             prefix = ""
             if prefix_requested:
                 prefix_budget = min(
@@ -746,21 +737,13 @@ def _literal_template_component(
     )
 
 
-def _create_download_staging_root(output_dir: Path) -> Path:
+def _plan_download_staging_root(output_dir: Path) -> Path:
     parent = output_dir.parent
-    parent.mkdir(parents=True, exist_ok=True)
     for _attempt in range(10):
-        candidate = require_windows_interop_path(
-            parent / f".mf-dl-{uuid.uuid4().hex[:8]}"
-        )
-        try:
-            candidate.mkdir()
-        except FileExistsError:
-            continue
-        return candidate
-    raise RuntimeError(
-        "无法创建隔离下载目录，请稍后重试"
-    )
+        candidate = require_windows_interop_path(parent / f".mf-dl-{uuid.uuid4().hex[:8]}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("无法创建隔离下载目录，请稍后重试")
 
 
 def _publish_download_outputs(
@@ -777,31 +760,23 @@ def _publish_download_outputs(
         try:
             relative = staged.relative_to(staging_root)
         except ValueError as error:
-            raise RuntimeError(
-                f"下载器返回了隔离目录之外的文件：{staged}"
-            ) from error
+            raise RuntimeError(f"下载器返回了隔离目录之外的文件：{staged}") from error
         destination = require_output_transaction_path(
-                output_dir / relative,
-                failure_archive_directory_name=(
-                FAILED_DOWNLOAD_DIRECTORY_NAME
-                ),
+            output_dir / relative,
+            failure_archive_directory_name=(FAILED_DOWNLOAD_DIRECTORY_NAME),
         )
         if destination in seen_destinations:
             continue
         seen_destinations.add(destination)
         pairs.append((staged, destination))
     if not pairs:
-        raise RuntimeError(
-            "下载完成但没有可发布的文件"
-        )
+        raise RuntimeError("下载完成但没有可发布的文件")
 
     destinations = [destination for _staged, destination in pairs]
     with output_set_transaction(
         destinations,
         overwrite=False,
-        failure_archive_directory_name=(
-            FAILED_DOWNLOAD_DIRECTORY_NAME
-        ),
+        failure_archive_directory_name=(FAILED_DOWNLOAD_DIRECTORY_NAME),
     ) as transaction:
         for staged, destination in pairs:
             destination.parent.mkdir(
@@ -834,12 +809,8 @@ def _archive_download_staging(
     if not has_content:
         _remove_empty_download_staging(staging_root)
         return None
-    archive_root = require_windows_interop_path(
-        output_dir / FAILED_DOWNLOAD_DIRECTORY_NAME
-    )
-    archived = require_windows_interop_path(
-        archive_root / f"run-{uuid.uuid4().hex[:12]}"
-    )
+    archive_root = require_windows_interop_path(output_dir / FAILED_DOWNLOAD_DIRECTORY_NAME)
+    archived = require_windows_interop_path(archive_root / f"run-{uuid.uuid4().hex[:12]}")
     archive_root.mkdir(parents=True, exist_ok=True)
     try:
         staging_root.replace(archived)
@@ -854,11 +825,7 @@ def _remove_empty_download_staging(
     if not staging_root.exists():
         return
     directories = sorted(
-        (
-            path
-            for path in staging_root.rglob("*")
-            if path.is_dir()
-        ),
+        (path for path in staging_root.rglob("*") if path.is_dir()),
         key=lambda path: len(path.parts),
         reverse=True,
     )

@@ -8,7 +8,9 @@ import secrets
 import socket
 import sys
 import time
+import uuid
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +92,7 @@ class EditorServiceServer:
         self._workspaces: WorkspaceRegistry | None = None
         self._websockets: set[web.WebSocketResponse] = set()
         self.discovery: ServiceDiscovery | None = None
+        self._maintenance_task: asyncio.Task[None] | None = None
 
     async def start(self) -> ServiceDiscovery:
         self.paths.prepare()
@@ -140,6 +143,7 @@ class EditorServiceServer:
                 token=secrets.token_urlsafe(32),
             )
             self.discovery.write(self.paths.discovery)
+            self._maintenance_task = asyncio.create_task(self._maintain_sessions())
             return self.discovery
         except BaseException:
             await self.stop()
@@ -153,6 +157,10 @@ class EditorServiceServer:
     async def stop(self) -> None:
         stop_error: BaseException | None = None
         discovery = self.discovery
+        if self._maintenance_task is not None:
+            self._maintenance_task.cancel()
+            await asyncio.gather(self._maintenance_task, return_exceptions=True)
+            self._maintenance_task = None
         if self._event_hub is not None:
             self._event_hub.publish(ServiceEvent("service.stopping", {}))
         try:
@@ -203,6 +211,19 @@ class EditorServiceServer:
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    async def _maintain_sessions(self) -> None:
+        while not self._stop.is_set():
+            await asyncio.sleep(1.0)
+            if self._workspaces is not None:
+                self._workspaces.reap_idle()
+            if self._operations is not None and self._execution is not None:
+                try:
+                    await self._execution.run("lifecycle", self._operations.reap_idle)
+                except ServiceBusyError:
+                    continue
+                except Exception:
+                    logger.exception("Project session maintenance failed")
 
     async def _shutdown_websockets(self, _app: web.Application) -> None:
         websockets = tuple(self._websockets)
@@ -279,11 +300,26 @@ class EditorServiceServer:
                 str(error),
                 {"type": type(error).__name__, "retryable": True},
             )
+        except CancelledError as error:
+            response = _json_rpc_error(
+                identifier, -32800, str(error), {"type": "CancelledError", "cancelled": True},
+            )
         except RuntimeError as error:
-            response = _json_rpc_error(identifier, -32000, str(error), {"type": type(error).__name__})
+            response = self._unexpected_rpc_error(identifier, method, -32000, error)
         except Exception as error:
-            response = _json_rpc_error(identifier, -32603, str(error), {"type": type(error).__name__})
+            response = self._unexpected_rpc_error(identifier, method, -32603, error)
         return web.json_response(response)
+
+    @staticmethod
+    def _unexpected_rpc_error(identifier: Any, method: str, code: int, error: Exception) -> dict[str, Any]:
+        error_id = uuid.uuid4().hex[:10]
+        # Arguments can contain cookies, credentials or authored data. Keep
+        # the operation and original traceback, never the complete request.
+        logger.error("RPC %s failed [%s]", method, error_id, exc_info=True)
+        return _json_rpc_error(
+            identifier, code, f"{error} [错误编号：{error_id}]",
+            {"type": type(error).__name__, "error_id": error_id},
+        )
 
     async def _publish_project_conflict(
         self,
@@ -377,6 +413,7 @@ class EditorServiceServer:
             selector=lambda event: event.type not in scoped_event_types,
         )
         workspace_subscription: tuple[str, str] | None = None
+        desktop_subscription: tuple[Path, str] | None = None
         subscription_ready = asyncio.Event()
 
         async def send_events() -> None:
@@ -445,6 +482,14 @@ class EditorServiceServer:
                     execution = self._execution
                     if execution is None:
                         raise RuntimeError("Editor Service execution pools are not ready")
+                    if workspace_session_id:
+                        await execution.run(
+                            "lifecycle", operations.registry.open_desktop_project, path, project_client_id,
+                        )
+                        if desktop_subscription is not None:
+                            operations.registry.desktop_disconnected(*desktop_subscription)
+                        operations.registry.desktop_connected(path, project_client_id)
+                        desktop_subscription = (path, project_client_id)
                     identity = await execution.run(
                         "project",
                         operations.desktop.project_identity,
@@ -464,10 +509,6 @@ class EditorServiceServer:
                         if event.type in {"project.changed", "project.conflict"}:
                             if str(event.payload.get("project_id") or "") != project_id:
                                 return False
-                            if event.type == "project.changed" and client_id:
-                                actor = event.payload.get("actor")
-                                if isinstance(actor, dict) and str(actor.get("id") or "") == client_id:
-                                    return False
                             return True
                         if event.type == "task.changed":
                             event_project = str(event.payload.get("project_path") or "")
@@ -490,10 +531,19 @@ class EditorServiceServer:
                         project_cursor=project_cursor,
                         task_cursor=task_cursor,
                     )
-                    for event in snapshot["project_events"]:
-                        await websocket.send_json(ServiceEvent("project.changed", event).as_dict())
-                    for event in snapshot["task_events"]:
-                        await websocket.send_json(ServiceEvent("task.changed", event).as_dict())
+                    while True:
+                        for event in snapshot["project_events"]:
+                            await websocket.send_json(ServiceEvent("project.changed", event).as_dict())
+                        for event in snapshot["task_events"]:
+                            await websocket.send_json(ServiceEvent("task.changed", event).as_dict())
+                        if not snapshot["has_more"]:
+                            break
+                        snapshot = await execution.run(
+                            "project", operations.desktop.project_subscription, path,
+                            project_cursor=snapshot["next_project_cursor"],
+                            task_cursor=snapshot["next_task_cursor"],
+                            project_head=snapshot["project_event_cursor"], task_head=snapshot["task_cursor"],
+                        )
                     workspace_client_id = project_client_id
                     if workspace_session_id:
                         workspaces = self._workspaces
@@ -501,6 +551,10 @@ class EditorServiceServer:
                             raise RuntimeError("Workspace registry is not ready")
                         if workspace_subscription is not None:
                             workspaces.disconnect(*workspace_subscription)
+                        workspaces.attach(
+                            workspace_session_id=workspace_session_id,
+                            client_id=workspace_client_id, project=str(path),
+                        )
                         workspaces.connect(
                             workspace_session_id,
                             workspace_client_id,
@@ -525,6 +579,8 @@ class EditorServiceServer:
                 elif message.type == WSMsgType.ERROR:
                     break
         finally:
+            if desktop_subscription is not None:
+                operations.registry.desktop_disconnected(*desktop_subscription)
             if workspace_subscription is not None and self._workspaces is not None:
                 self._workspaces.disconnect(*workspace_subscription)
             sender.cancel()

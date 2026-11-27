@@ -31,7 +31,10 @@ from mediaflow.domain.timeline import (
     ClipTransformKeyframe,
     TimelineMarker,
 )
+from mediaflow.domain.visual_effects import VisualEffectParameterKeyframe
 from mediaflow.infrastructure.project_repository import ProjectRepository
+from mediaflow.service.codec import decode_transport, encode_transport
+from mediaflow.service.commands import desktop_command
 from mediaflow.waveform_cache import write_waveform_cache
 
 
@@ -63,6 +66,80 @@ def test_duration_frames_matches_the_cached_timeline_state(editor_fixture) -> No
     )
 
     assert editor.duration_frames == editor.state.duration_frames == 100
+
+
+@pytest.mark.parametrize("kind", ["transform", "effect"])
+def test_keyframe_paste_command_is_atomic_persisted_and_undoable(editor_fixture, kind: str) -> None:
+    repository, editor, asset, video_track = editor_fixture
+    clip = editor.add_clip(
+        track_id=video_track.id,
+        asset_id=asset.id,
+        timeline_start=100,
+        source_in=0,
+        duration=20,
+    )
+    curve = KeyframeCurve(interpolation="hold")
+    if kind == "transform":
+        editor.upsert_clip_transform_keyframe(clip.id, 0, ClipTransform(x=1))
+        editor.upsert_clip_transform_keyframe(clip.id, 5, ClipTransform(x=2))
+        command = "paste_clip_transform_keyframes"
+        copied = [
+            ClipTransformKeyframe(
+                timeline_offset=2,
+                transform=ClipTransform(x=20),
+                curve=curve,
+                source="subject_tracking",
+                confidence=0.8,
+            ),
+            ClipTransformKeyframe(timeline_offset=6, transform=ClipTransform(x=40)),
+        ]
+        arguments = {"clip_id": clip.id, "keyframes": copied}
+    else:
+        effect = editor.add_clip_visual_effect(clip.id, VisualEffectKind.GAUSSIAN_BLUR)
+        editor.upsert_clip_effect_parameter_keyframe(clip.id, effect.id, "sigma", 0, 1)
+        editor.upsert_clip_effect_parameter_keyframe(clip.id, effect.id, "sigma", 5, 2)
+        command = "paste_clip_effect_parameter_keyframes"
+        copied = [
+            VisualEffectParameterKeyframe(timeline_offset=2, value=3, curve=curve),
+            VisualEffectParameterKeyframe(timeline_offset=6, value=4),
+        ]
+        arguments = {"clip_id": clip.id, "effect_id": effect.id, "field_id": "sigma", "keyframes": copied}
+
+    definition = desktop_command("timeline", command)
+    before = editor.state.clips[0]
+    wire_arguments = decode_transport(encode_transport({**arguments, "timeline_frame": 105, "scale": 0.5}))
+    request = definition.validate_arguments(wire_arguments)
+    result = definition.validate_result(definition.invoke(editor, request))
+    frames = result.transform_keyframes if kind == "transform" else result.parameter_keyframes["sigma"]
+    assert [item.timeline_offset for item in frames] == [0, 5, 7]
+    assert frames[1].curve == curve
+    if kind == "transform":
+        assert frames[1].source == "manual" and frames[1].confidence == 0.8
+        assert [item.transform.x for item in frames] == [1, 20, 40]
+    else:
+        assert [item.value for item in frames] == [1, 3, 4]
+    after = editor.state.clips[0]
+    assert repository.timeline.load_timeline(editor.sequence_id).clips[0] == after
+    plan = definition.mutation_plan(
+        sequence_id=editor.sequence_id,
+        args=[clip.id],
+        kwargs={},
+    )
+    assert plan.change_scopes == [f"/sequences/{editor.sequence_id}"]
+    assert plan.conflict_set == [f"/sequences/{editor.sequence_id}/clips/{clip.id}"]
+
+    for timeline_frame, scale in ((119, 1), (105, 0)):
+        invalid = definition.validate_arguments(
+            {**arguments, "timeline_frame": timeline_frame, "scale": scale}
+        )
+        with pytest.raises(ValueError):
+            definition.invoke(editor, invalid)
+        assert editor.state.clips[0] == after
+        assert repository.timeline.load_timeline(editor.sequence_id).clips[0] == after
+    editor.undo()
+    assert editor.state.clips[0] == before
+    editor.redo()
+    assert editor.state.clips[0] == after
 
 
 def test_multicam_sync_builds_real_program_clips_and_angle_switches_are_reversible(
@@ -146,11 +223,7 @@ def test_multicam_timecode_sync_and_master_audio_remain_stable_across_video_cuts
         )
         second = repository.assets.update_asset(
             second.model_copy(
-                update={
-                    "metadata": first.metadata.model_copy(
-                        update={"start_timecode_frame": 1030}
-                    )
-                }
+                update={"metadata": first.metadata.model_copy(update={"start_timecode_frame": 1030})}
             )
         )
         editor = TimelineEditor(repository, repository.projects.get_project().main_sequence_id)
@@ -174,9 +247,7 @@ def test_multicam_timecode_sync_and_master_audio_remain_stable_across_video_cuts
         assert audio.duration == 200
         switched = editor.switch_multicam_angle(group.id, analysis.angles[1].id, 75)
         updated = repository.timeline.load_timeline(editor.sequence_id)
-        stable_audio = next(
-            item for item in updated.clips if item.id in switched.program_audio_clip_ids
-        )
+        stable_audio = next(item for item in updated.clips if item.id in switched.program_audio_clip_ids)
         assert stable_audio.asset_id == second.id
         assert stable_audio.timeline_start == 0
         assert stable_audio.duration == 200
@@ -589,15 +660,12 @@ def test_native_transform_and_effect_keyframes_persist_retime_and_undo(
     assert [item.timeline_offset for item in stored.transform_keyframes] == [5, 10]
     assert stored.transform_keyframes[0].curve.interpolation == "ease_in_out"
     stored_effect = stored.visual_effects[0]
-    assert [
-        item.timeline_offset for item in stored_effect.parameter_keyframes["sigma"]
-    ] == [4, 14]
+    assert [item.timeline_offset for item in stored_effect.parameter_keyframes["sigma"]] == [4, 14]
     assert stored_effect.parameter_keyframes["sigma"][0].curve.interpolation == "hold"
 
     editor.undo()
     assert [
-        item.timeline_offset
-        for item in editor.state.clips[0].visual_effects[0].parameter_keyframes["sigma"]
+        item.timeline_offset for item in editor.state.clips[0].visual_effects[0].parameter_keyframes["sigma"]
     ] == [4, 12]
 
     with pytest.raises(ValueError, match="片段范围内"):

@@ -71,6 +71,7 @@ from .project_migrations_v54 import migrate_v53_to_v54
 from .project_migrations_v55 import migrate_v54_to_v55
 from .project_migrations_v56 import migrate_v55_to_v56
 from .project_migrations_v57 import migrate_v56_to_v57
+from .project_migrations_v58 import migrate_v57_to_v58
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +168,7 @@ PROJECT_MIGRATIONS = (
     ProjectMigration(54, 55, migrate_v54_to_v55),
     ProjectMigration(55, 56, migrate_v55_to_v56),
     ProjectMigration(56, 57, migrate_v56_to_v57),
+    ProjectMigration(57, 58, migrate_v57_to_v58),
 )
 
 MIGRATION_BY_SOURCE_VERSION = {migration.source_version: migration for migration in PROJECT_MIGRATIONS}

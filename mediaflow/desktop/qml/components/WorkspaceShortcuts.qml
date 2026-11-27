@@ -51,7 +51,7 @@ Item {
     }
     Shortcut {
         sequence: "Space"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         autoRepeat: false
         onActivated: shortcuts.preview.playing || shortcuts.preview.playbackRequested
             ? shortcuts.preview.pause() : shortcuts.host.playPreview()
@@ -63,7 +63,7 @@ Item {
     }
     Shortcut {
         sequence: "J"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: {
             shortcuts.preview.playbackRate = shortcuts.preview.playing
                     && shortcuts.preview.playbackRate < 0
@@ -73,12 +73,12 @@ Item {
     }
     Shortcut {
         sequence: "K"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: shortcuts.preview.pause()
     }
     Shortcut {
         sequence: "L"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: {
             shortcuts.preview.playbackRate = shortcuts.preview.playing
                     && shortcuts.preview.playbackRate > 0
@@ -88,7 +88,7 @@ Item {
     }
     Shortcut {
         sequence: "S"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: shortcuts.timelineView.snapEnabled = !shortcuts.timelineView.snapEnabled
     }
     Shortcut {
@@ -96,14 +96,14 @@ Item {
         enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
             && mediaflow.timelineViewController.selectedClipId.length > 0
         onActivated: mediaflow.timelineClipController.splitClip(
-            mediaflow.timelineViewController.selectedClipId, shortcuts.preview.position)
+            mediaflow.timelineViewController.selectedClipId, shortcuts.timelineView.visiblePlayheadFrame)
     }
     Shortcut {
         sequence: "Ctrl+B"
         enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
             && mediaflow.timelineViewController.selectedClipId.length > 0
         onActivated: mediaflow.timelineClipController.splitClip(
-            mediaflow.timelineViewController.selectedClipId, shortcuts.preview.position)
+            mediaflow.timelineViewController.selectedClipId, shortcuts.timelineView.visiblePlayheadFrame)
     }
     Shortcut {
         sequence: "Delete"
@@ -136,7 +136,7 @@ Item {
         onActivated: mediaflow.timelineClipController.duplicateClip(
             mediaflow.timelineViewController.selectedClipId,
             shortcuts.timelineView.pixelsPerFrame,
-            shortcuts.preview.position)
+            shortcuts.timelineView.visiblePlayheadFrame)
     }
     Shortcut {
         sequence: "Ctrl+A"
@@ -163,15 +163,19 @@ Item {
     }
     Shortcut {
         sequence: "I"
-        enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
-            && mediaflow.workspaceViewController.timelineDurationFrames > 0
-        onActivated: mediaflow.timelineStructureController.setSequenceInPoint(shortcuts.preview.position)
+        enabled: shortcuts.host.navigationShortcutsEnabled && shortcuts.host.canEdit
+            && (shortcuts.host.previewMode === "source" || mediaflow.workspaceViewController.timelineDurationFrames > 0)
+        onActivated: shortcuts.host.previewMode === "source"
+            ? mediaflow.mediaController.setSourceInFrame(shortcuts.preview.position)
+            : mediaflow.timelineStructureController.setSequenceInPoint(shortcuts.timelineView.visiblePlayheadFrame)
     }
     Shortcut {
         sequence: "O"
-        enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
-            && mediaflow.workspaceViewController.timelineDurationFrames > 0
-        onActivated: mediaflow.timelineStructureController.setSequenceOutPoint(shortcuts.preview.position)
+        enabled: shortcuts.host.navigationShortcutsEnabled && shortcuts.host.canEdit
+            && (shortcuts.host.previewMode === "source" || mediaflow.workspaceViewController.timelineDurationFrames > 0)
+        onActivated: shortcuts.host.previewMode === "source"
+            ? mediaflow.mediaController.setSourceOutFrame(shortcuts.preview.position)
+            : mediaflow.timelineStructureController.setSequenceOutPoint(shortcuts.timelineView.visiblePlayheadFrame)
     }
     Shortcut {
         sequence: "Ctrl+Shift+X"
@@ -181,24 +185,24 @@ Item {
     }
     Shortcut {
         sequence: "Left"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: shortcuts.preview.seek(shortcuts.preview.position - 1)
     }
     Shortcut {
         sequence: "Right"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: shortcuts.preview.seek(shortcuts.preview.position + 1)
     }
     Shortcut {
         sequence: "Home"
-        enabled: shortcuts.host.shortcutsEnabled
+        enabled: shortcuts.host.navigationShortcutsEnabled
         onActivated: shortcuts.preview.seek(0)
     }
     Shortcut {
         sequence: "End"
-        enabled: shortcuts.host.shortcutsEnabled
-            && mediaflow.workspaceViewController.timelineDurationFrames > 0
-        onActivated: shortcuts.preview.seek(mediaflow.workspaceViewController.timelineDurationFrames - 1)
+        enabled: shortcuts.host.navigationShortcutsEnabled
+            && shortcuts.preview.duration > 0
+        onActivated: shortcuts.preview.seek(shortcuts.preview.duration - 1)
     }
     Shortcut {
         sequence: "\\"
@@ -207,7 +211,7 @@ Item {
     }
     Shortcut {
         sequence: "M"
-        enabled: shortcuts.host.shortcutsEnabled && shortcuts.host.canEdit
-        onActivated: mediaflow.timelineStructureController.addTimelineMarker(shortcuts.preview.position)
+        enabled: shortcuts.host.navigationShortcutsEnabled && shortcuts.host.canEdit
+        onActivated: mediaflow.timelineStructureController.addTimelineMarker(shortcuts.timelineView.visiblePlayheadFrame)
     }
 }

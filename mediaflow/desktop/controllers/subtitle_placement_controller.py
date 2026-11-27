@@ -128,7 +128,7 @@ class SubtitlePlacementController(ControllerFacet[SubtitlePresentationScope]):
                 document_id, subtitle_track.id
             )
         self._session.projectors.timeline.refresh_timeline()
-        self._session.projectors.timeline.refresh_preview_subtitles()
+        self._session.projectors.timeline_subtitles.refresh_preview_subtitles()
         self._session.updates.commit(project=True)
         self._session._set_status("已放入 %1 条字幕", len(placements))
 
@@ -150,9 +150,9 @@ class SubtitlePlacementController(ControllerFacet[SubtitlePresentationScope]):
         else:
             self._session.state.binding.require_current().update_subtitle_placement_text(placement_id, text)
             self._session._set_status("已保存序列字幕覆盖")
-        self._session.projectors.timeline.refresh_preview_subtitles()
+        self._session.projectors.timeline_subtitles.refresh_preview_subtitles()
         self._session.updates.commit(selection=True)
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     def _require_unlocked_subtitle_track(self, track_id: str) -> None:
         track = next(
@@ -175,8 +175,8 @@ class SubtitlePlacementController(ControllerFacet[SubtitlePresentationScope]):
         *status_arguments: object,
     ) -> None:
         self._session.state.selection.subtitle_placement_id = placement_id
-        self._session.projectors.timeline.refresh_preview_subtitles()
+        self._session.projectors.timeline_subtitles.refresh_preview_subtitles()
         select_subtitle_placement_context(self._session, placement_id)
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session._set_status(status_source, *status_arguments)
         self._session.updates.commit(history=True)

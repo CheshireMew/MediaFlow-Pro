@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -29,6 +30,12 @@ from mediaflow.domain.web_media_sources import (
 T = TypeVar("T")
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedWebPackageImport:
+    asset: Asset
+    publication: web_files.WebPackagePublication
+
+
 class WebPackageService:
     """Imports, verifies, and publishes editable-media packages."""
 
@@ -47,6 +54,9 @@ class WebPackageService:
             self._reconcile_publications()
 
     def import_package(self, source: str | Path) -> Asset:
+        return self.commit_import(self.prepare_import(source))
+
+    def prepare_import(self, source: str | Path) -> PreparedWebPackageImport:
         package_tree, manifest, media_sources = self.read_package_tree(source)
         project = self.repository.projects.get_project()
         asset_id = new_id()
@@ -85,11 +95,17 @@ class WebPackageService:
                 has_audio=has_audio,
             ),
         )
+        return PreparedWebPackageImport(asset, publication)
+
+    def discard_import(self, prepared: PreparedWebPackageImport) -> None:
+        self._storage.archive_failed(prepared.publication)
+
+    def commit_import(self, prepared: PreparedWebPackageImport) -> Asset:
         return self.commit_publication(
-            publication,
+            prepared.publication,
             lambda: self._save_imported_package(
-                asset,
-                publication,
+                prepared.asset,
+                prepared.publication,
             ),
         )
 

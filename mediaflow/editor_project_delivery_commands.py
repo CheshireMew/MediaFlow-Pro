@@ -18,14 +18,20 @@ from mediaflow.domain.collaboration import (
     ProjectEditAction,
     ProjectEditCommand,
 )
+from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.interchange import LoadedInterchangeTimeline
 from mediaflow.domain.portable_timeline import LoadedPortableTimeline
 from mediaflow.domain.project import Asset, ProjectProfile, Sequence
 from mediaflow.domain.project_archive import ProjectArchiveResult
 from mediaflow.domain.project_records import ProjectVersionRecord
 from mediaflow.domain.settings import ServiceSettings
-from mediaflow.domain.task_commands import ImportAssetCommand, TaskCommand
-from mediaflow.domain.tasks import Task
+from mediaflow.domain.task_commands import (
+    ArchiveProjectCommand,
+    ExportFcpxmlCommand,
+    ImportAssetCommand,
+    TaskCommand,
+)
+from mediaflow.domain.tasks import ProjectArchiveTaskOutcome, Task
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.domain.voiceover import (
     VoiceoverCue,
@@ -43,7 +49,6 @@ from mediaflow.infrastructure.project_archive_service import ProjectArchiveServi
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.proxy_service import ProxyDecision, ProxyService
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.project_task_settlement import ProjectTaskResult, ProjectTaskSettlement
 
 
@@ -318,8 +323,21 @@ class EditorProjectDeliveryCommands:
         self._history.clear()
         return record
 
-    def create_project_archive(self, destination: str | Path) -> ProjectArchiveResult:
-        return self._project_archives.create(destination)
+    def create_project_archive(
+        self,
+        destination: str | Path,
+        *,
+        idempotency_key: str | None = None,
+    ) -> ProjectArchiveResult:
+        task = self.start_task(
+            ArchiveProjectCommand(destination=str(destination)), idempotency_key=idempotency_key
+        )
+        completed = self._tasks.wait(task.id)
+        if completed.status != TaskStatus.COMPLETED or not isinstance(
+            completed.outcome, ProjectArchiveTaskOutcome
+        ):
+            raise RuntimeError(completed.error or "项目归档已停止")
+        return completed.outcome.result
 
     def export_fcpxml(
         self,
@@ -328,22 +346,23 @@ class EditorProjectDeliveryCommands:
         *,
         overwrite: bool = False,
     ) -> Path:
-        state = self._repository.timeline.load_timeline(sequence_id)
-        exporter = FcpxmlExportService(self._repository, self._paths)
-        output = exporter.preflight(
-            state,
+        FcpxmlExportService(self._repository, self._paths).preflight(
+            self._repository.timeline.load_timeline(sequence_id),
             destination,
             overwrite=overwrite,
         )
-        WebRenderService(
-            self._repository,
-            self._paths,
-        ).ensure_sequence(state)
-        return exporter.export(
-            state,
-            output,
-            overwrite=overwrite,
+        task = self.start_task(
+            ExportFcpxmlCommand(
+                sequence_id=sequence_id,
+                output_path=str(destination),
+                overwrite=overwrite,
+            ),
+            sequence_id=sequence_id,
         )
+        completed = self._tasks.wait(task.id)
+        if completed.status != TaskStatus.COMPLETED:
+            raise RuntimeError(completed.error or "FCPXML 导出已停止")
+        return completed.artifacts[0].resolve(self._repository.project_dir)
 
     def proxy_decision(
         self,

@@ -81,12 +81,21 @@ class _BoundedExecutionPool:
 
         loop = asyncio.get_running_loop()
         try:
-            future = loop.run_in_executor(self._executor, partial(operation, *args, **kwargs))
+            future = self._executor.submit(partial(operation, *args, **kwargs))
         except BaseException:
             self._slots.release()
             raise
         future.add_done_callback(lambda _future: loop.call_soon_threadsafe(self._slots.release))
-        return await future
+        pending = asyncio.wrap_future(future, loop=loop)
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # Cancellation of the caller cannot free admission while the
+            # submitted thread still owns work or waits to start.
+            pending.add_done_callback(
+                lambda completed: None if completed.cancelled() else completed.exception()
+            )
+            raise
 
     def close(self) -> None:
         with self._state_lock:

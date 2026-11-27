@@ -15,7 +15,7 @@ from mediaflow.domain.model_base import DomainModel
 from mediaflow.environment import SERVICE_STATE_DIRECTORY_VARIABLE, configured_path
 
 SERVICE_PROTOCOL = "mediaflow-editor"
-SERVICE_PROTOCOL_VERSION = 5
+SERVICE_PROTOCOL_VERSION = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +105,12 @@ class ServiceDiscovery(DomainModel):
             process = psutil.Process(self.pid)
             return (
                 process.is_running()
-                and process.status() not in {psutil.STATUS_DEAD, psutil.STATUS_ZOMBIE}
+                # Windows has no zombie state. psutil's Windows status() scans
+                # thread suspension, which can stall every interactive RPC.
+                and (
+                    sys.platform == "win32"
+                    or process.status() not in {psutil.STATUS_DEAD, psutil.STATUS_ZOMBIE}
+                )
                 and abs(process.create_time() - self.process_started_at) < 0.01
             )
         except (psutil.Error, OSError):

@@ -114,6 +114,8 @@ def test_runtime_status_messages_use_the_registered_translation_boundary() -> No
     dynamic_bridges: set[tuple[str, str]] = set()
     source_positions = {
         "_set_status": 0,
+        "set_status": 0,
+        "finish_sequence_in_out_edit": 0,
         "_finish_subtitle_edit": 1,
         "_finish_sequence_in_out_edit": 0,
         "_finish_subtitle_placement_edit": 1,
@@ -322,9 +324,13 @@ def test_repository_and_subtitle_capabilities_remain_split() -> None:
         "content_revision",
         "acknowledge_content_revision",
         "coalesced_revision",
+        "command_scope",
+        "read_snapshot",
         "enlist_transaction_publication",
         "transaction",
         "task_transaction",
+        "task_read_connection",
+        "after_commit",
         "close",
     }
     initializer = next(
@@ -848,6 +854,8 @@ def test_audited_large_components_keep_semantic_boundaries() -> None:
     assert {node.name for node in task_handlers.body if isinstance(node, ast.FunctionDef)} == {
         "__init__",
         "register_with",
+        "_import",
+        "_export",
     }
 
     web_services = _class(
@@ -903,6 +911,10 @@ def test_audited_large_components_keep_semantic_boundaries() -> None:
     session_source = (ROOT / "mediaflow" / "desktop" / "controllers" / "project_controller.py").read_text(
         encoding="utf-8"
     )
+    composition_source = (ROOT / "mediaflow" / "desktop" / "session_components.py").read_text(
+        encoding="utf-8"
+    )
+    assert "compose_desktop_components" in session_source
     for boundary in (
         "SessionEvents",
         "SessionModels",
@@ -915,7 +927,7 @@ def test_audited_large_components_keep_semantic_boundaries() -> None:
         "TimelineAssetOperations",
         "DesktopSessionState",
     ):
-        assert boundary in session_source
+        assert boundary in session_source + composition_source
 
     timeline_editor = _class(
         ROOT / "mediaflow" / "application" / "timeline_editor.py",

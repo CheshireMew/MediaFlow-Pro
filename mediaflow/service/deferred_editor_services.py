@@ -89,6 +89,10 @@ class DeferredEditorServices:
         registry = self.registry.peek()
         return 0 if registry is None else registry.cancel_all_tasks()
 
+    def reap_idle(self) -> int:
+        registry = self.registry.peek()
+        return 0 if registry is None else registry.reap_idle()
+
     def close(self) -> None:
         registry = self.registry.peek()
         if registry is not None:

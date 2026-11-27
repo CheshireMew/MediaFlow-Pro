@@ -15,7 +15,9 @@ from mediaflow.domain.web_manifest import web_asset_spec_document
 
 
 def import_web(context: OperationContext) -> dict:
-    asset = context.project.import_web_package(str(context.required("source")))
+    asset = context.project.import_web_package(
+        str(context.required("source")), idempotency_key=context.task_idempotency(),
+    )
     return {
         "asset": asset,
         "web_asset": web_asset_spec_document(context.project.inspect_web_asset(asset.id)),

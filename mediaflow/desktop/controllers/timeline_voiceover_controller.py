@@ -1,17 +1,13 @@
 from __future__ import annotations
 
+import time
 import uuid
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from PySide6.QtCore import Property, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QCoreApplication, QEventLoop, QTimer, QUrl, Signal, Slot
 from PySide6.QtMultimedia import (
-    QAudioInput,
-    QAudioOutput,
-    QMediaCaptureSession,
     QMediaDevices,
-    QMediaFormat,
-    QMediaPlayer,
     QMediaRecorder,
 )
 
@@ -19,34 +15,30 @@ from mediaflow.application.voiceover_latency import (
     CALIBRATION_MARKER_OFFSET_SAMPLES,
     write_calibration_signal,
 )
+from mediaflow.desktop.voiceover_capture import VoiceoverCapture
 from mediaflow.domain.voiceover import VoiceoverCue, VoiceoverCueStatus
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineVoiceoverScope
+
+if TYPE_CHECKING:
+    from mediaflow.desktop.session_state import DesktopProject
 
 
-class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
+class TimelineVoiceoverController(ControllerFacet[TimelineVoiceoverScope]):
     projectStateChanged = Signal()
     recordingCompleted = Signal(str)
 
-    def __init__(self, scope: TimelinePresentationScope) -> None:
+    def __init__(self, scope: TimelineVoiceoverScope) -> None:
         super().__init__(scope)
         self._media_devices = QMediaDevices(self)
-        self._audio_input = QAudioInput(self)
-        self._capture_session = QMediaCaptureSession(self)
-        self._recorder = QMediaRecorder(self)
-        self._capture_session.setAudioInput(self._audio_input)
-        self._capture_session.setRecorder(self._recorder)
-        self._calibration_player = QMediaPlayer(self)
-        self._calibration_output = QAudioOutput(self)
-        self._calibration_player.setAudioOutput(self._calibration_output)
-        self._calibration_output.setVolume(0.7)
+        self._capture_runtime: VoiceoverCapture | None = None
         self._auto_stop = QTimer(self)
         self._auto_stop.setSingleShot(True)
         self._auto_stop.timeout.connect(self.stopRecording)
         self._calibration_stop = QTimer(self)
         self._calibration_stop.setSingleShot(True)
-        self._calibration_stop.timeout.connect(self._recorder.stop)
+        self._calibration_stop.timeout.connect(self._stop_capture)
         self._recording_cue_id = ""
         self._recording_path: Path | None = None
         self._recording_duration_ms = 0
@@ -58,38 +50,47 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self._calibration_device_id = ""
         self._calibration_device_name = ""
         self._calibration_recording_path: Path | None = None
-        self._recorder.durationChanged.connect(self._on_duration_changed)
-        self._recorder.recorderStateChanged.connect(self._on_recorder_state_changed)
-        self._recorder.errorOccurred.connect(self._on_recorder_error)
+        self._capture_project: DesktopProject | None = None
+        self._capture_generation = -1
         self._media_devices.audioInputsChanged.connect(self.projectStateChanged.emit)
+
+    @property
+    def _capture(self) -> VoiceoverCapture:
+        if self._capture_runtime is None:
+            capture = VoiceoverCapture(self)
+            capture.recorder.durationChanged.connect(self._on_duration_changed)
+            capture.recorder.recorderStateChanged.connect(self._on_recorder_state_changed)
+            capture.recorder.errorOccurred.connect(self._on_recorder_error)
+            self._capture_runtime = capture
+        return self._capture_runtime
+
+    def _stop_capture(self) -> None:
+        if self._capture_runtime is not None:
+            self._capture_runtime.recorder.stop()
 
     @Property(list, notify=projectStateChanged)
     def cues(self) -> list[dict[str, Any]]:
-        current = self._session.state.binding.current
-        sequence_id = self._session.state.binding.active_sequence_id
+        current = self._session.project_binding.current
+        sequence_id = self._session.project_binding.active_sequence_id
         if current is None or not sequence_id:
             return []
         return [self._cue_row(item) for item in current.list_voiceover_cues(sequence_id)]
 
     @Property(list, notify=projectStateChanged)
     def audioInputs(self) -> list[dict[str, Any]]:
-        current = self._session.state.binding.current
+        current = self._session.project_binding.current
         rows: list[dict[str, Any]] = []
         for device in QMediaDevices.audioInputs():
             device_id = bytes(device.id().toHex().data()).decode("ascii")
             calibration = (
-                current.get_voiceover_latency_calibration(device_id)
-                if current is not None
-                else None
+                current.get_voiceover_latency_calibration(device_id) if current is not None else None
             )
             rows.append(
                 {
                     "deviceId": device_id,
                     "name": device.description(),
                     "calibrated": calibration is not None,
-                    "latencySamples": (
-                        calibration.latency_samples if calibration is not None else 0
-                    ),
+                    "latencySamples": (calibration.latency_samples if calibration is not None else 0),
                     "latencyMs": (
                         round(
                             calibration.latency_samples * 1000 / calibration.sample_rate,
@@ -106,7 +107,10 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(bool, notify=projectStateChanged)
     def recording(self) -> bool:
-        return self._recorder.recorderState() == QMediaRecorder.RecorderState.RecordingState
+        return (
+            self._capture_runtime is not None
+            and self._capture_runtime.recorder.recorderState() == QMediaRecorder.RecorderState.RecordingState
+        )
 
     @Property(str, notify=projectStateChanged)
     def recordingCueId(self) -> str:
@@ -135,9 +139,9 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         notes: str,
     ) -> None:
         self._session._require_writable()
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         current.create_voiceover_cue(
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
             start_frame=start_frame,
             end_frame=end_frame,
             text=text,
@@ -161,7 +165,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         status: str,
     ) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_current().update_voiceover_cue(
+        self._session.project_binding.require_current().update_voiceover_cue(
             cue_id,
             expected_revision=expected_revision,
             start_frame=start_frame,
@@ -180,7 +184,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self._session._require_writable()
         if self._recording_cue_id == cue_id:
             raise RuntimeError("请先停止当前录音")
-        self._session.state.binding.require_current().archive_voiceover_cue(
+        self._session.project_binding.require_current().archive_voiceover_cue(
             cue_id,
             expected_revision=expected_revision,
         )
@@ -192,7 +196,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
     def importTake(self, cue_id: str, source_url: str) -> None:
         self._session._require_writable()
         source = self._local_path(source_url)
-        self._session.state.binding.require_current().add_voiceover_take(cue_id, source)
+        self._session.project_binding.require_current().add_voiceover_take(cue_id, source)
         self._after_change(refresh_assets=True)
         self._session._set_status("旁白 take 已导入")
 
@@ -200,7 +204,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def updateTake(self, take_id: str, name: str, notes: str, rating: int) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_current().update_voiceover_take(
+        self._session.project_binding.require_current().update_voiceover_take(
             take_id,
             name=name,
             notes=notes,
@@ -213,7 +217,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def selectTake(self, cue_id: str, take_id: str, expected_revision: int) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_current().select_voiceover_take(
+        self._session.project_binding.require_current().select_voiceover_take(
             cue_id,
             take_id,
             expected_revision=expected_revision,
@@ -225,7 +229,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def archiveTake(self, take_id: str) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_current().archive_voiceover_take(take_id)
+        self._session.project_binding.require_current().archive_voiceover_take(take_id)
         self._after_change()
         self._session._set_status("旁白 take 已归档")
 
@@ -233,12 +237,12 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def placeTake(self, cue_id: str, expected_revision: int) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_current().place_voiceover_take(
+        self._session.project_binding.require_current().place_voiceover_take(
             cue_id,
             expected_revision=expected_revision,
         )
-        self._session.projectors.timeline.refresh_timeline()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.refresh_timeline()
+        self._session.preview.schedule()
         self._after_change()
         self._session._set_status("选中的旁白 take 已放入时间线")
 
@@ -252,26 +256,22 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         if not devices:
             raise RuntimeError("没有检测到录音输入设备")
         selected = next(
-            (
-                item
-                for item in devices
-                if bytes(item.id().toHex().data()).decode("ascii") == device_id
-            ),
+            (item for item in devices if bytes(item.id().toHex().data()).decode("ascii") == device_id),
             devices[0],
         )
         cue = self._cue(cue_id)
-        self._audio_input.setDevice(selected)
+        self._capture.audio_input.setDevice(selected)
         output = (
-            self._session.state.binding.require_current().project_dir
+            self._session.project_binding.require_current().project_dir
             / "cache"
             / "voiceover-capture"
             / cue.id
             / f"{uuid.uuid4().hex}.wav"
         )
         output.parent.mkdir(parents=True, exist_ok=True)
-        self._configure_recorder(output)
+        self._capture.configure(output)
         self._status_before_recording = cue.status
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         current.update_voiceover_cue(
             cue.id,
             expected_revision=cue.revision,
@@ -283,18 +283,17 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
             status="recording",
         )
         self._recording_cue_id = cue.id
+        self._capture_project = current
+        self._capture_generation = self._session.project_binding.generation
         selected_device_id = self._device_id(selected)
         calibration = current.get_voiceover_latency_calibration(selected_device_id)
         self._recording_device_id = selected_device_id if calibration is not None else ""
         self._recording_path = output
         self._recording_duration_ms = 0
-        self._recorder.record()
-        profile = self._session.state.binding.require_timeline().state.sequence.profile
+        self._capture.recorder.record()
+        profile = self._session.project_binding.require_timeline().state.sequence.profile
         duration_ms = round(
-            (cue.end_frame - cue.start_frame)
-            * 1000
-            * profile.fps_denominator
-            / profile.fps_numerator
+            (cue.end_frame - cue.start_frame) * 1000 * profile.fps_denominator / profile.fps_numerator
         )
         self._auto_stop.start(max(1, duration_ms))
         self.projectStateChanged.emit()
@@ -311,23 +310,21 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         selected = next((item for item in devices if self._device_id(item) == device_id), None)
         if selected is None:
             raise RuntimeError("所选录音设备已不可用")
-        root = (
-            self._session.state.binding.require_current().project_dir
-            / "cache"
-            / "voiceover-calibration"
-        )
+        root = self._session.project_binding.require_current().project_dir / "cache" / "voiceover-calibration"
         token = uuid.uuid4().hex
         recording = root / f"{token}-capture.wav"
         signal = write_calibration_signal(root / f"{token}-signal.wav")
-        self._audio_input.setDevice(selected)
-        self._configure_recorder(recording)
-        self._calibration_player.setSource(QUrl.fromLocalFile(str(signal)))
+        self._capture.audio_input.setDevice(selected)
+        self._capture.configure(recording)
+        self._capture.calibration_player.setSource(QUrl.fromLocalFile(str(signal)))
         self._calibration_device_id = device_id
         self._calibration_device_name = device_name or selected.description()
         self._calibration_recording_path = recording
         self._discard_calibration = False
         self._calibrating = True
-        self._recorder.record()
+        self._capture_project = self._session.project_binding.require_current()
+        self._capture_generation = self._session.project_binding.generation
+        self._capture.recorder.record()
         self.projectStateChanged.emit()
         self._session._set_status("延迟校准中：扬声器将播放一段短测试声")
 
@@ -337,8 +334,8 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
             return
         self._discard_calibration = True
         self._calibration_stop.stop()
-        self._calibration_player.stop()
-        self._recorder.stop()
+        self._capture.calibration_player.stop()
+        self._capture.recorder.stop()
 
     @Slot(str, str, float)
     @report_ui_errors
@@ -351,7 +348,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self._session._require_writable()
         if latency_ms < 0 or latency_ms > 1_000:
             raise ValueError("录音延迟必须在 0 到 1000 毫秒之间")
-        self._session.state.binding.require_current().set_voiceover_latency_calibration(
+        self._session.project_binding.require_current().set_voiceover_latency_calibration(
             device_id=device_id,
             device_name=device_name,
             latency_samples=round(latency_ms * 48_000 / 1000),
@@ -365,7 +362,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         if not self._recording_cue_id:
             return
         self._auto_stop.stop()
-        self._recorder.stop()
+        self._capture.recorder.stop()
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self._recording_duration_ms = max(0, int(duration_ms))
@@ -375,7 +372,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self.projectStateChanged.emit()
         if self._calibrating:
             if state == QMediaRecorder.RecorderState.RecordingState:
-                self._calibration_player.play()
+                self._capture.calibration_player.play()
                 self._calibration_stop.start(2_400)
             elif state == QMediaRecorder.RecorderState.StoppedState:
                 self._finalize_latency_calibration()
@@ -386,16 +383,16 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
     def _on_recorder_error(self, _error: QMediaRecorder.Error, message: str) -> None:
         if self._calibrating:
             self._calibration_stop.stop()
-            self._calibration_player.stop()
+            self._capture.calibration_player.stop()
             self._clear_calibration()
-            self._session.updates.report_error(message or self._recorder.errorString())
+            self._session.updates.report_error(message or self._capture.recorder.errorString())
             return
         if not self._recording_cue_id:
             return
         self._auto_stop.stop()
         self._restore_recording_status()
         self._clear_recording()
-        self._session.updates.report_error(message or self._recorder.errorString())
+        self._session.updates.report_error(message or self._capture.recorder.errorString())
 
     def _finalize_recording(self) -> None:
         if self._finalizing:
@@ -403,13 +400,13 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self._finalizing = True
         self._auto_stop.stop()
         cue_id = self._recording_cue_id
-        actual_url = self._recorder.actualLocation()
+        actual_url = self._capture.recorder.actualLocation()
         actual_path = Path(actual_url.toLocalFile()) if actual_url.isLocalFile() else None
         source = actual_path if actual_path and actual_path.exists() else self._recording_path
         try:
             if source is None or not source.is_file() or source.stat().st_size <= 0:
                 raise RuntimeError("录音没有生成可用的音频文件")
-            self._session.state.binding.require_current().add_voiceover_take(
+            self._capture_owner().add_voiceover_take(
                 cue_id,
                 source,
                 calibration_device_id=(self._recording_device_id or None),
@@ -425,8 +422,9 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
 
     def _restore_recording_status(self) -> None:
         try:
+            current = self._capture_owner()
             cue = self._cue(self._recording_cue_id)
-            self._session.state.binding.require_current().update_voiceover_cue(
+            current.update_voiceover_cue(
                 cue.id,
                 expected_revision=cue.revision,
                 start_frame=cue.start_frame,
@@ -446,15 +444,17 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self._recording_duration_ms = 0
         self._recording_device_id = ""
         self._finalizing = False
+        self._capture_project = None
+        self._capture_generation = -1
         self.projectStateChanged.emit()
 
     def _finalize_latency_calibration(self) -> None:
         self._calibration_stop.stop()
-        self._calibration_player.stop()
+        self._capture.calibration_player.stop()
         if self._discard_calibration:
             self._clear_calibration()
             return
-        actual_url = self._recorder.actualLocation()
+        actual_url = self._capture.recorder.actualLocation()
         actual_path = Path(actual_url.toLocalFile()) if actual_url.isLocalFile() else None
         source = (
             actual_path
@@ -464,14 +464,11 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         try:
             if source is None or not source.is_file() or source.stat().st_size <= 0:
                 raise RuntimeError("延迟校准没有生成可用的录音")
-            calibration = (
-                self._session.state.binding.require_current()
-                .analyze_voiceover_latency_calibration(
-                    source,
-                    device_id=self._calibration_device_id,
-                    device_name=self._calibration_device_name,
-                    marker_offset_samples=CALIBRATION_MARKER_OFFSET_SAMPLES,
-                )
+            calibration = self._capture_owner().analyze_voiceover_latency_calibration(
+                source,
+                device_id=self._calibration_device_id,
+                device_name=self._calibration_device_name,
+                marker_offset_samples=CALIBRATION_MARKER_OFFSET_SAMPLES,
             )
             self._after_change()
             latency_ms = calibration.latency_samples * 1000 / calibration.sample_rate
@@ -491,23 +488,45 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
         self._calibration_device_id = ""
         self._calibration_device_name = ""
         self._calibration_recording_path = None
+        self._capture_project = None
+        self._capture_generation = -1
         self.projectStateChanged.emit()
 
-    def _configure_recorder(self, output: Path) -> None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        media_format = QMediaFormat()
-        media_format.setFileFormat(QMediaFormat.FileFormat.Wave)
-        media_format.setAudioCodec(QMediaFormat.AudioCodec.Wave)
-        self._recorder.setMediaFormat(media_format)
-        self._recorder.setAudioSampleRate(48_000)
-        self._recorder.setAudioChannelCount(1)
-        self._recorder.setQuality(QMediaRecorder.Quality.HighQuality)
-        self._recorder.setOutputLocation(QUrl.fromLocalFile(str(output)))
+    def _capture_owner(self) -> DesktopProject:
+        binding = self._session.project_binding
+        if (
+            self._capture_project is None
+            or binding.current is not self._capture_project
+            or binding.generation != self._capture_generation
+        ):
+            raise RuntimeError("录音所属项目已关闭；原始录音保留在原项目缓存中")
+        return self._capture_project
+
+    def prepare_project_unbind(self) -> None:
+        """Drain recorder callbacks while their original project is still bound."""
+        self._auto_stop.stop()
+        self._calibration_stop.stop()
+        if self._capture_runtime is None:
+            return
+        self._capture.calibration_player.stop()
+        if self._calibrating:
+            self._discard_calibration = True
+        if self._recording_cue_id or self._calibrating:
+            self._capture.recorder.stop()
+            deadline = time.monotonic() + 5.0
+            while self._capture.recorder.recorderState() != QMediaRecorder.RecorderState.StoppedState:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("录音尚未停止，项目保持打开，请稍后重试")
+                QCoreApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 20)
+            if self._calibrating:
+                self._finalize_latency_calibration()
+            elif self._recording_cue_id:
+                self._finalize_recording()
 
     def _cue(self, cue_id: str) -> VoiceoverCue:
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         for cue in current.list_voiceover_cues(
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
             include_archived=True,
         ):
             if cue.id == cue_id:
@@ -516,7 +535,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
 
     def _after_change(self, *, refresh_assets: bool = False) -> None:
         if refresh_assets:
-            self._session.projectors.assets.refresh_assets()
+            self._session.refresh_assets()
         self._session.updates.commit(project=True, history=True, selection=True)
         self.projectStateChanged.emit()
 
@@ -542,9 +561,7 @@ class TimelineVoiceoverController(ControllerFacet[TimelinePresentationScope]):
                     "rating": take.rating,
                     "latencySamples": take.latency_compensation_samples,
                     "latencyMs": round(
-                        take.latency_compensation_samples
-                        * 1000
-                        / take.latency_sample_rate,
+                        take.latency_compensation_samples * 1000 / take.latency_sample_rate,
                         2,
                     ),
                     "calibrationDeviceId": take.calibration_device_id or "",

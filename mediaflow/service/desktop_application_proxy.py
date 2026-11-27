@@ -319,7 +319,11 @@ class DesktopEditorApplication:
         )
 
     def write_preview_snapshot(self, project_dir: str | Path, state, **kwargs: Any):
+        kwargs.setdefault("request_owner", self._actor.id)
         return self._application_call("write_preview_snapshot", project_dir, state, **kwargs)
+
+    def cancel_preview_snapshot_requests(self, project_dir: str | Path, **kwargs: Any) -> None:
+        self._application_call("cancel_preview_snapshot_requests", project_dir, **kwargs)
 
     def write_asset_preview_snapshot(
         self,
@@ -332,6 +336,7 @@ class DesktopEditorApplication:
             project_dir,
             sequence_id,
             asset_id,
+            request_owner=self._actor.id,
         )
 
     @staticmethod

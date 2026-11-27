@@ -34,7 +34,7 @@ This source repository does not contain a generated portable runtime. When a por
 
 Windows portable builds use PyInstaller 6.22.2 under GPL-2.0-or-later with
 the PyInstaller bootloader exception. The bootloader exception permits
-distribution of the generated executable under MediaFlow Pro's GPL-3.0-only
+distribution of the generated executable under MediaFlow Pro's AGPL-3.0-or-later
 license. PyInstaller is a build-time dependency; its bootloader is represented
 in the exact portable-directory inventory generated for every release.
 

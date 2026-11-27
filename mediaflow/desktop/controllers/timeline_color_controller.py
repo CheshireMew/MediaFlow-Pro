@@ -5,13 +5,13 @@ from typing import Any
 from PySide6.QtCore import Property, Signal, Slot
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineColorScope
 
 
-class TimelineColorController(ControllerFacet[TimelinePresentationScope]):
+class TimelineColorController(ControllerFacet[TimelineColorScope]):
     scopeChanged = Signal()
 
-    def __init__(self, scope: TimelinePresentationScope) -> None:
+    def __init__(self, scope: TimelineColorScope) -> None:
         super().__init__(scope)
         self._scope_data: dict[str, Any] = {}
         self._running = False
@@ -28,10 +28,10 @@ class TimelineColorController(ControllerFacet[TimelinePresentationScope]):
     @Slot(int)
     @report_ui_errors
     def analyzeFrame(self, frame: int) -> None:
-        current = self._session.state.binding.current
+        current = self._session.project_binding.current
         if current is None:
             raise RuntimeError("请先打开项目")
-        state = self._session.state.binding.require_timeline().state
+        state = self._session.project_binding.require_timeline().state
         if not 0 <= frame < state.duration_frames:
             raise ValueError("当前播放头没有可分析的画面")
         self._request_id += 1
@@ -45,7 +45,7 @@ class TimelineColorController(ControllerFacet[TimelinePresentationScope]):
                 "color.scope.analyze",
                 current.project_dir,
                 {
-                    "sequence_id": self._session.state.binding.active_sequence_id,
+                    "sequence_id": self._session.project_binding.active_sequence_id,
                     "frame": frame,
                     "bins": 64,
                     "use_proxies": True,

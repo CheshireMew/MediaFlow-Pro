@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -41,6 +42,7 @@ from mediaflow.domain.web_exports import (
     WebClipExportResult,
     WebExportFormat,
 )
+from mediaflow.file_digest import sha256_file
 
 from .analysis_artifacts import (
     archive_failed_visual_analysis,
@@ -51,6 +53,7 @@ from .cookie_store import CookieStore
 from .diagnostics_bundle import DiagnosticsBundleService
 from .dubbing_runtime import InfrastructureDubbingRuntime
 from .export_quality import ExportQualityService
+from .fcpxml_export import FcpxmlExportService
 from .file_fingerprint import fingerprint_file, fingerprint_matches
 from .mlt import (
     LoudnessAnalysisService,
@@ -91,7 +94,19 @@ class InfrastructureWebTaskRuntime:
         documents: ProjectTaskDocuments,
         paths: RuntimePaths,
     ):
+        self._documents = documents
+        self._paths = paths
         self._service = WebRenderService(documents, paths)
+
+    @contextmanager
+    def snapshot(self) -> Iterator[tuple[ProjectTaskDocuments, InfrastructureWebTaskRuntime]]:
+        with self._documents.read_snapshot() as documents:
+            yield documents, InfrastructureWebTaskRuntime(documents, self._paths)
+
+    def prepare_sequence(
+        self, state: TimelineState, *, progress: ProgressCallback, check_cancelled: CancellationCheck,
+    ) -> tuple[Path, ...]:
+        return tuple(self._service.ensure_sequence(state, progress=progress, check_cancelled=check_cancelled))
 
     def render_web_export(
         self,
@@ -225,6 +240,22 @@ class InfrastructureExportTaskRuntime:
         self._documents = documents
         self._paths = paths
         self._web = WebRenderService(documents, paths)
+
+    @contextmanager
+    def snapshot(self) -> Iterator[tuple[ProjectTaskDocuments, InfrastructureExportTaskRuntime]]:
+        with self._documents.read_snapshot() as documents:
+            yield documents, InfrastructureExportTaskRuntime(documents, self._paths)
+
+    def export_fcpxml(
+        self, state: TimelineState, output_path: str | Path, *, overwrite: bool,
+        progress: ProgressCallback, check_cancelled: CancellationCheck,
+    ) -> tuple[Path, str]:
+        exporter = FcpxmlExportService(self._documents, self._paths)
+        output = exporter.preflight(state, output_path, overwrite=overwrite)
+        self._web.ensure_sequence(state, progress=progress, check_cancelled=check_cancelled)
+        check_cancelled()
+        output = exporter.export(state, output, overwrite=overwrite)
+        return output, sha256_file(output)
 
     def preflight_sequence_exports(
         self,

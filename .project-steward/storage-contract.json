@@ -1,7 +1,7 @@
 {
   "protocol": "project-steward-production-storage-contract",
-  "version": 1,
-  "project_id": "mediaflow-pro",
+  "version": 3,
+  "project_id": "mediaflow",
   "policy": {
     "unknown_peak": "block",
     "outside_owned_roots": "block",
@@ -13,7 +13,13 @@
       "id": "local-quality-run",
       "root_source": {
         "kind": "user-environment-policy",
-        "value": "MEDIAFLOW_TEST_ROOT/q/<run-id> for evidence and MEDIAFLOW_TEST_ROOT/qw/<run-id-hash> for the Windows-safe workspace"
+        "value": "quality_run_roots",
+        "ownership": {
+          "scope": "project-owned-external",
+          "project_namespace": "mediaflow",
+          "fallback": "block",
+          "approved_root_source": "user-environment-policy:verification_storage_parent"
+        }
       },
       "artifact_classes": [
         "temporary",
@@ -25,7 +31,10 @@
       },
       "budget": {
         "maximum_managed_bytes_source": "MEDIAFLOW_QUALITY_RUN_MAX_BYTES and MEDIAFLOW_TEST_ARTIFACT_MAX_BYTES",
-        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES",
+        "registered_roots_inventory_source": "mediaflow/infrastructure/storage_roots.py:registered_storage_roots",
+        "filesystem_allocated_bytes_source": "mediaflow/infrastructure/storage_allocation.py:file_allocation",
+        "managed_object_identity_source": "mediaflow/infrastructure/storage_inventory.py:_file_metrics"
       },
       "reuse": {
         "required": false
@@ -33,16 +42,22 @@
       "lifecycle": {
         "preflight": "quality_storage_preflight runs before the evidence and work roots are created",
         "finalization": "quality-report records separate evidence and workspace inventories for passed and failed runs",
-        "interruption": "the owned run remains inspectable under the same quality root"
+        "interruption": "A running quality-report with PID and process-start identity precedes all child commands; the reader exposes interrupted owners and retained registered roots."
       },
       "implementation_files": [
         "mediaflow/infrastructure/storage_budget.py",
         "scripts/ci/run_quality.py",
-        "scripts/report_storage.py"
+        "scripts/report_storage.py",
+        "mediaflow/infrastructure/storage_allocation.py",
+        "mediaflow/infrastructure/storage_inventory.py",
+        "mediaflow/infrastructure/storage_roots.py",
+        "mediaflow/infrastructure/storage_preflight.py",
+        "mediaflow/infrastructure/storage_receipts.py"
       ],
       "test_files": [
         "tests/v2/architecture/test_ci_quality_plan.py",
-        "tests/v2/infrastructure/test_storage_budget.py"
+        "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_storage_capacity_contract.py"
       ],
       "enforcement": {
         "file": "scripts/ci/run_quality.py",
@@ -52,13 +67,37 @@
           "require_test_artifact_budget",
           "report-only-until-authorized"
         ]
+      },
+      "consumer_sources": [
+        "scripts/report_storage.py:build_report"
+      ],
+      "manifest": {
+        "source": "scripts/ci/run_quality.py:_write_report",
+        "terminal_states": [
+          "succeeded",
+          "failed",
+          "interrupted"
+        ],
+        "cleanup_authorization": "report-only",
+        "persisted_status_mapping": {
+          "passed": "succeeded",
+          "failed": "failed",
+          "interrupted": "interrupted"
+        },
+        "consumer": "scripts/report_storage.py:build_report"
       }
     },
     {
       "id": "pytest-and-verification-evidence",
       "root_source": {
         "kind": "user-environment-policy",
-        "value": "MEDIAFLOW_TEST_ROOT"
+        "value": "test_run_root",
+        "ownership": {
+          "scope": "project-owned-external",
+          "project_namespace": "mediaflow",
+          "fallback": "block",
+          "approved_root_source": "user-environment-policy:verification_storage_parent"
+        }
       },
       "artifact_classes": [
         "temporary",
@@ -70,40 +109,74 @@
       },
       "budget": {
         "maximum_managed_bytes_source": "MEDIAFLOW_TEST_ARTIFACT_MAX_BYTES",
-        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES",
+        "registered_roots_inventory_source": "mediaflow/infrastructure/storage_roots.py:registered_storage_roots",
+        "filesystem_allocated_bytes_source": "mediaflow/infrastructure/storage_allocation.py:file_allocation",
+        "managed_object_identity_source": "mediaflow/infrastructure/storage_inventory.py:_file_metrics"
       },
       "reuse": {
         "required": false
       },
       "lifecycle": {
         "preflight": "managed pytest and script runs reserve budget before creating a run directory",
-        "finalization": "run-result records retained evidence and final inventory",
+        "finalization": "run-result records final payload allocation, excludes its own changing control file, and preserves passed/failed/interrupted status.",
         "interruption": "running manifests retain process ownership for later review"
       },
       "implementation_files": [
         "mediaflow/infrastructure/storage_budget.py",
         "scripts/run_artifacts.py",
-        "tests/v2/conftest.py"
+        "tests/v2/conftest.py",
+        "mediaflow/infrastructure/storage_allocation.py",
+        "mediaflow/infrastructure/storage_inventory.py",
+        "mediaflow/infrastructure/storage_roots.py",
+        "mediaflow/infrastructure/storage_preflight.py",
+        "mediaflow/infrastructure/storage_receipts.py"
       ],
       "test_files": [
         "tests/v2/infrastructure/test_script_run_artifacts.py",
-        "tests/v2/infrastructure/test_storage_budget.py"
+        "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_storage_capacity_contract.py"
       ],
       "enforcement": {
         "file": "scripts/run_artifacts.py",
         "tokens": [
           "require_test_artifact_budget",
-          "directory_inventory",
+          "run_payload_inventory",
           "storage_preflight",
           "report-only-until-authorized"
         ]
+      },
+      "consumer_sources": [
+        "scripts/report_storage.py:build_report",
+        "tests/v2/conftest.py:run_payload_inventory"
+      ],
+      "manifest": {
+        "source": "scripts/run_artifacts.py:_manifest",
+        "terminal_states": [
+          "succeeded",
+          "failed",
+          "interrupted"
+        ],
+        "cleanup_authorization": "report-only",
+        "persisted_status_mapping": {
+          "passed": "succeeded",
+          "failed": "failed",
+          "interrupted": "interrupted"
+        },
+        "consumer": "scripts/report_storage.py:build_report"
       }
     },
     {
       "id": "project-derived-cache",
       "root_source": {
         "kind": "runtime-config",
-        "value": "RuntimePaths.project_cache_dir(project_dir)"
+        "value": "RuntimePaths.project_cache_dir",
+        "ownership": {
+          "scope": "project-owned-external",
+          "project_namespace": "mediaflow",
+          "fallback": "block",
+          "approved_root_source": "runtime-config:runtime_storage_parent"
+        }
       },
       "artifact_classes": [
         "cache",
@@ -111,12 +184,15 @@
         "evidence"
       ],
       "peak_estimate": {
-        "source": "video dimensions and frame count, or audio duration and waveform pyramid levels, including concurrent partial/final copies",
+        "source": "BGRA pixel payload with lossless/container headroom and concurrent copies; waveform pyramid payload plus allocation-unit padding for every fragment and output.",
         "unknown_behavior": "block"
       },
       "budget": {
         "maximum_managed_bytes_source": "MEDIAFLOW_PROJECT_CACHE_MAX_BYTES and MEDIAFLOW_PROJECT_CACHES_MAX_BYTES",
-        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES",
+        "registered_roots_inventory_source": "mediaflow/infrastructure/project_cache_budget.py:registered_cache_groups",
+        "filesystem_allocated_bytes_source": "mediaflow/infrastructure/storage_allocation.py:file_allocation",
+        "managed_object_identity_source": "mediaflow/infrastructure/storage_inventory.py:_file_metrics"
       },
       "reuse": {
         "required": true,
@@ -124,8 +200,8 @@
       },
       "lifecycle": {
         "preflight": "web render, segmented export and waveform generation check the project cache before the first large write",
-        "finalization": "content-addressed manifests identify reusable completed outputs",
-        "interruption": "partial and failed outputs remain owned evidence or explicit review candidates"
+        "finalization": "Settling the reservation measures retained allocated bytes before removing the charge; shared objects force a complete global inventory.",
+        "interruption": "Unsettled or dead owners retain their charge until a complete cross-root scan covers their last writes; receipt reader exposes interrupted owners without deleting files."
       },
       "implementation_files": [
         "mediaflow/infrastructure/runtime_paths.py",
@@ -133,34 +209,67 @@
         "mediaflow/infrastructure/storage_budget.py",
         "mediaflow/infrastructure/waveform_service.py",
         "mediaflow/infrastructure/web_render_service.py",
-        "scripts/report_storage.py"
+        "scripts/report_storage.py",
+        "mediaflow/infrastructure/storage_allocation.py",
+        "mediaflow/infrastructure/storage_inventory.py",
+        "mediaflow/infrastructure/storage_roots.py",
+        "mediaflow/infrastructure/storage_preflight.py",
+        "mediaflow/infrastructure/storage_receipts.py",
+        "mediaflow/infrastructure/project_cache_budget.py",
+        "mediaflow/infrastructure/project_cache_reservations.py"
       ],
       "test_files": [
         "tests/v2/infrastructure/test_storage_budget.py",
         "tests/v2/infrastructure/test_media_pipeline.py",
-        "tests/v2/infrastructure/test_web_media.py"
+        "tests/v2/infrastructure/test_web_media.py",
+        "tests/v2/infrastructure/test_storage_capacity_contract.py"
       ],
       "enforcement": {
-        "file": "mediaflow/infrastructure/storage_budget.py",
+        "file": "mediaflow/infrastructure/project_cache_budget.py",
         "tokens": [
-          "require_project_cache_budget",
-          "register_project_cache_owner",
-          "estimate_video_cache_bytes",
-          "MEDIAFLOW_PROJECT_CACHE_MAX_BYTES",
-          "MEDIAFLOW_PROJECT_CACHES_MAX_BYTES",
-          "block-before-large-write"
+          "registered_cache_groups",
+          "allocated_growth_bound",
+          "_record_project_observation",
+          "project_caches_max_bytes",
+          "minimum_free_bytes",
+          "start_storage_receipt"
         ]
+      },
+      "consumer_sources": [
+        "scripts/report_storage.py:build_report"
+      ],
+      "manifest": {
+        "source": "mediaflow/infrastructure/storage_receipts.py:finalize_storage_receipt",
+        "terminal_states": [
+          "succeeded",
+          "failed",
+          "interrupted"
+        ],
+        "cleanup_authorization": "report-only",
+        "persisted_status_mapping": {
+          "passed": "succeeded",
+          "failed": "failed",
+          "interrupted": "interrupted"
+        },
+        "consumer": "scripts/report_storage.py:build_report"
       }
     },
     {
       "id": "runtime-component-installation",
       "root_source": {
         "kind": "runtime-config",
-        "value": "MEDIAFLOW_RUNTIME_DIR"
+        "value": "MEDIAFLOW_RUNTIME_DIR",
+        "ownership": {
+          "scope": "project-owned-external",
+          "project_namespace": "mediaflow",
+          "fallback": "block",
+          "approved_root_source": "runtime-config:runtime_storage_parent"
+        }
       },
       "artifact_classes": [
         "cache",
-        "temporary"
+        "temporary",
+        "evidence"
       ],
       "peak_estimate": {
         "source": "runtime-components.lock.json install.peak_install_bytes includes archive, extraction and concurrent copies",
@@ -168,7 +277,10 @@
       },
       "budget": {
         "maximum_managed_bytes_source": "MEDIAFLOW_RUNTIME_MAX_BYTES",
-        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES",
+        "registered_roots_inventory_source": "mediaflow/infrastructure/storage_roots.py:registered_storage_roots",
+        "filesystem_allocated_bytes_source": "mediaflow/infrastructure/storage_allocation.py:file_allocation",
+        "managed_object_identity_source": "mediaflow/infrastructure/storage_inventory.py:_file_metrics"
       },
       "reuse": {
         "required": true,
@@ -183,11 +295,17 @@
         "mediaflow/infrastructure/runtime_components.py",
         "mediaflow/infrastructure/storage_budget.py",
         "mediaflow/resources/runtime-components.lock.json",
-        "scripts/report_storage.py"
+        "scripts/report_storage.py",
+        "mediaflow/infrastructure/storage_allocation.py",
+        "mediaflow/infrastructure/storage_inventory.py",
+        "mediaflow/infrastructure/storage_roots.py",
+        "mediaflow/infrastructure/storage_preflight.py",
+        "mediaflow/infrastructure/storage_receipts.py"
       ],
       "test_files": [
         "tests/v2/infrastructure/test_asr_cli.py",
-        "tests/v2/infrastructure/test_storage_budget.py"
+        "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_storage_capacity_contract.py"
       ],
       "enforcement": {
         "file": "mediaflow/infrastructure/runtime_components.py",
@@ -197,17 +315,41 @@
           "start_storage_receipt",
           "finalize_storage_receipt"
         ]
+      },
+      "consumer_sources": [
+        "scripts/report_storage.py:build_report"
+      ],
+      "manifest": {
+        "source": "mediaflow/infrastructure/storage_receipts.py:finalize_storage_receipt",
+        "terminal_states": [
+          "succeeded",
+          "failed",
+          "interrupted"
+        ],
+        "cleanup_authorization": "report-only",
+        "persisted_status_mapping": {
+          "passed": "succeeded",
+          "failed": "failed",
+          "interrupted": "interrupted"
+        },
+        "consumer": "scripts/report_storage.py:build_report"
       }
     },
     {
       "id": "media-download",
       "root_source": {
         "kind": "user-environment-policy",
-        "value": "DownloadRequest.output_directory"
+        "value": "DownloadRequest.output_directory",
+        "ownership": {
+          "scope": "project-root",
+          "project_namespace": "mediaflow",
+          "fallback": "block"
+        }
       },
       "artifact_classes": [
         "temporary",
-        "deliverable"
+        "deliverable",
+        "evidence"
       ],
       "peak_estimate": {
         "source": "duration and selected quality bitrate ceiling, or the enforced MEDIAFLOW_DOWNLOAD_OPERATION_MAX_BYTES cap",
@@ -215,7 +357,10 @@
       },
       "budget": {
         "maximum_managed_bytes_source": "MEDIAFLOW_DOWNLOAD_OPERATION_MAX_BYTES",
-        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES",
+        "registered_roots_inventory_source": "mediaflow/infrastructure/storage_roots.py:registered_storage_roots",
+        "filesystem_allocated_bytes_source": "mediaflow/infrastructure/storage_allocation.py:file_allocation",
+        "managed_object_identity_source": "mediaflow/infrastructure/storage_inventory.py:_file_metrics"
       },
       "reuse": {
         "required": false
@@ -228,11 +373,17 @@
       "implementation_files": [
         "mediaflow/infrastructure/ytdlp_service.py",
         "mediaflow/infrastructure/storage_budget.py",
-        "scripts/report_storage.py"
+        "scripts/report_storage.py",
+        "mediaflow/infrastructure/storage_allocation.py",
+        "mediaflow/infrastructure/storage_inventory.py",
+        "mediaflow/infrastructure/storage_roots.py",
+        "mediaflow/infrastructure/storage_preflight.py",
+        "mediaflow/infrastructure/storage_receipts.py"
       ],
       "test_files": [
         "tests/v2/infrastructure/test_download_features.py",
-        "tests/v2/infrastructure/test_storage_budget.py"
+        "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_storage_capacity_contract.py"
       ],
       "enforcement": {
         "file": "mediaflow/infrastructure/ytdlp_service.py",
@@ -242,17 +393,41 @@
           "max_filesize",
           "finalize_storage_receipt"
         ]
+      },
+      "consumer_sources": [
+        "scripts/report_storage.py:build_report"
+      ],
+      "manifest": {
+        "source": "mediaflow/infrastructure/storage_receipts.py:finalize_storage_receipt",
+        "terminal_states": [
+          "succeeded",
+          "failed",
+          "interrupted"
+        ],
+        "cleanup_authorization": "report-only",
+        "persisted_status_mapping": {
+          "passed": "succeeded",
+          "failed": "failed",
+          "interrupted": "interrupted"
+        },
+        "consumer": "scripts/report_storage.py:build_report"
       }
     },
     {
       "id": "project-proxy",
       "root_source": {
         "kind": "project-relative",
-        "value": "proxies"
+        "value": "proxies",
+        "ownership": {
+          "scope": "project-root",
+          "project_namespace": "mediaflow",
+          "fallback": "block"
+        }
       },
       "artifact_classes": [
         "cache",
-        "temporary"
+        "temporary",
+        "evidence"
       ],
       "peak_estimate": {
         "source": "timeline duration, fixed proxy video/audio rate ceilings and one or two simultaneous outputs",
@@ -260,7 +435,10 @@
       },
       "budget": {
         "maximum_managed_bytes_source": "MEDIAFLOW_PROJECT_ARTIFACT_MAX_BYTES and MEDIAFLOW_PROJECT_ARTIFACTS_MAX_BYTES",
-        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES"
+        "minimum_free_bytes_source": "MEDIAFLOW_MINIMUM_FREE_BYTES",
+        "registered_roots_inventory_source": "mediaflow/infrastructure/storage_roots.py:registered_storage_roots",
+        "filesystem_allocated_bytes_source": "mediaflow/infrastructure/storage_allocation.py:file_allocation",
+        "managed_object_identity_source": "mediaflow/infrastructure/storage_inventory.py:_file_metrics"
       },
       "reuse": {
         "required": true,
@@ -274,21 +452,54 @@
       "implementation_files": [
         "mediaflow/infrastructure/proxy_service.py",
         "mediaflow/infrastructure/storage_budget.py",
-        "scripts/report_storage.py"
+        "scripts/report_storage.py",
+        "mediaflow/infrastructure/storage_allocation.py",
+        "mediaflow/infrastructure/storage_inventory.py",
+        "mediaflow/infrastructure/storage_roots.py",
+        "mediaflow/infrastructure/storage_preflight.py",
+        "mediaflow/infrastructure/storage_receipts.py",
+        "mediaflow/infrastructure/storage_estimates.py"
       ],
       "test_files": [
         "tests/v2/infrastructure/test_proxy_commit_boundary.py",
-        "tests/v2/infrastructure/test_storage_budget.py"
+        "tests/v2/infrastructure/test_storage_budget.py",
+        "tests/v2/infrastructure/test_storage_capacity_contract.py"
       ],
       "enforcement": {
         "file": "mediaflow/infrastructure/proxy_service.py",
         "tokens": [
           "estimate_proxy_peak_bytes",
           "require_project_artifact_budget",
-          "PROXY_VIDEO_MAX_BITRATE",
           "finalize_storage_receipt"
         ]
+      },
+      "consumer_sources": [
+        "scripts/report_storage.py:build_report"
+      ],
+      "manifest": {
+        "source": "mediaflow/infrastructure/storage_receipts.py:finalize_storage_receipt",
+        "terminal_states": [
+          "succeeded",
+          "failed",
+          "interrupted"
+        ],
+        "cleanup_authorization": "report-only",
+        "persisted_status_mapping": {
+          "passed": "succeeded",
+          "failed": "failed",
+          "interrupted": "interrupted"
+        },
+        "consumer": "scripts/report_storage.py:build_report"
       }
     }
-  ]
+  ],
+  "measurement_limits": {
+    "allocated_bytes": "Conservative filesystem file-data allocation; shared extents may be counted more than once and filesystem-wide metadata is not attributed.",
+    "exclusive_reclaimable_bytes": "A lower/upper bound only; never a promise of exact reclaimed space.",
+    "historical_receipts": "v1 remains historical-unverified and never establishes current root ownership."
+  },
+  "runtime_project_roots": {
+    "source": "User-selected MediaFlow projects, download deliveries and explicitly configured runtime directories are runtime project roots. Portable installs and the desktop runtime chooser retain their selected directory without requiring a development namespace. Only declared artifact subtrees, planned same-volume staging and exact outputs are registered; no drive or common user ancestor becomes an owned root.",
+    "ownership_source": "mediaflow/infrastructure/storage_roots.py:project_root_ownership"
+  }
 }

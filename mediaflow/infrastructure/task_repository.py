@@ -3,18 +3,18 @@ from __future__ import annotations
 import builtins
 import json
 import sqlite3
-from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.ports import TaskProjectAccess
-from mediaflow.domain.enums import TaskStatus
+from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.model_base import now_ms
 from mediaflow.domain.progress import OperationProgress
+from mediaflow.domain.task_commands import TASK_COMMAND_TYPES_BY_KIND
 from mediaflow.domain.tasks import Task, TaskStopRequest
 from mediaflow.infrastructure.project_schema_definition import PROJECT_FILE_NAME
-from mediaflow.infrastructure.sqlite_connections import open_project_database
 
 
 class TaskRepository:
@@ -32,11 +32,17 @@ class TaskRepository:
             raise FileNotFoundError(self.database_path)
 
     @contextmanager
+    def command_scope(self) -> Iterator[None]:
+        with self._project.command_scope():
+            yield
+
+    @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
-        with closing(
-            open_project_database(self.database_path, read_only=True)
-        ) as connection:
+        with self._project.task_read_connection() as connection:
             yield connection
+
+    def after_commit(self, action: Callable[[], None]) -> None:
+        self._project.after_commit(action)
 
     @contextmanager
     def _write_connection(self) -> Iterator[sqlite3.Connection]:
@@ -65,12 +71,12 @@ class TaskRepository:
         with self._write_connection() as connection:
             connection.execute(
                 """INSERT INTO task(
-                    id, project_id, sequence_id, idempotency_key,
+                    id, project_id, sequence_id, idempotency_key, execution_scope,
                     command_json, status, progress_json, input_asset_ids_json,
                     artifacts_json, outcome_json, execution_trace_json,
                     error, execution_owner_id, heartbeat_at, lease_expires_at,
                     stop_request, revision, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 self._values(task),
             )
             self._insert_event(connection, task, event_type)
@@ -96,6 +102,8 @@ class TaskRepository:
             if row is None:
                 raise KeyError(task_id)
             task = self._from_row(row)
+            if task.execution_scope != "project":
+                return None
             recovered = task.status == TaskStatus.RUNNING
             if task.status == TaskStatus.PENDING:
                 claimable = task.execution_owner_id is None
@@ -445,22 +453,45 @@ class TaskRepository:
             rows = connection.execute("SELECT * FROM task ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
 
-    def list_claimable(self, at_ms: int) -> builtins.list[Task]:
+    def list_claimable(
+        self, at_ms: int, *, limit: int = 100,
+        kinds: tuple[TaskKind, ...] | None = None,
+        exclude_ids: tuple[str, ...] = (), include_expired: bool = True,
+    ) -> builtins.list[Task]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("Claimable task batch size must be between 1 and 1000")
+        filters = " AND execution_scope='project'"
+        parameters: list[object] = []
+        if kinds is not None:
+            command_types = tuple(value for kind in kinds for value in TASK_COMMAND_TYPES_BY_KIND[kind])
+            if not command_types:
+                return []
+            placeholders = ",".join("?" for _ in command_types)
+            filters += f" AND json_extract(command_json, '$.command_type') IN ({placeholders})"
+            parameters.extend(command_types)
+        if exclude_ids:
+            placeholders = ",".join("?" for _ in exclude_ids)
+            filters += f" AND id NOT IN ({placeholders})"
+            parameters.extend(exclude_ids)
         with self._read_connection() as connection:
+            connection.execute("BEGIN")
             pending_rows = connection.execute(
                 """SELECT * FROM task
                    WHERE status='pending' AND execution_owner_id IS NULL"""
+                + filters + " ORDER BY created_at, id LIMIT ?",
+                (*parameters, limit),
             ).fetchall()
             expired_rows = connection.execute(
                 """SELECT * FROM task
-                   WHERE status='running' AND lease_expires_at<=?""",
-                (at_ms,),
-            ).fetchall()
+                   WHERE status='running' AND lease_expires_at<=?"""
+                + filters + " ORDER BY created_at, id LIMIT ?",
+                (at_ms, *parameters, limit),
+            ).fetchall() if include_expired else []
             rows = sorted(
                 (*pending_rows, *expired_rows),
                 key=lambda row: (int(row["created_at"]), str(row["id"])),
             )
-        return [self._from_row(row) for row in rows]
+        return [self._from_row(row) for row in rows[:limit]]
 
     def delete(self, task_id: str, *, event_type: str = "deleted") -> None:
         self._require_writable()
@@ -485,7 +516,8 @@ class TaskRepository:
 
     def snapshot(self) -> tuple[builtins.list[Task], int]:
         with self._read_connection() as connection:
-            connection.execute("BEGIN")
+            if not connection.in_transaction:
+                connection.execute("BEGIN")
             cursor_row = connection.execute(
                 "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM task_event"
             ).fetchone()
@@ -504,6 +536,10 @@ class TaskRepository:
         if row is None:
             raise KeyError(f"No persisted event for task {task_id}")
         return self._event_from_row(row)
+
+    def latest_cursor(self) -> int:
+        with self._read_connection() as connection:
+            return int(connection.execute("SELECT COALESCE(MAX(cursor), 0) FROM task_event").fetchone()[0])
 
     def events_after(self, cursor: int, *, limit: int = 500) -> builtins.list[TaskEvent]:
         if cursor < 0:
@@ -531,6 +567,7 @@ class TaskRepository:
             task.project_id,
             task.sequence_id,
             task.idempotency_key,
+            task.execution_scope,
             cls._json(
                 task.command.model_dump(
                     mode="json",
@@ -594,6 +631,7 @@ class TaskRepository:
             project_id=row["project_id"],
             sequence_id=row["sequence_id"],
             idempotency_key=row["idempotency_key"],
+            execution_scope=row["execution_scope"],
             command=json.loads(row["command_json"]),
             status=TaskStatus(row["status"]),
             progress=json.loads(row["progress_json"]),

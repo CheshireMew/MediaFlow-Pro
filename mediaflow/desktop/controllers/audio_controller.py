@@ -107,7 +107,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         )
         self._session.projectors.audio.refresh_audio_buses()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session._set_status("已更新 %1 总线", bus.name)
 
     @Slot(str)
@@ -134,7 +134,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         self._session.projectors.audio.refresh_audio_buses()
         self._session.updates.commit(selection=True)
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     @Slot(str, str)
     @report_ui_errors
@@ -173,7 +173,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         self._session.state.selection.audio_effect_id = effect.id
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
 
     @Slot(str, bool)
@@ -189,7 +189,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         )
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     @Slot(str, result="QVariantList")
     def audioEffectPresets(self, kind: str) -> list[dict]:
@@ -216,7 +216,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         self._session.state.selection.audio_effect_id = effect_id
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
 
     @Slot(str)
@@ -227,7 +227,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         self._session.state.selection.audio_effect_id = ""
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(selection=True)
 
     @Slot(str, int)
@@ -248,7 +248,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         self._session.state.selection.audio_effect_id = effect_id
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     @Slot(str, str, object)
     @report_ui_errors
@@ -270,7 +270,7 @@ class AudioController(ControllerFacet[CreativeControllerScope]):
         self._session.state.selection.audio_effect_id = effect_id
         self._session.projectors.audio.refresh_audio_effects()
         self._session.projectors.audio.invalidate_audio_metrics()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     @Slot()
     @report_ui_errors

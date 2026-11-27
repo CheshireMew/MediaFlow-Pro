@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.ci.install_maintenance_tools import locked_requirement_block
 from scripts.ci.prepare_python_environment import (
@@ -13,7 +14,7 @@ from scripts.ci.prepare_python_environment import (
     environment_python,
     expected_state,
 )
-from scripts.ci.quality_plan import forced_plan, normalize_path, plan_for_paths
+from scripts.ci.quality_plan import determine_plan, forced_plan, normalize_path, plan_for_paths
 from scripts.ci.run_quality import (
     build_quality_stages,
     local_changed_paths,
@@ -49,22 +50,25 @@ def test_ui_matrix_serializes_complete_qt_quick_scenarios_on_windows() -> None:
         (("AGENTS.md", "ARCHITECTURE.md"), "maintenance", False, False),
         (("mediaflow/domain/tasks.py",), "core", False, False),
         (("mediaflow/application/task_service.py",), "core", False, False),
-        (("mediaflow/composition.py",), "full", False, False),
-        (("mediaflow/domain/project.py",), "full", False, True),
-        (("mediaflow/infrastructure/project_repository.py",), "full", False, True),
-        (("mediaflow/infrastructure/runtime_paths.py",), "full", True, False),
-        (("mediaflow/desktop/native/MltRuntime.cpp",), "full", True, False),
-        (("tests/v2/integration/test_native_preview.py",), "full", True, False),
-        ((".github/workflows/quality.yml",), "full", True, True),
-        (("scripts/ci/quality_plan.py",), "full", True, True),
-        ((".env.example",), "full", True, False),
-        (("requirements.lock",), "full", True, True),
-        (("runtime.lock.json",), "full", True, True),
-        (("scripts/verify_project_interchange.py",), "full", False, True),
-        (("unclassified/release-input.bin",), "full", False, False),
+        (("mediaflow/composition.py",), "core", False, False),
+        (("mediaflow/domain/project.py",), "core", False, False),
+        (("mediaflow/infrastructure/project_repository.py",), "core", False, False),
+        (("mediaflow/desktop/controllers/timeline_clip_controller.py",), "core", False, False),
+        (("mediaflow/desktop/qml/Main.qml",), "core", False, False),
+        (("mediaflow/infrastructure/runtime_paths.py",), "core", False, False),
+        (("mediaflow/desktop/native/MltRuntime.cpp",), "core", False, False),
+        (("tests/v2/integration/test_native_preview.py",), "core", False, False),
+        ((".github/workflows/quality.yml",), "core", False, False),
+        (("scripts/ci/quality_plan.py",), "core", False, False),
+        ((".env.example",), "core", False, False),
+        (("requirements.lock",), "core", False, False),
+        (("runtime.lock.json",), "core", False, False),
+        (("scripts/verify_project_interchange.py",), "core", False, False),
+        (("tests/fixtures/editable-media-v6/editable-media.json",), "core", False, False),
+        (("unclassified/release-input.bin",), "core", False, False),
     ),
 )
-def test_quality_scope_fails_closed_without_over_testing_maintenance_changes(
+def test_changed_paths_use_lightweight_scopes_without_full_regression(
     paths: tuple[str, ...],
     scope: str,
     portable_build: bool,
@@ -86,11 +90,33 @@ def test_mixed_changes_keep_the_strongest_required_scope() -> None:
     assert plan.changed_count == 2
 
 
-def test_empty_or_manual_full_plans_cannot_silently_skip_release_boundaries() -> None:
-    assert plan_for_paths(()).scope == "full"
+def test_empty_changes_stay_lightweight_and_full_runs_require_explicit_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty = plan_for_paths(())
+    assert empty.scope == "maintenance"
+    assert not any((empty.run_core, empty.run_full, empty.run_portable_build, empty.run_interchange))
     forced = forced_plan("full", reason="test")
     assert forced.run_portable_build is True
     assert forced.run_interchange is True
+    monkeypatch.setattr(
+        "scripts.ci.quality_plan.changed_paths",
+        lambda base, head: ("mediaflow/desktop/qml/Main.qml",),
+    )
+    for event, scope, expected in (
+        ("workflow_dispatch", "core", False),
+        ("workflow_dispatch", "full", True),
+        ("schedule", "full", False),
+        ("push", "full", False),
+        ("pull_request", "full", False),
+        ("workflow_run", "full", False),
+        ("repository_dispatch", "full", False),
+        ("release", "full", False),
+    ):
+        plan, _ = determine_plan(event=event, base="", head="HEAD", manual_scope=scope)
+        assert plan.run_full is expected
+        assert plan.run_portable_build is expected
+        assert plan.run_interchange is expected
 
 
 def test_windows_paths_are_normalized_before_classification() -> None:
@@ -149,6 +175,8 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
         "tests/v2/application/test_portable_timeline_import.py::test_import",
         "tests/v2/desktop/test_qml_smoke.py::test_window",
         "tests/v2/application/test_editor_api.py::test_preview_frame_render_returns_real_revision_bound_png_evidence",
+        "tests/v2/infrastructure/test_script_run_artifacts.py::"
+        "test_pytest_runner_retains_only_failed_case_after_collection_success_and_failure",
     )
 
     lightweight = select_resource_profile(nodes, "lightweight")
@@ -160,6 +188,7 @@ def test_resource_profiles_are_one_disjoint_boundary_without_marker_churn() -> N
     assert requires_reviewed_runtime(nodes[3]) is True
     assert requires_reviewed_runtime(nodes[4]) is True
     assert requires_reviewed_runtime(nodes[5]) is True
+    assert requires_reviewed_runtime(nodes[6]) is True
     assert requires_reviewed_runtime(nodes[-1]) is True
     assert requires_reviewed_runtime(nodes[0]) is False
 
@@ -264,18 +293,15 @@ def test_local_quality_runner_is_change_scoped_parallel_and_never_monolithic(
     assert len(runtime.commands) == 4
     assert all(
         "tests/v2/desktop/test_qml_smoke.py::"
-        "test_transcript_button_runs_real_timeline_chain_and_opens_generated_subtitles"
-        in command.arguments
+        "test_transcript_button_runs_real_timeline_chain_and_opens_generated_subtitles" in command.arguments
         for command in runtime.commands
     )
     runtime_serial = next(stage for stage in full if stage.name == "runtime-serial")
     assert runtime_serial.max_workers == 1
-    assert [command.name for command in runtime_serial.commands] == [
-        "release-startup-performance"
-    ]
-    assert [stage.name for stage in full].index("runtime-serial") < [
-        stage.name for stage in full
-    ].index("runtime")
+    assert [command.name for command in runtime_serial.commands] == ["release-startup-performance"]
+    assert [stage.name for stage in full].index("runtime-serial") < [stage.name for stage in full].index(
+        "runtime"
+    )
     interactive_qml = next(stage for stage in full if stage.name == "interactive-qml")
     assert interactive_qml.max_workers == 1
     assert [command.name for command in interactive_qml.commands] == [
@@ -335,9 +361,29 @@ def test_maintenance_yaml_dependency_is_derived_from_the_reviewed_lock() -> None
 def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     triggers = workflow.split("permissions:", 1)[0]
+    document = yaml.load(workflow, Loader=yaml.BaseLoader)
 
-    assert "push:\n    branches:\n      - main\n    tags:\n      - \"v*\"" in triggers
+    assert set(document["on"]) == {"push", "pull_request", "workflow_dispatch"}
+    assert document["on"]["workflow_dispatch"]["inputs"]["scope"]["default"] == "core"
+    assert document["run-name"] == "${{ inputs.scope || 'auto' }} quality: ${{ github.ref_name }}"
+    for name, flag in (
+        ("runtime-tests", "run_full"),
+        ("python", "run_full"),
+        ("native-policy", "run_full"),
+        ("portable-core", "run_portable_build"),
+        ("interchange-produce", "run_interchange"),
+        ("interchange-consume", "run_interchange"),
+    ):
+        assert document["jobs"][name]["if"] == (
+            "github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && "
+            f"needs.plan.outputs.{flag} == 'true'"
+        )
+
+    assert 'push:\n    branches:\n      - main\n    tags:\n      - "v*"' in triggers
     assert "pull_request:\n    branches:\n      - main" in triggers
+    assert "workflow_dispatch:" in triggers
+    assert "schedule:" not in triggers
+    assert "cron:" not in triggers
     assert "python scripts/ci/quality_plan.py" in workflow
     assert "needs.plan.outputs.run_core == 'true'" in workflow
     assert "needs.plan.outputs.run_full == 'true'" in workflow
@@ -356,6 +402,26 @@ def test_workflow_consumes_one_plan_and_keeps_expensive_boundaries_conditional()
     assert "V2 quality gate" in workflow
 
 
+def test_release_does_not_require_full_acceptance() -> None:
+    workflow = (ROOT / ".github/workflows/release-windows-portable.yml").read_text(encoding="utf-8")
+    document = yaml.load(workflow, Loader=yaml.BaseLoader)
+
+    assert set(document["on"]) == {"workflow_dispatch"}
+    option = document["on"]["workflow_dispatch"]["inputs"]["run_full_acceptance"]
+    assert option["type"] == "boolean"
+    assert option["default"] == "false"
+    steps = [step for job in document["jobs"].values() for step in job["steps"]]
+    offline = [step for step in steps if "scripts/verify_windows_portable.py" in step.get("run", "")]
+    assert len(offline) == 1
+    assert offline[0]["if"] == "inputs.run_full_acceptance == true"
+    assert all(step.get("id") != "quality" for step in steps)
+    assert "quality_run_id" not in document["jobs"]["authorize"]["outputs"]
+    assert "actions/workflows/quality.yml" not in workflow
+    assert "quality-gate" not in workflow
+    assert "quality-receipt" not in workflow
+    assert "full quality" not in document["on"]["workflow_dispatch"]["inputs"]["tag"]["description"]
+
+
 def test_complete_python_cache_is_reused_and_lightweight_core_has_no_media_sdk_setup() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     core = workflow.split("  core-tests:", 1)[1].split("  runtime-tests:", 1)[0]
@@ -367,9 +433,9 @@ def test_complete_python_cache_is_reused_and_lightweight_core_has_no_media_sdk_s
     assert "prepare_runtime.py" not in core
     assert "prepare_ci_qt.py" not in core
     assert "build_native.py" not in core
-    assert "mediaflow-runtime\\deps" not in core
-    assert "mediaflow-runtime\\qt" not in core
-    assert "mediaflow-runtime\\native" not in core
+    assert "mediaflow\\runtime\\deps" not in core
+    assert "mediaflow\\runtime\\qt" not in core
+    assert "mediaflow\\runtime\\native" not in core
     assert workflow.count("id: native-preview") == 3
     assert workflow.count("if: steps.native-preview.outputs.cache-hit != 'true'") == 3
 
@@ -408,8 +474,8 @@ def test_browser_scenarios_and_failure_diagnostics_have_process_boundaries() -> 
 def test_runtime_caches_follow_the_artifact_that_actually_invalidates() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "mediaflow-deps-v2-" in workflow
-    assert "mediaflow-qt-v2-" in workflow
-    assert "mediaflow-native-v2-" in workflow
+    assert "mediaflow-deps-v3-" in workflow
+    assert "mediaflow-qt-v3-" in workflow
+    assert "mediaflow-native-v3-" in workflow
     assert "hashFiles('runtime.lock.json')" in workflow
     assert "hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py'" in workflow

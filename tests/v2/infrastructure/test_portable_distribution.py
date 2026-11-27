@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
+import pytest
+
+from scripts import archive_windows_portable, build_windows_portable
 from scripts.verify_portable_distribution import REQUIRED_DISTRIBUTIONS, verify
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -101,3 +105,46 @@ def test_final_portable_inventory_rejects_missing_direct_distribution_metadata(
 
     assert report["passed"] is False
     assert report["missing_required_distributions"] == ["mcp-types"]
+
+
+@pytest.mark.parametrize("operation", ["build", "archive"])
+def test_portable_preflight_reads_current_storage_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    if operation == "build" and os.name != "nt":
+        pytest.skip("Windows portable build preflight")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "runtime.bin").write_bytes(b"runtime data")
+    (source / "runtime-copy.bin").hardlink_to(source / "runtime.bin")
+    logical_bytes = 2 * len(b"runtime data")
+
+    class PreflightReached(Exception):
+        pass
+
+    def check_budget(root: Path, *, expected_new_bytes: int, **_kwargs: object) -> dict:
+        assert root == tmp_path
+        assert expected_new_bytes == (
+            logical_bytes * 2 + 4 * 1024**3 if operation == "build" else logical_bytes
+        )
+        raise PreflightReached
+
+    if operation == "build":
+        monkeypatch.setattr(
+            build_windows_portable, "_require_release_source", lambda _tag: ("commit", "remote")
+        )
+        monkeypatch.setattr(build_windows_portable, "require_storage_budget", check_budget)
+        with pytest.raises(PreflightReached):
+            build_windows_portable.build(
+                release_tag="v2.0.0", runtime_root=source,
+                work_root=tmp_path / "work", output_root=tmp_path / "output",
+            )
+    else:
+        monkeypatch.setattr(archive_windows_portable, "verify", lambda *_args, **_kwargs: {"passed": True})
+        monkeypatch.setattr(archive_windows_portable, "require_storage_budget", check_budget)
+        with pytest.raises(PreflightReached):
+            archive_windows_portable.archive(
+                source, tmp_path / "portable.7z", expected_version="2.0.0", receipt=tmp_path / "receipt.json",
+            )
+    assert not (tmp_path / "work").exists()
+    assert not (tmp_path / "portable.7z").exists()

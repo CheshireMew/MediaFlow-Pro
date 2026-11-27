@@ -40,3 +40,6 @@ class EditorServiceOperations:
 
     def close(self) -> None:
         self._services.close()
+
+    def reap_idle(self) -> int:
+        return self._services.reap_idle()

@@ -8,7 +8,7 @@ from mediaflow.domain.enums import ColorMode, TrackKind, TransitionKind
 from mediaflow.domain.timeline import Transition
 
 from .controller_facet import ControllerFacet
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineViewScope
 from .timeline_selection import sequence_boundary_analysis_running
 
 FILMSTRIP_BASE_IDLE_MS = 120
@@ -19,12 +19,11 @@ FILMSTRIP_CLIPS_PER_ADDED_MS = 2
 def filmstrip_idle_delay_ms(clip_count: int) -> int:
     return min(
         FILMSTRIP_MAX_IDLE_MS,
-        FILMSTRIP_BASE_IDLE_MS
-        + max(0, int(clip_count)) // FILMSTRIP_CLIPS_PER_ADDED_MS,
+        FILMSTRIP_BASE_IDLE_MS + max(0, int(clip_count)) // FILMSTRIP_CLIPS_PER_ADDED_MS,
     )
 
 
-class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
+class TimelineViewController(ControllerFacet[TimelineViewScope]):
     projectStateChanged = Signal()
     selectionChanged = Signal()
     historyChanged = Signal()
@@ -34,15 +33,15 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(QObject, constant=True)
     def tracksModel(self) -> QObject:
-        return self._session.models.tracks
+        return self._session.tracks_model
 
     @Property(QObject, constant=True)
     def clipsModel(self) -> QObject:
-        return self._session.models.clips
+        return self._session.clips_model
 
     @Property(int, notify=projectStateChanged)
     def filmstripIdleDelayMs(self) -> int:
-        return filmstrip_idle_delay_ms(self._session.models.clips.rowCount())
+        return filmstrip_idle_delay_ms(self._session.clips_model.rowCount())
 
     @Slot(float, float, float, int)
     def requestFilmstrip(
@@ -52,22 +51,22 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
         pixels_per_frame: float,
         height: int,
     ) -> None:
-        if not self._session.state.binding.current or not self._session.state.binding.active_sequence_id:
+        if not self._session.project_binding.current or not self._session.project_binding.active_sequence_id:
             return
-        self._session.state.requests.filmstrip_id += 1
-        filmstrip_generation = self._session.state.requests.filmstrip_id
+        self._session.request_state.filmstrip_id += 1
+        filmstrip_generation = self._session.request_state.filmstrip_id
         request_id = (
-            self._session.state.binding.generation,
+            self._session.project_binding.generation,
             filmstrip_generation,
-            self._session.state.binding.active_sequence_id,
+            self._session.project_binding.active_sequence_id,
         )
-        previous = self._session.state.requests.filmstrip_future
+        previous = self._session.request_state.filmstrip_future
         if previous is not None and not previous.done():
             previous.cancel()
-        project_dir = self._session.state.binding.require_current().project_dir
-        sequence_id = self._session.state.binding.active_sequence_id
-        request_owner = self._session.state.binding.require_current().actor_id
-        self._session.state.requests.filmstrip_future = self._session.background.submit(
+        project_dir = self._session.project_binding.require_current().project_dir
+        sequence_id = self._session.project_binding.active_sequence_id
+        request_owner = self._session.project_binding.require_current().actor_id
+        self._session.request_state.filmstrip_future = self._session.background.submit(
             "timeline_filmstrip",
             request_id,
             lambda: self._session._api.timeline_filmstrip_paths(
@@ -84,25 +83,25 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(QObject, constant=True)
     def compoundClipsModel(self) -> QObject:
-        return self._session.models.compound_clips
+        return self._session.compound_clips_model
 
     @Property(QObject, constant=True)
     def transitionsModel(self) -> QObject:
-        return self._session.models.transitions
+        return self._session.transitions_model
 
     @Property(QObject, constant=True)
     def timelineMarkersModel(self) -> QObject:
-        return self._session.models.markers
+        return self._session.markers_model
 
     @Property(QObject, constant=True)
     def timelineRangesModel(self) -> QObject:
-        return self._session.models.ranges
+        return self._session.ranges_model
 
     @Property(list, notify=projectStateChanged)
     def transitionOptions(self) -> list[dict]:
         color_mode = (
-            self._session.state.binding.require_timeline().state.sequence.profile.color_mode
-            if self._session.state.binding.timeline
+            self._session.project_binding.require_timeline().state.sequence.profile.color_mode
+            if self._session.project_binding.timeline
             else ColorMode.SDR_BT709
         )
         return transition_options(color_mode)
@@ -112,12 +111,12 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
         """Compile a temporary transition through the real MLT preview graph."""
         try:
             if (
-                not self._session.state.binding.current
-                or not self._session.state.binding.timeline
+                not self._session.project_binding.current
+                or not self._session.project_binding.timeline
                 or not clip_id
             ):
                 return
-            state = self._session.state.binding.require_timeline().state
+            state = self._session.project_binding.require_timeline().state.model_copy(deep=True)
             left = next(item for item in state.clips if item.id == clip_id)
             right = next(
                 item
@@ -142,15 +141,15 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
             ]
             state.transitions.append(preview)
             path = self._session._api.write_preview_snapshot(
-                self._session.state.binding.require_current().project_dir,
+                self._session.project_binding.require_current().project_dir,
                 state,
-                use_proxies=self._session.state.service_settings.preview.preview_quality != "source",
+                use_proxies=self._session.read_service_settings().preview.preview_quality != "source",
                 prefer_sdr_preview_proxy=(
                     state.sequence.profile.color_mode == ColorMode.HDR10_BT2020_PQ
-                    and not self._session.state.presentation.hdr_preview_active
+                    and not self._session.presentation_state.hdr_preview_active
                 ),
             )
-            self._session.state.presentation.preview_graph_path = str(path)
+            self._session.presentation_state.preview_graph_path = str(path)
             self._session.updates.commit(preview_graph=True)
             self._session.updates.request_preview_range(
                 max(0, left.timeline_end - transition_duration),
@@ -164,74 +163,73 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
     @Slot()
     def clearTransitionPreview(self) -> None:
         if (
-            self._session.state.binding.timeline
-            and self._session.state.binding.require_timeline().state.clips
+            self._session.project_binding.timeline
+            and self._session.project_binding.require_timeline().state.clips
         ):
-            self._session.projectors.timeline.schedule_preview_graph()
+            self._session.preview.schedule()
 
     @Property(bool, notify=tasksChanged)
     def sequenceBoundaryAnalysisRunning(self) -> bool:
-        return sequence_boundary_analysis_running(self._session)
+        return sequence_boundary_analysis_running(
+            self._session.project_binding, self._session.task_view_state
+        )
 
     @Property(str, notify=selectionChanged)
     def selectedClipId(self) -> str:
         return self._selected_clip_id()
 
     def _selected_clip_id(self) -> str:
-        if self._session.state.selection.compound_id:
+        if self._session.read_selection().compound_id:
             return ""
-        return self._session.state.selection.clip_ids[-1] if self._session.state.selection.clip_ids else ""
+        return self._session.read_selection().clip_ids[-1] if self._session.read_selection().clip_ids else ""
 
     @Property(list, notify=selectionChanged)
     def selectedClipIds(self) -> list[str]:
-        return list(self._session.state.selection.clip_ids)
+        return list(self._session.read_selection().clip_ids)
 
     @Property(str, notify=selectionChanged)
     def selectedCompoundId(self) -> str:
-        return self._session.state.selection.compound_id
+        return self._session.read_selection().compound_id
 
     @Property(str, notify=selectionChanged)
     def selectedTransitionId(self) -> str:
-        return self._session.state.selection.transition_id
+        return self._session.read_selection().transition_id
 
     @Property(str, notify=selectionChanged)
     def selectedMarkerId(self) -> str:
-        return self._session.state.selection.marker_id
+        return self._session.read_selection().marker_id
 
     @Property(str, notify=selectionChanged)
     def selectedRangeId(self) -> str:
-        return self._session.state.selection.range_id
+        return self._session.read_selection().range_id
 
     @Property(int, notify=selectionChanged)
     def rangeInFrame(self) -> int:
-        return (
-            -1
-            if self._session.state.selection.range_in_frame is None
-            else self._session.state.selection.range_in_frame
-        )
+        selection = self._session.read_selection()
+        return -1 if selection.range_in_frame is None else selection.range_in_frame
 
     @Property(dict, notify=selectionChanged)
     def selectedTransitionData(self) -> dict:
-        row = self._session.models.transitions.findRow(
-            "transitionId", self._session.state.selection.transition_id
+        row = self._session.transitions_model.findRow(
+            "transitionId", self._session.read_selection().transition_id
         )
-        return self._session.models.transitions.get(row)
+        return self._session.transitions_model.get(row)
 
     @Property(dict, notify=selectionChanged)
     def selectedClipData(self) -> dict:
-        row = self._session.models.clips.findRow("clipId", self._selected_clip_id())
-        return self._session.models.clips.get(row)
+        row = self._session.clips_model.findRow("clipId", self._selected_clip_id())
+        return self._session.clips_model.get(row)
 
     @Property(list, notify=selectionChanged)
     def selectedClipReplacementOptions(self) -> list[dict]:
         clip_id = self._selected_clip_id()
-        if not self._session.state.binding.current or not clip_id:
+        if not self._session.project_binding.current or not clip_id:
             return []
-        row_index = self._session.models.clips.findRow("clipId", clip_id)
-        row = self._session.models.clips.get(row_index)
+        row_index = self._session.clips_model.findRow("clipId", clip_id)
+        row = self._session.clips_model.get(row_index)
         track_kind = str(row.get("trackKind", ""))
         options = []
-        for asset in self._session.state.binding.require_current().list_assets():
+        for asset in self._session.project_binding.require_current().list_assets():
             if asset.kind.value == "web" or asset.status.value != "online":
                 continue
             compatible = (track_kind == TrackKind.VIDEO.value and asset.kind.value in {"video", "image"}) or (
@@ -246,8 +244,8 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
     @Property(dict, notify=selectionChanged)
     def selectedClipsSummary(self) -> dict:
         rows = [
-            self._session.models.clips.get(self._session.models.clips.findRow("clipId", clip_id))
-            for clip_id in self._session.state.selection.clip_ids
+            self._session.clips_model.get(self._session.clips_model.findRow("clipId", clip_id))
+            for clip_id in self._session.read_selection().clip_ids
         ]
         rows = [row for row in rows if row]
         if len(rows) < 2:
@@ -270,29 +268,29 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(dict, notify=selectionChanged)
     def selectedCompoundData(self) -> dict:
-        row = self._session.models.compound_clips.findRow(
-            "compoundId", self._session.state.selection.compound_id
+        row = self._session.compound_clips_model.findRow(
+            "compoundId", self._session.read_selection().compound_id
         )
-        return self._session.models.compound_clips.get(row)
+        return self._session.compound_clips_model.get(row)
 
     @Property(bool, notify=selectionChanged)
     def canCreateCompoundClip(self) -> bool:
         if (
-            not self._session.state.binding.timeline
-            or self._session.state.selection.compound_id
-            or len(self._session.state.selection.clip_ids) < 2
+            not self._session.project_binding.timeline
+            or self._session.read_selection().compound_id
+            or len(self._session.read_selection().clip_ids) < 2
         ):
             return False
-        selected_ids = set(self._session.state.selection.clip_ids)
+        selected_ids = set(self._session.read_selection().clip_ids)
         if any(
             selected_ids.intersection(item.clip_ids)
-            for item in self._session.state.binding.require_timeline().state.compounds
+            for item in self._session.project_binding.require_timeline().state.compounds
         ):
             return False
         selected = sorted(
             (
                 clip
-                for clip in self._session.state.binding.require_timeline().state.clips
+                for clip in self._session.project_binding.require_timeline().state.clips
                 if clip.id in selected_ids
             ),
             key=lambda clip: (clip.timeline_start, clip.id),
@@ -309,87 +307,89 @@ class TimelineViewController(ControllerFacet[TimelinePresentationScope]):
     @Property(bool, notify=historyChanged)
     def canUndo(self) -> bool:
         return bool(
-            self._session.state.binding.timeline and self._session.state.binding.require_timeline().can_undo
+            self._session.project_binding.timeline
+            and self._session.project_binding.require_timeline().can_undo
         )
 
     @Property(bool, notify=historyChanged)
     def canRedo(self) -> bool:
         return bool(
-            self._session.state.binding.timeline and self._session.state.binding.require_timeline().can_redo
+            self._session.project_binding.timeline
+            and self._session.project_binding.require_timeline().can_redo
         )
 
     @Slot(str)
     @Slot(str, bool)
     def selectClip(self, clip_id: str, toggle: bool = False) -> None:
-        self._session.state.selection.compound_id = ""
-        self._session.state.selection.clip_ids = self._session._updated_selection(
-            self._session.state.selection.clip_ids,
+        self._session.read_selection().compound_id = ""
+        self._session.read_selection().clip_ids = self._session._updated_selection(
+            self._session.read_selection().clip_ids,
             clip_id,
             toggle=toggle,
         )
-        self._session.state.selection.transition_id = ""
+        self._session.read_selection().transition_id = ""
         self._session.updates.commit(selection=True)
 
     @Slot(str)
     def selectCompoundClip(self, compound_id: str) -> None:
-        if not self._session.state.binding.timeline:
+        if not self._session.project_binding.timeline:
             return
         try:
             compound = next(
                 item
-                for item in self._session.state.binding.require_timeline().state.compounds
+                for item in self._session.project_binding.require_timeline().state.compounds
                 if item.id == compound_id
             )
         except StopIteration:
             return
-        self._session.state.selection.compound_id = compound.id
-        self._session.state.selection.clip_ids = list(compound.clip_ids)
-        self._session.state.selection.transition_id = ""
-        self._session.state.selection.marker_id = ""
-        self._session.state.selection.range_id = ""
+        self._session.read_selection().compound_id = compound.id
+        self._session.read_selection().clip_ids = list(compound.clip_ids)
+        self._session.read_selection().transition_id = ""
+        self._session.read_selection().marker_id = ""
+        self._session.read_selection().range_id = ""
         self._session.updates.commit(selection=True)
 
     @Slot(str, result=bool)
     def isClipSelected(self, clip_id: str) -> bool:
-        return clip_id in self._session.state.selection.clip_ids
+        return clip_id in self._session.read_selection().clip_ids
 
     @Slot()
     def selectAllClips(self) -> None:
-        self._session.state.selection.clip_ids = (
-            [clip.id for clip in self._session.state.binding.require_timeline().state.clips]
-            if self._session.state.binding.timeline
+        self._session.read_selection().clip_ids = (
+            [clip.id for clip in self._session.project_binding.require_timeline().state.clips]
+            if self._session.project_binding.timeline
             else []
         )
-        self._session.state.selection.compound_id = ""
-        self._session.state.selection.transition_id = ""
-        self._session.state.selection.marker_id = ""
-        self._session.state.selection.range_id = ""
+        self._session.read_selection().compound_id = ""
+        self._session.read_selection().transition_id = ""
+        self._session.read_selection().marker_id = ""
+        self._session.read_selection().range_id = ""
         self._session.updates.commit(selection=True)
 
     @Slot()
     def clearSelection(self) -> None:
-        self._session.state.selection.clip_ids = []
-        self._session.state.selection.compound_id = ""
-        self._session.state.selection.transition_id = ""
-        self._session.state.selection.marker_id = ""
-        self._session.state.selection.range_id = ""
+        self._session.read_selection().clip_ids = []
+        self._session.read_selection().compound_id = ""
+        self._session.read_selection().transition_id = ""
+        self._session.read_selection().marker_id = ""
+        self._session.read_selection().range_id = ""
         self._session.updates.commit(selection=True)
 
     @Slot(str)
     def selectTransition(self, transition_id: str) -> None:
-        self._session.state.selection.transition_id = transition_id
-        self._session.state.selection.clip_ids = []
-        self._session.state.selection.compound_id = ""
+        self._session.read_selection().transition_id = transition_id
+        self._session.read_selection().clip_ids = []
+        self._session.read_selection().compound_id = ""
         self._session.updates.commit(selection=True)
 
     @Slot(str)
     def selectTimelineMarker(self, marker_id: str) -> None:
-        self._session.state.selection.marker_id = marker_id
-        self._session.state.selection.range_id = ""
+        self._session.read_selection().marker_id = marker_id
+        self._session.read_selection().range_id = ""
         self._session.updates.commit(selection=True)
 
     @Slot(str)
     def selectTimelineRange(self, range_id: str) -> None:
-        self._session.state.selection.marker_id = ""
-        self._session.state.selection.range_id = range_id
+        self._session.read_selection().marker_id = ""
+        self._session.read_selection().range_id = range_id
         self._session.updates.commit(selection=True)

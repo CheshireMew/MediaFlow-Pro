@@ -2,22 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
+from contextlib import nullcontext
 from pathlib import Path
 
 from mediaflow.application.presentation_models import RecentProjectSnapshot
-from mediaflow.atomic_file import atomic_write_text
 from mediaflow.domain.enums import AssetKind, TaskStatus, TrackKind
-from mediaflow.domain.storage_names import content_addressed_child_path
 from mediaflow.domain.timeline import Clip, TimelineState, Track, default_clip_media_kind
-from mediaflow.infrastructure.cache_manager import CacheManager
 from mediaflow.infrastructure.media_thumbnail_service import MediaThumbnailService
 from mediaflow.infrastructure.mlt import TimelineCompiler
+from mediaflow.infrastructure.presentation_requests import PresentationRequestCoordinator
+from mediaflow.infrastructure.preview_graph_cache import PreviewGraphCache
 from mediaflow.infrastructure.project_cover_service import ProjectCoverService
 from mediaflow.infrastructure.project_migration_runner import ProjectUpgradeRequiredError
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
 from mediaflow.infrastructure.task_repository import TaskRepository
 from mediaflow.infrastructure.timeline_filmstrip import FILMSTRIP_REQUESTS, TimelineFilmstripService
+from mediaflow.infrastructure.web_render_service import WebRenderService
 
 
 class ProjectPresentationService:
@@ -27,6 +29,9 @@ class ProjectPresentationService:
         self.paths = paths
         self.thumbnails = MediaThumbnailService(paths)
         self.covers = ProjectCoverService(paths)
+        self._preview_caches: dict[Path, PreviewGraphCache] = {}
+        self._preview_cache_lock = threading.Lock()
+        self._preview_requests = PresentationRequestCoordinator()
 
     def write_preview_snapshot(
         self,
@@ -35,8 +40,25 @@ class ProjectPresentationService:
         *,
         use_proxies: bool,
         prefer_sdr_preview_proxy: bool,
+        prepare_web: bool = False,
+        request_owner: str = "direct",
+        request_generation: int | None = None,
     ) -> Path:
-        with ProjectRepository.open(project_dir, writable=False) as repository:
+        request_key = (str(Path(project_dir).resolve()), request_owner)
+        request_scope = (
+            nullcontext(lambda: None) if request_generation is None
+            else self._preview_requests.request(request_key, request_generation)
+        )
+        with (
+            request_scope as check_cancelled,
+            ProjectRepository.open(project_dir, writable=False) as live,
+            live.read_snapshot() as repository,
+        ):
+            check_cancelled()
+            if prepare_web:
+                WebRenderService(repository, self.paths).ensure_sequence(
+                    state, check_cancelled=check_cancelled,
+                )
             document = TimelineCompiler(repository, self.paths).compile(
                 state,
                 use_proxies=use_proxies,
@@ -44,28 +66,38 @@ class ProjectPresentationService:
                 prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
             )
             namespace = "pv-" + hashlib.sha256(state.sequence.id.encode("utf-8")).hexdigest()[:12]
-            preview_cache = self.paths.project_cache_dir(project_dir)
-            destination = content_addressed_child_path(
-                preview_cache / "mlt",
-                document.xml,
-                namespace=namespace,
-                suffix=".mlt",
-            )
-            if not destination.is_file():
-                atomic_write_text(destination, document.xml)
-            CacheManager(preview_cache).prune_files(
-                "mlt",
-                f"{namespace}-*.mlt",
-                keep=16,
-                max_age_seconds=7 * 24 * 60 * 60,
+            cache = self._preview_cache(project_dir)
+            destination = cache.publish(
+                document.xml, namespace=namespace, owner=request_owner, check_cancelled=check_cancelled,
             )
         return destination
+
+    def cancel_preview_snapshot_requests(
+        self, project_dir: str | Path, *, request_owner: str, request_generation: int,
+    ) -> None:
+        self._preview_requests.cancel((str(Path(project_dir).resolve()), request_owner), request_generation)
+
+    def _preview_cache(self, project_dir: str | Path) -> PreviewGraphCache:
+        root = Path(project_dir).resolve()
+        with self._preview_cache_lock:
+            return self._preview_caches.setdefault(root, PreviewGraphCache(root, self.paths))
+
+    def release_preview_owner(self, project_dir: str | Path, request_owner: str | None) -> None:
+        if request_owner is None:
+            self._preview_requests.cancel_project(str(Path(project_dir).resolve()))
+        else:
+            self._preview_requests.cancel_current((str(Path(project_dir).resolve()), request_owner))
+        with self._preview_cache_lock:
+            cache = self._preview_caches.get(Path(project_dir).resolve())
+            if cache is not None and cache.release(request_owner):
+                self._preview_caches.pop(Path(project_dir).resolve(), None)
 
     def write_asset_preview_snapshot(
         self,
         project_dir: str | Path,
         sequence_id: str,
         asset_id: str,
+        *, request_owner: str = "direct",
     ) -> Path:
         with ProjectRepository.open(project_dir, writable=False) as repository:
             sequence = repository.sequences.get_sequence(sequence_id)
@@ -104,15 +136,9 @@ class ProjectPresentationService:
                 prefer_sdr_preview_proxy=True,
             )
             namespace = "source-" + hashlib.sha256(asset.id.encode("utf-8")).hexdigest()[:12]
-            preview_cache = self.paths.project_cache_dir(project_dir)
-            destination = content_addressed_child_path(
-                preview_cache / "mlt",
-                document.xml,
-                namespace=namespace,
-                suffix=".mlt",
+            destination = self._preview_cache(project_dir).publish(
+                document.xml, namespace=namespace, owner=request_owner, surface="source",
             )
-            if not destination.is_file():
-                atomic_write_text(destination, document.xml)
         return destination
 
     def recent_projects(self, paths: list[str]) -> RecentProjectSnapshot:

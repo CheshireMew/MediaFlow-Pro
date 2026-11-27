@@ -16,37 +16,8 @@ Item {
     width: timelineCanvas.contentWidth
     height: Math.max(tracksHeight, timelineCanvas.height - 28)
     z: 2
-    property var clipRows: []
-
-    function refreshOverview() {
-        clipRows = mediaflow.timelineViewportController.visibleClipsModel.overview();
-        clipOverview.requestPaint();
-    }
-
-    function patchOverview(changedRows, removedIds) {
-        const removed = {};
-        const changed = {};
-        for (let index = 0; index < removedIds.length; ++index)
-            removed[String(removedIds[index])] = true;
-        for (let index = 0; index < changedRows.length; ++index)
-            changed[String(changedRows[index].clipId)] = changedRows[index];
-        const nextRows = [];
-        for (let index = 0; index < clipRows.length; ++index) {
-            const clipId = String(clipRows[index].clipId);
-            if (removed[clipId] === true)
-                continue;
-            if (changed[clipId] !== undefined) {
-                nextRows.push(changed[clipId]);
-                delete changed[clipId];
-            } else {
-                nextRows.push(clipRows[index]);
-            }
-        }
-        for (const clipId in changed)
-            nextRows.push(changed[clipId]);
-        clipRows = nextRows;
-        clipOverview.requestPaint();
-    }
+    required property var clipRows
+    onClipRowsChanged: clipOverview.requestPaint()
 
     function clipAt(contentX, contentY) {
         const frame = contentX / Math.max(0.000001, view.pixelsPerFrame);
@@ -61,16 +32,6 @@ Item {
                 return row;
         }
         return null;
-    }
-
-    Component.onCompleted: refreshOverview()
-
-    Connections {
-        target: mediaflow.timelineViewportController.visibleClipsModel
-        function onSourceItemsReset() { clipLayer.refreshOverview(); }
-        function onSourceItemsPatched(changedRows, removedIds) {
-            clipLayer.patchOverview(changedRows, removedIds);
-        }
     }
 
     Connections {
@@ -172,7 +133,7 @@ Item {
             property real leftTrimOffset: 0
             property real rightTrimOffset: 0
             readonly property string displayedTrackKind: view.draggingClipId === clipId ? view.draggingClipTrackKind : trackKind
-            readonly property bool selected: mediaflow.timelineViewController.isClipSelected(clipId)
+            readonly property bool selected: mediaflow.timelineViewController.selectedClipIds.indexOf(clipId) >= 0
             readonly property color clipAccent: displayedTrackKind === "audio"
                 ? Theme.audio
                 : assetKind === "image"
@@ -336,7 +297,7 @@ Item {
                 HoverHandler { id: fadeOutHover }
             }
             Repeater {
-                model: assetKind === "web" && mediaflow.webController.isWebClip && mediaflow.timelineViewController.isClipSelected(clipId) ? mediaflow.webTimelineController.keyframesData : []
+                model: assetKind === "web" && mediaflow.webController.isWebClip && clipDelegate.selected ? mediaflow.webTimelineController.keyframesData : []
                 delegate: Rectangle {
                     id: keyframeMarker
                     required property var modelData

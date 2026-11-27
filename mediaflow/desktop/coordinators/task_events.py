@@ -7,12 +7,14 @@ from typing import Any
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal, Slot
 
 from mediaflow.application.events import TaskEvent
-from mediaflow.domain.enums import TaskKind
+from mediaflow.desktop.component_contexts import TaskOperationsContext
+from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.task_commands import (
     AnalyzeHighlightsCommand,
     AnalyzeLoudnessCommand,
     AnalyzeScenesCommand,
     AnalyzeSequenceBoundsCommand,
+    ExportFcpxmlCommand,
     GenerateProxyCommand,
     GenerateWaveformCommand,
     TaskCommand,
@@ -22,7 +24,7 @@ from mediaflow.domain.task_commands import (
     TranslateDocumentCommand,
     TranslateSegmentsCommand,
 )
-from mediaflow.domain.tasks import Task
+from mediaflow.domain.tasks import ProjectArchiveTaskOutcome, ProjectCollectionTaskOutcome, Task
 from mediaflow.domain.workflows import WorkflowRun
 
 from .base import SessionCoordinator
@@ -34,16 +36,16 @@ class _TaskEventBridge(QObject):
     eventReceived = Signal(object)
 
 
-class TaskOperations(SessionCoordinator):
-    def __init__(self, session):
-        super().__init__(session)
+class TaskOperations(SessionCoordinator[TaskOperationsContext]):
+    def __init__(self, context: TaskOperationsContext):
+        super().__init__(context)
         self._start_lock = threading.RLock()
         self._blocked_event_cursor: int | None = None
         self._terminal_replays: dict[str, Task] = {}
         self._reported_delivery_errors: set[tuple[str, int]] = set()
         self._active_workflow: WorkflowRun | None = None
         self._active_workflow_loaded = False
-        self._bridge = _TaskEventBridge(session)
+        self._bridge = _TaskEventBridge(context.parent)
         self._bridge.eventReceived.connect(self._on_event)
         self._reconciliation_timer = QTimer(self)
         self._reconciliation_timer.setInterval(1_000)
@@ -64,20 +66,20 @@ class TaskOperations(SessionCoordinator):
         self._active_workflow_loaded = False
 
     def refresh_active_workflow(self) -> WorkflowRun | None:
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         self._active_workflow = current.active_workflow() if current is not None else None
         self._active_workflow_loaded = True
         return self._active_workflow
 
     def reconcile_committed_results(self) -> None:
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         if current is None:
             return
         candidates = dict(self._terminal_replays)
         for task in current.list_tasks():
-            projected = self._session.state.tasks.items.get(task.id)
+            projected = self._context.state.tasks.items.get(task.id)
             if task.status.is_terminal and (
-                task.revision > self._session.state.tasks.revisions.get(task.id, -1)
+                task.revision > self._context.state.tasks.revisions.get(task.id, -1)
                 or projected is None
                 or projected.revision < task.revision
                 or projected.status != task.status
@@ -86,7 +88,7 @@ class TaskOperations(SessionCoordinator):
         for task in candidates.values():
             if self._apply_task_update(task):
                 self._terminal_replays.pop(task.id, None)
-                self._session.state.tasks.revisions[task.id] = task.revision
+                self._context.state.tasks.revisions[task.id] = task.revision
             else:
                 self._terminal_replays[task.id] = task
 
@@ -104,7 +106,7 @@ class TaskOperations(SessionCoordinator):
                 sequence_id=sequence_id,
             )
         except Exception as error:
-            self._session.updates.report_error(str(error))
+            self._context.updates.report_error(str(error))
             return None
 
     def create(
@@ -114,8 +116,8 @@ class TaskOperations(SessionCoordinator):
         *,
         sequence_id: str | None = None,
     ) -> Task:
-        self._session._require_writable()
-        current = self._session.state.binding.current
+        self._context.require_writable()
+        current = self._context.state.binding.current
         if current is None:
             raise RuntimeError("当前没有打开的项目")
         scope = self._active_request_scope(command)
@@ -125,29 +127,28 @@ class TaskOperations(SessionCoordinator):
                 task = current.start_task(
                     command,
                     input_asset_ids,
-                    sequence_id=(sequence_id or self._session.state.binding.active_sequence_id),
+                    sequence_id=(sequence_id or self._context.state.binding.active_sequence_id),
                 )
-        observed = self._session.state.tasks.items.get(task.id)
+        observed = self._context.state.tasks.items.get(task.id)
         # The synchronous service facade keeps pumping the Qt event loop while
         # start_task waits for its response. A fast task can therefore publish
         # running and terminal events before this method receives the older
         # created-task snapshot. Never let that response move the desktop back
         # to an earlier task revision.
         if observed is None or task.revision >= observed.revision:
-            self._session.state.tasks.items[task.id] = task
-        self._session.projectors.tasks.refresh_tasks()
+            self._context.state.tasks.items[task.id] = task
+        self._context.refresh_tasks()
         self.update_reconciliation_state()
         return task
 
     def update_reconciliation_state(self) -> None:
         needs_reconciliation = bool(self._terminal_replays) or any(
-            task.status.is_active
-            for task in self._session.state.tasks.items.values()
+            task.status.is_active for task in self._context.state.tasks.items.values()
         )
         if (
             needs_reconciliation
-            and self._session.state.binding.current is not None
-            and not self._session.state.requests.shutting_down
+            and self._context.state.binding.current is not None
+            and not self._context.state.requests.shutting_down
             and QCoreApplication.instance() is not None
         ):
             if not self._reconciliation_timer.isActive():
@@ -157,14 +158,11 @@ class TaskOperations(SessionCoordinator):
 
     @Slot()
     def _reconcile_timer_tick(self) -> None:
-        if (
-            self._session.state.binding.current is None
-            or self._session.state.requests.shutting_down
-        ):
+        if self._context.state.binding.current is None or self._context.state.requests.shutting_down:
             self._reconciliation_timer.stop()
             return
         try:
-            self._session.lifecycle.reconcile_task_events()
+            self._context.reconcile_task_events()
         except Exception:
             logger.exception("Desktop task event reconciliation failed")
         self.update_reconciliation_state()
@@ -175,10 +173,10 @@ class TaskOperations(SessionCoordinator):
     ) -> Task | None:
         if scope is None:
             return None
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         if current is None:
             return None
-        observed: dict[str, Task] = dict(self._session.state.tasks.items)
+        observed: dict[str, Task] = dict(self._context.state.tasks.items)
         for task in current.list_tasks():
             observed.setdefault(task.id, task)
         return next(
@@ -242,28 +240,28 @@ class TaskOperations(SessionCoordinator):
         if not isinstance(envelope, tuple) or len(envelope) != 2:
             return
         generation, event = envelope
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         if (
             not isinstance(generation, int)
-            or generation != self._session.state.binding.generation
+            or generation != self._context.state.binding.generation
             or not isinstance(event, TaskEvent)
-            or event.project_id != self._session.state.binding.project_id
+            or event.project_id != self._context.state.binding.project_id
         ):
             return
         if event.cursor:
-            if event.cursor <= self._session.state.tasks.cursor:
+            if event.cursor <= self._context.state.tasks.cursor:
                 return
             if self._blocked_event_cursor is not None and event.cursor > self._blocked_event_cursor:
                 return
-        previous_revision = self._session.state.tasks.revisions.get(event.task_id, -1)
+        previous_revision = self._context.state.tasks.revisions.get(event.task_id, -1)
         if event.event_type == "deleted":
-            self._session.state.tasks.items.pop(event.task_id, None)
-            self._session.state.tasks.revisions.pop(event.task_id, None)
+            self._context.state.tasks.items.pop(event.task_id, None)
+            self._context.state.tasks.revisions.pop(event.task_id, None)
             if event.cursor:
-                self._session.state.tasks.cursor = event.cursor
+                self._context.state.tasks.cursor = event.cursor
                 if self._blocked_event_cursor == event.cursor:
                     self._blocked_event_cursor = None
-            self._session.projectors.tasks.refresh_tasks()
+            self._context.refresh_tasks()
             self.update_reconciliation_state()
             return
         elif event.revision <= previous_revision:
@@ -280,19 +278,19 @@ class TaskOperations(SessionCoordinator):
                 self._blocked_event_cursor = event.cursor
             return
         if current is None:
-            self._session.state.tasks.items[task.id] = task
+            self._context.state.tasks.items[task.id] = task
             if task.status.is_terminal:
-                self._session.timeline_assets.finish_import_drop(
+                self._context.finish_import_drop(
                     task.id,
                     "",
                 )
                 self._terminal_replays[task.id] = task
-            self._session.state.tasks.revisions[task.id] = event.revision
+            self._context.state.tasks.revisions[task.id] = event.revision
             if event.cursor:
-                self._session.state.tasks.cursor = event.cursor
+                self._context.state.tasks.cursor = event.cursor
                 if self._blocked_event_cursor == event.cursor:
                     self._blocked_event_cursor = None
-            self._session.projectors.tasks.refresh_tasks()
+            self._context.refresh_tasks()
             self.update_reconciliation_state()
             return
         if not self._apply_task_update(task):
@@ -303,92 +301,92 @@ class TaskOperations(SessionCoordinator):
             self.update_reconciliation_state()
             return
         self._terminal_replays.pop(task.id, None)
-        self._session.state.tasks.revisions[task.id] = event.revision
+        self._context.state.tasks.revisions[task.id] = event.revision
         if event.cursor:
-            self._session.state.tasks.cursor = event.cursor
+            self._context.state.tasks.cursor = event.cursor
             if self._blocked_event_cursor == event.cursor:
                 self._blocked_event_cursor = None
         self.update_reconciliation_state()
 
     def _apply_task_update(self, task: Task) -> bool:
         result = None
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         if current is None:
             return False
-        previous_task = self._session.state.tasks.items.get(task.id)
+        previous_task = self._context.state.tasks.items.get(task.id)
         try:
             if task.status.is_terminal:
                 current.invalidate_task_result_cache()
                 result = current.committed_task_result(task.id)
                 if result is None:
                     raise RuntimeError("服务尚未提交任务结果")
-                self._session._apply_workflow_update(result.workflow)
+                self._context.apply_workflow_update(result.workflow)
             if result is not None and result.imported_asset_id:
                 asset = current.get_asset(result.imported_asset_id)
-                self._session.state.selection.asset_ids = [asset.id]
+                self._context.state.selection.asset_ids = [asset.id]
                 if result.imported_purpose == "watermark":
-                    self._session.state.selection.watermark_asset_id = asset.id
-                    self._session._set_status("已选择水印 %1", asset.name)
+                    self._context.state.selection.watermark_asset_id = asset.id
+                    self._context.set_status("已选择水印 %1", asset.name)
                 elif result.imported_purpose == "subtitle":
-                    self._session.state.selection.document_id = result.imported_document_id
-                    self._session.state.selection.subtitle_segment_ids = []
-                    self._session.projectors.subtitles.refresh_documents()
-                    self._session.projectors.timeline.refresh_preview_subtitles()
+                    self._context.state.selection.document_id = result.imported_document_id
+                    self._context.state.selection.subtitle_segment_ids = []
+                    self._context.refresh_documents()
+                    self._context.refresh_preview_subtitles()
                     segment_count = len(current.list_subtitle_segments(result.imported_document_id))
-                    self._session._set_status(
+                    self._context.set_status(
                         "已导入 %1，共 %2 条字幕",
                         asset.name,
                         segment_count,
                     )
                 else:
-                    self._session._set_status("已导入 %1", asset.name)
-                self._session.updates.commit(project=True)
-                self._session.updates.commit(selection=True)
+                    self._context.set_status("已导入 %1", asset.name)
+                self._context.updates.commit(project=True)
+                self._context.updates.commit(selection=True)
             if result is not None and result.download_plan is not None:
-                self._session._set_download_plan(result.download_plan)
+                self._context.set_download_plan(result.download_plan)
             if result is not None and result.sequence_bounds_status:
                 if result.sequence_bounds_status == "stale":
-                    self._session._set_status("分析期间时间线已修改，请重新运行智能入出点")
+                    self._context.set_status("分析期间时间线已修改，请重新运行智能入出点")
                 else:
                     sequence = current.get_sequence(result.sequence_id)
                     bounds = sequence.in_out
                     if bounds is None:
                         raise RuntimeError("序列入出点任务完成后没有返回有效范围")
                     without_speech = result.sequence_bounds_status == "applied_without_speech"
-                    if result.sequence_id == self._session.state.binding.active_sequence_id:
-                        self._session.state.binding.timeline = current.timeline(
-                            self._session.state.binding.active_sequence_id
+                    if result.sequence_id == self._context.state.binding.active_sequence_id:
+                        self._context.state.binding.timeline = current.timeline(
+                            self._context.state.binding.active_sequence_id
                         )
                         if without_speech:
-                            self._session._finish_sequence_in_out_edit(
+                            self._context.finish_sequence_in_out_edit(
                                 "已设置序列入出点：%1–%2 帧；未发现启用的字幕，只处理了黑屏",
                                 bounds.in_frame,
                                 bounds.out_frame,
                             )
                         else:
-                            self._session._finish_sequence_in_out_edit(
+                            self._context.finish_sequence_in_out_edit(
                                 "已设置序列入出点：%1–%2 帧",
                                 bounds.in_frame,
                                 bounds.out_frame,
                             )
                     else:
                         if without_speech:
-                            self._session._set_status(
+                            self._context.set_status(
                                 "已设置序列入出点：%1–%2 帧；未发现启用的字幕，"
                                 "只处理了黑屏；结果已应用到原序列",
                                 bounds.in_frame,
                                 bounds.out_frame,
                             )
                         else:
-                            self._session._set_status(
+                            self._context.set_status(
                                 "已设置序列入出点：%1–%2 帧；结果已应用到原序列",
                                 bounds.in_frame,
                                 bounds.out_frame,
                             )
             if result is not None and result.audio_metrics is not None:
-                self._session.state.requests.audio_metrics_id += 1
-                self._session.state.presentation.audio_metrics = result.audio_metrics
-                self._session.updates.commit(audio_metrics=True)
+                self._context.state.requests.audio_metrics_id += 1
+                self._context.state.presentation.audio_metrics = result.audio_metrics
+                self._context.updates.commit(audio_metrics=True)
         except Exception as error:
             self._report_delivery_error(
                 task.id,
@@ -396,14 +394,14 @@ class TaskOperations(SessionCoordinator):
                 error,
             )
             return False
-        self._session.state.tasks.items[task.id] = task
+        self._context.state.tasks.items[task.id] = task
         try:
             self._finish_task_update(task, result)
         except Exception as error:
             if previous_task is None:
-                self._session.state.tasks.items.pop(task.id, None)
+                self._context.state.tasks.items.pop(task.id, None)
             else:
-                self._session.state.tasks.items[task.id] = previous_task
+                self._context.state.tasks.items[task.id] = previous_task
             self._report_delivery_error(
                 task.id,
                 task.revision,
@@ -414,15 +412,15 @@ class TaskOperations(SessionCoordinator):
         return True
 
     def _finish_task_update(self, task: Task, result: Any) -> None:
-        timeline = self._session.state.binding.timeline
+        timeline = self._context.state.binding.timeline
         if task.status.is_terminal:
             imported_asset_id = result.imported_asset_id if result is not None else ""
-            self._session.timeline_assets.finish_import_drop(
+            self._context.finish_import_drop(
                 task.id,
                 imported_asset_id,
             )
         if not task.status.is_terminal:
-            self._session.projectors.tasks.refresh_tasks()
+            self._context.refresh_tasks(task_ids=[task.id])
             return
         if task.kind in {
             TaskKind.IMPORT,
@@ -432,56 +430,70 @@ class TaskOperations(SessionCoordinator):
         }:
             if task.kind == TaskKind.WAVEFORM:
                 for asset_id in task.input_asset_ids:
-                    self._session.state.assets.waveform_cache.pop(asset_id, None)
-            self._session.projectors.assets.refresh_assets()
+                    self._context.state.assets.waveform_cache.pop(asset_id, None)
+            self._context.refresh_assets()
             if task.kind == TaskKind.WAVEFORM:
-                self._session.projectors.timeline.refresh_timeline()
+                self._context.refresh_timeline()
         if task.kind in {TaskKind.TRANSCRIBE, TaskKind.TRANSLATE}:
             if isinstance(task.command, TranscribeSequenceCommand):
-                if task.command.sequence_id == self._session.state.binding.active_sequence_id:
+                if task.command.sequence_id == self._context.state.binding.active_sequence_id:
                     if timeline is None:
                         raise RuntimeError("当前项目没有活动时间线")
                     timeline.reload()
-                    self._session.projectors.timeline.refresh_timeline()
-                    self._session.updates.commit(project=True)
-                self._session.projectors.assets.refresh_assets()
-            self._session.projectors.subtitles.refresh_documents()
-            self._session.projectors.timeline.refresh_preview_subtitles()
+                    self._context.refresh_timeline()
+                    self._context.updates.commit(project=True)
+                self._context.refresh_assets()
+            self._context.refresh_documents()
+            self._context.refresh_preview_subtitles()
         if isinstance(
             task.command,
             (AnalyzeScenesCommand, TrackMaskCommand, TrackSubjectCommand),
         ):
-            if task.command.sequence_id == self._session.state.binding.active_sequence_id:
+            if task.command.sequence_id == self._context.state.binding.active_sequence_id:
                 if timeline is None:
                     raise RuntimeError("当前项目没有活动时间线")
                 timeline.reload()
-                self._session.projectors.timeline.refresh_timeline()
-                self._session.updates.commit(project=True)
-                self._session.updates.commit(selection=True)
-                self._session.updates.commit(history=True)
+                self._context.refresh_timeline()
+                self._context.updates.commit(project=True)
+                self._context.updates.commit(selection=True)
+                self._context.updates.commit(history=True)
             if task.status.value == "completed":
                 if isinstance(task.command, AnalyzeScenesCommand):
-                    self._session._set_status("场景切点已写入时间线")
+                    self._context.set_status("场景切点已写入时间线")
                 elif isinstance(task.command, TrackMaskCommand):
-                    self._session._set_status("蒙版跟踪已应用")
+                    self._context.set_status("蒙版跟踪已应用")
                 else:
-                    self._session._set_status("画面跟踪已应用")
+                    self._context.set_status("画面跟踪已应用")
         if task.kind == TaskKind.HIGHLIGHT:
-            self._session.projectors.highlights.refresh_highlights()
+            self._context.refresh_highlights()
         if task.kind == TaskKind.DUBBING:
             if timeline is not None:
                 timeline.reload()
-                self._session.projectors.timeline.refresh_timeline()
-            self._session.projectors.assets.refresh_assets()
-            self._session.updates.commit(project=True)
-            self._session.updates.commit(history=True)
+                self._context.refresh_timeline()
+            self._context.refresh_assets()
+            self._context.updates.commit(project=True)
+            self._context.updates.commit(history=True)
         if task.kind in {TaskKind.PROXY, TaskKind.ANALYZE}:
-            self._session.projectors.timeline.schedule_preview_graph()
+            self._context.schedule_preview()
         if task.kind == TaskKind.WEB_RENDER:
-            self._session.projectors.timeline.schedule_preview_graph()
-        self._session.projectors.workspace.refresh_recent_projects()
-        self._session.projectors.tasks.refresh_tasks()
-        self._session.updates.commit(workflow=True)
+            self._context.schedule_preview()
+        if task.status == TaskStatus.COMPLETED:
+            if isinstance(task.outcome, ProjectCollectionTaskOutcome):
+                collected = task.outcome.result
+                self._context.updates.commit(project=True, history=True)
+                self._context.set_status(
+                    "已归集 %1 个外部素材，共 %2 字节", len(collected.assets), collected.record.total_bytes
+                )
+            elif isinstance(task.outcome, ProjectArchiveTaskOutcome):
+                archive = task.outcome.result
+                self._context.set_status(
+                    "可迁移项目已归档：%1（%2 个文件）", archive.destination, archive.file_count
+                )
+            elif isinstance(task.command, ExportFcpxmlCommand):
+                self._context.set_status("已导出 FCPXML：%1", task.command.output_path)
+        self._context.refresh_recent_projects()
+        self._context.refresh_tasks()
+        self._context.updates.commit(workflow=True)
 
     def _report_delivery_error(
         self,
@@ -493,7 +505,7 @@ class TaskOperations(SessionCoordinator):
         if key in self._reported_delivery_errors:
             return
         self._reported_delivery_errors.add(key)
-        self._session.updates.report_error(f"处理任务结果失败，将自动重试：{error}")
+        self._context.updates.report_error(f"处理任务结果失败，将自动重试：{error}")
 
     def active_workflow(self) -> WorkflowRun | None:
         return self._active_workflow if self._active_workflow_loaded else None

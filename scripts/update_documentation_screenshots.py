@@ -22,7 +22,7 @@ from scripts.documentation_screenshot_contract import (
     png_dimensions,
     png_region_metrics,
 )
-from scripts.run_artifacts import verification_run
+from scripts.run_artifacts import verification_run, verification_workspace_root
 
 WINDOWS_PATH = re.compile(r"(?:^|\s)[A-Za-z]:[\\/]")
 
@@ -145,7 +145,8 @@ def _qimage_region_is_real_content(
 
 
 def update_screenshots(run_dir: Path) -> list[dict[str, object]]:
-    _configure_environment(run_dir)
+    workspace = verification_workspace_root(run_dir)
+    _configure_environment(workspace)
 
     from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPointF
     from PySide6.QtGui import QGuiApplication
@@ -164,7 +165,7 @@ def update_screenshots(run_dir: Path) -> list[dict[str, object]]:
     )
     from mediaflow.service.client import shutdown_sync_service
 
-    service_settings = ServiceSettings(default_project_directory=str(run_dir / "projects"))
+    service_settings = ServiceSettings(default_project_directory=str(workspace / "projects"))
     desktop_settings = DesktopSettings()
     desktop_settings.ui.language = "zh_CN"
     desktop_settings.ui.workspace_tour_completed = True

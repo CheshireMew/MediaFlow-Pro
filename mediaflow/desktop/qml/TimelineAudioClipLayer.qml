@@ -18,47 +18,8 @@ Item {
     height: tracksHeight
     z: 3
 
-    property var clipRows: []
-
-    function refreshOverview() {
-        clipRows = mediaflow.timelineViewportController.visibleClipsModel.overview();
-        embeddedAudioOverview.requestPaint();
-    }
-
-    function patchOverview(changedRows, removedIds) {
-        const removed = {};
-        const changed = {};
-        for (let index = 0; index < removedIds.length; ++index)
-            removed[String(removedIds[index])] = true;
-        for (let index = 0; index < changedRows.length; ++index)
-            changed[String(changedRows[index].clipId)] = changedRows[index];
-        const nextRows = [];
-        for (let index = 0; index < clipRows.length; ++index) {
-            const clipId = String(clipRows[index].clipId);
-            if (removed[clipId] === true)
-                continue;
-            if (changed[clipId] !== undefined) {
-                nextRows.push(changed[clipId]);
-                delete changed[clipId];
-            } else {
-                nextRows.push(clipRows[index]);
-            }
-        }
-        for (const clipId in changed)
-            nextRows.push(changed[clipId]);
-        clipRows = nextRows;
-        embeddedAudioOverview.requestPaint();
-    }
-
-    Component.onCompleted: refreshOverview()
-
-    Connections {
-        target: mediaflow.timelineViewportController.visibleClipsModel
-        function onSourceItemsReset() { embeddedAudioLayer.refreshOverview(); }
-        function onSourceItemsPatched(changedRows, removedIds) {
-            embeddedAudioLayer.patchOverview(changedRows, removedIds);
-        }
-    }
+    required property var clipRows
+    onClipRowsChanged: embeddedAudioOverview.requestPaint()
 
     Connections {
         target: mediaflow.timelineViewController
@@ -129,7 +90,7 @@ Item {
             required property int audioTrackPosition
             required property bool waveformReady
             required property string compoundId
-            readonly property bool selected: mediaflow.timelineViewController.isClipSelected(clipId)
+            readonly property bool selected: mediaflow.timelineViewController.selectedClipIds.indexOf(clipId) >= 0
 
             objectName: "embeddedAudioClip"
             readonly property string displayedTrackKind: view.draggingClipId === clipId ? view.draggingClipTrackKind : trackKind

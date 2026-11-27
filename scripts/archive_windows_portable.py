@@ -13,11 +13,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.infrastructure.storage_budget import (
-    directory_inventory,
-    load_storage_policy,
-    require_storage_budget,
-)
+from mediaflow.infrastructure.storage_inventory import directory_inventory
+from mediaflow.infrastructure.storage_policy import load_storage_policy
+from mediaflow.infrastructure.storage_preflight import require_storage_budget
 from scripts.verify_portable_distribution import verify
 
 
@@ -46,7 +44,7 @@ def archive(
     verification = verify(portable_root, expected_version=expected_version)
     if not verification["passed"]:
         raise RuntimeError("Portable directory failed verification before archive creation")
-    source_bytes = int(directory_inventory(portable_root)["bytes"])
+    source_bytes = int(directory_inventory(portable_root)["logical_bytes"])
     policy = load_storage_policy()
     storage_preflight = require_storage_budget(
         output.parent,

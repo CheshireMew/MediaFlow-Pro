@@ -5,10 +5,7 @@ from pathlib import Path
 
 from mediaflow.domain.enums import ColorMode
 from mediaflow.domain.project import Asset, ProjectProfile
-from mediaflow.infrastructure.storage_budget import (
-    PROXY_AUDIO_BITRATE,
-    PROXY_VIDEO_MAX_BITRATE,
-)
+from mediaflow.infrastructure.storage_policy import PROXY_AUDIO_BITRATE, PROXY_VIDEO_MAX_BITRATE
 
 
 def _source_is_hdr(asset: Asset) -> bool:

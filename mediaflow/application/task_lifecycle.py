@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Callable
+from functools import partial
 
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.ports import TaskStore
@@ -44,7 +45,7 @@ class TaskLifecycle:
             if sequence_id is not None and sequence_id != command_sequence_id:
                 raise ValueError("Task sequence must match its command sequence")
             sequence_id = command_sequence_id
-        with self.execution.lock:
+        with self.repository.command_scope(), self.execution.lock:
             self.execution.require_accepting()
             command.validate_for_execution()
             kind = command.task_kind
@@ -61,8 +62,13 @@ class TaskLifecycle:
             if task.id == candidate.id:
                 self.publish(task, "created")
             if task.status.is_in_flight:
-                self.execution.schedule(task)
+                self._schedule_after_commit(task)
             return task
+
+    def _schedule_after_commit(self, task: Task) -> None:
+        def schedule() -> None:
+            self.execution.schedule(task)
+        self.repository.after_commit(schedule)
 
     def resume(
         self,
@@ -71,9 +77,10 @@ class TaskLifecycle:
         allow_existing: bool = False,
     ) -> Task:
         self._require_writable()
-        with self.execution.lock:
+        with self.repository.command_scope(), self.execution.lock:
             self.execution.require_accepting()
             task = self.repository.get(task_id)
+            self._require_executable_task(task)
             if not self.execution.has_handler(task):
                 raise KeyError(f"No task handler registered for {task.kind.value}")
             resumed = self.repository.queue_paused(task_id)
@@ -83,16 +90,17 @@ class TaskLifecycle:
                     current.status.is_active or current.status.is_consumable
                 ):
                     if current.status.is_in_flight:
-                        self.execution.schedule(current)
+                        self._schedule_after_commit(current)
                     return current
                 raise ValueError("Only paused tasks can be resumed")
             self.publish(resumed, "status")
-            self.execution.schedule(resumed)
+            self._schedule_after_commit(resumed)
             return resumed
 
     def retry(self, task_id: str) -> Task:
         self._require_writable()
         task = self.repository.get(task_id)
+        self._require_executable_task(task)
         if not task.status.is_retryable:
             raise ValueError("Only failed or cancelled tasks can be retried")
         return self.start(
@@ -115,7 +123,7 @@ class TaskLifecycle:
                 requested,
                 "control" if requested.status == TaskStatus.RUNNING else "status",
             )
-        self.execution.request_pause(task_id)
+        self.repository.after_commit(partial(self.execution.request_pause, task_id))
 
     def cancel(self, task_id: str) -> None:
         self._require_writable()
@@ -129,7 +137,7 @@ class TaskLifecycle:
             current = self.repository.get(task_id)
             if not current.status.is_active:
                 raise ValueError("Only active tasks can be cancelled")
-        self.execution.request_cancel(task_id)
+        self.repository.after_commit(partial(self.execution.request_cancel, task_id))
 
     def pause_all(self) -> int:
         self._require_writable()
@@ -153,7 +161,7 @@ class TaskLifecycle:
                 requested,
                 "control" if requested.status == TaskStatus.RUNNING else "status",
             )
-            self.execution.request_cancel(task.id)
+            self.repository.after_commit(partial(self.execution.request_cancel, task.id))
             count += 1
         return count
 
@@ -163,14 +171,12 @@ class TaskLifecycle:
         if not task.status.is_terminal:
             raise ValueError("Only completed, failed, or cancelled tasks can be removed")
         self.repository.delete(task_id, event_type="deleted")
-        self.execution.forget_task(task_id)
         self.publish(task, "deleted")
 
     def clear_history(self) -> int:
         self._require_writable()
         tasks = self.repository.delete_terminal()
         for task in tasks:
-            self.execution.forget_task(task.id)
             self.publish(task, "deleted")
         return len(tasks)
 
@@ -197,3 +203,8 @@ class TaskLifecycle:
     def _require_writable(self) -> None:
         if self.repository.read_only:
             raise PermissionError("Project task service is read-only")
+
+    @staticmethod
+    def _require_executable_task(task: Task) -> None:
+        if task.execution_scope != "project":
+            raise ValueError("这是归档中的任务历史；请指定当前输出位置并创建新任务")

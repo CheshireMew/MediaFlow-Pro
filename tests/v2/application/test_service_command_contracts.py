@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
 
+import mediaflow.service.commands as service_commands
 from mediaflow.application.presentation_models import RecentProjectSnapshot
 from mediaflow.domain.workspace_commands import (
     WORKSPACE_COMMANDS,
@@ -22,6 +26,36 @@ from mediaflow.service.execution import ServiceExecutionPools
 from mediaflow.service.request_dispatcher import ServiceRequestDispatcher
 from mediaflow.service.runtime_sessions import ApplicationRuntimeOperations
 from mediaflow.service.workspaces import WorkspaceRegistry
+
+
+def test_concurrent_first_command_use_builds_one_strict_contract(monkeypatch) -> None:
+    def echo(value: int) -> int:
+        return value
+
+    builds = []
+    build_models = service_commands.command_models
+
+    def counted_models(*args, **kwargs):
+        builds.append(args[:2])
+        time.sleep(0.02)
+        return build_models(*args, **kwargs)
+
+    monkeypatch.setattr(service_commands, "command_models", counted_models)
+    ready = threading.Barrier(8)
+
+    def first_use(_index):
+        ready.wait(timeout=5)
+        return service_commands.command_contract("test", "concurrent_echo", echo)
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        contracts = list(workers.map(first_use, range(8)))
+    assert builds == [("test", "concurrent_echo")]
+    assert all(contract is contracts[0] for contract in contracts)
+    assert contracts[0].request_model.model_validate({"value": 7}).value == 7
+    with pytest.raises(ValidationError):
+        contracts[0].request_model.model_validate({"value": "invalid"})
+    with pytest.raises(ValidationError):
+        contracts[0].result_model.model_validate({"value": "invalid"})
 
 
 def test_command_contract_cannot_silently_accept_an_untyped_result() -> None:

@@ -9,6 +9,8 @@ from mediaflow.domain.downloads import DownloadPlan
 from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.model_base import DomainModel, new_id, now_ms
 from mediaflow.domain.progress import OperationProgress
+from mediaflow.domain.project_archive import ProjectArchiveResult
+from mediaflow.domain.project_collection import ProjectCollectionResult
 from mediaflow.domain.sequence_bounds import SequenceBoundaryAnalysis
 from mediaflow.domain.task_commands import TaskCommand
 
@@ -136,6 +138,7 @@ class LoudnessTaskOutcome(DomainModel):
 
 class ExportFileTaskOutcome(DomainModel):
     output: ArtifactReference
+    subtitle_files: list[ArtifactReference] = Field(default_factory=list)
     requested_video_codec: str | None = None
     actual_video_codec: str | None = None
     hardware_fallback_reason: str | None = None
@@ -197,15 +200,42 @@ class DubbingTaskOutcome(DomainModel):
     master: ArtifactReference | None = None
 
 
+class InterchangeExportTaskOutcome(DomainModel):
+    outcome_type: Literal["interchange_export"] = "interchange_export"
+    sequence_id: str
+    timeline_revision: int = Field(ge=0)
+    output: ArtifactReference
+    sha256: str = Field(min_length=64, max_length=64)
+
+
+class WebPackageImportTaskOutcome(DomainModel):
+    outcome_type: Literal["web_package_import"] = "web_package_import"
+    asset_id: str
+
+
+class ProjectCollectionTaskOutcome(DomainModel):
+    outcome_type: Literal["project_collection"] = "project_collection"
+    result: ProjectCollectionResult
+
+
+class ProjectArchiveTaskOutcome(DomainModel):
+    outcome_type: Literal["project_archive"] = "project_archive"
+    result: ProjectArchiveResult
+
+
 TaskOutcome = Annotated[
     ImportedAssetTaskOutcome
+    | WebPackageImportTaskOutcome
+    | ProjectCollectionTaskOutcome
+    | ProjectArchiveTaskOutcome
     | DownloadAnalysisTaskOutcome
     | SequenceBoundaryTaskOutcome
     | LoudnessTaskOutcome
     | ExportTaskOutcome
     | SequenceBuildTaskOutcome
     | DiagnosticsBundleTaskOutcome
-    | DubbingTaskOutcome,
+    | DubbingTaskOutcome
+    | InterchangeExportTaskOutcome,
     Field(discriminator="outcome_type"),
 ]
 
@@ -217,6 +247,7 @@ class Task(DomainModel):
     project_id: str
     sequence_id: str | None = None
     idempotency_key: str | None = None
+    execution_scope: Literal["project", "archive_history"] = "project"
     command: TaskCommand
     status: TaskStatus = TaskStatus.PENDING
     progress: OperationProgress = Field(default_factory=lambda: OperationProgress.indeterminate("queued"))

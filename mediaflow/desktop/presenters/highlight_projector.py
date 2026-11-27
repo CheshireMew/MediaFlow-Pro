@@ -1,22 +1,24 @@
 from __future__ import annotations
 
+from mediaflow.desktop.component_contexts import HighlightProjectorContext
+
 from .base import Projector
 
 
-class HighlightProjector(Projector):
+class HighlightProjector(Projector[HighlightProjectorContext]):
     def refresh_highlights(self) -> None:
-        if not self._session.state.binding.current:
-            self._session.models.highlights.set_items([])
+        if not self._context.state.binding.current:
+            self._context.models.highlights.set_items([])
             return
         selected_asset_id = (
-            self._session.state.selection.asset_ids[0] if self._session.state.selection.asset_ids else None
+            self._context.state.selection.asset_ids[0] if self._context.state.selection.asset_ids else None
         )
-        candidates = self._session.state.binding.require_current().list_highlights(selected_asset_id)
+        candidates = self._context.state.binding.require_current().list_highlights(selected_asset_id)
         documents = {
             document.id: document
-            for document in self._session.state.binding.require_current().list_subtitle_documents()
+            for document in self._context.state.binding.require_current().list_subtitle_documents()
         }
-        self._session.models.highlights.set_items(
+        self._context.models.highlights.set_items(
             [
                 {
                     "highlightId": item.id,

@@ -212,7 +212,7 @@ MediaFlow Pro 正式消费通用的 `editable-media` v6 本地网页包，不依
 - `web.clip.render.inspect` 分开返回计划后端、实际后端、回退原因、实际编码器、硬件证明和像素搬运证据。当前锁定 Chromium 的 Canvas `VideoFrame` 会从 D3D 画面回读到内存后交给硬件编码器，因此明确报告 `hardware_acceleration_verified=true`、`zero_copy_verified=false`，不会把“硬件编码”和“零拷贝”混为一谈。网页内动态 `<video>` 不进入这条快路；正式视频素材继续由原生视频管线按时间线帧时钟合成，所以无需在浏览器中再造一套视频帧目录和解码缓存。
 - NVIDIA 机器在真正启动快路前还会读取当前 GPU 利用率和显存占用；任一达到 90% 就直接记录回退原因并使用禁用 GPU 的逐帧管道。这样模型推理、图像生成等任务占满显卡时不会为了尝试“硬件提速”反而拖慢整条渲染。软件 OpenH264 在相同压力下的完整 4K 对照没有达到净提速门槛，因此不作为自动替代。
 
-普通单序列视频导出在没有设置局部入出点且时长超过一个 10 秒段时，会自动使用同一套稳定分段缓存：画面按段编码，音频始终一次连续生成，最后经过时长和流规格检查再原子发布。再次导出或只改局部画面时复用未受影响的画面段；音频变化不会让画面段全部重算。多目标原子导出、音频导出和局部入出点导出继续使用原来的完整导出路径。
+普通单序列视频导出在没有设置局部入出点且时长至少达到两个 60 秒段（120 秒）时，会自动使用同一套稳定分段缓存：画面按段编码，音频始终一次连续生成，最后经过时长和流规格检查再原子发布。再次导出或只改局部画面时复用未受影响的画面段；音频变化不会让画面段全部重算。多目标原子导出、音频导出和局部入出点导出继续使用原来的完整导出路径。
 
 历史项目中的标准 v4/v5 网页素材会在事务性项目升级中直接迁移到 v6；旧包移入项目内的 `archive/web` 供人工追溯，不再保留第二套运行分支。无法证明可安全转换的第三方 runtime 会明确中止升级并要求重新发布。
 
@@ -278,15 +278,16 @@ mediaflow-cli produce --request production.json
 
 ## 开发与验证
 
-修改前先加载本机环境，并运行直接覆盖改动的目标测试。目标测试通过后，使用唯一的本地质量入口按改动范围完成最终验证：
+日常修改只运行直接覆盖本次改动的目标测试和必要静态检查，目标测试通过后即可结束验证：
 
 ```powershell
 . .\scripts\load_environment.ps1
 & $env:MEDIAFLOW_PYTHON -m pytest tests\v2\path\to\test_file.py
-.\scripts\run_quality.ps1
 ```
 
-不要直接运行没有资源边界的整库 `pytest tests/v2`。本地入口和 CI 都由 [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) 统一决定范围，并把跨平台源码构建与项目交接分开；文档修改不会触发无关的桌面端或端到端验收。使用 `.\scripts\run_quality.ps1 --dry-run` 可以预览实际命令。
+不要直接运行没有资源边界的整库 `pytest tests/v2`。需要整套轻量质量检查时，可使用 `.\scripts\run_quality.ps1`；它和 CI 都由 [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) 统一选择维护或核心级别。完整验收只有项目所有者明确要求时才使用 `--scope full` 或在 CI 手动选择 `full`；推送、PR、标签和发布请求不自动触发完整验收，也没有定时完整回归。使用 `--dry-run` 可以预览实际命令。
+
+pytest 只自动回收 `MEDIAFLOW_TEST_ROOT/p` 中具有匹配归属清单的测试运行。成功用例在收尾后清除临时文件，默认保留最近 10 份简短成功清单；失败材料默认保留最近 3 次、最长 7 天、合计不超过 1 GiB，超过限制的单次失败只留下清单。启动和结束时都会回收历史运行，正在运行的任务、未登记目录及链接指向的外部内容受到保护；只读测试副本可回收，被其它进程占用的文件会保留并报告错误。可通过 `MEDIAFLOW_TEST_KEEP_PASSED_RUNS`、`MEDIAFLOW_TEST_KEEP_FAILED_RUNS`、`MEDIAFLOW_TEST_FAILED_DAYS` 和 `MEDIAFLOW_TEST_FAILED_MAX_BYTES` 调整上限，设为 0 表示不保留对应历史产物；当前运行始终留有清单，供检查结果和清理错误。这项授权不包含用户项目、媒体、模型、共享运行环境或独立验证脚本的交付结果。
 
 公开界面图由 `& $env:MEDIAFLOW_PYTHON scripts\update_documentation_screenshots.py` 在隔离项目中生成。生成器会同时更新图片哈希、尺寸和 UI 源码摘要；文档校验会拒绝手工替换、暴露本机路径或已经落后于当前 QML 的截图。
 
@@ -296,7 +297,7 @@ mediaflow-cli produce --request production.json
 
 MediaFlow Pro 源码以 [GNU AGPL v3 or later](LICENSE) 发布。Qt、MLT、FFmpeg、yt-dlp、Python 包及其它第三方组件仍适用各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-本仓库只维护源码、构建脚本和依赖清单。除非项目所有者明确启动发布计划，否则不会生成便携包或安装器。Windows 发布只能从干净标签构建，且标签指向的同一提交必须先通过标签触发的完整质量门。原始便携目录会在验收前后分别生成精确清单；验收只在它的副本上完成离线桌面启动、导入、编辑、预览、导出和重开；归档还必须记录全部文件哈希，以及随包 Python、Chromium、MLT、FFmpeg 和 Qt 的许可证证据，全部通过后才允许新建 Release。
+本仓库只维护源码、构建脚本和依赖清单。除非项目所有者明确启动发布计划，否则不会生成便携包或安装器。Windows 发布只能从干净标签构建。完整验收不是发布前置条件，发布流程不查询或要求已有的完整验收结果，也不会因推送标签或发布请求自动运行。便携包完整离线链路只有手动勾选 `run_full_acceptance` 时才在副本上运行。原始便携目录在归档前后核对清单，归档记录全部文件哈希及随包 Python、Chromium、MLT、FFmpeg 和 Qt 的许可证证据，通过这些检查后才允许新建 Release。
 
 ## Star History
 

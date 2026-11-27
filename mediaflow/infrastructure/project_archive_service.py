@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import shutil
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 
 from mediaflow.domain.project_archive import (
@@ -12,6 +12,8 @@ from mediaflow.domain.project_archive import (
     ProjectArchiveManifest,
     ProjectArchiveResult,
 )
+from mediaflow.file_digest import sha256_file
+from mediaflow.infrastructure.project_archive_materializer import ProjectArchiveMaterializer
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.project_schema_definition import (
     PROJECT_FILE_NAME,
@@ -19,13 +21,60 @@ from mediaflow.infrastructure.project_schema_definition import (
 )
 
 
+@dataclass
+class PreparedArchive:
+    repository: ProjectRepository
+    staging: Path
+    target: Path
+    result: ProjectArchiveResult
+
+    def commit(self) -> None:
+        self.staging.rename(self.target)
+        if self.repository._transaction_depth:
+
+            def rollback(_error: BaseException) -> None:
+                self.target.rename(self.staging)
+
+            self.repository.enlist_transaction_publication(
+                on_commit=lambda: None,
+                on_rollback=rollback,
+            )
+
+    def discard(self) -> None:
+        ProjectArchiveService._archive_failure(self.staging, self.target)
+
+
 class ProjectArchiveService:
     """Create a verified, self-contained project directory without copying caches."""
 
-    def __init__(self, repository: ProjectRepository) -> None:
+    def __init__(
+        self,
+        repository: ProjectRepository,
+        *,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> None:
         self.repository = repository
+        self._check_cancelled = check_cancelled or (lambda: None)
 
     def create(self, destination: str | Path) -> ProjectArchiveResult:
+        prepared = self.prepare(destination)
+        prepared.commit()
+        return prepared.result
+
+    def prepare(
+        self,
+        destination: str | Path,
+        *,
+        check_cancelled: Callable[[], None] | None = None,
+    ) -> PreparedArchive:
+        check = check_cancelled or self._check_cancelled
+        target = Path(destination).resolve()
+        staging = target.with_name(f".{target.name}.partial")
+        with self.repository.read_snapshot(include_history=True) as snapshot:
+            result = ProjectArchiveService(snapshot, check_cancelled=check)._create_snapshot(destination)
+        return PreparedArchive(self.repository, staging, target, result)
+
+    def _create_snapshot(self, destination: str | Path) -> ProjectArchiveResult:
         target = Path(destination)
         if not target.is_absolute():
             raise ValueError("归档目标必须是绝对路径")
@@ -34,12 +83,17 @@ class ProjectArchiveService:
         if target.exists() or staging.exists():
             raise FileExistsError(f"归档目标已经存在：{target}")
 
-        relative_sources = self._portable_sources()
+        self._validate_sources()
         staging.mkdir(parents=True, exist_ok=False)
         try:
             self._backup_database(staging / PROJECT_FILE_NAME)
-            for relative in relative_sources:
-                self._copy_source(relative, staging)
+            # Resolve all current and historical dependencies from the frozen
+            # database; the materializer verifies versions and copied content.
+            ProjectArchiveMaterializer(
+                self.repository.project_dir,
+                staging,
+                check_cancelled=self._check_cancelled,
+            ).materialize()
             files = self._catalog_files(staging)
             manifest = ProjectArchiveManifest(
                 project_id=self.repository.projects.get_project().id,
@@ -55,7 +109,7 @@ class ProjectArchiveService:
             )
             self._verify_catalog(staging, files)
             self._validate_portable_project(staging, manifest)
-            staging.replace(target)
+            self._check_cancelled()
         except BaseException as error:
             archived = self._archive_failure(staging, target)
             if archived is not None:
@@ -70,9 +124,8 @@ class ProjectArchiveService:
             content_revision=manifest.content_revision,
         )
 
-    def _portable_sources(self) -> list[Path]:
+    def _validate_sources(self) -> None:
         root = self.repository.project_dir.resolve()
-        sources: set[Path] = set()
         external: list[str] = []
         missing: list[str] = []
         for asset in self.repository.assets.list_assets():
@@ -83,11 +136,8 @@ class ProjectArchiveService:
             if not source.exists():
                 missing.append(asset.name)
                 continue
-            sources.add(source.relative_to(root))
         if external:
-            raise ValueError(
-                "归档前必须先归集所有外部素材：" + "、".join(sorted(external))
-            )
+            raise ValueError("归档前必须先归集所有外部素材：" + "、".join(sorted(external)))
         if missing:
             raise FileNotFoundError("以下项目素材已经丢失：" + "、".join(sorted(missing)))
 
@@ -95,50 +145,25 @@ class ProjectArchiveService:
             snapshot = (root / version.snapshot_path).resolve()
             if not snapshot.is_relative_to(root) or not snapshot.is_file():
                 raise FileNotFoundError(f"命名版本快照已经丢失：{version.name}")
-            if self._sha256_file(snapshot) != version.sha256:
+            if sha256_file(snapshot, check_cancelled=self._check_cancelled) != version.sha256:
                 raise RuntimeError(f"命名版本快照校验失败：{version.name}")
-            sources.add(snapshot.relative_to(root))
-        return self._collapse_sources(sources)
-
-    @staticmethod
-    def _collapse_sources(sources: set[Path]) -> list[Path]:
-        ordered = sorted(sources, key=lambda item: (len(item.parts), item.as_posix().casefold()))
-        selected: list[Path] = []
-        for candidate in ordered:
-            if any(candidate == root or candidate.is_relative_to(root) for root in selected):
-                continue
-            selected.append(candidate)
-        return selected
 
     def _backup_database(self, destination: Path) -> None:
-        # Automation exports run inside a project transaction.  Backing up that
-        # same connection would wait on its own write transaction, so use an
-        # independent read snapshot of the last committed project state.
+        # The source is already a detached, consistent database snapshot.
         with (
-            closing(sqlite3.connect(self.repository.database_path)) as source,
             closing(sqlite3.connect(destination)) as snapshot,
         ):
-            source.execute("PRAGMA query_only=ON")
-            source.backup(snapshot)
+            self.repository._connection.backup(snapshot)
             integrity = snapshot.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or str(integrity[0]).casefold() != "ok":
                 raise RuntimeError("归档项目数据库完整性检查失败")
-
-    def _copy_source(self, relative: Path, staging: Path) -> None:
-        source = self.repository.project_dir / relative
-        destination = staging / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if source.is_dir():
-            shutil.copytree(source, destination, copy_function=shutil.copy2)
-        else:
-            shutil.copy2(source, destination)
 
     def _catalog_files(self, staging: Path) -> list[ProjectArchiveFile]:
         return [
             ProjectArchiveFile(
                 path=path.relative_to(staging).as_posix(),
                 size_bytes=path.stat().st_size,
-                sha256=self._sha256_file(path),
+                sha256=sha256_file(path, check_cancelled=self._check_cancelled),
             )
             for path in sorted(
                 (item for item in staging.rglob("*") if item.is_file()),
@@ -149,7 +174,10 @@ class ProjectArchiveService:
     def _verify_catalog(self, staging: Path, files: list[ProjectArchiveFile]) -> None:
         for item in files:
             path = staging / item.path
-            if path.stat().st_size != item.size_bytes or self._sha256_file(path) != item.sha256:
+            if (
+                path.stat().st_size != item.size_bytes
+                or sha256_file(path, check_cancelled=self._check_cancelled) != item.sha256
+            ):
                 raise RuntimeError(f"项目归档文件校验失败：{item.path}")
 
     @staticmethod
@@ -182,11 +210,3 @@ class ProjectArchiveService:
                 staging.replace(candidate)
                 return candidate
             suffix += 1
-
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-        return digest.hexdigest()

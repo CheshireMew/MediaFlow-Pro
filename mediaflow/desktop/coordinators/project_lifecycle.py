@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
+from mediaflow.desktop.component_contexts import ProjectLifecycleContext
 from mediaflow.desktop.session_state import (
     DesktopProject,
     ProjectInteractionSnapshot,
@@ -27,14 +29,15 @@ logger = logging.getLogger(__name__)
 PROJECT_CLOSE_TIMEOUT_SECONDS = 15.0
 
 
-class ProjectLifecycle(SessionCoordinator):
+class ProjectLifecycle(SessionCoordinator[ProjectLifecycleContext]):
     projectEventReceived = Signal(object)
 
-    def __init__(self, session):
-        super().__init__(session)
+    def __init__(self, context: ProjectLifecycleContext):
+        super().__init__(context)
         self._active_draft_path = ""
         self._deferred_events: list[ProjectChangeEvent] = []
         self._application: QGuiApplication | None = None
+        self._unbind_handlers: list[Callable[[], None]] = []
         self.projectEventReceived.connect(self._on_project_event)
         application = QGuiApplication.instance()
         if isinstance(application, QGuiApplication):
@@ -42,7 +45,7 @@ class ProjectLifecycle(SessionCoordinator):
             application.focusObjectChanged.connect(self._on_focus_object_changed)
 
     def replace(self, candidate: DesktopProject) -> None:
-        if self._session.state.requests.closing_project is not None:
+        if self._context.state.requests.closing_project is not None:
             candidate.close()
             raise RuntimeError("正在释放上一个项目，请稍候再打开项目")
         try:
@@ -52,39 +55,44 @@ class ProjectLifecycle(SessionCoordinator):
         except Exception:
             candidate.close()
             raise
-        previous = self._session.state.binding.current
-        previous_subscription = self._session.state.binding.task_subscription_token
-        previous_project_subscription = self._session.state.binding.project_subscription_token
-        previous_workspace_subscription = self._session.state.binding.workspace_subscription_token
+        previous = self._context.state.binding.current
+        previous_subscription = self._context.state.binding.task_subscription_token
+        previous_project_subscription = self._context.state.binding.project_subscription_token
+        previous_workspace_subscription = self._context.state.binding.workspace_subscription_token
         preserved_selection = self._capture_interaction()
+        try:
+            self._prepare_unbind()
+        except BaseException:
+            candidate.close()
+            raise
         try:
             self._bind(candidate)
         except Exception:
             if (
-                self._session.state.binding.current
-                and self._session.state.binding.task_subscription_token is not None
+                self._context.state.binding.current
+                and self._context.state.binding.task_subscription_token is not None
             ):
-                self._session.state.binding.require_current().unsubscribe_task_events(
-                    self._session.state.binding.task_subscription_token
+                self._context.state.binding.require_current().unsubscribe_task_events(
+                    self._context.state.binding.task_subscription_token
                 )
             if (
-                self._session.state.binding.current
-                and self._session.state.binding.project_subscription_token is not None
+                self._context.state.binding.current
+                and self._context.state.binding.project_subscription_token is not None
             ):
                 self._unsubscribe_project_events(
-                    self._session.state.binding.current,
-                    self._session.state.binding.project_subscription_token,
+                    self._context.state.binding.current,
+                    self._context.state.binding.project_subscription_token,
                 )
             if (
-                self._session.state.binding.current
-                and self._session.state.binding.workspace_subscription_token is not None
+                self._context.state.binding.current
+                and self._context.state.binding.workspace_subscription_token is not None
             ):
-                self._session.state.binding.require_current().unsubscribe_workspace_events(
-                    self._session.state.binding.workspace_subscription_token
+                self._context.state.binding.require_current().unsubscribe_workspace_events(
+                    self._context.state.binding.workspace_subscription_token
                 )
             candidate.close()
             if previous is None:
-                self._session.state.binding.current = None
+                self._context.state.binding.current = None
                 self.close(close_in_background=False)
             else:
                 if previous_subscription is not None:
@@ -125,7 +133,7 @@ class ProjectLifecycle(SessionCoordinator):
             name,
             ensure_unique=ensure_unique,
         )
-        candidate = self._session._api.create_project(root, display_name, profile)
+        candidate = self._context.create_project(root, display_name, profile)
         self.replace(candidate)
 
     def create_sample_and_open(self, parent: Path) -> None:
@@ -134,7 +142,7 @@ class ProjectLifecycle(SessionCoordinator):
             "MediaFlow 示例项目",
             ensure_unique=True,
         )
-        candidate = self._session._api.create_project(root, display_name)
+        candidate = self._context.create_project(root, display_name)
         try:
             candidate.populate_sample_project()
         except BaseException:
@@ -187,38 +195,38 @@ class ProjectLifecycle(SessionCoordinator):
         return root, display_name
 
     def _bind(self, project: DesktopProject, *, reset_selection: bool = True) -> None:
-        self._session.state.binding.generation += 1
-        generation = self._session.state.binding.generation
+        self._context.state.binding.generation += 1
+        generation = self._context.state.binding.generation
         if reset_selection:
             self.reset_interaction()
-        self._session.state.binding.current = project
-        current = self._session.state.binding.require_current().get_project()
-        self._session.state.binding.project_id = current.id
-        self._session.state.binding.active_sequence_id = current.main_sequence_id
-        self._session.state.binding.timeline = project.timeline(
-            self._session.state.binding.active_sequence_id
+        self._context.state.binding.current = project
+        current = self._context.state.binding.require_current().get_project()
+        self._context.state.binding.project_id = current.id
+        self._context.state.binding.active_sequence_id = current.main_sequence_id
+        self._context.state.binding.timeline = project.timeline(
+            self._context.state.binding.active_sequence_id
         )
-        self._session.tasks.reset_delivery_state()
-        initial_tasks, self._session.state.tasks.cursor = (
-            self._session.state.binding.require_current().task_snapshot()
+        self._context.reset_delivery_state()
+        initial_tasks, self._context.state.tasks.cursor = (
+            self._context.state.binding.require_current().task_snapshot()
         )
-        self._session.state.tasks.items = {task.id: task for task in initial_tasks}
-        self._session.state.tasks.revisions = {task.id: task.revision for task in initial_tasks}
-        self._session.state.binding.task_subscription_token = (
-            self._session.state.binding.require_current().subscribe_task_events(
-                lambda event: self._session.tasks.publish((generation, event)),
+        self._context.state.tasks.items = {task.id: task for task in initial_tasks}
+        self._context.state.tasks.revisions = {task.id: task.revision for task in initial_tasks}
+        self._context.state.binding.task_subscription_token = (
+            self._context.state.binding.require_current().subscribe_task_events(
+                lambda event: self._context.publish((generation, event)),
                 include_snapshot=False,
             )
         )
-        self._session.state.binding.project_subscription_token = project.subscribe_project_events(
+        self._context.state.binding.project_subscription_token = project.subscribe_project_events(
             lambda event: self.projectEventReceived.emit((generation, event)),
             include_snapshot=False,
         )
-        self._session.state.binding.workspace_subscription_token = project.subscribe_workspace_events(
-            self._session.updates.receive_workspace_command
+        self._context.state.binding.workspace_subscription_token = project.subscribe_workspace_events(
+            self._context.updates.receive_workspace_command
         )
         self.reconcile_task_events()
-        self._session.projectors.refresh_project()
+        self._context.refresh_project()
 
     @Slot(object)
     def _on_project_event(self, envelope: object) -> None:
@@ -226,47 +234,44 @@ class ProjectLifecycle(SessionCoordinator):
             return
         generation, event = envelope
         if (
-            generation != self._session.state.binding.generation
+            generation != self._context.state.binding.generation
             or not isinstance(event, ProjectChangeEvent)
-            or self._session.state.binding.current is None
-            or self._session.state.requests.shutting_down
+            or self._context.state.binding.current is None
+            or self._context.state.requests.shutting_down
         ):
             return
-        if event.actor.id == self._session.state.binding.require_current().actor_id:
-            # The command response has already projected this desktop client's
-            # write. Replaying its journal event can erase a pending deferred
-            # dataChanged notification without producing a replacement.
-            return
-        if self._active_draft_path and any(
-            project_write_paths_overlap(self._active_draft_path, path) for path in event.write_set
+        draft_paths = current.draft_paths if (current := self._context.state.binding.current) else ()
+        if any(
+            project_write_paths_overlap(draft, path) for draft in draft_paths for path in event.write_set
         ):
             self._deferred_events.append(event)
-            self._session._set_status("外部修改与当前输入冲突，已保护未提交内容")
+            self._context.set_status("外部修改与当前输入冲突，已保护未提交内容")
             return
         self._apply_project_event(event)
 
     def _apply_project_event(self, event: ProjectChangeEvent) -> None:
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         if current is None:
             return
         try:
             current.reload_external_changes()
             available_sequences = {item.id for item in current.list_sequences()}
-            if self._session.state.binding.active_sequence_id not in available_sequences:
-                self._session.state.binding.active_sequence_id = current.get_project().main_sequence_id
-            self._session.state.binding.timeline = current.timeline(
-                self._session.state.binding.active_sequence_id
+            if self._context.state.binding.active_sequence_id not in available_sequences:
+                self._context.state.binding.active_sequence_id = current.get_project().main_sequence_id
+            self._context.state.binding.timeline = current.timeline(
+                self._context.state.binding.active_sequence_id
             )
-            self._session.projectors.refresh_project()
-            self._session.updates.commit(selection=True)
-            self._session.updates.commit(history=True)
-            self._session.projectors.timeline.schedule_preview_graph()
-            self._session._set_status(
-                "已实时同步 %1 的修改",
-                event.actor.name or event.actor.kind,
-            )
+            self._context.refresh_project()
+            self._context.updates.commit(selection=True)
+            self._context.updates.commit(history=True)
+            self._context.schedule_preview()
+            if event.actor.kind != "system":
+                self._context.set_status(
+                    "已实时同步 %1 的修改",
+                    event.actor.name or event.actor.kind,
+                )
         except Exception as error:
-            self._session.updates.report_error(f"无法投影项目修改：{error}")
+            self._context.updates.report_error(f"无法投影项目修改：{error}")
 
     @Slot(object)
     def _on_focus_object_changed(self, focus: object) -> None:
@@ -276,12 +281,7 @@ class ProjectLifecycle(SessionCoordinator):
             next_path = str(property_reader("collaborationPath") or "").rstrip("/")
         if next_path == self._active_draft_path:
             return
-        current = self._session.state.binding.current
-        if current is not None and self._active_draft_path:
-            current.end_draft(self._active_draft_path)
         self._active_draft_path = next_path
-        if current is not None and next_path:
-            current.begin_draft(next_path)
         self._flush_deferred_events()
 
     def _flush_deferred_events(self) -> None:
@@ -290,8 +290,10 @@ class ProjectLifecycle(SessionCoordinator):
         applicable: list[ProjectChangeEvent] = []
         retained: list[ProjectChangeEvent] = []
         for event in self._deferred_events:
-            if self._active_draft_path and any(
-                project_write_paths_overlap(self._active_draft_path, path) for path in event.write_set
+            current = self._context.state.binding.current
+            if current is not None and any(
+                project_write_paths_overlap(draft, path)
+                for draft in current.draft_paths for path in event.write_set
             ):
                 retained.append(event)
             else:
@@ -301,7 +303,7 @@ class ProjectLifecycle(SessionCoordinator):
             self._apply_project_event(applicable[-1])
 
     def resolve_collaboration_conflict(self, resolution: str) -> None:
-        current = self._session.state.binding.current
+        current = self._context.state.binding.current
         if current is None:
             raise RuntimeError("当前没有打开的项目")
         focus = QGuiApplication.focusObject()
@@ -318,118 +320,118 @@ class ProjectLifecycle(SessionCoordinator):
             self._deferred_events.clear()
             self._apply_project_event(latest)
         else:
-            self._session.state.binding.timeline = current.timeline(
-                self._session.state.binding.active_sequence_id
+            self._context.state.binding.timeline = current.timeline(
+                self._context.state.binding.active_sequence_id
             )
-            self._session.projectors.refresh_project()
-            self._session.updates.commit(selection=True)
-            self._session.updates.commit(history=True)
-            self._session.projectors.timeline.schedule_preview_graph()
+            self._context.refresh_project()
+            self._context.updates.commit(selection=True)
+            self._context.updates.commit(history=True)
+            self._context.schedule_preview()
         if resolution == "keep_local":
-            self._session._set_status("已保留你的修改")
+            self._context.set_status("已保留你的修改")
         else:
-            self._session._set_status("已采用最新项目内容")
+            self._context.set_status("已采用最新项目内容")
 
     def replay_task_events(self) -> None:
-        if not self._session.state.binding.current:
+        if not self._context.state.binding.current:
             return
-        for event in self._session.state.binding.require_current().task_events_after(
-            self._session.state.tasks.cursor
+        for event in self._context.state.binding.require_current().task_events_after(
+            self._context.state.tasks.cursor
         ):
-            self._session.tasks.publish((self._session.state.binding.generation, event))
+            self._context.publish((self._context.state.binding.generation, event))
 
     def reconcile_task_events(self) -> None:
-        self._session.tasks.reconcile_committed_results()
+        self._context.reconcile_committed_results()
         self.replay_task_events()
-        self._session.tasks.update_reconciliation_state()
+        self._context.update_reconciliation_state()
 
     def _capture_interaction(self) -> ProjectInteractionSnapshot:
         return ProjectInteractionSnapshot(
-            selection=copy.deepcopy(self._session.state.selection),
-            pending_profile_asset_id=self._session.state.assets.pending_profile_asset_id,
-            pending_profile_label=self._session.state.assets.pending_profile_label,
-            pending_profile_placement=self._session.state.assets.pending_profile_placement,
-            pending_batch_ids=copy.deepcopy(self._session.state.assets.pending_batch_ids),
-            pending_batch_placement=self._session.state.assets.pending_batch_placement,
-            pending_import_tasks=copy.deepcopy(self._session.state.assets.pending_import_tasks),
-            pending_import_batches=copy.deepcopy(self._session.state.assets.pending_import_batches),
-            pending_relink_asset_id=self._session.state.assets.pending_relink_asset_id,
-            pending_relink_path=self._session.state.assets.pending_relink_path,
-            download_plan=copy.deepcopy(self._session.state.download.plan),
-            selected_download_entries=set(self._session.state.download.selected_entries),
-            pending_preview_range=self._session.state.presentation.pending_preview_range,
+            selection=copy.deepcopy(self._context.state.selection),
+            pending_profile_asset_id=self._context.state.assets.pending_profile_asset_id,
+            pending_profile_label=self._context.state.assets.pending_profile_label,
+            pending_profile_placement=self._context.state.assets.pending_profile_placement,
+            pending_batch_ids=copy.deepcopy(self._context.state.assets.pending_batch_ids),
+            pending_batch_placement=self._context.state.assets.pending_batch_placement,
+            pending_import_tasks=copy.deepcopy(self._context.state.assets.pending_import_tasks),
+            pending_import_batches=copy.deepcopy(self._context.state.assets.pending_import_batches),
+            pending_relink_asset_id=self._context.state.assets.pending_relink_asset_id,
+            pending_relink_path=self._context.state.assets.pending_relink_path,
+            download_plan=copy.deepcopy(self._context.state.download.plan),
+            selected_download_entries=set(self._context.state.download.selected_entries),
+            pending_preview_range=self._context.state.presentation.pending_preview_range,
         )
 
     def _restore_interaction(self, values: ProjectInteractionSnapshot) -> None:
-        self._session.state.selection = copy.deepcopy(values.selection)
-        self._session.state.assets.pending_profile_asset_id = values.pending_profile_asset_id
-        self._session.state.assets.pending_profile_label = values.pending_profile_label
-        self._session.state.assets.pending_profile_placement = values.pending_profile_placement
-        self._session.state.assets.pending_batch_ids = copy.deepcopy(values.pending_batch_ids)
-        self._session.state.assets.pending_batch_placement = values.pending_batch_placement
-        self._session.state.assets.pending_import_tasks = copy.deepcopy(values.pending_import_tasks)
-        self._session.state.assets.pending_import_batches = copy.deepcopy(values.pending_import_batches)
-        self._session.state.assets.pending_relink_asset_id = values.pending_relink_asset_id
-        self._session.state.assets.pending_relink_path = values.pending_relink_path
-        self._session.state.download.plan = copy.deepcopy(values.download_plan)
-        self._session.state.download.selected_entries = set(values.selected_download_entries)
-        self._session.state.presentation.pending_preview_range = values.pending_preview_range
+        self._context.state.selection = copy.deepcopy(values.selection)
+        self._context.state.assets.pending_profile_asset_id = values.pending_profile_asset_id
+        self._context.state.assets.pending_profile_label = values.pending_profile_label
+        self._context.state.assets.pending_profile_placement = values.pending_profile_placement
+        self._context.state.assets.pending_batch_ids = copy.deepcopy(values.pending_batch_ids)
+        self._context.state.assets.pending_batch_placement = values.pending_batch_placement
+        self._context.state.assets.pending_import_tasks = copy.deepcopy(values.pending_import_tasks)
+        self._context.state.assets.pending_import_batches = copy.deepcopy(values.pending_import_batches)
+        self._context.state.assets.pending_relink_asset_id = values.pending_relink_asset_id
+        self._context.state.assets.pending_relink_path = values.pending_relink_path
+        self._context.state.download.plan = copy.deepcopy(values.download_plan)
+        self._context.state.download.selected_entries = set(values.selected_download_entries)
+        self._context.state.presentation.pending_preview_range = values.pending_preview_range
 
     def reset_interaction(self) -> None:
-        self._session.state.selection.asset_ids = []
-        self._session.state.selection.clip_ids = []
-        self._session.state.selection.compound_id = ""
-        self._session.state.selection.document_id = ""
-        self._session.state.selection.subtitle_segment_ids = []
-        self._session.state.selection.subtitle_placement_id = ""
-        self._session.state.selection.highlight_id = ""
-        self._session.state.selection.audio_bus_id = ""
-        self._session.state.selection.audio_effect_id = ""
-        self._session.state.selection.transition_id = ""
-        self._session.state.selection.marker_id = ""
-        self._session.state.selection.range_id = ""
-        self._session.state.selection.watermark_asset_id = ""
-        self._session.state.selection.range_in_frame = None
-        self._session.state.assets.pending_profile_asset_id = ""
-        self._session.state.assets.pending_profile_label = ""
-        self._session.state.assets.pending_profile_placement = TimelinePlacement()
-        self._session.state.assets.pending_batch_ids = []
-        self._session.state.assets.pending_batch_placement = TimelinePlacement()
-        self._session.state.assets.pending_import_tasks = {}
-        self._session.state.assets.pending_import_batches = {}
-        self._session.state.assets.pending_relink_asset_id = ""
-        self._session.state.assets.pending_relink_path = ""
-        self._session.state.download.plan = None
-        self._session.state.download.selected_entries = set()
-        self._session.state.presentation.pending_preview_range = None
+        self._context.state.selection.asset_ids = []
+        self._context.state.selection.clip_ids = []
+        self._context.state.selection.compound_id = ""
+        self._context.state.selection.document_id = ""
+        self._context.state.selection.subtitle_segment_ids = []
+        self._context.state.selection.subtitle_placement_id = ""
+        self._context.state.selection.highlight_id = ""
+        self._context.state.selection.audio_bus_id = ""
+        self._context.state.selection.audio_effect_id = ""
+        self._context.state.selection.transition_id = ""
+        self._context.state.selection.marker_id = ""
+        self._context.state.selection.range_id = ""
+        self._context.state.selection.watermark_asset_id = ""
+        self._context.state.selection.range_in_frame = None
+        self._context.state.assets.pending_profile_asset_id = ""
+        self._context.state.assets.pending_profile_label = ""
+        self._context.state.assets.pending_profile_placement = TimelinePlacement()
+        self._context.state.assets.pending_batch_ids = []
+        self._context.state.assets.pending_batch_placement = TimelinePlacement()
+        self._context.state.assets.pending_import_tasks = {}
+        self._context.state.assets.pending_import_batches = {}
+        self._context.state.assets.pending_relink_asset_id = ""
+        self._context.state.assets.pending_relink_path = ""
+        self._context.state.download.plan = None
+        self._context.state.download.selected_entries = set()
+        self._context.state.presentation.pending_preview_range = None
 
     def remember_recent(self, project_dir: Path) -> None:
         project_path = str(project_dir.expanduser().resolve())
         project_key = self._recent_key(project_path)
-        candidate = self._session.state.desktop_settings.model_copy(deep=True)
+        candidate = self._context.state.desktop_settings.model_copy(deep=True)
         candidate.ui.recent_project_paths = [
             project_path,
             *(path for path in candidate.ui.recent_project_paths if self._recent_key(path) != project_key),
         ][:10]
         try:
-            self._session.settings_persistence.commit(candidate)
+            self._context.commit(candidate)
         except Exception as error:
-            self._session.updates.report_error(f"项目已打开，但无法更新最近项目记录：{error}")
-        self._session.projectors.workspace.refresh_recent_projects()
+            self._context.updates.report_error(f"项目已打开，但无法更新最近项目记录：{error}")
+        self._context.refresh_recent_projects()
 
     def forget_recent(self, project_dir: Path) -> bool:
         project_key = self._recent_key(project_dir)
         remaining = [
             path
-            for path in self._session.state.desktop_settings.ui.recent_project_paths
+            for path in self._context.state.desktop_settings.ui.recent_project_paths
             if self._recent_key(path) != project_key
         ]
-        if len(remaining) == len(self._session.state.desktop_settings.ui.recent_project_paths):
+        if len(remaining) == len(self._context.state.desktop_settings.ui.recent_project_paths):
             return False
-        candidate = self._session.state.desktop_settings.model_copy(deep=True)
+        candidate = self._context.state.desktop_settings.model_copy(deep=True)
         candidate.ui.recent_project_paths = remaining
-        self._session.settings_persistence.commit(candidate)
-        self._session.projectors.workspace.refresh_recent_projects()
+        self._context.commit(candidate)
+        self._context.refresh_recent_projects()
         return True
 
     @staticmethod
@@ -437,104 +439,108 @@ class ProjectLifecycle(SessionCoordinator):
         return os.path.normcase(str(Path(path).expanduser().resolve()))
 
     def close(self, *, close_in_background: bool = True) -> None:
-        self._session.state.binding.generation += 1
+        self._prepare_unbind()
+        self._context.state.binding.generation += 1
         if (
-            self._session.state.binding.current
-            and self._session.state.binding.task_subscription_token is not None
+            self._context.state.binding.current
+            and self._context.state.binding.task_subscription_token is not None
         ):
-            self._session.state.binding.require_current().unsubscribe_task_events(
-                self._session.state.binding.task_subscription_token
+            self._context.state.binding.require_current().unsubscribe_task_events(
+                self._context.state.binding.task_subscription_token
             )
-        self._session.state.binding.task_subscription_token = None
+        self._context.state.binding.task_subscription_token = None
         if (
-            self._session.state.binding.current
-            and self._session.state.binding.project_subscription_token is not None
+            self._context.state.binding.current
+            and self._context.state.binding.project_subscription_token is not None
         ):
             self._unsubscribe_project_events(
-                self._session.state.binding.current,
-                self._session.state.binding.project_subscription_token,
+                self._context.state.binding.current,
+                self._context.state.binding.project_subscription_token,
             )
-        self._session.state.binding.project_subscription_token = None
+        self._context.state.binding.project_subscription_token = None
         if (
-            self._session.state.binding.current
-            and self._session.state.binding.workspace_subscription_token is not None
+            self._context.state.binding.current
+            and self._context.state.binding.workspace_subscription_token is not None
         ):
-            self._session.state.binding.require_current().unsubscribe_workspace_events(
-                self._session.state.binding.workspace_subscription_token
+            self._context.state.binding.require_current().unsubscribe_workspace_events(
+                self._context.state.binding.workspace_subscription_token
             )
-        self._session.state.binding.workspace_subscription_token = None
+        self._context.state.binding.workspace_subscription_token = None
         self._active_draft_path = ""
         self._deferred_events.clear()
-        self._session.state.tasks.cursor = 0
-        closing_project = self._session.state.binding.current
-        self._session.state.binding.current = None
-        self._session.state.binding.project_id = ""
-        self._session.state.tasks.revisions = {}
-        self._session.state.tasks.items = {}
-        self._session.state.binding.timeline = None
-        self._session.state.binding.active_sequence_id = ""
-        self._session.state.selection.asset_ids = []
-        self._session.state.selection.clip_ids = []
-        self._session.state.selection.compound_id = ""
-        self._session.state.selection.document_id = ""
-        self._session.state.selection.subtitle_segment_ids = []
-        self._session.state.selection.subtitle_placement_id = ""
-        self._session.state.selection.highlight_id = ""
-        self._session.state.selection.audio_bus_id = ""
-        self._session.state.selection.audio_effect_id = ""
-        self._session.state.selection.transition_id = ""
-        self._session.state.selection.marker_id = ""
-        self._session.state.selection.range_id = ""
-        self._session.state.selection.range_in_frame = None
-        self._session.state.download.plan = None
-        self._session.state.download.selected_entries = set()
-        self._session.models.download_entries.set_items([])
-        self._session.updates.commit(download_plan=True)
-        self._session.projectors.timeline.stop_preview()
-        self._session.state.presentation.preview_graph_path = ""
-        self._session.state.presentation.filmstrip_frames.clear()
+        self._context.state.tasks.cursor = 0
+        closing_project = self._context.state.binding.current
+        self._context.state.binding.current = None
+        self._context.state.binding.project_id = ""
+        self._context.state.tasks.revisions = {}
+        self._context.state.tasks.items = {}
+        self._context.state.binding.timeline = None
+        self._context.state.binding.active_sequence_id = ""
+        self._context.state.selection.asset_ids = []
+        self._context.state.selection.clip_ids = []
+        self._context.state.selection.compound_id = ""
+        self._context.state.selection.document_id = ""
+        self._context.state.selection.subtitle_segment_ids = []
+        self._context.state.selection.subtitle_placement_id = ""
+        self._context.state.selection.highlight_id = ""
+        self._context.state.selection.audio_bus_id = ""
+        self._context.state.selection.audio_effect_id = ""
+        self._context.state.selection.transition_id = ""
+        self._context.state.selection.marker_id = ""
+        self._context.state.selection.range_id = ""
+        self._context.state.selection.range_in_frame = None
+        self._context.state.download.plan = None
+        self._context.state.download.selected_entries = set()
+        self._context.models.download_entries.set_items([])
+        self._context.updates.commit(download_plan=True)
+        self._context.stop_preview()
+        self._context.state.presentation.preview_graph_path = ""
+        self._context.state.presentation.preview_status = "empty"
+        self._context.state.presentation.preview_error = ""
+        self._context.state.presentation.filmstrip_frames.clear()
         self.cancel_filmstrip(closing_project)
-        self._session.state.presentation.hdr_preview_active = False
-        self._session.state.presentation.preview_subtitles = []
-        self._session.state.presentation.preview_subtitles_by_track = {}
-        self._session.state.assets.waveform_cache.clear()
-        self._session.state.assets.waveform_pending.clear()
-        self._session.state.assets.thumbnail_paths.clear()
-        self._session.state.assets.thumbnail_pending_request = None
-        self._session.state.assets.thumbnail_refresh_requested = False
-        self._session.state.presentation.audio_metrics = {}
-        if self._session.state.assets.pending_profile_asset_id:
-            self._session.state.assets.pending_profile_asset_id = ""
-            self._session.state.assets.pending_profile_label = ""
-            self._session.state.assets.pending_profile_placement = TimelinePlacement()
-            self._session.updates.commit(profile_confirmation=True)
-        self._session.state.assets.pending_batch_ids = []
-        self._session.state.assets.pending_batch_placement = TimelinePlacement()
-        self._session.state.assets.pending_import_tasks = {}
-        self._session.state.assets.pending_import_batches = {}
-        if self._session.state.assets.pending_relink_asset_id:
-            self._session.state.assets.pending_relink_asset_id = ""
-            self._session.state.assets.pending_relink_path = ""
-            self._session.updates.commit(relink_confirmation=True)
-        self._session.models.assets.set_items([])
-        self._session.models.sequences.set_items([])
-        self._session.models.tracks.set_items([])
-        self._session.models.clips.set_items([])
-        self._session.models.compound_clips.set_items([])
-        self._session.models.transitions.set_items([])
-        self._session.models.markers.set_items([])
-        self._session.models.ranges.set_items([])
-        self._session.models.tasks.set_items([])
-        self._session.models.documents.set_items([])
-        self._session.models.segments.set_items([])
-        self._session.models.subtitle_placements.set_items([])
-        self._session.models.highlights.set_items([])
-        self._session.models.audio_buses.set_items([])
-        self._session.models.audio_effects.set_items([])
-        self._session.models.audio_effect_parameters.set_items([])
-        self._session.updates.commit(audio_metrics=True)
-        self._session.updates.commit(workflow=True)
-        self._session.updates.commit(preview_graph=True)
+        self.cancel_preview(closing_project)
+        self._context.state.presentation.hdr_preview_active = False
+        self._context.state.presentation.preview_subtitles = []
+        self._context.state.presentation.preview_subtitles_by_track = {}
+        self._context.state.assets.waveform_cache.clear()
+        self._context.state.assets.waveform_pending.clear()
+        self._context.state.assets.thumbnail_paths.clear()
+        self._context.state.assets.thumbnail_pending_request = None
+        self._context.state.assets.thumbnail_refresh_requested = False
+        self._context.state.presentation.audio_metrics = {}
+        if self._context.state.assets.pending_profile_asset_id:
+            self._context.state.assets.pending_profile_asset_id = ""
+            self._context.state.assets.pending_profile_label = ""
+            self._context.state.assets.pending_profile_placement = TimelinePlacement()
+            self._context.updates.commit(profile_confirmation=True)
+        self._context.state.assets.pending_batch_ids = []
+        self._context.state.assets.pending_batch_placement = TimelinePlacement()
+        self._context.state.assets.pending_import_tasks = {}
+        self._context.state.assets.pending_import_batches = {}
+        if self._context.state.assets.pending_relink_asset_id:
+            self._context.state.assets.pending_relink_asset_id = ""
+            self._context.state.assets.pending_relink_path = ""
+            self._context.updates.commit(relink_confirmation=True)
+        self._context.models.assets.set_items([])
+        self._context.models.sequences.set_items([])
+        self._context.models.tracks.set_items([])
+        self._context.models.clips.set_items([])
+        self._context.models.compound_clips.set_items([])
+        self._context.models.transitions.set_items([])
+        self._context.models.markers.set_items([])
+        self._context.models.ranges.set_items([])
+        self._context.models.tasks.set_items([])
+        self._context.models.documents.set_items([])
+        self._context.models.segments.set_items([])
+        self._context.models.subtitle_placements.set_items([])
+        self._context.models.highlights.set_items([])
+        self._context.models.audio_buses.set_items([])
+        self._context.models.audio_effects.set_items([])
+        self._context.models.audio_effect_parameters.set_items([])
+        self._context.updates.commit(audio_metrics=True)
+        self._context.updates.commit(workflow=True)
+        self._context.updates.commit(preview_graph=True)
         if closing_project:
             self._dispose(
                 closing_project,
@@ -542,18 +548,39 @@ class ProjectLifecycle(SessionCoordinator):
             )
 
     def cancel_filmstrip(self, project: DesktopProject | None = None) -> None:
-        self._session.state.requests.filmstrip_id += 1
-        target = project or self._session.state.binding.current
-        future = self._session.state.requests.filmstrip_future
+        self._context.state.requests.filmstrip_id += 1
+        target = project or self._context.state.binding.current
+        future = self._context.state.requests.filmstrip_future
         if future is not None:
             future.cancel()
-            self._session.state.requests.filmstrip_future = None
+            self._context.state.requests.filmstrip_future = None
         if target is not None:
-            self._session._api.cancel_timeline_filmstrip_requests(
+            self._context.cancel_timeline_filmstrip_requests(
                 target.project_dir,
                 request_owner=target.actor_id,
-                request_generation=self._session.state.requests.filmstrip_id,
+                request_generation=self._context.state.requests.filmstrip_id,
             )
+
+    def cancel_preview(self, project: DesktopProject | None = None) -> None:
+        self._context.stop_preview()
+        self._context.state.requests.preview_id += 1
+        future = self._context.state.requests.preview_future
+        if future is not None:
+            future.cancel()
+            self._context.state.requests.preview_future = None
+        target = project or self._context.state.binding.current
+        if target is not None:
+            self._context.cancel_preview_snapshot_requests(
+                target.project_dir, request_owner=target.actor_id,
+                request_generation=self._context.state.requests.preview_id,
+            )
+
+    def add_unbind_handler(self, handler: Callable[[], None]) -> None:
+        self._unbind_handlers.append(handler)
+
+    def _prepare_unbind(self) -> None:
+        for handler in self._unbind_handlers:
+            handler()
 
     def shutdown(self) -> None:
         try:
@@ -573,20 +600,20 @@ class ProjectLifecycle(SessionCoordinator):
         *,
         close_in_background: bool,
     ) -> None:
-        if close_in_background and not self._session.state.requests.shutting_down:
-            pending_project = self._session.state.requests.closing_project
+        if close_in_background and not self._context.state.requests.shutting_down:
+            pending_project = self._context.state.requests.closing_project
             if pending_project is not None and pending_project is not project:
                 raise RuntimeError("已有项目资源等待释放")
-            if self._session.state.requests.project_close_future is not None:
+            if self._context.state.requests.project_close_future is not None:
                 raise RuntimeError("项目资源仍在释放中")
-            self._session.state.requests.project_close_id += 1
-            close_id = self._session.state.requests.project_close_id
+            self._context.state.requests.project_close_id += 1
+            close_id = self._context.state.requests.project_close_id
             project_path = str(project.project_dir)
-            self._session.state.requests.closing_project = project
-            self._session.state.requests.closing_project_error = ""
-            self._session.updates.commit(project=True)
-            self._session._set_status("正在关闭项目并释放文件…")
-            self._session.state.requests.project_close_future = self._session.background.submit(
+            self._context.state.requests.closing_project = project
+            self._context.state.requests.closing_project_error = ""
+            self._context.updates.commit(project=True)
+            self._context.set_status("正在关闭项目并释放文件…")
+            self._context.state.requests.project_close_future = self._context.submit_background(
                 "project_close",
                 (close_id, project_path),
                 lambda: project.close(
@@ -601,9 +628,9 @@ class ProjectLifecycle(SessionCoordinator):
         project.unsubscribe_project_events(token)
 
     def retry_close(self) -> None:
-        project = self._session.state.requests.closing_project
+        project = self._context.state.requests.closing_project
         if project is None:
             return
-        if self._session.state.requests.project_close_future is not None:
+        if self._context.state.requests.project_close_future is not None:
             raise RuntimeError("项目资源仍在释放中")
         self._dispose(project, close_in_background=True)

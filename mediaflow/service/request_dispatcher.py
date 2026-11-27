@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mediaflow.automation.contracts import AutomationRequest, describe_contract
+from mediaflow.automation.operation_registry import OPERATIONS
 from mediaflow.domain.collaboration import ActorIdentity
 
 from .application_commands import application_command
@@ -93,7 +94,20 @@ class ServiceRequestDispatcher:
             value = params.get("request")
             if not isinstance(value, dict):
                 raise ValueError("params.request must be an object")
-            return await self._execution.run("project", self._operations.automation.execute, value)
+            envelope = AutomationRequest.model_validate(value)
+            operation = envelope.operation.strip()
+            if operation == "describe":
+                return await self._execution.run("snapshot", self._operations.automation.execute, envelope)
+            definition = OPERATIONS.get(operation)
+            if definition is None:
+                raise ValueError(f"Unknown operation: {operation}")
+            envelope = envelope.model_copy(update={
+                "operation": operation,
+                "arguments": definition.validate_arguments(envelope.arguments),
+            })
+            return await self._execution.run(
+                definition.workload, self._operations.automation.execute, envelope
+            )
         if method == "operation.execute_batch":
             values = params.get("requests")
             if not isinstance(values, list) or not all(isinstance(item, dict) for item in values):
@@ -287,9 +301,7 @@ class ServiceRequestDispatcher:
             ),
             client_id=str(params.get("client_id") or "editor-service"),
         )
-        workload: ServiceWorkload = (
-            "wait" if method == "task.wait" else "control" if method == "task.cancel" else "project"
-        )
+        workload: ServiceWorkload = OPERATIONS[method].workload
         return await self._execution.run(
             workload,
             self._operations.automation.execute,

@@ -477,4 +477,4 @@ class WebTimelineController(ControllerFacet[WebControllerScope]):
 
     def _accept_state(self, _state) -> None:
         self._session.updates.commit(history=True)
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()

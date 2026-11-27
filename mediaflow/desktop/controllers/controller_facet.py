@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject
 
 from mediaflow.service.client import EditorServiceRpcError
 
-from .controller_scopes import ControllerScope
+from .controller_context import ControllerScope
 
 
 def report_ui_errors(

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from mediaflow.application.edit_history import ProjectEditHistory
+from mediaflow.application.project_changes import project_scoped_history_changes
 from mediaflow.application.project_revision_policy import resolve_project_revision
 from mediaflow.application.timeline_editor import TimelineEditor
 from mediaflow.domain.collaboration import (
@@ -251,7 +252,9 @@ class ProjectCollaboration:
                 planned_change_scopes = sorted(
                     {path for command in commands for path in command.change_scopes}
                 )
-                change_set = self._history.change_set_since(checkpoint)
+                change_set = project_scoped_history_changes(
+                    self._history.change_set_since(checkpoint), planned_change_scopes,
+                )
                 require_planned_changes(
                     "operation.execute_batch",
                     planned_change_scopes,
@@ -385,7 +388,9 @@ class ProjectCollaboration:
                 result = action(False)
                 command = self._history.combined_since(history_checkpoint) if reversible else None
                 history_change_set = (
-                    self._history.change_set_since(history_checkpoint) if reversible else ProjectChangeSet()
+                    project_scoped_history_changes(
+                        self._history.change_set_since(history_checkpoint), mutation_plan.change_scopes,
+                    ) if reversible else ProjectChangeSet()
                 )
                 observed_change_set = (
                     ProjectChangeSet()
@@ -554,11 +559,13 @@ class ProjectCollaboration:
         *,
         current_revision: int,
     ) -> None:
-        self._raise_if_write_set_conflicts(
-            start_revision=group.state_revision,
+        resolve_project_revision(
+            base_revision=group.state_revision,
             current_revision=current_revision,
             write_set=group.write_set,
-            reason="one or more fields changed after the undo target",
+            events=self._repository.events.iter_after_revision(group.state_revision),
+            conflict_reason="one or more fields changed after the undo target",
+            ignore_restored_history=True,
         )
 
     def _raise_if_write_set_conflicts(
@@ -573,7 +580,7 @@ class ProjectCollaboration:
             base_revision=start_revision,
             current_revision=current_revision,
             write_set=write_set,
-            events=self._repository.events.list_after_revision(start_revision),
+            events=self._repository.events.iter_after_revision(start_revision),
             conflict_reason=reason,
         )
 

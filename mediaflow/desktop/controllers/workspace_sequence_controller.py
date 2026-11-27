@@ -19,6 +19,10 @@ class WorkspaceSequenceController(ControllerFacet[WorkspaceSequenceScope]):
 
     variantPlanChanged = Signal()
 
+    @Slot()
+    def retryPreview(self) -> None:
+        self._session.preview.retry()
+
     def __init__(self, scope: WorkspaceSequenceScope) -> None:
         super().__init__(scope)
         self._variant_plan: dict[str, Any] = {}
@@ -219,7 +223,7 @@ class WorkspaceSequenceController(ControllerFacet[WorkspaceSequenceScope]):
         if self._session.state.presentation.hdr_preview_active == active:
             return
         self._session.state.presentation.hdr_preview_active = active
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
 
     @Slot(int, int, int, int, str, int)
     @report_ui_errors
@@ -249,7 +253,7 @@ class WorkspaceSequenceController(ControllerFacet[WorkspaceSequenceScope]):
         self._session.projectors.timeline.refresh_sequences()
         self._session.projectors.timeline.refresh_timeline()
         self._session.projectors.subtitles.refresh_documents()
-        self._session.projectors.timeline.refresh_preview_subtitles()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.projectors.timeline_subtitles.refresh_preview_subtitles()
+        self._session.preview.schedule()
         self._session.updates.commit(project=True, history=True)
         self._session._set_status("序列配置已更新")

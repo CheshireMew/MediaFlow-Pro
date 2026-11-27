@@ -22,6 +22,7 @@ from mediaflow.domain.storage_names import (
 )
 from mediaflow.domain.task_commands import (
     BuildSequenceCommand,
+    ExportFcpxmlCommand,
     ExportHighlightsCommand,
     ExportSequenceCommand,
 )
@@ -29,6 +30,7 @@ from mediaflow.domain.tasks import (
     ArtifactReference,
     ExportFileTaskOutcome,
     ExportTaskOutcome,
+    InterchangeExportTaskOutcome,
     SequenceBuildAudioOutcome,
     SequenceBuildTaskOutcome,
     SequenceBuildUnitOutcome,
@@ -41,16 +43,36 @@ class ExportTaskHandlers(ProjectTaskHandler):
         documents: ExportTaskDocuments,
         runtime: ExportTaskRuntime,
         highlights: HighlightService,
+        *,
+        history_documents: ExportTaskDocuments | None = None,
     ):
         super().__init__(documents.project_dir)
         self.documents = documents
         self.runtime = runtime
         self.highlights = highlights
+        self.history_documents = history_documents or documents
 
     def handle(self, context: TaskContext) -> TaskCompletion:
         command = context.task.command
         if isinstance(command, ExportHighlightsCommand):
             return self._export_highlights(context, command)
+        with self.runtime.snapshot() as (documents, runtime):
+            return ExportTaskHandlers(
+                documents, runtime, self.highlights, history_documents=self.history_documents,
+            )._handle_snapshot(context)
+
+    def _handle_snapshot(self, context: TaskContext) -> TaskCompletion:
+        command = context.task.command
+        if isinstance(command, ExportFcpxmlCommand):
+            state = self.documents.timeline.load_timeline(command.sequence_id)
+            output, digest = self.runtime.export_fcpxml(
+                state, command.output_path, overwrite=command.overwrite,
+                progress=context.report, check_cancelled=context.cancellation.raise_if_requested,
+            )
+            return self.completion(output, outcome=InterchangeExportTaskOutcome(
+                sequence_id=command.sequence_id, timeline_revision=state.sequence.timeline_revision,
+                output=ArtifactReference.from_path(self.project_dir, output), sha256=digest,
+            ))
         if isinstance(command, BuildSequenceCommand):
             return self._build_sequence(context, command)
         if not isinstance(command, ExportSequenceCommand):
@@ -66,7 +88,7 @@ class ExportTaskHandlers(ProjectTaskHandler):
             state,
             preset,
             command.output_path,
-            overwrite=command.overwrite or context.recovered,
+            overwrite=command.overwrite,
             progress=context.report,
             check_cancelled=context.cancellation.raise_if_requested,
         )
@@ -93,7 +115,6 @@ class ExportTaskHandlers(ProjectTaskHandler):
             )
             self._defer_export_history(
                 context,
-                result,
                 ExportHistoryRecord(
                     id=context.task.id,
                     task_id=context.task.id,
@@ -131,7 +152,7 @@ class ExportTaskHandlers(ProjectTaskHandler):
             preset,
             command.units,
             command.output_path,
-            overwrite=command.overwrite or context.recovered,
+            overwrite=command.overwrite,
             progress=context.report,
             check_cancelled=context.cancellation.raise_if_requested,
         )
@@ -158,6 +179,7 @@ class ExportTaskHandlers(ProjectTaskHandler):
                 "sequence_id": command.sequence_id,
                 "content_revision": content_revision,
                 "output": str(result.output_path),
+                "subtitle_files": [str(path) for path in result.subtitle_files],
                 "units": [
                     {
                         "id": item.unit.id,
@@ -234,11 +256,11 @@ class ExportTaskHandlers(ProjectTaskHandler):
                 quality_report_path,
                 *quality.proof_frames,
                 report_path,
+                *result.subtitle_files,
                 outcome=outcome,
             )
             self._defer_export_history(
                 context,
-                result,
                 ExportHistoryRecord(
                     id=context.task.id,
                     task_id=context.task.id,
@@ -262,20 +284,18 @@ class ExportTaskHandlers(ProjectTaskHandler):
     def _defer_export_history(
         self,
         context: TaskContext,
-        result: ExportExecutionResult,
         history: ExportHistoryRecord,
     ) -> None:
-        def commit_history() -> None:
-            try:
-                self.documents.records.save_export_history(history)
-            except BaseException as error:
-                self._archive_unrecorded_exports(
-                    [result],
-                    error,
-                    quality_report_id=context.task.id,
-                )
-                raise
+        # The task output journal still owns the published output locks here.
+        # It rolls those files back with SQLite; discard only this task's QA
+        # evidence separately, including cancellation and terminal save errors.
+        def discard_quality() -> None:
+            self.runtime.archive_unrecorded_exports([], quality_report_id=context.task.id)
 
+        def commit_history() -> None:
+            self.history_documents.records.save_export_history(history)
+
+        context.on_discard(discard_quality)
         context.defer_project_change(commit_history)
 
     def _export_highlights(
@@ -368,15 +388,20 @@ class ExportTaskHandlers(ProjectTaskHandler):
             # before any derived sequence becomes observable.
             self.runtime.preflight_sequence_exports(
                 requests,
-                overwrite=context.recovered,
+                overwrite=False,
             )
         context.commit_project_change(commit_short_sequences)
-        results = self.runtime.export_sequences_atomically(
-            requests,
-            overwrite=context.recovered,
-            progress=context.report,
-            check_cancelled=context.cancellation.raise_if_requested,
-        )
+        with self.runtime.snapshot() as (documents, runtime):
+            requests = [ExportSequenceRequest(
+                state=documents.timeline.load_timeline(request.state.sequence.id),
+                preset=request.preset, output_path=request.output_path,
+            ) for request in requests]
+            results = runtime.export_sequences_atomically(
+                requests,
+                overwrite=False,
+                progress=context.report,
+                check_cancelled=context.cancellation.raise_if_requested,
+            )
         try:
             for result in results:
                 outputs.extend(
@@ -427,6 +452,9 @@ class ExportTaskHandlers(ProjectTaskHandler):
     def _export_file_outcome(self, result: ExportExecutionResult) -> ExportFileTaskOutcome:
         return ExportFileTaskOutcome(
             output=ArtifactReference.from_path(self.project_dir, result.output_path),
+            subtitle_files=[
+                ArtifactReference.from_path(self.project_dir, path) for path in result.subtitle_files
+            ],
             requested_video_codec=result.requested_video_codec,
             actual_video_codec=result.actual_video_codec,
             hardware_fallback_reason=result.hardware_fallback_reason,

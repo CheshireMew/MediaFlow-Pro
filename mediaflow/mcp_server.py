@@ -71,39 +71,15 @@ def _execute_input_schema(
         if not isinstance(operation, dict):
             raise RuntimeError("Editor Service operation contract is invalid")
         name = str(operation.get("name") or "").strip()
-        arguments = operation.get("arguments_schema")
-        if not name or not isinstance(arguments, dict):
-            raise RuntimeError("Editor Service operation schema is incomplete")
+        request_schema = operation.get("request_schema")
+        if not name or not isinstance(request_schema, dict):
+            raise RuntimeError("Editor Service operation request schema is incomplete")
         namespace = f"operation_{index}_{name.replace('.', '_')}"
-        argument_schema, shared = _operation_schema(
-            arguments,
-            namespace=namespace,
-        )
-        overlap = definitions.keys() & shared.keys()
-        if overlap:
-            raise RuntimeError(
-                "Editor Service operation definitions are not uniquely namespaced"
-            )
+        branch, shared = _operation_schema(request_schema, namespace=namespace)
+        if definitions.keys() & shared.keys():
+            raise RuntimeError("Editor Service operation definitions are not uniquely namespaced")
         definitions.update(shared)
-        required = ["operation"]
-        if argument_schema.get("required"):
-            required.append("arguments")
-        access = str(operation.get("project_access") or "none")
-        if access in {"read", "write"}:
-            required.append("project")
-        if access in {"create", "write"}:
-            required.append("request_id")
-        if access == "write":
-            required.append("base_revision")
-        branches.append(
-            {
-                "properties": {
-                    "operation": {"const": name},
-                    "arguments": argument_schema,
-                },
-                "required": required,
-            }
-        )
+        branches.append(branch)
     generated = dict(base_schema)
     generated["oneOf"] = branches
     if definitions:

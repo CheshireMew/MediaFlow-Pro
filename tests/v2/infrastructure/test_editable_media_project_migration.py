@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 import cv2
@@ -94,7 +95,7 @@ def _request(
     }
     definition = OPERATIONS[operation]
     if definition.project_access == "write":
-        with sqlite3.connect(project / "project.mfp") as connection:
+        with closing(sqlite3.connect(project / "project.mfp")) as connection:
             row = connection.execute("SELECT content_revision FROM project LIMIT 1").fetchone()
         if row is None:
             raise RuntimeError("Project has no content revision")
@@ -427,7 +428,7 @@ def test_third_party_v4_runtime_requires_republication_without_project_writes(
     assert result["ok"] is False
     assert "Third-party editable-media v4 runtime" in json.dumps(result, ensure_ascii=False)
     assert "republish" in json.dumps(result, ensure_ascii=False)
-    with sqlite3.connect(project / "project.mfp") as connection:
+    with closing(sqlite3.connect(project / "project.mfp")) as connection:
         assert connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone() == (
             35,
         )
@@ -526,7 +527,7 @@ def test_all_legacy_web_assets_are_preflighted_before_the_first_publication(
 
     assert code == 1
     assert "Third-party editable-media v4 runtime" in json.dumps(result, ensure_ascii=False)
-    with sqlite3.connect(project / "project.mfp") as connection:
+    with closing(sqlite3.connect(project / "project.mfp")) as connection:
         assert connection.execute("SELECT version FROM schema_info WHERE component='project'").fetchone() == (
             35,
         )

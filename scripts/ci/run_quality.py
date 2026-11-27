@@ -17,13 +17,15 @@ from pathlib import Path
 
 import psutil
 
+from mediaflow.atomic_file import atomic_write_text
 from mediaflow.environment import load_project_environment, test_run_root
-from mediaflow.infrastructure.storage_budget import (
-    directory_inventory,
-    load_storage_policy,
-    require_storage_budget,
-    require_test_artifact_budget,
-)
+from mediaflow.infrastructure.storage_budget import require_test_artifact_budget
+from mediaflow.infrastructure.storage_inventory import directory_inventory, run_payload_inventory
+from mediaflow.infrastructure.storage_policy import load_storage_policy
+from mediaflow.infrastructure.storage_preflight import require_storage_budget
+from mediaflow.infrastructure.storage_processes import storage_process_owner
+from mediaflow.infrastructure.storage_receipts import storage_terminal_status
+from mediaflow.infrastructure.storage_roots import managed_root_ownership, register_owned_storage_roots
 from scripts.ci.quality_plan import QualityPlan, forced_plan, plan_for_paths
 from scripts.run_artifacts import VERIFICATION_WORK_ROOT_VARIABLE
 
@@ -615,22 +617,27 @@ def _write_report(
         "schema": "mediaflow-local-quality/v1",
         "status": status,
         "started_at": started_at,
-        "finished_at": datetime.now(UTC).isoformat(),
+        "finished_at": None if status == "running" else datetime.now(UTC).isoformat(),
+        "owner": storage_process_owner(),
         "plan": asdict(plan),
         "changed_paths": list(changed_paths),
         "work_root": str(work_root),
         "commands": [asdict(result) for result in results],
         "storage": {
             "preflight": storage_preflight,
-            "final_inventory": {
-                "evidence": directory_inventory(storage_root),
+            "final_inventory": None
+            if status == "running"
+            else {
+                "evidence": run_payload_inventory(
+                    storage_root, excluded_control_files=("quality-report.json",)
+                ),
                 "workspace": directory_inventory(work_root),
             },
             "cleanup": "report-only-until-authorized",
         },
         "error": error,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _print_dry_run(stages: Sequence[QualityStage], plan: QualityPlan) -> None:
@@ -740,6 +747,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         work_root,
         plan,
     )
+    register_owned_storage_roots(
+        (run_root, work_root),
+        ownership=managed_root_ownership(configured_test_root),
+        producer="local-quality-run",
+        receipt=run_root / "quality-report.json",
+    )
     run_root.mkdir(parents=True, exist_ok=False)
     work_root.mkdir(parents=True, exist_ok=False)
     started_at = datetime.now(UTC).isoformat()
@@ -755,6 +768,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             "this local run verifies the selected Windows boundary."
         )
     results: list[CommandResult] = []
+    _write_report(
+        run_root / "quality-report.json",
+        plan=plan,
+        changed_paths=paths,
+        work_root=work_root,
+        status="running",
+        results=results,
+        started_at=started_at,
+        storage_preflight=storage_preflight,
+        storage_root=run_root,
+    )
     try:
         for stage in stages:
             results.extend(_run_stage(stage, run_root, work_root))
@@ -800,7 +824,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan=plan,
             changed_paths=paths,
             work_root=work_root,
-            status="failed",
+            status=storage_terminal_status(error),
             results=results,
             started_at=started_at,
             storage_preflight=storage_preflight,

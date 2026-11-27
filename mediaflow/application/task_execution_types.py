@@ -83,6 +83,16 @@ class TaskContext:
             )
         self._project_changes.append(change)
 
+    _discard_actions: list[Callable[[], None]] = field(default_factory=list, init=False, repr=False)
+
+    def on_discard(self, action: Callable[[], None]) -> None:
+        self._discard_actions.append(action)
+
+    def discard_prepared_result(self) -> None:
+        actions, self._discard_actions = self._discard_actions, []
+        for action in reversed(actions):
+            action()
+
     def project_changes(self) -> tuple[Callable[[], None], ...]:
         return tuple(self._project_changes)
 

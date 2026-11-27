@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from mediaflow.domain.audio import AUDIO_EFFECT_DEFINITIONS, AudioEffect
 from mediaflow.domain.clip_transform_projection import (
+    project_clip_transform_keyframes,
     project_clip_transform_points,
     sampled_clip_transform_points,
 )
@@ -23,7 +24,7 @@ from mediaflow.domain.enums import (
 )
 from mediaflow.domain.exports import ExportPreset
 from mediaflow.domain.keyframes import KeyframeCurve, keyframe_progress
-from mediaflow.domain.mask_projection import mask_spline_json, sampled_mask_points
+from mediaflow.domain.mask_projection import mask_spline_json, project_mask_keyframes, sampled_mask_points
 from mediaflow.domain.masks import ClipMask, MaskGeometry, MaskKeyframe, MaskPoint
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.project import ProjectProfile, Sequence
@@ -143,6 +144,47 @@ def test_clip_transform_projection_uses_one_clip_local_clock_for_all_renderers()
 
     assert projection.has_keyframes is True
     assert projection.points == ((0, clip.transform), (2, transformed))
+
+
+@pytest.mark.parametrize("speed, anchors", [(2, [10, 14, 30]), (-2, [6, 10, 30])])
+def test_transform_and_mask_source_anchors_share_projection_and_curve_sampling(
+    speed: int,
+    anchors: list[int],
+) -> None:
+    curve = KeyframeCurve(interpolation="ease_in_out")
+    mask = ClipMask(
+        kind="rectangle",
+        position=0,
+        keyframes=[
+            MaskKeyframe(source_frame=frame, geometry=MaskGeometry(center_x=frame / 100), curve=curve)
+            for frame in anchors
+        ],
+    )
+    clip = Clip(
+        track_id="video",
+        asset_id="asset",
+        timeline_start=100,
+        source_in=10,
+        duration=5,
+        media_kind=ClipMediaKind.VIDEO_ONLY,
+        speed_numerator=speed,
+        transform_keyframes=[
+            ClipTransformKeyframe(source_frame=frame, transform=ClipTransform(x=frame), curve=curve)
+            for frame in anchors
+        ],
+        masks=[mask],
+    )
+
+    transforms = project_clip_transform_keyframes(clip)
+    masks = project_mask_keyframes(clip, mask)
+    assert [item.timeline_offset for item in transforms] == [0, 2]
+    assert [item.timeline_offset for item in masks] == [0, 2]
+    assert all(item.source_frame is None for item in (*transforms, *masks))
+    transform_samples = dict(sampled_clip_transform_points(clip))
+    mask_samples = dict(sampled_mask_points(clip, mask))
+    assert set(transform_samples) == set(mask_samples) == {0, 1, 2, 4}
+    for frame in transform_samples:
+        assert transform_samples[frame].x == pytest.approx(mask_samples[frame].center_x * 100)
 
 
 def test_native_keyframe_curves_are_deterministic_and_baked_for_renderers() -> None:

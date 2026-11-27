@@ -6,14 +6,14 @@ from typing import Any
 from PySide6.QtCore import Property, QUrl, Signal, Slot
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineInterchangeScope
 
 
-class TimelineInterchangeController(ControllerFacet[TimelinePresentationScope]):
+class TimelineInterchangeController(ControllerFacet[TimelineInterchangeScope]):
     stateChanged = Signal()
     importCompleted = Signal(str)
 
-    def __init__(self, scope: TimelinePresentationScope) -> None:
+    def __init__(self, scope: TimelineInterchangeScope) -> None:
         super().__init__(scope)
         self._inspection: dict[str, Any] = {}
         self._running = False
@@ -35,7 +35,7 @@ class TimelineInterchangeController(ControllerFacet[TimelinePresentationScope]):
     @Slot(str, str)
     @report_ui_errors
     def inspectTimeline(self, source_url: str, frame_rate_text: str) -> None:
-        current = self._session.state.binding.current
+        current = self._session.project_binding.current
         if current is None:
             raise RuntimeError("请先打开项目")
         path = self._local_path(source_url)
@@ -52,7 +52,7 @@ class TimelineInterchangeController(ControllerFacet[TimelinePresentationScope]):
                 "timeline.interchange.inspect",
                 current.project_dir,
                 {
-                    "sequence_id": self._session.state.binding.active_sequence_id,
+                    "sequence_id": self._session.project_binding.active_sequence_id,
                     "timeline_path": str(path),
                     **({"frame_rate": frame_rate} if frame_rate is not None else {}),
                 },
@@ -71,10 +71,10 @@ class TimelineInterchangeController(ControllerFacet[TimelinePresentationScope]):
         media_mappings: dict[str, Any],
     ) -> None:
         self._session._require_writable()
-        current = self._session.state.binding.require_current()
+        current = self._session.project_binding.require_current()
         path = self._local_path(source_url)
         frame_rate = self._frame_rate(path, frame_rate_text)
-        sequence_id = self._session.state.binding.active_sequence_id
+        sequence_id = self._session.project_binding.active_sequence_id
         mappings = {
             str(key): str(value)
             for key, value in dict(media_mappings).items()
@@ -112,7 +112,7 @@ class TimelineInterchangeController(ControllerFacet[TimelinePresentationScope]):
         if request_id != self._request_id:
             return
         self._importing = False
-        current = self._session.state.binding.current
+        current = self._session.project_binding.current
         if current is None or current.project_dir != project_dir:
             self.stateChanged.emit()
             return
@@ -124,11 +124,11 @@ class TimelineInterchangeController(ControllerFacet[TimelinePresentationScope]):
         if not sequence_id:
             self._fail(request_id, RuntimeError("交换时间线没有返回新序列"), importing=True)
             return
-        self._session.state.binding.active_sequence_id = sequence_id
-        self._session.state.binding.timeline = current.timeline(sequence_id)
-        self._session.state.selection.clip_ids = []
-        self._session.state.selection.compound_id = ""
-        self._session.projectors.refresh_active_sequence(refresh_sequences=True)
+        self._session.project_binding.active_sequence_id = sequence_id
+        self._session.project_binding.timeline = current.timeline(sequence_id)
+        self._session.read_selection().clip_ids = []
+        self._session.read_selection().compound_id = ""
+        self._session.refresh_active_sequence(refresh_sequences=True)
         self._session.updates.commit(project=True, history=True)
         self.stateChanged.emit()
         self._session._set_status("交换时间线已导入：%1", getattr(sequence, "name", sequence_id))

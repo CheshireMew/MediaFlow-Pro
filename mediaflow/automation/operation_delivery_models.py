@@ -111,6 +111,7 @@ class AudioBusWithEffects(AudioBus):
 
 class AudioInspectResult(DomainModel):
     buses: list[AudioBusWithEffects]
+    audible_clip_ids: list[str]
 
 
 class AudioBusResult(DomainModel):

@@ -16,6 +16,8 @@ from typing import Any
 import psutil
 from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, TCPConnector
 
+from mediaflow.operation_cancellation import OperationCancelled
+
 from .discovery import SERVICE_PROTOCOL, SERVICE_PROTOCOL_VERSION, ServiceDiscovery, ServicePaths
 from .process_launcher import launch_editor_service
 
@@ -266,6 +268,15 @@ class EditorServiceClient:
             raise EditorServiceUnavailable("Editor Service returned a non-object response")
         payload_error = payload.get("error")
         if isinstance(payload_error, dict):
+            data = payload_error.get("data")
+            if (
+                payload_error.get("code") == -32800
+                and isinstance(data, dict)
+                and data.get("cancelled") is True
+            ):
+                raise OperationCancelled(
+                    str(payload_error.get("message") or "Editor Service request cancelled"),
+                )
             raise EditorServiceRpcError(
                 int(payload_error.get("code", -32603)),
                 str(payload_error.get("message", "Editor Service request failed")),

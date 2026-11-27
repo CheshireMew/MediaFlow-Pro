@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from mediaflow.application.edit_history import ProjectEditHistory
@@ -20,6 +22,12 @@ from mediaflow.domain.project_collection import (
     ProjectCollectionRecord,
     ProjectCollectionResult,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedProjectCollection:
+    result: ProjectCollectionResult
+    baseline: tuple[Asset, ...]
 
 
 class ProjectCollectionService:
@@ -73,6 +81,12 @@ class ProjectCollectionService:
         )
 
     def collect(self, asset_ids: list[str] | None = None) -> ProjectCollectionResult:
+        return self.commit_collection(self.prepare_collection(asset_ids))
+
+    def prepare_collection(
+        self, asset_ids: list[str] | None = None,
+        *, check_cancelled: Callable[[], None] | None = None,
+    ) -> PreparedProjectCollection:
         preview = self.preview(asset_ids)
         blocked = [item for item in preview.candidates if not item.collectable and not item.managed]
         if blocked:
@@ -81,11 +95,18 @@ class ProjectCollectionService:
         candidates = [item for item in preview.candidates if item.collectable]
         if not candidates:
             raise ValueError("项目中没有需要归集的外部素材")
+        baseline = tuple(self.repository.assets.get_asset(item.asset_id) for item in candidates)
+        by_baseline = {asset.id: asset for asset in baseline}
+        if any(
+            self.repository.assets.resolve_asset_path(by_baseline[item.asset_id]) != Path(item.source_path)
+            for item in candidates
+        ):
+            raise RuntimeError("素材路径在归集准备期间已修改，请重新归集")
         record = ProjectCollectionRecord(
             items=[
                 ProjectCollectionItem(
                     asset_id=item.asset_id,
-                    original_path=self.repository.assets.get_asset(item.asset_id).path,
+                    original_path=by_baseline[item.asset_id].path,
                     original_managed=False,
                     collected_path="pending",
                     size_bytes=item.size_bytes,
@@ -97,6 +118,7 @@ class ProjectCollectionService:
         copies = self.storage.collect(
             record.id,
             [(item.asset_id, Path(item.source_path)) for item in candidates],
+            check_cancelled=check_cancelled,
         )
         by_id = {item.asset_id: item for item in copies}
         record = record.model_copy(
@@ -115,19 +137,32 @@ class ProjectCollectionService:
                 ]
             }
         )
+        by_asset = {item.asset_id: item for item in record.items}
+        assets = [asset.model_copy(update={
+            "path": str(self.repository.project_dir / by_asset[asset.id].collected_path),
+            "managed": True, "status": AssetStatus.ONLINE,
+        }) for asset in baseline]
+        return PreparedProjectCollection(
+            ProjectCollectionResult(record=record, assets=assets, using_collected_files=True), baseline,
+        )
+
+    def discard_collection(self, prepared: PreparedProjectCollection) -> None:
+        self.storage.archive_uncommitted(prepared.result.record.id)
+
+    def commit_collection(self, prepared: PreparedProjectCollection) -> ProjectCollectionResult:
+        record = prepared.result.record
         try:
             with self.repository.transaction():
+                if any(self.repository.assets.get_asset(asset.id) != asset for asset in prepared.baseline):
+                    raise RuntimeError("素材在归集期间已修改，未覆盖当前项目，请重新归集")
                 self.repository.assets.save_project_collection(record)
-                assets = self._apply_state(record, using_collected=True)
+                for asset in prepared.result.assets:
+                    self.repository.assets.update_asset(asset)
         except BaseException:
             self.storage.archive_uncommitted(record.id)
             raise
         self._push_history(record, from_collected=False, to_collected=True, created=True)
-        return ProjectCollectionResult(
-            record=record,
-            assets=assets,
-            using_collected_files=True,
-        )
+        return prepared.result
 
     def list_records(self) -> list[ProjectCollectionRecord]:
         return self.repository.assets.list_project_collections()

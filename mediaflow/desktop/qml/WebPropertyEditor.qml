@@ -73,6 +73,7 @@ ColumnLayout {
 
     EditorFieldControl {
         field: root.descriptor
+        collaborationPath: root.collaborationPath()
         showLabel: false
         onValueCommitted: value => root.commit(value)
     }

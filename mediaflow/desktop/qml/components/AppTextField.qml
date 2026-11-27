@@ -4,6 +4,37 @@ import ".."
 
 TextField {
     property string collaborationPath: ""
+    property var sourceText: undefined
+    property var draftTexts: ({})
+    property bool applyingSourceText: false
+
+    function restoreSourceText() {
+        if (sourceText === undefined)
+            return;
+        applyingSourceText = true;
+        const hasDraft = collaborationPath.length > 0
+            && mediaflow.workspaceProjectController.hasCollaborationDraft(collaborationPath);
+        text = hasDraft && draftTexts[collaborationPath] !== undefined
+            ? draftTexts[collaborationPath] : String(sourceText);
+        applyingSourceText = false;
+    }
+
+    function rememberDraft() {
+        if (applyingSourceText || collaborationPath.length === 0)
+            return;
+        draftTexts[collaborationPath] = text;
+        mediaflow.workspaceProjectController.beginCollaborationDraft(collaborationPath);
+    }
+
+    onSourceTextChanged: restoreSourceText()
+    onCollaborationPathChanged: Qt.callLater(restoreSourceText)
+    Component.onCompleted: restoreSourceText()
+    Connections {
+        target: control
+        function onTextEdited() {
+            control.rememberDraft();
+        }
+    }
     id: control
     property bool error: false
     hoverEnabled: true

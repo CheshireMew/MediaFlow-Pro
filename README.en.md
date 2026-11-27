@@ -168,7 +168,7 @@ MediaFlow Pro formally consumes generic local `editable-media` v6 packages. It d
 - `web.clip.render.inspect` reports the planned backend, actual backend, fallback reason, actual encoder, hardware proof, and pixel-transfer evidence separately. Chromium's current Canvas `VideoFrame` reads D3D pixels back to memory before hardware encoding, so it reports `hardware_acceleration_verified=true` and `zero_copy_verified=false` rather than conflating hardware encoding with zero-copy. Dynamic `<video>` inside a page does not enter this fast path; formal video sources remain in the native-video pipeline and share the timeline frame clock.
 - On NVIDIA systems, the fast path reads current GPU utilization and VRAM usage before it starts. Either reaching 90% records an immediate fallback and uses the GPU-disabled frame pipeline, so model inference or image generation cannot turn a speculative acceleration attempt into a slower render. Full 4K comparisons showed that software OpenH264 does not clear the net-speedup threshold under the same load, so it is not an automatic substitute.
 
-An ordinary single-sequence video export with no local in/out range and a duration longer than one 10-second segment automatically uses the same stable segment cache. Picture is encoded by segment, audio is generated once as a continuous stream, and duration and stream specifications are checked before atomic publication. Repeat exports and local picture edits reuse unaffected picture segments; audio-only changes do not invalidate all picture segments. Atomic multi-target exports, audio exports, and ranged exports continue through the complete export path.
+An ordinary single-sequence video export with no local in/out range and a duration of at least two 60-second segments (120 seconds) automatically uses the same stable segment cache. Picture is encoded by segment, audio is generated once as a continuous stream, and duration and stream specifications are checked before atomic publication. Repeat exports and local picture edits reuse unaffected picture segments; audio-only changes do not invalidate all picture segments. Atomic multi-target exports, audio exports, and ranged exports continue through the complete export path.
 
 Standard v4/v5 web assets in older projects migrate directly to v6 in one transactional project upgrade. Old packages move to project-local `archive/web` for manual inspection and no longer participate in a second runtime path. A third-party runtime that cannot be proven safe to convert stops the upgrade and must be republished.
 
@@ -222,15 +222,14 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layers, threading, persistence bounda
 
 ## Development and verification
 
-Load the local environment and run the tests that directly cover your change first. After they pass, use the one local quality entry point to perform the final change-scoped verification:
+For routine changes, run only the directly affected tests and necessary static checks. Stop after those checks pass:
 
 ```powershell
 . .\scripts\load_environment.ps1
 & $env:MEDIAFLOW_PYTHON -m pytest tests\v2\path\to\test_file.py
-.\scripts\run_quality.ps1
 ```
 
-Do not run the unbounded `pytest tests/v2` suite directly. The local entry point and CI both consume [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py), with cross-platform source builds separated from project interchange. Documentation-only changes do not trigger unrelated desktop or end-to-end runs. Use `.\scripts\run_quality.ps1 --dry-run` to preview the exact commands.
+Do not run the unbounded `pytest tests/v2` suite directly. When a complete lightweight check is needed, `.\scripts\run_quality.ps1` and CI both use [`scripts/ci/quality_plan.py`](scripts/ci/quality_plan.py) to select maintenance or core checks. Full acceptance requires an explicit request from the project owner through `--scope full` or the manual CI `full` choice. Pushes, PRs, tags, and release requests do not automatically start full acceptance, and there is no scheduled full regression. Use `--dry-run` to preview the exact commands.
 
 Public interface screenshots are generated in an isolated project with `& $env:MEDIAFLOW_PYTHON scripts\update_documentation_screenshots.py`. The generator updates the image hashes, dimensions, UI source digest, and program-monitor pixel evidence together. Documentation verification rejects manual replacements, visible local paths, stale QML captures, and blank preview imagery.
 
@@ -240,7 +239,7 @@ Desktop logs live at `logs/mediaflow.log` under the runtime directory, rotate at
 
 MediaFlow Pro source is released under the [GNU AGPL v3 or later](LICENSE). Qt, MLT, FFmpeg, yt-dlp, Python packages, and other third-party components keep their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-This repository maintains source, build scripts, and dependency manifests. It does not produce a portable bundle or installer unless the project owner explicitly starts a release plan. A Windows release must be built from a clean tag whose exact commit has passed the tag-triggered full quality gate. The pristine portable directory is inventoried before and after acceptance, its copy completes the offline desktop/import/edit/preview/export/reopen chain, and the archive records exact file hashes plus bundled Python, Chromium, MLT, FFmpeg, and Qt license evidence before a new release can be published.
+This repository maintains source, build scripts, and dependency manifests. It does not produce a portable bundle or installer unless the project owner explicitly starts a release plan. A Windows release must be built from a clean tag. Full acceptance is not a release prerequisite: the release workflow neither queries nor requires a previous full acceptance result, and tags or release requests do not start it automatically. The complete portable offline chain runs on a separate copy only when `run_full_acceptance` is explicitly selected. The pristine directory is inventoried around archiving, and the archive records exact file hashes plus bundled Python, Chromium, MLT, FFmpeg, and Qt license evidence before a new release can be published.
 
 ## Star History
 

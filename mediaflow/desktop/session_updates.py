@@ -10,6 +10,7 @@ from mediaflow.desktop.session_events import SessionEvents
 @dataclass(frozen=True, slots=True)
 class SessionChangeSet:
     project: bool = False
+    home_summary: bool = False
     selection: bool = False
     history: bool = False
     status: bool = False
@@ -41,6 +42,7 @@ class SessionUpdates(QObject):
         change: SessionChangeSet | None = None,
         *,
         project: bool = False,
+        home_summary: bool = False,
         selection: bool = False,
         history: bool = False,
         status: bool = False,
@@ -61,6 +63,7 @@ class SessionUpdates(QObject):
     ) -> None:
         named = SessionChangeSet(
             project=project,
+            home_summary=home_summary,
             selection=selection,
             history=history,
             status=status,
@@ -84,6 +87,7 @@ class SessionUpdates(QObject):
         resolved = change or named
         ordered_signals = (
             (resolved.project, self._events.projectStateChanged),
+            (resolved.home_summary, self._events.homeSummaryChanged),
             (resolved.selection, self._events.selectionChanged),
             (resolved.history, self._events.historyChanged),
             (resolved.status, self._events.statusChanged),

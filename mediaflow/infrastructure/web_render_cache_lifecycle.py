@@ -10,13 +10,11 @@ from mediaflow.domain.project import AssetFingerprint
 from mediaflow.domain.web_rendering import WebRenderActualCapture, WebRenderPlan
 
 from .file_fingerprint import fingerprint_matches
+from .project_cache_budget import reserve_project_cache
+from .project_cache_reservations import ProjectCacheReservation
 from .project_lock import ProcessFileLock
 from .runtime_paths import RuntimePaths
-from .storage_budget import (
-    ProjectCacheReservation,
-    estimate_video_cache_bytes,
-    reserve_project_cache,
-)
+from .storage_estimates import estimate_video_cache_bytes
 from .web_render_target import (
     WEB_CACHE_MANIFEST_SCHEMA,
     WEB_RENDERER_VERSION,
@@ -227,6 +225,7 @@ class WebRenderCacheLifecycle:
         target: WebRenderTarget,
         *,
         label: str,
+        check_cancelled=None,
     ) -> ProjectCacheReservation:
         cache_root = self.paths.project_cache_dir(self.documents.project_dir)
         return reserve_project_cache(
@@ -239,6 +238,7 @@ class WebRenderCacheLifecycle:
             ),
             label=label,
             case_sensitive_paths=self.paths.target.case_sensitive_paths,
+            check_cancelled=check_cancelled,
         )
 
     @classmethod

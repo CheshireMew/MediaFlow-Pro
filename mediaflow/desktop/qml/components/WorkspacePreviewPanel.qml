@@ -12,6 +12,12 @@ Rectangle {
     required property string activeMode
     required property var exportPreviewOptions
     property string previewMode: "program"
+    property int programFrame: 0
+    property int sourceFrame: 0
+    property string programSequenceId: ""
+    property string sourceAssetId: ""
+    property bool restoringMonitor: false
+    property int restoreFrame: 0
     readonly property bool compactSourceActions: width < 620
     readonly property var sourceMonitor: mediaflow.mediaController.sourceMonitorData
     readonly property alias viewport: previewViewport
@@ -24,9 +30,63 @@ Rectangle {
     border.color: Theme.borderSubtle
     clip: true
 
+    function restoreMonitor() {
+        restoringMonitor = true;
+        restoreFrame = previewMode === "source" ? sourceFrame : programFrame;
+        Qt.callLater(function () {
+            previewViewport.seek(root.restoreFrame);
+            root.finishMonitorRestore();
+        });
+    }
+
+    function finishMonitorRestore() {
+        if (restoringMonitor && previewViewport.duration > 0
+                && previewViewport.position === Math.min(restoreFrame, previewViewport.duration - 1))
+            restoringMonitor = false;
+    }
+
+    function seekProgram(frame) {
+        programFrame = Math.max(0, Math.round(frame));
+        previewMode = "program";
+        restoreMonitor();
+    }
+
+    function openSource(frame) {
+        sourceFrame = Math.max(0, Math.round(frame));
+        previewMode = "source";
+        restoreMonitor();
+    }
+
+    function playProgramRange(startFrame, endFrame) {
+        seekProgram(startFrame);
+        Qt.callLater(function () { previewViewport.playRequestedRange(startFrame, endFrame); });
+    }
+
+    onPreviewModeChanged: restoreMonitor()
+
+    Connections {
+        target: mediaflow.workspaceViewController
+        function onProjectStateChanged() {
+            const sequenceId = String(mediaflow.workspaceViewController.activeSequenceId || "");
+            if (root.programSequenceId !== sequenceId) {
+                root.programSequenceId = sequenceId;
+                root.programFrame = 0;
+                if (root.previewMode === "program")
+                    root.restoreMonitor();
+            }
+        }
+    }
+
     Connections {
         target: mediaflow.mediaController
         function onSourceMonitorChanged() {
+            const assetId = String(root.sourceMonitor.assetId || "");
+            if (root.sourceAssetId !== assetId) {
+                root.sourceAssetId = assetId;
+                root.sourceFrame = 0;
+                if (root.previewMode === "source")
+                    root.restoreMonitor();
+            }
             if (!root.sourceMonitor.assetId && root.previewMode === "source")
                 root.previewMode = "program";
         }
@@ -35,10 +95,11 @@ Rectangle {
     Connections {
         target: mediaflow.workspacePlaybackController
         function onRemoteSeekRequested(frame) {
-            previewViewport.seek(frame);
+            root.seekProgram(frame);
         }
         function onRemotePlayRequested(frame) {
-            previewViewport.playPreviewFrom(frame);
+            root.seekProgram(frame);
+            Qt.callLater(function () { previewViewport.playPreviewFrom(frame); });
         }
         function onRemotePauseRequested() {
             previewViewport.pause();
@@ -181,15 +242,31 @@ Rectangle {
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 260
+            Layout.minimumHeight: 140
 
             PreviewViewport {
                 id: previewViewport
                 anchors.fill: parent
-                visible: !(mediaflow.webController.isWebClip && mediaflow.webController.editMode)
+                visible: !(root.previewMode === "program" && mediaflow.webController.isWebClip && mediaflow.webController.editMode)
                 source: root.previewMode === "source"
                     ? String(root.sourceMonitor.graphPath || "")
                     : mediaflow.workspaceViewController.previewGraphPath
+                preparationState: root.previewMode === "source"
+                    ? "ready" : mediaflow.workspaceViewController.previewStatus
+                preparationError: root.previewMode === "source"
+                    ? "" : mediaflow.workspaceViewController.previewError
+                onRetryRequested: mediaflow.workspaceSequenceController.retryPreview()
+                onTasksRequested: mediaflow.taskController.openTaskCenter()
+                onPositionChanged: {
+                    root.finishMonitorRestore();
+                    if (root.restoringMonitor)
+                        return;
+                    if (root.previewMode === "source")
+                        root.sourceFrame = position;
+                    else
+                        root.programFrame = position;
+                }
+                onDurationChanged: root.finishMonitorRestore()
                 runtimeRoot: mediaflow.workspaceViewController.mltRuntimeRoot
                 mltLibrary: mediaflow.workspaceViewController.mltLibraryPath
                 mltRepository: mediaflow.workspaceViewController.mltRepositoryPath
@@ -224,10 +301,10 @@ Rectangle {
                 id: webEditorLoader
                 objectName: "webEditorLoader"
                 anchors.fill: parent
-                visible: mediaflow.webController.isWebClip && mediaflow.webController.editMode
+                visible: root.previewMode === "program" && mediaflow.webController.isWebClip && mediaflow.webController.editMode
                 active: visible || status === Loader.Ready
                 sourceComponent: WebEditorCanvas {
-                    playheadFrame: previewViewport.position
+                    playheadFrame: root.programFrame
                 }
             }
         }

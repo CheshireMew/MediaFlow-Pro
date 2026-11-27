@@ -2,7 +2,7 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/media-resource-catalog.json",
-  "producer_revision": "0c3b1fdac281300e09f14e1d5714cc12ad88ddc1",
+  "producer_revision": "0f37c9db84cbcc5d85fbb1772cdb8bc984217c14",
   "catalog_id": "visual-multimedia-core-resources",
   "catalog_version": "1.2.0",
   "files": {

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 from dataclasses import dataclass
 from math import ceil
 from pathlib import Path
@@ -17,9 +16,8 @@ from mediaflow.application.ports import (
 from mediaflow.application.timeline_clock import assets_in_timeline_clock
 from mediaflow.atomic_file import atomic_write_text, unique_temporary_sibling
 from mediaflow.domain.enums import AssetKind, ClipMediaKind, ExportFormat, TrackKind
-from mediaflow.domain.exports import ExportPreset
+from mediaflow.domain.exports import ExportPreset, SubtitleStyle
 from mediaflow.domain.progress import OperationProgress
-from mediaflow.domain.sequence_audio import select_audible_sequence_audio
 from mediaflow.domain.task_commands import SequenceBuildUnit
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.file_digest import sha256_file
@@ -32,16 +30,14 @@ from mediaflow.infrastructure.mlt.export_types import (
     MltExportRequest,
 )
 from mediaflow.infrastructure.output_reservation import output_set_transaction
+from mediaflow.infrastructure.project_cache_budget import reserve_project_cache
+from mediaflow.infrastructure.project_cache_reservations import ProjectCacheReservation
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
-from mediaflow.infrastructure.storage_budget import (
-    ProjectCacheReservation,
-    estimate_video_cache_bytes,
-    reserve_project_cache,
-)
+from mediaflow.infrastructure.storage_estimates import estimate_video_cache_bytes
 from mediaflow.infrastructure.web_render_service import WebRenderService
 from mediaflow.infrastructure.web_render_target import WEB_RENDERER_VERSION
 
-BUILD_PROTOCOL_VERSION = 3
+BUILD_PROTOCOL_VERSION = 5
 AUTO_SEGMENT_SECONDS = 60
 
 
@@ -94,6 +90,7 @@ class SegmentedExportService:
         progress=None,
         check_cancelled=None,
     ) -> SequenceBuildResult:
+        self.exporter.preflight(state, preset, output_path, overwrite=overwrite)
         total_frames, reservation = self._prepare_build(state, preset, units)
         with reservation:
             check = check_cancelled or (lambda: None)
@@ -128,13 +125,8 @@ class SegmentedExportService:
                 total_frames,
                 check_cancelled=check,
             )
-            output, final_probe = self._publish_assembly(
-                state,
-                preset,
-                assembly,
-                output_path,
-                total_frames,
-                overwrite=overwrite,
+            output, final_probe, subtitle_files = self.exporter.publish_existing(
+                state, preset, assembly.path, output_path, overwrite=overwrite,
             )
             return self._build_result(
                 output,
@@ -143,6 +135,7 @@ class SegmentedExportService:
                 unit_results,
                 audio_result,
                 total_frames,
+                subtitle_files,
             )
 
     @staticmethod
@@ -382,39 +375,6 @@ class SegmentedExportService:
             transaction.publish()
             transaction.finalize(archive_replaced_to=(self.cache_root / "archive" / "assemblies"))
 
-    def _publish_assembly(
-        self,
-        state: TimelineState,
-        preset: ExportPreset,
-        assembly: _PreparedAssembly,
-        output_path: str | Path,
-        total_frames: int,
-        *,
-        overwrite: bool,
-    ):
-        output = Path(output_path).expanduser().resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        if not (output.is_file() and sha256_file(output) == assembly.sha256):
-            with output_set_transaction(
-                (output,),
-                overwrite=overwrite,
-                runtime_dir=self.paths.runtime_dir,
-            ) as transaction:
-                staged = transaction.temporary_path(
-                    output,
-                    "sequence-build",
-                )
-                shutil.copyfile(assembly.path, staged)
-                transaction.commit()
-        probe = self.exporter.probe(output)
-        self.exporter.validate_probe(
-            state,
-            preset,
-            probe,
-            expected_duration_frames=total_frames,
-        )
-        return output, probe
-
     @staticmethod
     def _build_result(
         output: Path,
@@ -423,6 +383,7 @@ class SegmentedExportService:
         units: list[SequenceBuildUnitResult],
         audio: SequenceBuildAudioResult,
         total_frames: int,
+        subtitle_files: tuple[Path, ...],
     ) -> SequenceBuildResult:
         actual_codecs = {item.actual_video_codec for item in units if item.actual_video_codec is not None}
         fallback_reasons = sorted(
@@ -440,6 +401,7 @@ class SegmentedExportService:
                 output_path=output,
                 project_graph_path=assembly.concat_path,
                 probe=final_probe,
+                subtitle_files=subtitle_files,
                 start_frame=0,
                 end_frame=total_frames,
                 requested_video_codec=requested_codec,
@@ -517,6 +479,7 @@ class SegmentedExportService:
                     output_path=item.output_path,
                     start_frame=item.unit.start_frame,
                     end_frame=item.unit.end_frame,
+                    duration_frames=max(item.state.duration_frames, item.unit.end_frame),
                 )
             )
         if requests:
@@ -567,7 +530,7 @@ class SegmentedExportService:
         progress,
         check_cancelled,
     ) -> SequenceBuildAudioResult:
-        if final_preset.audio_codec is None or not self._has_audible_audio(state):
+        if final_preset.audio_codec is None:
             return SequenceBuildAudioResult("absent", None, None, None)
         audio_state = self._audio_state(state)
         audio_preset = ExportPreset(
@@ -585,7 +548,7 @@ class SegmentedExportService:
                 "audio_channels": state.sequence.profile.audio_channels,
             },
         )
-        key = self._audio_key(audio_state, audio_preset)
+        key = self._audio_key(audio_state, audio_preset, duration_frames=state.duration_frames)
         output = self.cache_root / "audio" / f"{key}.wav"
         manifest = output.with_suffix(".wav.json")
         frames = state.duration_frames
@@ -624,6 +587,7 @@ class SegmentedExportService:
             archive_replaced_to=self.cache_root / "archive" / "audio",
             progress=progress,
             check_cancelled=check_cancelled,
+            duration_frames=frames,
         )
         cached = self._write_cache(output, manifest, key, frames)
         return SequenceBuildAudioResult(
@@ -659,19 +623,20 @@ class SegmentedExportService:
         handle = max((transition.duration for transition in state.transitions), default=0)
         selection_start = max(0, unit.start_frame - handle)
         selection_end = min(state.duration_frames, unit.end_frame + handle)
+        video_track_ids = {track.id for track in state.effective_tracks(TrackKind.VIDEO)}
         selected_clips = [
             clip
             for clip in state.clips
             if clip.timeline_start < selection_end
             and clip.timeline_end > selection_start
-            and next(track for track in state.tracks if track.id == clip.track_id).kind == TrackKind.VIDEO
+            and clip.track_id in video_track_ids
         ]
         clip_ids = {clip.id for clip in selected_clips}
         subtitle_track_id = preset.burn_subtitle_track_id
         tracks = [
             track
             for track in state.tracks
-            if track.kind == TrackKind.VIDEO
+            if track.id in {clip.track_id for clip in selected_clips}
             or (subtitle_track_id is not None and track.id == subtitle_track_id)
         ]
         return state.model_copy(
@@ -694,14 +659,12 @@ class SegmentedExportService:
         )
 
     def _audio_state(self, state: TimelineState) -> TimelineState:
-        audio_track_ids = {track.id for track in state.tracks if track.kind == TrackKind.AUDIO}
-        linked_video_track_ids = {
-            track.id for track in state.tracks if track.linked_audio_track_id in audio_track_ids
-        }
+        # Even a video track without audio can solo away linked sound on another
+        # track. Preserve that control state when deriving the continuous mix.
         tracks = [
             track
             for track in state.tracks
-            if track.id in audio_track_ids or track.id in linked_video_track_ids
+            if track.kind in {TrackKind.AUDIO, TrackKind.VIDEO}
         ]
         clips = [
             clip
@@ -738,8 +701,15 @@ class SegmentedExportService:
         assets = assets_in_timeline_clock(
             self.documents.projects, self.documents.sequences, self.documents.assets, state.sequence
         )
-        asset_ids = sorted({clip.asset_id for clip in state.clips})
+        asset_ids = {clip.asset_id for clip in state.clips}
+        asset_ids.update(
+            effect.resource_asset_id for clip in state.clips for effect in clip.visual_effects
+            if effect.resource_asset_id is not None
+        )
+        if preset.watermark is not None and preset.watermark.enabled and preset.watermark.asset_id:
+            asset_ids.add(preset.watermark.asset_id)
         subtitles = []
+        subtitle_style = None
         if preset.burn_subtitle_track_id:
             segments = {
                 segment.id: segment
@@ -756,6 +726,11 @@ class SegmentedExportService:
                 )
                 if placement.start_frame < unit.end_frame and placement.end_frame > unit.start_frame
             ]
+            if subtitles:
+                track = next(track for track in state.tracks if track.id == preset.burn_subtitle_track_id)
+                subtitle_style = (
+                    preset.subtitle_style or track.subtitle_style or SubtitleStyle()
+                ).model_dump(mode="json")
         return self._hash_document(
             {
                 "protocol": BUILD_PROTOCOL_VERSION,
@@ -783,13 +758,16 @@ class SegmentedExportService:
                 "web_states": {
                     key: value.model_dump(mode="json") for key, value in sorted(state.web_states.items())
                 },
-                "assets": [self._asset_identity(assets[asset_id]) for asset_id in asset_ids],
+                "assets": [self._asset_identity(assets[asset_id]) for asset_id in sorted(asset_ids)],
                 "subtitles": subtitles,
+                "subtitle_style": subtitle_style,
                 "preset": self._preset_identity(preset),
             }
         )
 
-    def _audio_key(self, state: TimelineState, preset: ExportPreset) -> str:
+    def _audio_key(
+        self, state: TimelineState, preset: ExportPreset, *, duration_frames: int,
+    ) -> str:
         assets = assets_in_timeline_clock(
             self.documents.projects, self.documents.sequences, self.documents.assets, state.sequence
         )
@@ -799,6 +777,7 @@ class SegmentedExportService:
             {
                 "protocol": BUILD_PROTOCOL_VERSION,
                 "renderer": "mediaflow-mlt-audio-master",
+                "duration_frames": duration_frames,
                 "profile": state.sequence.profile.model_dump(mode="json"),
                 "tracks": [
                     {
@@ -864,13 +843,6 @@ class SegmentedExportService:
                 "edge_sha256": live.edge_sha256,
             },
         }
-
-    def _has_audible_audio(self, state: TimelineState) -> bool:
-        assets = assets_in_timeline_clock(
-            self.documents.projects, self.documents.sequences, self.documents.assets, state.sequence
-        )
-        buses = self.documents.audio.list_audio_buses(state.sequence.id)
-        return bool(select_audible_sequence_audio(state, assets, buses).asset_ids)
 
     @staticmethod
     def _validate_units(state: TimelineState, units: list[SequenceBuildUnit]) -> None:

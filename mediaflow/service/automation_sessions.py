@@ -42,6 +42,8 @@ class ProjectAutomationOperations:
             return {"result": result, "project_revision": None, "event": None}
         if definition.project_access in {"create", "write"} and not envelope.request_id:
             raise ValueError("request_id is required for project writes")
+        if definition.project_access == "write" and envelope.base_revision is None:
+            raise ValueError("base_revision is required for project writes")
         leased_session = (
             self.registry.leased_created_session(envelope)
             if definition.project_access == "create"
@@ -66,7 +68,7 @@ class ProjectAutomationOperations:
                     "rebased_from": None,
                     "event": None,
                 }
-            if definition.execution_mode == "task":
+            if definition.execution_mode == "task" or definition.workload == "preview":
                 # Task handlers may wait while the worker reaches an admitted
                 # state. Keep the session alive, but release the foreground
                 # gate so independent edits remain responsive.

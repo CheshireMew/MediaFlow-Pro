@@ -1,30 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from mediaflow.application.timeline_change_session import TimelineChangeSession
+from mediaflow.application.timeline_entities import (
+    clip_by_id,
+    transition_by_id,
+)
 from mediaflow.domain.effect_registry import transition_is_available
 from mediaflow.domain.enums import TransitionKind
-from mediaflow.domain.timeline import Clip, CompoundClip, TimelineState, Transition
+from mediaflow.domain.timeline import CompoundClip, TimelineState, Transition
 
 
 class TimelineStructureEditing:
-    sequence_id: str
-    _changes: TimelineChangeSession
+    def __init__(self, changes: TimelineChangeSession) -> None:
+        self._changes = changes
 
-    if TYPE_CHECKING:
-        def _commit(
-            self,
-            label: str,
-            mutate: Callable[[TimelineState], None],
-            *,
-            allow_locked_changes: bool = False,
-        ) -> None: ...
-
-        def _clip(self, clip_id: str) -> Clip: ...
-
-        def _transition(self, transition_id: str) -> Transition: ...
     def create_compound_clip(
         self,
         clip_ids: Iterable[str],
@@ -35,7 +26,7 @@ class TimelineStructureEditing:
         if len(selected_ids) < 2:
             raise ValueError("请至少选择两个片段来创建复合片段")
         selected = sorted(
-            (self._clip(clip_id) for clip_id in selected_ids),
+            (clip_by_id(self._changes.current, clip_id) for clip_id in selected_ids),
             key=lambda clip: (clip.timeline_start, clip.id),
         )
         if len({clip.track_id for clip in selected}) != 1:
@@ -49,7 +40,7 @@ class TimelineStructureEditing:
         if occupied.intersection(selected_ids):
             raise ValueError("所选片段已经属于其他复合片段")
         compound = CompoundClip(
-            sequence_id=self.sequence_id,
+            sequence_id=self._changes.sequence_id,
             name=name,
             clip_ids=[clip.id for clip in selected],
         )
@@ -57,7 +48,7 @@ class TimelineStructureEditing:
         def mutate(state: TimelineState) -> None:
             state.compounds.append(compound)
 
-        self._commit("创建复合片段", mutate)
+        self._changes.commit_change("创建复合片段", mutate)
         return next(item for item in self._changes.current.compounds if item.id == compound.id)
 
     def dissolve_compound_clip(self, compound_id: str) -> None:
@@ -67,7 +58,7 @@ class TimelineStructureEditing:
         def mutate(state: TimelineState) -> None:
             state.compounds = [item for item in state.compounds if item.id != compound_id]
 
-        self._commit("解除复合片段", mutate)
+        self._changes.commit_change("解除复合片段", mutate)
 
     def create_transition(
         self,
@@ -76,8 +67,8 @@ class TimelineStructureEditing:
         kind: TransitionKind,
         duration: int,
     ) -> Transition:
-        left = self._clip(left_clip_id)
-        right = self._clip(right_clip_id)
+        left = clip_by_id(self._changes.current, left_clip_id)
+        right = clip_by_id(self._changes.current, right_clip_id)
         if not transition_is_available(kind, self._changes.current.sequence.profile.color_mode):
             raise ValueError("Transition is not verified for HDR10 projects")
         if left.track_id != right.track_id:
@@ -102,7 +93,7 @@ class TimelineStructureEditing:
             ]
             state.transitions.append(transition)
 
-        self._commit("添加转场", mutate)
+        self._changes.commit_change("添加转场", mutate)
         return transition
 
     def update_transition(
@@ -113,11 +104,11 @@ class TimelineStructureEditing:
         duration: int,
         parameters: dict | None = None,
     ) -> Transition:
-        source = self._transition(transition_id)
+        source = transition_by_id(self._changes.current, transition_id)
         if not transition_is_available(kind, self._changes.current.sequence.profile.color_mode):
             raise ValueError("Transition is not verified for HDR10 projects")
-        left = self._clip(source.left_clip_id)
-        right = self._clip(source.right_clip_id)
+        left = clip_by_id(self._changes.current, source.left_clip_id)
+        right = clip_by_id(self._changes.current, source.right_clip_id)
         if duration <= 0 or duration > min(left.duration, right.duration):
             raise ValueError("Transition duration exceeds the available clips")
 
@@ -131,13 +122,36 @@ class TimelineStructureEditing:
                 }
             )
 
-        self._commit("调整转场", mutate)
-        return self._transition(transition_id)
+        self._changes.commit_change("调整转场", mutate)
+        return transition_by_id(self._changes.current, transition_id)
 
     def remove_transition(self, transition_id: str) -> None:
-        self._transition(transition_id)
+        transition_by_id(self._changes.current, transition_id)
 
         def mutate(state: TimelineState) -> None:
             state.transitions = [item for item in state.transitions if item.id != transition_id]
 
-        self._commit("移除转场", mutate)
+        self._changes.commit_change("移除转场", mutate)
+
+    def replace_contents(
+        self,
+        destination: TimelineState,
+        *,
+        label: str = "导入可携带时间线",
+    ) -> TimelineState:
+        if destination.sequence.id != self._changes.sequence_id:
+            raise ValueError("Timeline replacement belongs to another sequence")
+        if destination.sequence.profile != self._changes.current.sequence.profile:
+            raise ValueError("Set the sequence profile before replacing timeline contents")
+
+        def mutate(state: TimelineState) -> None:
+            state.tracks = list(destination.tracks)
+            state.clips = list(destination.clips)
+            state.compounds = list(destination.compounds)
+            state.transitions = list(destination.transitions)
+            state.markers = list(destination.markers)
+            state.ranges = list(destination.ranges)
+            state.web_states = dict(destination.web_states)
+
+        self._changes.commit_change(label, mutate, allow_locked_changes=True)
+        return self._changes.snapshot

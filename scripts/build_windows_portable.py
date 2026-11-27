@@ -17,11 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from mediaflow.atomic_file import atomic_write_text
-from mediaflow.infrastructure.storage_budget import (
-    directory_inventory,
-    load_storage_policy,
-    require_storage_budget,
-)
+from mediaflow.infrastructure.storage_inventory import directory_inventory
+from mediaflow.infrastructure.storage_policy import load_storage_policy
+from mediaflow.infrastructure.storage_preflight import require_storage_budget
 from scripts.generate_runtime_license_bundle import generate as generate_runtime_licenses
 from scripts.verify_portable_distribution import verify as verify_portable_distribution
 
@@ -116,7 +114,7 @@ def build(
     commit, remote = _require_release_source(release_tag)
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = str(project["project"]["version"])
-    runtime_bytes = int(directory_inventory(runtime_root)["bytes"])
+    runtime_bytes = int(directory_inventory(runtime_root)["logical_bytes"])
     policy = load_storage_policy()
     storage_preflight = require_storage_budget(
         work_root.parent,

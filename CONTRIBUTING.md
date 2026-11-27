@@ -24,20 +24,20 @@
 
 ## 验证
 
-先运行直接覆盖改动的目标测试。只有公共合同、核心运行时、跨平台边界或目标测试暴露系统性影响时，才扩大回归范围。
+日常只运行直接覆盖本次改动的现有测试和必要静态检查；目标测试暴露问题时，只补充受影响的检查。完整验收、完整用户链路、跨平台源码构建和交接矩阵只有项目所有者明确要求时才运行，不因目录、合同、运行时或发布请求自动触发。
 
 ```powershell
 . .\scripts\load_environment.ps1
 & $env:MEDIAFLOW_PYTHON -m pytest tests\v2\path\to\test_file.py
 ```
 
-不要直接运行没有资源边界的整库 `pytest tests/v2`。目标测试通过后，使用唯一的本地质量入口；它会读取当前改动，按维护、核心或 Windows 完整等级运行，并为并发分片建立独立测试目录：
+不要直接运行没有资源边界的整库 `pytest tests/v2`。目标测试通过后即可结束本次验证。确需整套轻量质量检查时，可以使用统一入口；默认根据当前改动选择维护或核心级别，不自动进入完整验收：
 
 ```powershell
 .\scripts\run_quality.ps1
 ```
 
-可使用 `.\scripts\run_quality.ps1 --dry-run` 先查看将执行的命令。入口会根据 CPU 与可用内存把运行时并发设为 1、2 或 4；也可用 `--max-runtime-workers 1` 在资源较少的机器上明确限制。CI 与本地入口共同消费 `scripts/ci/quality_plan.py`：文档、许可证和纯元数据修改只运行维护级检查；桌面与媒体运行时变化运行 Windows 完整验收；目标平台运行时和原生预览变化才运行跨平台源码构建；项目格式、迁移、仓储或交接脚本变化才运行项目交接矩阵。
+可使用 `.\scripts\run_quality.ps1 --dry-run` 预览实际命令。CI 与本地入口共同消费 `scripts/ci/quality_plan.py`：文档、许可证和纯元数据使用维护级检查，代码、配置和测试使用核心级检查。只有项目所有者明确要求完整验收时，才使用 `--scope full` 或手动选择 CI 的 `full`；不设置定时完整回归。完整运行的并发可用 `--max-runtime-workers 1` 限制。
 
 ## Pull Request
 
@@ -59,4 +59,5 @@ Issues, code, tests, documentation, and reproducible samples are welcome in eith
 
 - Set up the pinned Python and media runtimes through the README quick start. Fix the owning source of truth, migrate all producers and consumers, preserve unrelated working-tree changes, and run the tests that directly cover the user-visible result.
 - For larger features, public-contract changes, or cross-layer refactors, open an [Issue](https://github.com/CheshireMew/MediaFlow-Pro/issues) first with the intended outcome, impact, and acceptance evidence.
+- Full acceptance, end-to-end chains, cross-platform source builds, and project interchange require an explicit request from the project owner. Routine changes use only directly affected tests; neither tags nor release requests automatically start full acceptance.
 - State what users can observe, why the change was necessary, which checks actually ran, and what remains unverified. Never commit credentials, machine-specific paths, downloaded runtimes, media, models, project data, caches, or test artifacts.

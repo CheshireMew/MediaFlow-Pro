@@ -39,6 +39,7 @@ class MltExportRequest:
     output_path: str | Path
     start_frame: int | None = None
     end_frame: int | None = None
+    duration_frames: int | None = None
 
 
 class RuntimeExportPreset(ExportPreset):

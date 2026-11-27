@@ -24,12 +24,9 @@ from .ffmpeg_runner import FfmpegRunner
 from .output_reservation import output_set_transaction
 from .proxy_encoding import build_proxy_command
 from .runtime_paths import RuntimePaths
-from .storage_budget import (
-    estimate_proxy_peak_bytes,
-    finalize_storage_receipt,
-    require_project_artifact_budget,
-    start_storage_receipt,
-)
+from .storage_budget import require_project_artifact_budget
+from .storage_estimates import estimate_proxy_peak_bytes
+from .storage_receipts import finalize_storage_receipt, start_storage_receipt, storage_terminal_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,9 +84,7 @@ class ProxyService:
         progress: Callable[[OperationProgress], None] | None = None,
         check_cancelled: Callable[[], None] | None = None,
     ) -> PreparedProxyGeneration:
-        source = require_windows_interop_path(
-            self.repository.assets.resolve_asset_path(asset)
-        )
+        source = require_windows_interop_path(self.repository.assets.resolve_asset_path(asset))
         if not source.is_file():
             raise FileNotFoundError(source)
         output_dir = self.repository.project_dir / "proxies"
@@ -122,7 +117,7 @@ class ProxyService:
         except BaseException as error:
             finalize_storage_receipt(
                 receipt,
-                status=("interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed"),
+                status=storage_terminal_status(error),
                 error=str(error),
             )
             raise
@@ -223,9 +218,7 @@ class ProxyService:
                 expected_fingerprint=asset.fingerprint,
                 proxy_path=output,
                 sdr_preview_proxy_path=sdr_preview_output,
-                replaced_outputs=tuple(
-                    publication.replaced_output_archives.items()
-                ),
+                replaced_outputs=tuple(publication.replaced_output_archives.items()),
                 storage_receipt_path=storage_receipt_path,
             )
 
@@ -241,9 +234,7 @@ class ProxyService:
             self._rollback_prepared(prepared, error)
             raise
         outputs = (prepared.proxy_path,) + (
-            (prepared.sdr_preview_proxy_path,)
-            if prepared.sdr_preview_proxy_path is not None
-            else ()
+            (prepared.sdr_preview_proxy_path,) if prepared.sdr_preview_proxy_path is not None else ()
         )
         finalize_storage_receipt(
             prepared.storage_receipt_path,
@@ -277,11 +268,7 @@ class ProxyService:
         retained: list[Path] = []
         destinations = (
             prepared.proxy_path,
-            *(
-                (prepared.sdr_preview_proxy_path,)
-                if prepared.sdr_preview_proxy_path is not None
-                else ()
-            ),
+            *((prepared.sdr_preview_proxy_path,) if prepared.sdr_preview_proxy_path is not None else ()),
         )
         for destination in destinations:
             if not destination.is_file():
@@ -297,9 +284,7 @@ class ProxyService:
                 destination.replace(failed)
                 retained.append(failed)
             except OSError as archive_error:
-                error.add_note(
-                    f"未登记代理文件无法移入失败归档：{archive_error}"
-                )
+                error.add_note(f"未登记代理文件无法移入失败归档：{archive_error}")
         for destination, archived in prepared.replaced_outputs:
             if not archived.is_file():
                 continue
@@ -307,12 +292,10 @@ class ProxyService:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 archived.replace(destination)
             except OSError as restore_error:
-                error.add_note(
-                    f"代理登记失败后无法恢复原文件 {destination}：{restore_error}"
-                )
+                error.add_note(f"代理登记失败后无法恢复原文件 {destination}：{restore_error}")
         finalize_storage_receipt(
             prepared.storage_receipt_path,
-            status="failed",
+            status=storage_terminal_status(error),
             outputs=tuple(retained),
             error=str(error),
         )
@@ -352,9 +335,7 @@ class ProxyService:
             check_cancelled=check_cancelled,
         )
         if result.returncode != 0 or not output.is_file() or output.stat().st_size == 0:
-            raise RuntimeError(
-                f"{failure_label} generation failed: {result.stderr.strip()}"
-            )
+            raise RuntimeError(f"{failure_label} generation failed: {result.stderr.strip()}")
 
     def _encode(
         self,

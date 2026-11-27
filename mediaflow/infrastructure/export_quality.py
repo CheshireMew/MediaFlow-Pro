@@ -118,6 +118,7 @@ class ExportQualityService:
             passed=not any(check.status == "failed" for check in checks),
             checks=checks,
             proof_frames=[str(path) for path in proof_frames],
+            subtitle_files=[str(path) for path in result.subtitle_files],
             sha256=sha256_file(
                 output,
                 progress=(

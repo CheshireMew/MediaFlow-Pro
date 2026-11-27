@@ -16,11 +16,8 @@ from mediaflow.file_digest import sha256_file
 
 from .resumable_download import DownloadSizeError, DownloadTransferError, download_with_resume
 from .runtime_paths import RuntimePaths
-from .storage_budget import (
-    finalize_storage_receipt,
-    require_runtime_budget,
-    start_storage_receipt,
-)
+from .storage_budget import require_runtime_budget
+from .storage_receipts import finalize_storage_receipt, start_storage_receipt, storage_terminal_status
 from .subprocess_runner import run_cancellable
 
 ComponentProgress = Callable[[OperationProgress], None]
@@ -111,9 +108,7 @@ def load_runtime_component_catalog(
         if not all(required_values) or not component.required_paths or not component.targets:
             raise ValueError("Runtime component record is incomplete")
         if component.distribution not in {"upstream-download-only", "redistributable"}:
-            raise ValueError(
-                f"Runtime component {component.id!r} has an unsupported distribution policy"
-            )
+            raise ValueError(f"Runtime component {component.id!r} has an unsupported distribution policy")
         if component.bundle_allowed and component.license == "NOASSERTION":
             raise ValueError(
                 f"Runtime component {component.id!r} cannot be bundled without a license assertion"
@@ -277,15 +272,17 @@ class RuntimeComponentService:
             expected_new_bytes=definition.peak_install_bytes,
             label=f"MediaFlow runtime component {definition.display_name}",
         )
+        archive_path = downloads / definition.archive_file
+        tools_root = self.paths.runtime_dir / "tools"
         receipt = start_storage_receipt(
             self.paths.runtime_dir,
             producer="runtime-component",
             operation_id=f"{definition.id}:{definition.version}",
-            owned_root=self.paths.runtime_dir,
+            owned_root=tools_root,
             preflight=preflight,
+            owned_roots=(archive_path, tools_root),
         )
         downloads.mkdir(parents=True, exist_ok=True)
-        archive_path = downloads / definition.archive_file
 
         def report_download(completed: int, total: int) -> None:
             if progress:
@@ -308,9 +305,7 @@ class RuntimeComponentService:
                     check_cancelled=check_cancelled,
                 )
             except DownloadSizeError as error:
-                raise RuntimeError(
-                    f"运行组件下载不完整：{error.actual} / {error.expected}"
-                ) from error
+                raise RuntimeError(f"运行组件下载不完整：{error.actual} / {error.expected}") from error
             except DownloadTransferError as error:
                 raise RuntimeError(f"运行组件下载失败：{error}") from error
             self._verify_archive(archive_path, definition)
@@ -332,9 +327,7 @@ class RuntimeComponentService:
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 if completed.returncode != 0:
-                    raise RuntimeError(
-                        (completed.stderr or completed.stdout or "运行组件解压失败").strip()
-                    )
+                    raise RuntimeError((completed.stderr or completed.stdout or "运行组件解压失败").strip())
             installation = self.resolve(definition.id)
             if installation is None:
                 expected = tools_root / definition.install_root / definition.entrypoint
@@ -343,7 +336,7 @@ class RuntimeComponentService:
             partial = (archive_path,) if archive_path.exists() else ()
             finalize_storage_receipt(
                 receipt,
-                status=("interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed"),
+                status=storage_terminal_status(error),
                 outputs=partial,
                 error=str(error),
             )

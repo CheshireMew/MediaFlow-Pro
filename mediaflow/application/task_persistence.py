@@ -10,6 +10,7 @@ from mediaflow.application.task_execution_types import (
     TaskCompletion,
     TaskLeaseLost,
     TaskSettlementCommitter,
+    TaskStopped,
 )
 from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.model_base import now_ms
@@ -112,7 +113,7 @@ class TaskPersistence:
         completion: TaskCompletion,
         *,
         project_changes: tuple[Callable[[], None], ...],
-    ) -> None:
+    ) -> Task | None:
         def completed_task(current: Task) -> Task:
             return current.model_copy(
                 update={
@@ -130,12 +131,13 @@ class TaskPersistence:
                 }
             )
 
-        self.settlement(
+        return self.settlement(
             task_id,
             token,
             event_type="completed",
             update=completed_task,
             project_changes=project_changes,
+            observe_stop=True,
         )
 
     def settlement(
@@ -146,14 +148,15 @@ class TaskPersistence:
         event_type: str,
         update: Callable[[Task], Task],
         project_changes: tuple[Callable[[], None], ...] = (),
-    ) -> None:
+        observe_stop: bool = False,
+    ) -> Task | None:
         def persist() -> Task:
             return self.owned(
                 task_id,
                 token,
                 event_type=event_type,
                 release_owner=True,
-                observe_stop=False,
+                observe_stop=observe_stop,
                 publish=self.settlement_committer is None,
                 update=update,
             )
@@ -166,22 +169,26 @@ class TaskPersistence:
                 project_changes,
             )
             self.publish(persisted, event_type)
-            return
+            return persisted
 
+        if observe_stop:
+            self.sync_control(self.repository.get(task_id), token)
+            token.raise_if_requested()
         for change in project_changes:
             change()
         for attempt in range(8):
             try:
-                persist()
-                return
+                return persist()
             except TaskLeaseLost:
                 try:
                     current = self.repository.get(task_id)
                 except Exception:
-                    return
+                    raise
                 if current.status.is_settled:
-                    return
-                return
+                    return current
+                raise
+            except TaskStopped:
+                raise
             except Exception:
                 try:
                     current_after_failure = self.repository.get(task_id)
@@ -191,7 +198,7 @@ class TaskPersistence:
                     current_after_failure is not None
                     and current_after_failure.status.is_settled
                 ):
-                    return
+                    return current_after_failure
                 if attempt == 7:
                     self.report_background_error(
                         f"settlement:{task_id}",
@@ -204,6 +211,7 @@ class TaskPersistence:
                     )
                     raise
                 time.sleep(min(0.5, 0.05 * (2**attempt)))
+        raise RuntimeError(f"Task {task_id} did not settle after all persistence attempts")
 
     def failure_or_stop(
         self,

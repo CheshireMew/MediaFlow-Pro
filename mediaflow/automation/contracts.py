@@ -65,10 +65,11 @@ class AutomationOperationContract(DomainModel):
     project_access: Literal["none", "create", "read", "write"]
     execution_mode: Literal["atomic", "task"]
     history_mode: Literal["reversible", "non_undoable"]
-    idempotency: Literal["none", "optional"]
+    idempotency: Literal["none", "required"]
     required_capabilities: list[str]
     arguments_schema: dict[str, Any]
     result_schema: dict[str, Any]
+    request_schema: dict[str, Any]
 
 
 class AutomationOperationSummary(DomainModel):
@@ -76,7 +77,7 @@ class AutomationOperationSummary(DomainModel):
     project_access: Literal["none", "create", "read", "write"]
     execution_mode: Literal["atomic", "task"]
     history_mode: Literal["reversible", "non_undoable"]
-    idempotency: Literal["none", "optional"]
+    idempotency: Literal["none", "required"]
     required_capabilities: list[str]
 
 
@@ -193,10 +194,27 @@ def _operation_summary(name: str, definition: Any) -> AutomationOperationSummary
 
 
 def _operation_contract(name: str, definition: Any) -> AutomationOperationContract:
+    request_schema = inline_model_schema(AutomationRequest)
+    request_schema["properties"]["operation"] = {"const": name, "type": "string"}
+    request_schema["properties"]["arguments"] = inline_model_schema(definition.arguments_model)
+    required = set(request_schema.get("required", []))
+    if request_schema["properties"]["arguments"].get("required"):
+        required.add("arguments")
+    if definition.project_access in {"create", "write"}:
+        required.add("request_id")
+        request_schema["properties"]["request_id"] = {"type": "string", "minLength": 1}
+    if definition.project_access == "write":
+        required.add("base_revision")
+        request_schema["properties"]["base_revision"] = {"type": "integer", "minimum": 0}
+    if definition.project_access in {"read", "write"}:
+        required.add("project")
+        request_schema["properties"]["project"] = {"type": "string", "minLength": 1}
+    request_schema["required"] = sorted(required)
     return AutomationOperationContract(
         **_operation_summary(name, definition).model_dump(mode="python"),
         arguments_schema=inline_model_schema(definition.arguments_model),
         result_schema=inline_model_schema(definition.result_model),
+        request_schema=request_schema,
     )
 
 

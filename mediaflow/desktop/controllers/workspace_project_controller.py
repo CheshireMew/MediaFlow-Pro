@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 
+from mediaflow.domain.task_commands import ArchiveProjectCommand, CollectProjectAssetsCommand
+
 from .controller_facet import ControllerFacet, report_ui_errors
 from .controller_scopes import WorkspaceProjectScope
 from .workspace_capabilities import workspace_action_capabilities
@@ -20,6 +22,23 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
     """Project lifecycle, named versions, and application shutdown commands."""
 
     sampleTourRequested = Signal()
+
+    @Slot(str)
+    def beginCollaborationDraft(self, path: str) -> None:
+        current = self._session.state.binding.current
+        if current is not None:
+            current.begin_draft(path)
+
+    @Slot(str)
+    def discardCollaborationDraft(self, path: str) -> None:
+        current = self._session.state.binding.current
+        if current is not None:
+            current.end_draft(path)
+
+    @Slot(str, result=bool)
+    def hasCollaborationDraft(self, path: str) -> bool:
+        current = self._session.state.binding.current
+        return current is not None and path.rstrip("/") in current.draft_paths
 
     @Slot(str)
     @report_ui_errors
@@ -162,7 +181,7 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
         )
         self._session.lifecycle.reset_interaction()
         self._session.projectors.refresh_project()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.preview.schedule()
         self._session.updates.commit(project=True, selection=True, history=True)
         self._session._set_status("已恢复命名版本“%1”", record.name)
 
@@ -171,14 +190,8 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
     def collectProjectAssets(self) -> None:
         self._session._require_writable()
         self._require_no_active_tasks("归集项目素材")
-        result = self._session.state.binding.require_current().collect_project_assets()
-        self._session.projectors.assets.refresh_assets()
-        self._session.updates.commit(project=True, history=True)
-        self._session._set_status(
-            "已归集 %1 个外部素材，共 %2 字节",
-            len(result.assets),
-            result.record.total_bytes,
-        )
+        self._session._set_status("正在归集项目素材")
+        self._session.tasks.create(CollectProjectAssetsCommand())
 
     @Slot(bool)
     @report_ui_errors
@@ -208,12 +221,8 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
         parent = self._session._local_path(parent_url)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         destination = parent / f"{current.project_dir.name}-archive-{stamp}"
-        result = current.create_project_archive(destination)
-        self._session._set_status(
-            "可迁移项目已归档：%1（%2 个文件）",
-            result.destination,
-            result.file_count,
-        )
+        self._session._set_status("正在创建可迁移项目归档")
+        self._session.tasks.create(ArchiveProjectCommand(destination=str(destination)))
 
     def _require_no_active_tasks(self, operation: str) -> None:
         if any(not task.status.is_terminal for task in self._session.state.tasks.items.values()):
@@ -235,6 +244,7 @@ class WorkspaceProjectController(ControllerFacet[WorkspaceProjectScope]):
                     first_error = error
 
         finish("timeline filmstrip cancellation", self._session.lifecycle.cancel_filmstrip)
+        finish("preview graph cancellation", self._session.lifecycle.cancel_preview)
         if self._session.state.runtime_state.thread and self._session.state.runtime_state.thread.is_alive():
             self._session.state.runtime_state.thread.join(timeout=5)
         finish("project background requests", self._session.background.shutdown_project_requests)

@@ -47,8 +47,9 @@ ListView {
         width: segmentList.width
         height: segmentPreviewText.implicitHeight + 31
         radius: Theme.radiusSmall
-        color: mediaflow.subtitleViewController.isSubtitleSegmentSelected(segmentId) ? Theme.accentSoft : segmentMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-        border.color: hasOverlap ? Theme.danger : mediaflow.subtitleViewController.isSubtitleSegmentSelected(segmentId) ? Theme.accent : Theme.border
+        readonly property bool selected: mediaflow.subtitleViewController.selectedSubtitleSegmentIds.indexOf(segmentId) >= 0
+        color: selected ? Theme.accentSoft : segmentMouse.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
+        border.color: hasOverlap ? Theme.danger : selected ? Theme.accent : Theme.border
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8

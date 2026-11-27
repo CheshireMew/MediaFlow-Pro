@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 ProjectAccess = Literal["none", "create", "read", "write"]
 ExecutionMode = Literal["atomic", "task"]
 HistoryMode = Literal["reversible", "non_undoable"]
-IdempotencyPolicy = Literal["none", "optional"]
+IdempotencyPolicy = Literal["none", "required"]
 OperationHandler = Callable[[OperationContext], Any]
 
 
@@ -84,10 +84,11 @@ class OperationDefinition:
     history_mode: HistoryMode
     required_capabilities: tuple[str, ...]
     handler: OperationHandler
+    workload: Literal["project", "wait", "control", "preview"] = "project"
 
     @property
     def idempotency(self) -> IdempotencyPolicy:
-        return "optional" if self.project_access in {"create", "write"} else "none"
+        return "required" if self.project_access in {"create", "write"} else "none"
 
     def validate_arguments(self, values: dict[str, Any]) -> dict[str, Any]:
         return self.arguments_model.model_validate(values).model_dump(
@@ -132,6 +133,7 @@ def _operation(
     task_backed: bool = False,
     reversible: bool = False,
     capabilities: tuple[str, ...] = ("project-editing",),
+    workload: Literal["project", "wait", "control", "preview"] = "project",
 ) -> OperationDefinition:
     return OperationDefinition(
         arguments_model=arguments_model,
@@ -141,6 +143,7 @@ def _operation(
         history_mode="reversible" if reversible else "non_undoable",
         required_capabilities=capabilities,
         handler=handler,
+        workload=workload,
     )
 
 
@@ -150,6 +153,7 @@ def _read(
     handler: OperationHandler,
     *,
     capabilities: tuple[str, ...] = ("project-editing",),
+    workload: Literal["project", "wait", "control", "preview"] = "project",
 ) -> OperationDefinition:
     return _operation(
         arguments_model,
@@ -157,6 +161,7 @@ def _read(
         "read",
         handler,
         capabilities=capabilities,
+        workload=workload,
     )
 
 
@@ -168,6 +173,7 @@ def _write(
     task_backed: bool = False,
     reversible: bool = False,
     capabilities: tuple[str, ...] = ("project-editing",),
+    workload: Literal["project", "wait", "control", "preview"] = "project",
 ) -> OperationDefinition:
     return _operation(
         arguments_model,
@@ -177,6 +183,7 @@ def _write(
         task_backed=task_backed,
         reversible=reversible,
         capabilities=capabilities,
+        workload=workload,
     )
 
 
@@ -321,6 +328,8 @@ OPERATIONS: dict[str, OperationDefinition] = {
         project_models.ProjectCollectionArguments,
         project_models.ProjectCollectionApplyResult,
         project.collect_project_assets,
+        task_backed=True,
+        workload="wait",
         capabilities=("project-editing", "project-collection"),
         reversible=True,
     ),
@@ -335,6 +344,8 @@ OPERATIONS: dict[str, OperationDefinition] = {
         project_models.ProjectArchiveCreateArguments,
         project_models.ProjectArchiveCreateResult,
         project.create_project_archive,
+        task_backed=True,
+        workload="wait",
         capabilities=("project-editing", "project-collection"),
     ),
     "sequence.short.create": _write(
@@ -1007,11 +1018,14 @@ OPERATIONS: dict[str, OperationDefinition] = {
         delivery_models.PreviewRenderArguments,
         delivery_models.PreviewRenderResult,
         timeline.render_preview,
+        task_backed=True,
+        workload="preview",
     ),
     "preview.frames.render": _read(
         delivery_models.PreviewFramesRenderArguments,
         delivery_models.PreviewFramesRenderResult,
         timeline.render_preview_frames,
+        workload="preview",
     ),
     "export.sequence": _write(
         delivery_models.ExportSequenceArguments,
@@ -1031,6 +1045,8 @@ OPERATIONS: dict[str, OperationDefinition] = {
         delivery_models.ExportFcpxmlArguments,
         delivery_models.FcpxmlExportResult,
         timeline.export_fcpxml,
+        task_backed=True,
+        workload="wait",
         capabilities=(
             "project-editing",
             "fcpxml-export",
@@ -1053,11 +1069,13 @@ OPERATIONS: dict[str, OperationDefinition] = {
         delivery_models.TaskStatusArguments,
         delivery_models.TaskStatusResult,
         tasks.cancel_task,
+        workload="control",
     ),
     "task.wait": _read(
         delivery_models.TaskWaitArguments,
         delivery_models.TaskStatusResult,
         tasks.wait_for_task,
+        workload="wait",
     ),
     "task.start": _write(
         delivery_models.TaskStartArguments,
@@ -1075,6 +1093,8 @@ OPERATIONS: dict[str, OperationDefinition] = {
         web_models.WebImportArguments,
         web_models.WebImportResult,
         web.import_web,
+        task_backed=True,
+        workload="wait",
         capabilities=(*WEB, "chromium"),
     ),
     "web.inspect": _read(
@@ -1099,6 +1119,7 @@ OPERATIONS: dict[str, OperationDefinition] = {
         web_models.WebClipUpdateArguments,
         web_models.WebClipStateResult,
         web.update_web_clip,
+        reversible=True,
         capabilities=WEB,
     ),
     "web.clip.diff": _read(
@@ -1111,66 +1132,77 @@ OPERATIONS: dict[str, OperationDefinition] = {
         web_models.WebClipVariantSelectArguments,
         web_models.WebClipStateResult,
         web.select_variant,
+        reversible=True,
         capabilities=(*WEB, "web-responsive-variants"),
     ),
     "web.clip.keyframe.set": _write(
         web_models.WebClipKeyframeSetArguments,
         web_models.WebClipStateResult,
         web.set_keyframe,
+        reversible=True,
         capabilities=(*WEB, "web-keyframes"),
     ),
     "web.clip.keyframe.remove": _write(
         web_models.WebClipKeyframeRemoveArguments,
         web_models.WebClipStateResult,
         web.remove_keyframe,
+        reversible=True,
         capabilities=(*WEB, "web-keyframes"),
     ),
     "web.clip.parameter.update": _write(
         web_models.WebParameterUpdateArguments,
         web_models.WebClipStateResult,
         web.update_parameter,
+        reversible=True,
         capabilities=(*WEB, "web-parameters"),
     ),
     "web.clip.parameter.keyframe.set": _write(
         web_models.WebParameterKeyframeSetArguments,
         web_models.WebClipStateResult,
         web.set_parameter_keyframe,
+        reversible=True,
         capabilities=(*WEB, "web-parameters", "web-keyframes"),
     ),
     "web.clip.parameter.keyframe.remove": _write(
         web_models.WebParameterKeyframeRemoveArguments,
         web_models.WebClipStateResult,
         web.remove_parameter_keyframe,
+        reversible=True,
         capabilities=(*WEB, "web-parameters", "web-keyframes"),
     ),
     "web.clip.parameter.lock.update": _write(
         web_models.WebParameterLockUpdateArguments,
         web_models.WebClipStateResult,
         web.update_parameter_lock,
+        reversible=True,
         capabilities=(*WEB, "web-parameters", "web-field-locks"),
     ),
     "web.clip.theme.update": _write(
         web_models.WebThemeUpdateArguments,
         web_models.WebClipStateResult,
         web.update_theme,
+        reversible=True,
         capabilities=(*WEB, "web-themes"),
     ),
     "web.clip.data.update": _write(
         web_models.WebDataUpdateArguments,
         web_models.WebClipStateResult,
         web.update_data,
+        reversible=True,
         capabilities=(*WEB, "web-data-snapshots"),
     ),
     "web.clip.data.snapshot": _write(
         web_models.WebDataSnapshotArguments,
         web_models.WebClipStateResult,
         web.snapshot_data,
+        reversible=True,
         capabilities=(*WEB, "web-data-snapshots"),
     ),
     "web.clip.lock.update": _write(
         web_models.WebFieldLockUpdateArguments,
         web_models.WebClipStateResult,
         web.update_locks,
+        reversible=True,
         capabilities=(*WEB, "web-field-locks"),
     ),
     "web.clip.render.inspect": _read(

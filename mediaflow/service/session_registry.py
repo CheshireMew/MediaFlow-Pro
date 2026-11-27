@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from weakref import WeakValueDictionary
 
 from mediaflow.application.events import TaskEvent
 from mediaflow.application.project_command_queue import ProjectCommandQueue
@@ -30,6 +32,10 @@ from .events import EventHub, ServiceEvent
 if TYPE_CHECKING:
     from mediaflow.composition import EditorApplication, EditorProject
 
+logger = logging.getLogger(__name__)
+PROJECT_IDLE_TIMEOUT_SECONDS = 60.0
+DESKTOP_RECONNECT_GRACE_SECONDS = 30.0
+
 @dataclass(slots=True)
 class ProjectSession:
     project: EditorProject
@@ -38,6 +44,7 @@ class ProjectSession:
     task_subscription: int
     active_calls: int = 0
     closing: bool = False
+    last_access: float = field(default_factory=time.monotonic)
 
 
 class ProjectSessionRegistry:
@@ -48,7 +55,9 @@ class ProjectSessionRegistry:
         self.events = events
         self._sessions: dict[Path, ProjectSession] = {}
         self._desktop_clients: dict[Path, set[str]] = {}
-        self._root_locks: dict[Path, threading.RLock] = {}
+        self._desktop_deadlines: dict[tuple[Path, str], float] = {}
+        self._desktop_connections: dict[tuple[Path, str], int] = {}
+        self._root_locks: WeakValueDictionary[Path, threading.RLock] = WeakValueDictionary()
         self._sessions_lock = threading.RLock()
 
     def _root_lifecycle_lock(self, root: Path) -> threading.RLock:
@@ -75,11 +84,13 @@ class ProjectSessionRegistry:
             )
             with session.lifetime_condition:
                 session.active_calls += 1
+                session.last_access = time.monotonic()
         try:
             yield session
         finally:
             with session.lifetime_condition:
                 session.active_calls -= 1
+                session.last_access = time.monotonic()
                 if session.active_calls == 0:
                     session.lifetime_condition.notify_all()
 
@@ -98,11 +109,13 @@ class ProjectSessionRegistry:
             session = self._create_session(envelope)
             with session.lifetime_condition:
                 session.active_calls += 1
+                session.last_access = time.monotonic()
         try:
             yield session
         finally:
             with session.lifetime_condition:
                 session.active_calls -= 1
+                session.last_access = time.monotonic()
                 if session.active_calls == 0:
                     session.lifetime_condition.notify_all()
 
@@ -194,6 +207,10 @@ class ProjectSessionRegistry:
                     self._sessions[root] = session
             with self._sessions_lock:
                 self._desktop_clients.setdefault(root, set()).add(client_id)
+                if not self._desktop_connections.get((root, client_id)):
+                    self._desktop_deadlines[(root, client_id)] = (
+                        time.monotonic() + PROJECT_IDLE_TIMEOUT_SECONDS
+                    )
             with session.write_lock:
                 return self._desktop_descriptor(session)
 
@@ -208,6 +225,10 @@ class ProjectSessionRegistry:
             )
             with self._sessions_lock:
                 self._desktop_clients.setdefault(root, set()).add(client_id)
+                if not self._desktop_connections.get((root, client_id)):
+                    self._desktop_deadlines[(root, client_id)] = (
+                        time.monotonic() + PROJECT_IDLE_TIMEOUT_SECONDS
+                    )
             with session.write_lock:
                 return self._desktop_descriptor(session)
 
@@ -228,14 +249,12 @@ class ProjectSessionRegistry:
                 if clients is None or client_id not in clients:
                     return {"released": False, "retained_for_tasks": False}
                 if len(clients) > 1:
-                    clients.remove(client_id)
+                    self._forget_desktop_client(root, client_id)
                     return {"released": True, "retained_for_tasks": False}
                 session = self._sessions.get(root)
             if session is None:
                 with self._sessions_lock:
-                    clients.remove(client_id)
-                    if not clients:
-                        self._desktop_clients.pop(root, None)
+                    self._forget_desktop_client(root, client_id)
                 return {"released": True, "retained_for_tasks": False}
             with session.lifetime_condition:
                 session.closing = True
@@ -243,22 +262,17 @@ class ProjectSessionRegistry:
                 self._wait_for_session_calls(session, deadline=deadline)
                 if self._session_has_active_tasks(session):
                     with self._sessions_lock:
-                        clients.remove(client_id)
-                        if not clients:
-                            self._desktop_clients.pop(root, None)
+                        self._forget_desktop_client(root, client_id)
                     with session.lifetime_condition:
                         session.closing = False
                         session.lifetime_condition.notify_all()
                     return {"released": True, "retained_for_tasks": True}
                 remaining = max(0.0, deadline - time.monotonic())
-                with session.write_lock:
-                    self._close_bound_session(session, timeout_seconds=remaining)
+                self._close_bound_session(session, timeout_seconds=remaining)
                 with self._sessions_lock:
                     if self._sessions.get(root) is session:
                         self._sessions.pop(root, None)
-                    clients.remove(client_id)
-                    if not clients:
-                        self._desktop_clients.pop(root, None)
+                    self._forget_desktop_client(root, client_id)
             except BaseException:
                 with session.lifetime_condition:
                     session.closing = False
@@ -280,7 +294,7 @@ class ProjectSessionRegistry:
                         "status": task.status.value,
                     }
                     for task in session.project.list_tasks()
-                    if task.status.is_active
+                    if task.status.is_in_flight
                 )
         return {
             "project_session_count": len(sessions),
@@ -288,6 +302,80 @@ class ProjectSessionRegistry:
             "active_task_count": len(active_tasks),
             "active_tasks": active_tasks,
         }
+
+    def desktop_connected(self, path: Path, client_id: str) -> None:
+        root = path.resolve()
+        with self._sessions_lock:
+            self._desktop_clients.setdefault(root, set()).add(client_id)
+            key = (root, client_id)
+            self._desktop_connections[key] = self._desktop_connections.get(key, 0) + 1
+            self._desktop_deadlines.pop((root, client_id), None)
+
+    def desktop_disconnected(self, path: Path, client_id: str) -> None:
+        with self._sessions_lock:
+            if client_id not in self._desktop_clients.get(path.resolve(), set()):
+                return
+            key = (path.resolve(), client_id)
+            remaining = max(0, self._desktop_connections.get(key, 0) - 1)
+            if remaining:
+                self._desktop_connections[key] = remaining
+                return
+            self._desktop_connections.pop(key, None)
+            self._desktop_deadlines[key] = (
+                time.monotonic() + DESKTOP_RECONNECT_GRACE_SECONDS
+            )
+
+    def reap_idle(self, *, now: float | None = None) -> int:
+        observed = time.monotonic() if now is None else now
+        with self._sessions_lock:
+            for key, deadline in tuple(self._desktop_deadlines.items()):
+                if deadline <= observed:
+                    root, client_id = key
+                    self._forget_desktop_client(root, client_id)
+            candidates = tuple(self._sessions.items())
+        closed = 0
+        for root, session in candidates:
+            lifecycle_lock = self._root_lifecycle_lock(root)
+            if not lifecycle_lock.acquire(blocking=False):
+                continue
+            try:
+                with self._sessions_lock:
+                    if self._sessions.get(root) is not session or self._desktop_clients.get(root):
+                        continue
+                with session.lifetime_condition:
+                    if session.closing or session.active_calls:
+                        continue
+                    if observed - session.last_access < PROJECT_IDLE_TIMEOUT_SECONDS:
+                        continue
+                    session.closing = True
+                try:
+                    if self._session_has_active_tasks(session):
+                        continue
+                    self._close_bound_session(session)
+                    with self._sessions_lock:
+                        self._sessions.pop(root, None)
+                        self._desktop_clients.pop(root, None)
+                    closed += 1
+                except Exception:
+                    logger.exception("Failed to release idle project %s", root)
+                finally:
+                    with session.lifetime_condition:
+                        session.closing = False
+                        session.lifetime_condition.notify_all()
+            finally:
+                lifecycle_lock.release()
+        return closed
+
+    def _forget_desktop_client(self, root: Path, client_id: str) -> None:
+        with self._sessions_lock:
+            clients = self._desktop_clients.get(root)
+            if clients is not None:
+                clients.discard(client_id)
+                if not clients:
+                    self._desktop_clients.pop(root, None)
+            self._desktop_deadlines.pop((root, client_id), None)
+            self._desktop_connections.pop((root, client_id), None)
+        self.application.release_preview_owner(root, client_id)
 
     def has_session(self, path: Path) -> bool:
         with self._sessions_lock:
@@ -323,12 +411,12 @@ class ProjectSessionRegistry:
                     with session.lifetime_condition:
                         session.closing = True
                     self._wait_for_session_calls(session, deadline=deadline)
-                    with session.write_lock:
-                        self._close_bound_session(session)
+                    self._close_bound_session(session)
                     with self._sessions_lock:
                         if self._sessions.get(root) is session:
                             self._sessions.pop(root, None)
-                        self._desktop_clients.pop(root, None)
+                        for client_id in tuple(self._desktop_clients.get(root, ())):
+                            self._forget_desktop_client(root, client_id)
             except BaseException as error:
                 with session.lifetime_condition:
                     session.closing = False
@@ -426,18 +514,19 @@ class ProjectSessionRegistry:
                     )
                 session.lifetime_condition.wait(timeout=remaining)
 
-    @staticmethod
     def _close_bound_session(
+        self,
         session: ProjectSession,
         *,
         timeout_seconds: float = 5.0,
     ) -> None:
         session.project.close(timeout=timeout_seconds)
         session.project.unsubscribe_task_events(session.task_subscription)
+        self.application.release_preview_owner(session.project.project_dir, None)
 
     @staticmethod
     def _session_has_active_tasks(session: ProjectSession) -> bool:
-        return any(task.status.is_active for task in session.project.list_tasks())
+        return any(task.status.is_in_flight for task in session.project.list_tasks())
 
     @staticmethod
     def task_event_document(
@@ -464,7 +553,7 @@ class ProjectSessionRegistry:
             current_revision=current,
             write_set=write_set,
             events=(
-                project.list_project_events_after_revision(envelope.base_revision)
+                project.iter_project_events_after_revision(envelope.base_revision)
                 if envelope.base_revision is not None and envelope.base_revision < current
                 else []
             ),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
 from contextlib import nullcontext
@@ -22,7 +23,7 @@ from mediaflow.application.task_persistence import (
     TaskPersistence,
     TaskPublisher,
 )
-from mediaflow.domain.enums import TaskKind
+from mediaflow.domain.enums import TaskKind, TaskStatus
 from mediaflow.domain.model_base import now_ms
 from mediaflow.domain.progress import OperationProgress
 from mediaflow.domain.tasks import Task
@@ -36,6 +37,7 @@ RESOURCE_INTENSIVE_TASK_KINDS = frozenset(
         TaskKind.DUBBING,
         TaskKind.EXPORT,
         TaskKind.WEB_RENDER,
+        TaskKind.IMPORT,
     }
 )
 
@@ -52,9 +54,11 @@ class TaskExecutionEngine:
         max_workers: int,
         lease_duration_ms: int,
         preparation_scope: TaskPreparationScope | None,
+        discard_preparation: Callable[[Task], None] | None,
         project_change_committer: TaskProjectChangeCommitter | None,
         publish: TaskPublisher,
         report_background_error: BackgroundErrorReporter,
+        capacity_available: Callable[[], None],
     ) -> None:
         self.repository = repository
         self.persistence = persistence
@@ -68,9 +72,12 @@ class TaskExecutionEngine:
             min(5.0, lease_duration_ms / 3000.0),
         )
         self.preparation_scope = preparation_scope or (lambda _task: nullcontext())
+        self.discard_preparation = discard_preparation
         self.project_change_committer = project_change_committer
         self.publish = publish
         self.report_background_error = report_background_error
+        self.capacity_available = capacity_available
+        self.max_workers = max_workers
         self.handlers: dict[TaskKind, TaskHandler] = {}
         self.executor = ThreadPoolExecutor(
             max_workers=max_workers,
@@ -80,10 +87,11 @@ class TaskExecutionEngine:
             max_workers=1,
             thread_name_prefix="mediaflow-heavy-task",
         )
-        self.worker_slots = threading.Semaphore(max_workers)
+        self._resource_task_ids: set[str] = set()
         self.tokens: dict[str, CancellationToken] = {}
         self.futures: dict[str, Future[None]] = {}
         self.lock = threading.RLock()
+        self._dispatch_lock = threading.Lock()
         self.accepting = True
 
     def register(self, kind: TaskKind, handler: TaskHandler) -> None:
@@ -106,17 +114,25 @@ class TaskExecutionEngine:
             self.require_accepting()
             if task.id in self.tokens:
                 return False
+            if len(self.tokens) >= self.max_workers:
+                return False
+            resource_intensive = task.kind in RESOURCE_INTENSIVE_TASK_KINDS
+            if resource_intensive and self._resource_task_ids:
+                return False
             self.tokens[task.id] = token
+            if resource_intensive:
+                self._resource_task_ids.add(task.id)
             try:
                 executor = (
                     self.resource_executor
                     if task.kind in RESOURCE_INTENSIVE_TASK_KINDS
                     else self.executor
                 )
-                future = executor.submit(self._run_with_admission, task.id, token)
+                future = executor.submit(self._run, task.id, token)
             except Exception:
                 if self.tokens.get(task.id) is token:
                     self.tokens.pop(task.id, None)
+                    self._resource_task_ids.discard(task.id)
                 raise
             self.futures[task.id] = future
 
@@ -125,10 +141,48 @@ class TaskExecutionEngine:
                 *,
                 task_id: str = task.id,
             ) -> None:
-                self._forget_future(task_id, completed)
+                self._forget_future(task_id, token, completed)
 
             future.add_done_callback(forget)
             return True
+
+    def admission_snapshot(self) -> tuple[int, tuple[TaskKind, ...], tuple[str, ...]]:
+        """Only materialize durable pending tasks that can actually run."""
+        with self.lock:
+            if not self.accepting:
+                return 0, (), ()
+            kinds = tuple(
+                kind for kind in self.handlers
+                if not self._resource_task_ids or kind not in RESOURCE_INTENSIVE_TASK_KINDS
+            )
+            return self.max_workers - len(self.tokens), kinds, tuple(self.tokens)
+
+    def dispatch_claimable(self, *, include_expired: bool) -> int:
+        """Admit a bounded durable batch using the same capacity owner as schedule."""
+        with self._dispatch_lock:
+            scheduled = 0
+            # Completions can free slots during a pass; cap total work per wake.
+            for _ in range(self.max_workers):
+                capacity, kinds, excluded = self.admission_snapshot()
+                if capacity <= 0 or not kinds:
+                    break
+                tasks = self.repository.list_claimable(
+                    now_ms(), limit=min(capacity, self.max_workers - scheduled),
+                    kinds=kinds, exclude_ids=excluded, include_expired=include_expired,
+                )
+                if not tasks:
+                    break
+                accepted = 0
+                for task in tasks:
+                    with self.lock:
+                        if not self.accepting:
+                            return scheduled
+                        if self.schedule(task):
+                            accepted += 1
+                scheduled += accepted
+                if not accepted or scheduled >= self.max_workers:
+                    break
+            return scheduled
 
     def request_pause(self, task_id: str) -> None:
         with self.lock:
@@ -141,10 +195,6 @@ class TaskExecutionEngine:
             token = self.tokens.get(task_id)
         if token is not None:
             token.request_cancel()
-
-    def forget_task(self, task_id: str) -> None:
-        with self.lock:
-            self.futures.pop(task_id, None)
 
     def begin_shutdown(
         self,
@@ -178,15 +228,9 @@ class TaskExecutionEngine:
         if not self.accepting:
             raise RuntimeError("Task service is shutting down")
 
-    def _run_with_admission(self, task_id: str, token: CancellationToken) -> None:
-        while not self.worker_slots.acquire(timeout=0.1):
-            token.raise_if_requested()
-        try:
-            self._run(task_id, token)
-        finally:
-            self.worker_slots.release()
-
     def _run(self, task_id: str, token: CancellationToken) -> None:
+        context: TaskContext | None = None
+        result_committed = False
         heartbeat_stop: threading.Event | None = None
         heartbeat_thread: threading.Thread | None = None
         try:
@@ -276,29 +320,39 @@ class TaskExecutionEngine:
             except TaskLeaseLost:
                 return
             except TaskStopped as stopped:
+                context.discard_prepared_result()
                 self.persistence.stopped(task_id, token, stopped.status)
             except Exception as error:
+                context.discard_prepared_result()
                 self.persistence.failure_or_stop(task_id, token, error)
             else:
                 try:
-                    self.persistence.completion(
+                    persisted = self.persistence.completion(
                         task_id,
                         token,
                         completion,
                         project_changes=context.project_changes(),
                     )
+                    result_committed = persisted is not None and persisted.status == TaskStatus.COMPLETED
                 except TaskLeaseLost:
                     return
                 except Exception as error:
+                    context.discard_prepared_result()
                     self.persistence.failure_or_stop(task_id, token, error)
         finally:
+            if context is not None and not result_committed:
+                try:
+                    if self.discard_preparation is not None:
+                        self.discard_preparation(context.task)
+                    context.discard_prepared_result()
+                except Exception:
+                    self.report_background_error(
+                        f"discard:{task_id}", f"Task {task_id} could not archive its uncommitted result",
+                    )
             if heartbeat_stop is not None:
                 heartbeat_stop.set()
             if heartbeat_thread is not None:
                 heartbeat_thread.join()
-            with self.lock:
-                if self.tokens.get(task_id) is token:
-                    self.tokens.pop(task_id, None)
 
     def _heartbeat_loop(
         self,
@@ -338,7 +392,13 @@ class TaskExecutionEngine:
             lease_expires_at = renewed.lease_expires_at or lease_expires_at
             self.persistence.sync_control(renewed, token)
 
-    def _forget_future(self, task_id: str, completed: Future[None]) -> None:
+    def _forget_future(
+        self, task_id: str, token: CancellationToken, completed: Future[None],
+    ) -> None:
         with self.lock:
             if self.futures.get(task_id) is completed:
                 self.futures.pop(task_id, None)
+                if self.tokens.get(task_id) is token:
+                    self.tokens.pop(task_id, None)
+                    self._resource_task_ids.discard(task_id)
+        self.capacity_available()

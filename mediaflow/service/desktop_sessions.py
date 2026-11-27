@@ -8,6 +8,7 @@ from mediaflow.automation.contracts import AutomationRequest
 from mediaflow.automation.operation_context import project_snapshot
 from mediaflow.automation.operation_registry import OPERATIONS
 from mediaflow.domain.collaboration import ActorIdentity
+from mediaflow.domain.timeline_history import TimelineStateChange
 
 from .codec import decode_transport, encode_transport
 from .commands import DesktopTarget, desktop_command
@@ -47,27 +48,37 @@ class DesktopProjectOperations:
         *,
         project_cursor: int,
         task_cursor: int,
+        project_head: int | None = None,
+        task_head: int | None = None,
     ) -> dict[str, Any]:
         if project_cursor < 0 or task_cursor < 0:
             raise ValueError("event cursors must be non-negative")
         with self.registry.locked_session(path, require_writable=False) as session:
             project = session.project
             project_document = project.get_project()
-            _tasks, current_task_cursor = project.task_snapshot()
+            current_task_cursor = project.task_event_cursor() if task_head is None else task_head
+            current_project_cursor = project.project_event_cursor() if project_head is None else project_head
+            task_events = [event for event in project.task_events_after(task_cursor)
+                           if event.cursor <= current_task_cursor]
+            project_events = project.list_project_events(
+                after_cursor=project_cursor, through_cursor=current_project_cursor,
+            )
+            next_task = task_events[-1].cursor if task_events else current_task_cursor
+            next_project = project_events[-1].cursor if project_events else current_project_cursor
             return {
                 "project": str(path),
                 "project_id": project_document.id,
                 "project_revision": project.content_revision(),
-                "project_event_cursor": project.project_event_cursor(),
+                "project_event_cursor": current_project_cursor,
                 "task_cursor": current_task_cursor,
+                "next_project_cursor": next_project,
+                "next_task_cursor": next_task,
+                "has_more": next_project < current_project_cursor or next_task < current_task_cursor,
                 "project_events": [
                     event.model_dump(mode="json")
-                    for event in project.list_project_events(after_cursor=project_cursor)
+                    for event in project_events
                 ],
-                "task_events": [
-                    self.registry.task_event_document(str(path), event)
-                    for event in project.task_events_after(task_cursor)
-                ],
+                "task_events": [self.registry.task_event_document(str(path), event) for event in task_events],
             }
 
     def execute_desktop_command(
@@ -85,9 +96,19 @@ class DesktopProjectOperations:
         definition = desktop_command(target, command)
         request = definition.validate_arguments(decode_transport(arguments_value))
         arguments = definition.request_arguments(request)
+        if definition.starts_task:
+            if not request_id:
+                raise ValueError("request_id is required for task admission")
+            if not arguments.get("idempotency_key"):
+                arguments["idempotency_key"] = f"desktop:{request_id}"
+                request = definition.validate_arguments(arguments)
         identity = ActorIdentity.model_validate(actor_value)
+        # Reads and their revision form one short snapshot. Runtime commands
+        # own only the lifetime lease: external rendering never owns the writer.
         session_scope = (
-            self.registry.leased_session if definition.access == "read" else self.registry.locked_session
+            self.registry.leased_session
+            if definition.access == "runtime" or command == "wait_for_task"
+            else self.registry.locked_session
         )
         with session_scope(
             path,
@@ -140,19 +161,34 @@ class DesktopProjectOperations:
                     "rebased_from": None,
                     "history": self._history_snapshot(session.project),
                     "event_ack": self._event_ack(event),
+                    "timeline_change": None,
                 }
             effective, rebased_from = self.registry.resolve_revision(
                 session.project,
                 envelope,
                 write_set,
             )
+
+            def invoke_write(_retrying: bool) -> dict[str, Any]:
+                before_revision = session.project.content_revision()
+                before = receiver.state if target == "timeline" else None
+                result = definition.validate_result(invoke())
+                change = (
+                    TimelineStateChange.between(
+                        before,
+                        receiver.state,
+                        base_revision=before_revision,
+                    )
+                    if before is not None
+                    else None
+                )
+                return {"value": encode_transport(result), "timeline_change": encode_transport(change)}
+
             stored, event = session.project.execute_automation_request(
                 effective.request_id,
                 effective.operation,
                 effective.arguments,
-                lambda _retrying: {
-                    "value": encode_transport(definition.validate_result(invoke()))
-                },
+                invoke_write,
                 atomic=True,
                 base_revision=effective.base_revision,
                 idempotency_base_revision=envelope.base_revision,
@@ -168,6 +204,7 @@ class DesktopProjectOperations:
                 "rebased_from": rebased_from,
                 "history": self._history_snapshot(session.project),
                 "event_ack": self._event_ack(event),
+                "timeline_change": stored["timeline_change"],
             }
 
     def project_events(self, path: Path, *, after_cursor: int = 0) -> list[dict[str, Any]]:

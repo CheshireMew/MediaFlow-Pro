@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from mediaflow.application.presentation_models import RecentProjectSnapshot
+from mediaflow.desktop.component_contexts import BackgroundResultRouterContext
 from mediaflow.domain.downloads import DownloadPlan
 
 logger = logging.getLogger(__name__)
@@ -113,8 +114,8 @@ def _require_path(value: object | None, label: str) -> Path:
 class BackgroundResultRouter:
     """Routes typed background results to one focused state transition per request kind."""
 
-    def __init__(self, session: Any):
-        self._session = session
+    def __init__(self, context: BackgroundResultRouterContext):
+        self._context = context
         self._handlers: dict[str, Callable[[BackgroundResult], None]] = {
             "recent_projects": self._handle_recent_projects,
             "encoder_policies": self._handle_encoder_policies,
@@ -141,39 +142,39 @@ class BackgroundResultRouter:
         return True
 
     def _handle_recent_projects(self, payload: BackgroundResult) -> None:
-        if payload.request_id != self._session.state.requests.recent_id:
+        if payload.request_id != self._context.state.requests.recent_id:
             return
         if payload.error:
-            self._session.updates.report_error(f"读取最近项目失败：{payload.error}")
+            self._context.updates.report_error(f"读取最近项目失败：{payload.error}")
         else:
-            self._session.projectors.workspace.apply_recent_projects(_require_recent_projects(payload.result))
+            self._context.apply_recent_projects(_require_recent_projects(payload.result))
 
     def _handle_encoder_policies(self, payload: BackgroundResult) -> None:
-        if payload.request_id != self._session.state.requests.encoder_id:
+        if payload.request_id != self._context.state.requests.encoder_id:
             return
         if payload.error:
-            self._session.updates.report_error(f"检测编码器失败：{payload.error}")
+            self._context.updates.report_error(f"检测编码器失败：{payload.error}")
         else:
-            self._session.state.presentation.encoder_policy_options = _require_dict_rows(
+            self._context.state.presentation.encoder_policy_options = _require_dict_rows(
                 payload.result,
                 "Encoder-policy",
             )
-            self._session.updates.commit(settings=True)
+            self._context.updates.commit(settings=True)
 
     def _handle_runtime_status(self, payload: BackgroundResult) -> None:
         request_id, preserve_cuda = _require_runtime_status_request(payload.request_id)
-        if request_id != self._session.state.requests.runtime_status_id:
+        if request_id != self._context.state.requests.runtime_status_id:
             return
         if payload.error:
             logger.warning("Failed to read runtime status: %s", payload.error)
             return
-        self._session.projectors.workspace.apply_runtime_tool_status(
+        self._context.apply_runtime_tool_status(
             _require_object_map(payload.result, "Runtime-status"),
             preserve_cuda=preserve_cuda,
         )
 
     def _handle_installed_asr_models(self, payload: BackgroundResult) -> None:
-        if payload.request_id != self._session.state.requests.installed_asr_models_id:
+        if payload.request_id != self._context.state.requests.installed_asr_models_id:
             return
         if payload.error:
             logger.warning("Failed to inspect installed ASR models: %s", payload.error)
@@ -182,31 +183,31 @@ class BackgroundResultRouter:
             isinstance(item, str) for item in payload.result
         ):
             raise TypeError("Installed-ASR-model request returned an invalid snapshot")
-        self._session.state.presentation.installed_asr_models = payload.result
-        self._session.updates.commit(settings=True)
+        self._context.state.presentation.installed_asr_models = payload.result
+        self._context.updates.commit(settings=True)
 
     def _handle_download_plan(self, payload: BackgroundResult) -> None:
-        if payload.request_id != self._session.state.download.request_id:
+        if payload.request_id != self._context.state.download.request_id:
             return
-        self._session.state.download.busy = False
+        self._context.state.download.busy = False
         if payload.error:
-            self._session.state.download.plan = None
-            self._session.state.download.selected_entries = set()
-            self._session.projectors.tasks.refresh_download_entries()
-            self._session.updates.commit(download_plan=True)
-            self._session.updates.report_error(f"读取媒体信息失败：{payload.error}")
+            self._context.state.download.plan = None
+            self._context.state.download.selected_entries = set()
+            self._context.refresh_download_entries()
+            self._context.updates.commit(download_plan=True)
+            self._context.updates.report_error(f"读取媒体信息失败：{payload.error}")
             return
         if not isinstance(payload.result, DownloadPlan):
             raise TypeError("Download-plan request returned an invalid plan")
-        self._session._set_download_plan(payload.result)
+        self._context.set_download_plan(payload.result)
 
     def _handle_waveform(self, payload: BackgroundResult) -> None:
         generation, asset_id, path_value = _require_int_str_str_request(
             payload.request_id,
             "Waveform",
         )
-        self._session.state.assets.waveform_pending.discard((generation, asset_id, path_value))
-        if generation != self._session.state.binding.generation:
+        self._context.state.assets.waveform_pending.discard((generation, asset_id, path_value))
+        if generation != self._context.state.binding.generation:
             return
         if payload.error:
             logger.warning(
@@ -217,33 +218,31 @@ class BackgroundResultRouter:
             )
             return
         modified, waveform = _require_waveform(payload.result)
-        self._session.state.assets.waveform_cache[asset_id] = (path_value, modified, waveform)
-        self._session.updates.commit(waveform_asset_id=asset_id)
+        self._context.state.assets.waveform_cache[asset_id] = (path_value, modified, waveform)
+        self._context.updates.commit(waveform_asset_id=asset_id)
 
     def _handle_asset_thumbnails(self, payload: BackgroundResult) -> None:
-        if payload.request_id != self._session.state.assets.thumbnail_pending_request:
+        if payload.request_id != self._context.state.assets.thumbnail_pending_request:
             return
-        self._session.state.assets.thumbnail_pending_request = None
+        self._context.state.assets.thumbnail_pending_request = None
         generation, _thumbnail_request_id, _project_path = _require_int_int_str_request(
             payload.request_id,
             "Asset-thumbnail",
         )
-        if generation != self._session.state.binding.generation:
+        if generation != self._context.state.binding.generation:
             return
         if payload.error:
             logger.warning("Failed to prepare asset thumbnails: %s", payload.error)
         else:
-            self._session.projectors.assets.apply_asset_thumbnails(
-                _require_string_map(payload.result, "Asset-thumbnail")
-            )
-        if self._session.state.assets.thumbnail_refresh_requested:
-            self._session.state.assets.thumbnail_refresh_requested = False
+            self._context.apply_asset_thumbnails(_require_string_map(payload.result, "Asset-thumbnail"))
+        if self._context.state.assets.thumbnail_refresh_requested:
+            self._context.state.assets.thumbnail_refresh_requested = False
             assets = (
-                self._session.state.binding.require_current().list_assets()
-                if self._session.state.binding.current
+                self._context.state.binding.require_current().list_assets()
+                if self._context.state.binding.current
                 else []
             )
-            self._session.projectors.assets.request_asset_thumbnails(assets)
+            self._context.request_asset_thumbnails(assets)
 
     def _handle_audio_metrics(self, payload: BackgroundResult) -> None:
         generation, metrics_request_id, sequence_id = _require_int_int_str_request(
@@ -251,9 +250,9 @@ class BackgroundResultRouter:
             "Audio-metrics",
         )
         if (
-            generation != self._session.state.binding.generation
-            or metrics_request_id != self._session.state.requests.audio_metrics_id
-            or sequence_id != self._session.state.binding.active_sequence_id
+            generation != self._context.state.binding.generation
+            or metrics_request_id != self._context.state.requests.audio_metrics_id
+            or sequence_id != self._context.state.binding.active_sequence_id
         ):
             return
         if payload.error:
@@ -265,9 +264,9 @@ class BackgroundResultRouter:
             metrics = {}
         else:
             metrics = _require_object_map(payload.result, "Audio-metrics")
-        if metrics != self._session.state.presentation.audio_metrics:
-            self._session.state.presentation.audio_metrics = metrics
-        self._session.updates.commit(audio_metrics=True)
+        if metrics != self._context.state.presentation.audio_metrics:
+            self._context.state.presentation.audio_metrics = metrics
+        self._context.updates.commit(audio_metrics=True)
 
     def _handle_timeline_filmstrip(self, payload: BackgroundResult) -> None:
         generation, filmstrip_id, sequence_id = _require_int_int_str_request(
@@ -275,21 +274,21 @@ class BackgroundResultRouter:
             "Timeline-filmstrip",
         )
         if (
-            generation != self._session.state.binding.generation
-            or filmstrip_id != self._session.state.requests.filmstrip_id
-            or sequence_id != self._session.state.binding.active_sequence_id
+            generation != self._context.state.binding.generation
+            or filmstrip_id != self._context.state.requests.filmstrip_id
+            or sequence_id != self._context.state.binding.active_sequence_id
         ):
             return
-        self._session.state.requests.filmstrip_future = None
+        self._context.state.requests.filmstrip_future = None
         if payload.error:
             logger.warning("Failed to prepare timeline filmstrip: %s", payload.error)
             return
         grouped: dict[str, list[dict]] = {}
         for item in _require_dict_rows(payload.result, "Timeline-filmstrip"):
             grouped.setdefault(str(item["clipId"]), []).append(dict(item))
-        changed_clip_ids = set(self._session.state.presentation.filmstrip_frames).union(grouped)
-        self._session.state.presentation.filmstrip_frames = grouped
-        self._session.projectors.timeline.refresh_clip_rows(
+        changed_clip_ids = set(self._context.state.presentation.filmstrip_frames).union(grouped)
+        self._context.state.presentation.filmstrip_frames = grouped
+        self._context.refresh_clip_rows(
             list(changed_clip_ids),
             defer_updates=True,
             refresh_relations=False,
@@ -301,18 +300,19 @@ class BackgroundResultRouter:
             payload.request_id,
             "Project-close",
         )
-        if close_id != self._session.state.requests.project_close_id:
+        if close_id != self._context.state.requests.project_close_id:
             return
-        self._session.state.requests.project_close_future = None
-        self._session.projectors.workspace.refresh_recent_projects()
+        self._context.state.requests.project_close_future = None
+        self._context.refresh_recent_projects()
         if payload.error:
-            self._session.state.requests.closing_project_error = str(payload.error)
-            self._session.updates.report_error(f"关闭项目时释放资源失败：{payload.error}")
+            self._context.state.requests.closing_project_error = str(payload.error)
+            self._context.updates.report_error(f"关闭项目时释放资源失败：{payload.error}")
         else:
-            self._session.state.requests.closing_project = None
-            self._session.state.requests.closing_project_error = ""
-            self._session._set_status("项目已关闭：%1", project_path)
-        self._session.updates.commit(project=True)
+            self._context.state.requests.closing_project = None
+            self._context.state.requests.closing_project_error = ""
+            if self._context.state.binding.current is None:
+                self._context.set_status("项目已关闭：%1", project_path)
+        self._context.updates.commit(project=True)
 
     def _handle_preview(self, payload: BackgroundResult) -> None:
         generation, preview_request_id, sequence_id = _require_int_int_str_request(
@@ -320,17 +320,26 @@ class BackgroundResultRouter:
             "Preview",
         )
         if (
-            generation != self._session.state.binding.generation
-            or preview_request_id != self._session.state.requests.preview_id
-            or sequence_id != self._session.state.binding.active_sequence_id
+            generation != self._context.state.binding.generation
+            or preview_request_id != self._context.state.requests.preview_id
+            or sequence_id != self._context.state.binding.active_sequence_id
         ):
             return
-        if payload.error:
-            self._session.updates.report_error(f"预览图编译失败：{payload.error}")
+        if isinstance(payload.error, CancelledError):
+            self._context.state.presentation.preview_status = "cancelled"
+            self._context.updates.commit(preview_graph=True)
             return
-        self._session.state.presentation.preview_graph_path = str(_require_path(payload.result, "Preview"))
-        self._session.updates.commit(preview_graph=True)
-        if self._session.state.presentation.pending_preview_range is not None:
-            start_frame, end_frame = self._session.state.presentation.pending_preview_range
-            self._session.state.presentation.pending_preview_range = None
-            self._session.updates.request_preview_range(start_frame, end_frame)
+        if payload.error:
+            self._context.state.presentation.preview_status = "failed"
+            self._context.state.presentation.preview_error = str(payload.error)
+            self._context.updates.commit(preview_graph=True)
+            self._context.updates.report_error(f"预览图编译失败：{payload.error}")
+            return
+        self._context.state.presentation.preview_graph_path = str(_require_path(payload.result, "Preview"))
+        self._context.state.presentation.preview_status = "ready"
+        self._context.state.presentation.preview_error = ""
+        self._context.updates.commit(preview_graph=True)
+        if self._context.state.presentation.pending_preview_range is not None:
+            start_frame, end_frame = self._context.state.presentation.pending_preview_range
+            self._context.state.presentation.pending_preview_range = None
+            self._context.updates.request_preview_range(start_frame, end_frame)

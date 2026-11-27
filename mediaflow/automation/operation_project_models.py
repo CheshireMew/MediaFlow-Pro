@@ -126,6 +126,7 @@ ProjectArchiveCreateResult = ProjectArchiveResult
 
 class ProjectChangesListArguments(DomainModel):
     since_revision: int = Field(ge=0)
+    limit: int = Field(default=500, ge=1, le=500)
     actor_kind: Literal["human", "agent", "automation", "system"] | None = None
 
 
@@ -249,6 +250,8 @@ class ProjectChangesListResult(DomainModel):
     current_revision: int = Field(ge=0)
     events: list[ProjectChangeEvent]
     summaries: list[ProjectChangeSummary]
+    has_more: bool = False
+    next_revision: int = Field(default=0, ge=0)
 
 
 class ProjectHandoffInspectResult(ProjectChangesListResult):

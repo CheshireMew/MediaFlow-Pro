@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from uuid import uuid4
 
 from mediaflow.application.events import TaskEvent, TaskEventBus
@@ -26,7 +27,6 @@ from mediaflow.application.task_lifecycle import TaskLifecycle
 from mediaflow.application.task_persistence import TaskPersistence
 from mediaflow.application.task_waiter import TaskStateWaiter
 from mediaflow.domain.enums import TaskKind, TaskStatus
-from mediaflow.domain.model_base import now_ms
 from mediaflow.domain.task_commands import TaskCommand
 from mediaflow.domain.tasks import Task
 
@@ -78,6 +78,7 @@ class TaskService:
         recovery_poll_interval: float = 1.0,
         execution_owner_id: str | None = None,
         preparation_scope: TaskPreparationScope | None = None,
+        discard_preparation: Callable[[Task], None] | None = None,
         project_change_committer: TaskProjectChangeCommitter | None = None,
         settlement_committer: TaskSettlementCommitter | None = None,
     ):
@@ -86,16 +87,14 @@ class TaskService:
         if recovery_poll_interval <= 0:
             raise ValueError("Task recovery poll interval must be positive")
         self.repository = repository
-        self.execution_owner_id = (
-            execution_owner_id
-            or f"{os.getpid()}:{uuid4()}"
-        )
+        self.execution_owner_id = execution_owner_id or f"{os.getpid()}:{uuid4()}"
         self._recovery_poll_interval = recovery_poll_interval
         self._recover_expired = recover_expired and not repository.read_only
         self._lock = threading.RLock()
         self._stopping = False
         self._stopped = False
         self._maintenance_stop = threading.Event()
+        self._maintenance_wake = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
         self._background_error_log_times: dict[str, float] = {}
         self.events = TaskEventBus(self._snapshot_events)
@@ -114,9 +113,11 @@ class TaskService:
             max_workers=max_workers,
             lease_duration_ms=lease_duration_ms,
             preparation_scope=preparation_scope,
+            discard_preparation=discard_preparation,
             project_change_committer=project_change_committer,
             publish=self._publish,
             report_background_error=self._log_background_error,
+            capacity_available=self._maintenance_wake.set,
         )
         self._lifecycle = TaskLifecycle(
             repository,
@@ -124,7 +125,7 @@ class TaskService:
             self._waiter,
             self._publish,
         )
-        if self._recover_expired:
+        if not repository.read_only:
             self._maintenance_thread = threading.Thread(
                 target=self._maintenance_loop,
                 name="mediaflow-task-recovery",
@@ -138,16 +139,7 @@ class TaskService:
     def recover_claimable(self) -> int:
         if not self._recover_expired:
             return 0
-        with self._lock:
-            if self._stopping:
-                return 0
-        scheduled = 0
-        for task in self.repository.list_claimable(now_ms()):
-            if not self._execution.has_handler(task):
-                continue
-            if self._execution.schedule(task):
-                scheduled += 1
-        return scheduled
+        return self._execution.dispatch_claimable(include_expired=True)
 
     def start(
         self,
@@ -213,17 +205,14 @@ class TaskService:
     def shutdown(self, *, timeout: float | None = None) -> None:
         if timeout is not None and timeout < 0:
             raise ValueError("Task shutdown timeout cannot be negative")
-        deadline = (
-            None
-            if timeout is None
-            else time.monotonic() + timeout
-        )
+        deadline = None if timeout is None else time.monotonic() + timeout
         with self._lock:
             if self._stopped:
                 return
             self._stopping = True
         owned, futures = self._execution.begin_shutdown()
         self._maintenance_stop.set()
+        self._maintenance_wake.set()
         for task_id, token in owned:
             token.request_pause()
             try:
@@ -264,11 +253,15 @@ class TaskService:
             self._stopped = True
 
     def _maintenance_loop(self) -> None:
-        while not self._maintenance_stop.wait(
-            self._recovery_poll_interval
-        ):
+        while not self._maintenance_stop.is_set():
+            self._maintenance_wake.wait(
+                self._recovery_poll_interval if self._recover_expired else None
+            )
+            self._maintenance_wake.clear()
+            if self._maintenance_stop.is_set():
+                return
             try:
-                self.recover_claimable()
+                self._execution.dispatch_claimable(include_expired=self._recover_expired)
             except Exception:
                 self._log_background_error(
                     "maintenance",
@@ -311,7 +304,13 @@ class TaskService:
         tasks, cursor = self.repository.snapshot()
         return [self._event(task, "snapshot", cursor=cursor) for task in tasks]
 
+    def event_cursor(self) -> int:
+        return self.repository.latest_cursor()
+
     def _publish(self, task: Task, event_type: str) -> None:
+        self.repository.after_commit(lambda: self._publish_committed(task, event_type))
+
+    def _publish_committed(self, task: Task, event_type: str) -> None:
         event = self.repository.latest_event(task.id)
         if event.revision > task.revision:
             # A control request may commit between the worker's task write and

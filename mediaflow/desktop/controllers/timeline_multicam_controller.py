@@ -8,14 +8,14 @@ from mediaflow.domain.enums import AssetKind
 from mediaflow.domain.multicam import MulticamAngleSyncSpec
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineMulticamScope
 
 
-class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
+class TimelineMulticamController(ControllerFacet[TimelineMulticamScope]):
     multicamChanged = Signal()
     syncAnalysisChanged = Signal()
 
-    def __init__(self, scope: TimelinePresentationScope) -> None:
+    def __init__(self, scope: TimelineMulticamScope) -> None:
         super().__init__(scope)
         self._sync_analysis: dict[str, Any] = {}
         self._sync_request_id = 0
@@ -34,11 +34,11 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
         return self._selected_video_assets()
 
     def _selected_video_assets(self) -> list[dict[str, Any]]:
-        current = self._session.state.binding.current
+        current = self._session.project_binding.current
         if current is None:
             return []
         rows = []
-        for asset_id in self._session.state.selection.asset_ids:
+        for asset_id in self._session.read_selection().asset_ids:
             asset = current.get_asset(asset_id)
             if asset.kind == AssetKind.VIDEO and asset.metadata.duration_frames > 0:
                 rows.append(
@@ -52,7 +52,7 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
 
     @Property(list, notify=multicamChanged)
     def groups(self) -> list[dict[str, Any]]:
-        timeline = self._session.state.binding.timeline
+        timeline = self._session.project_binding.timeline
         if timeline is None:
             return []
         return [
@@ -93,7 +93,7 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
             )
             for item in angle_values
         ]
-        self._session.state.binding.require_timeline().create_multicam_group(
+        self._session.project_binding.require_timeline().create_multicam_group(
             name,
             angles,
             timeline_start=max(0, timeline_start),
@@ -133,7 +133,7 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
             )
             for item in angle_values
         ]
-        self._session.state.binding.require_timeline().create_multicam_group(
+        self._session.project_binding.require_timeline().create_multicam_group(
             name,
             angles,
             timeline_start=max(0, timeline_start),
@@ -157,10 +157,8 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
     @Slot(str)
     @report_ui_errors
     def analyzeSync(self, method: str) -> None:
-        current = self._session.state.binding.require_current()
-        asset_ids = [
-            str(item["assetId"]) for item in self._selected_video_assets()
-        ]
+        current = self._session.project_binding.require_current()
+        asset_ids = [str(item["assetId"]) for item in self._selected_video_assets()]
         if len(asset_ids) < 2:
             raise ValueError("请先选择至少两个视频素材")
         self._sync_request_id += 1
@@ -174,7 +172,7 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
                 "multicam.sync.analyze",
                 current.project_dir,
                 {
-                    "sequence_id": self._session.state.binding.active_sequence_id,
+                    "sequence_id": self._session.project_binding.active_sequence_id,
                     "asset_ids": asset_ids,
                     "method": method,
                 },
@@ -187,7 +185,7 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def switchAngle(self, group_id: str, angle_id: str, timeline_frame: int) -> None:
         self._session._require_writable()
-        self._session.state.binding.require_timeline().switch_multicam_angle(
+        self._session.project_binding.require_timeline().switch_multicam_angle(
             group_id,
             angle_id,
             timeline_frame,
@@ -196,7 +194,7 @@ class TimelineMulticamController(ControllerFacet[TimelinePresentationScope]):
         self._session._set_status("多机位角度已切换")
 
     def _after_change(self) -> None:
-        self._session.projectors.timeline.refresh_timeline()
+        self._session.refresh_timeline()
         self._session.updates.commit(history=True, selection=True)
         self.multicamChanged.emit()
 

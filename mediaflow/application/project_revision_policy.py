@@ -23,6 +23,7 @@ def resolve_project_revision(
     write_set: list[str],
     events: Iterable[ProjectChangeEvent],
     conflict_reason: str,
+    ignore_restored_history: bool = False,
 ) -> ProjectRevisionResolution:
     """Resolve one project write against the durable event journal."""
 
@@ -44,6 +45,7 @@ def resolve_project_revision(
 
     covered_revision = base_revision
     conflicts: list[ProjectChangeEvent] = []
+    pending_history: dict[str, ProjectChangeEvent] = {}
     for event in events:
         if event.base_revision != covered_revision:
             raise ProjectRevisionConflict(
@@ -54,7 +56,22 @@ def resolve_project_revision(
                 reason="the durable event journal does not cover the requested revision",
             )
         if any(project_write_paths_overlap(left, right) for left in write_set for right in event.write_set):
-            conflicts.append(event)
+            if ignore_restored_history and event.inverse_command is not None:
+                previous = pending_history.pop(event.undo_group_id, None)
+                if previous is None:
+                    pending_history[event.undo_group_id] = event
+                elif (
+                    (previous.operation == "history.undo") != (event.operation == "history.undo")
+                    and previous.inverse_command == event.inverse_command
+                ):
+                    # A command followed by its inverse restores the baseline.
+                    # Keep checking every revision so journal gaps still fail.
+                    pass
+                else:
+                    conflicts.append(previous)
+                    pending_history[event.undo_group_id] = event
+            else:
+                conflicts.append(event)
         covered_revision = event.project_revision
     if covered_revision != current_revision:
         raise ProjectRevisionConflict(
@@ -64,12 +81,13 @@ def resolve_project_revision(
             conflicting_events=[],
             reason="the durable event journal does not reach the current revision",
         )
+    conflicts.extend(pending_history.values())
     if conflicts:
         raise ProjectRevisionConflict(
             expected_revision=base_revision,
             current_revision=current_revision,
             write_set=write_set,
-            conflicting_events=conflicts,
+            conflicting_events=sorted(conflicts, key=lambda event: event.cursor),
             reason=conflict_reason,
         )
     return ProjectRevisionResolution(

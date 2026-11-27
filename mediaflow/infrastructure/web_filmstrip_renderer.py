@@ -102,6 +102,7 @@ class WebFilmstripRenderer:
         reservation = self.cache_lifecycle.reserve(
             one_frame_target,
             label="MediaFlow editable web filmstrip cache",
+            check_cancelled=check_cancelled,
         )
         try:
             one_frame_target.path.parent.mkdir(parents=True, exist_ok=True)

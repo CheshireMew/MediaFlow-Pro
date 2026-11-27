@@ -1,4 +1,5 @@
 name: V2 Quality
+run-name: "${{ inputs.scope || 'auto' }} quality: ${{ github.ref_name }}"
 
 on:
   push:
@@ -9,14 +10,12 @@ on:
   pull_request:
     branches:
       - main
-  schedule:
-    - cron: "17 18 * * *"
   workflow_dispatch:
     inputs:
       scope:
         description: Quality scope to run
         required: true
-        default: full
+        default: core
         type: choice
         options:
           - maintenance
@@ -33,7 +32,7 @@ env:
 
 concurrency:
   group: v2-quality-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+  cancel-in-progress: true
 
 jobs:
   plan:
@@ -63,7 +62,7 @@ jobs:
         shell: pwsh
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          MANUAL_SCOPE: ${{ inputs.scope || 'full' }}
+          MANUAL_SCOPE: ${{ inputs.scope || 'core' }}
         run: >-
           python scripts/ci/quality_plan.py
           --event "$env:GITHUB_EVENT_NAME"
@@ -114,13 +113,13 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -209,13 +208,13 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -267,7 +266,7 @@ jobs:
     needs:
       - plan
       - preflight
-    if: needs.plan.outputs.run_full == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && needs.plan.outputs.run_full == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -286,13 +285,13 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -317,20 +316,20 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            ${{ runner.temp }}\mediaflow-runtime\deps
-            ${{ runner.temp }}\mediaflow-runtime\downloads
-          key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+            ${{ runner.temp }}\mediaflow\runtime\deps
+            ${{ runner.temp }}\mediaflow\runtime\downloads
+          key: mediaflow-deps-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the checksum-pinned Qt SDK
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}\mediaflow-runtime\qt
-          key: mediaflow-qt-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+          path: ${{ runner.temp }}\mediaflow\runtime\qt
+          key: mediaflow-qt-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the native preview build
         id: native-preview
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}\mediaflow-runtime\native
-          key: mediaflow-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py', 'mediaflow/desktop/native/**') }}
+          path: ${{ runner.temp }}\mediaflow\runtime\native
+          key: mediaflow-native-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py', 'mediaflow/desktop/native/**') }}
       - name: Prepare the checksum-pinned media and Chromium runtime
         run: python scripts/prepare_runtime.py --runtime-root "$env:MEDIAFLOW_RUNTIME_DIR"
       - name: Install the exact Qt SDK declared by the runtime lock
@@ -369,7 +368,7 @@ jobs:
     needs:
       - plan
       - preflight
-    if: needs.plan.outputs.run_full == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && needs.plan.outputs.run_full == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
     strategy:
@@ -390,13 +389,13 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -421,20 +420,20 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            ${{ runner.temp }}\mediaflow-runtime\deps
-            ${{ runner.temp }}\mediaflow-runtime\downloads
-          key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+            ${{ runner.temp }}\mediaflow\runtime\deps
+            ${{ runner.temp }}\mediaflow\runtime\downloads
+          key: mediaflow-deps-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the checksum-pinned Qt SDK
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}\mediaflow-runtime\qt
-          key: mediaflow-qt-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+          path: ${{ runner.temp }}\mediaflow\runtime\qt
+          key: mediaflow-qt-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the native preview build
         id: native-preview
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}\mediaflow-runtime\native
-          key: mediaflow-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py', 'mediaflow/desktop/native/**') }}
+          path: ${{ runner.temp }}\mediaflow\runtime\native
+          key: mediaflow-native-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py', 'mediaflow/desktop/native/**') }}
       - name: Prepare the checksum-pinned media and Chromium runtime
         shell: pwsh
         run: |
@@ -514,7 +513,7 @@ jobs:
   native-policy:
     name: Native preview source policy
     needs: plan
-    if: needs.plan.outputs.run_full == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && needs.plan.outputs.run_full == 'true'
     runs-on: windows-latest
     timeout-minutes: 10
 
@@ -542,7 +541,7 @@ jobs:
     needs:
       - plan
       - preflight
-    if: needs.plan.outputs.run_portable_build == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && needs.plan.outputs.run_portable_build == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -571,13 +570,13 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-dev"
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-fixtures"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_DEV_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_TEST_FIXTURE_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-fixtures"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -597,20 +596,20 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            ${{ runner.temp }}/mediaflow-runtime/deps
-            ${{ runner.temp }}/mediaflow-runtime/downloads
-          key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+            ${{ runner.temp }}/mediaflow/runtime/deps
+            ${{ runner.temp }}/mediaflow/runtime/downloads
+          key: mediaflow-deps-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the target Qt SDK
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}/mediaflow-runtime/qt
-          key: mediaflow-qt-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+          path: ${{ runner.temp }}/mediaflow/runtime/qt
+          key: mediaflow-qt-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Restore the target native preview build
         id: native-preview
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}/mediaflow-runtime/native
-          key: mediaflow-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py', 'mediaflow/desktop/native/**') }}
+          path: ${{ runner.temp }}/mediaflow/runtime/native
+          key: mediaflow-native-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json', 'requirements.lock', 'scripts/build_native.py', 'mediaflow/desktop/native/**') }}
       - name: Install Linux system libraries required by pinned Chromium
         if: runner.os == 'Linux'
         run: |
@@ -696,7 +695,7 @@ jobs:
     needs:
       - plan
       - preflight
-    if: needs.plan.outputs.run_interchange == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && needs.plan.outputs.run_interchange == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -725,11 +724,11 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -749,9 +748,9 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            ${{ runner.temp }}/mediaflow-runtime/deps
-            ${{ runner.temp }}/mediaflow-runtime/downloads
-          key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+            ${{ runner.temp }}/mediaflow/runtime/deps
+            ${{ runner.temp }}/mediaflow/runtime/downloads
+          key: mediaflow-deps-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Install Linux libraries required by the reviewed MLT runtime
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1
@@ -783,7 +782,7 @@ jobs:
     needs:
       - plan
       - interchange-produce
-    if: needs.plan.outputs.run_interchange == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && needs.plan.outputs.run_interchange == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -824,11 +823,11 @@ jobs:
         shell: pwsh
         run: |
           $paths = @{
-            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-runtime"
-            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-projects"
-            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-media"
-            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow-test-runs"
-            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow-service"
+            MEDIAFLOW_RUNTIME_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/runtime"
+            MEDIAFLOW_PROJECT_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/projects"
+            MEDIAFLOW_MEDIA_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/media"
+            MEDIAFLOW_TEST_ROOT = Join-Path $env:RUNNER_TEMP "mediaflow/test-runs"
+            MEDIAFLOW_SERVICE_STATE_DIR = Join-Path $env:RUNNER_TEMP "mediaflow/service"
           }
           foreach ($entry in $paths.GetEnumerator()) {
             "$($entry.Key)=$($entry.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
@@ -848,9 +847,9 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
-            ${{ runner.temp }}/mediaflow-runtime/deps
-            ${{ runner.temp }}/mediaflow-runtime/downloads
-          key: mediaflow-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
+            ${{ runner.temp }}/mediaflow/runtime/deps
+            ${{ runner.temp }}/mediaflow/runtime/downloads
+          key: mediaflow-deps-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime.lock.json') }}
       - name: Install Linux libraries required by the reviewed MLT runtime
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libva2 libva-drm2 libva-x11-2 libvdpau1

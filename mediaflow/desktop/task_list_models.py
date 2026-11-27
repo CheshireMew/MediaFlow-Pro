@@ -18,6 +18,7 @@ class TaskListModel(DictListModel):
                 "commandType",
                 "kind",
                 "status",
+                "executionScope",
                 "statusLabel",
                 "progressMode",
                 "progressValue",

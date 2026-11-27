@@ -23,7 +23,7 @@ from mediaflow.domain.collaboration import (
     ProjectEditAction,
     ProjectEditCommand,
 )
-from mediaflow.domain.enums import AssetKind, AssetOrigin
+from mediaflow.domain.enums import AssetKind, AssetOrigin, TaskStatus
 from mediaflow.domain.highlights import HighlightCandidate
 from mediaflow.domain.project import Asset, ProjectProfile, Sequence
 from mediaflow.domain.project_collection import (
@@ -40,6 +40,8 @@ from mediaflow.domain.sequence_variants import (
 )
 from mediaflow.domain.settings import ServiceSettings
 from mediaflow.domain.subtitles import SubtitlePlacement, SubtitleSegment
+from mediaflow.domain.task_commands import CollectProjectAssetsCommand, TaskCommand
+from mediaflow.domain.tasks import ProjectCollectionTaskOutcome, Task
 from mediaflow.domain.transcript_edits import (
     TranscriptEditPlan,
     TranscriptEditRequest,
@@ -66,9 +68,19 @@ class EditorProjectMediaCommands:
     _settings: ServiceSettings
     _history: ProjectEditHistory
     if TYPE_CHECKING:
+
         def _require_writable(self) -> None: ...
         def _reload_timelines(self) -> None: ...
         def timeline(self, sequence_id: str) -> TimelineEditor: ...
+        def start_task(
+            self,
+            command: TaskCommand,
+            input_asset_ids: list[str] | None = None,
+            *,
+            sequence_id: str | None = None,
+            idempotency_key: str | None = None,
+        ) -> Task: ...
+        def wait_for_task(self, task_id: str, timeout: float | None = None) -> Task: ...
 
     def import_external_asset(
         self,
@@ -125,9 +137,19 @@ class EditorProjectMediaCommands:
     def collect_project_assets(
         self,
         asset_ids: list[str] | None = None,
+        *,
+        idempotency_key: str | None = None,
     ) -> ProjectCollectionResult:
         self._require_writable()
-        return self._collections.collect(asset_ids)
+        task = self.start_task(
+            CollectProjectAssetsCommand(asset_ids=asset_ids), idempotency_key=idempotency_key
+        )
+        completed = self.wait_for_task(task.id)
+        if completed.status != TaskStatus.COMPLETED or not isinstance(
+            completed.outcome, ProjectCollectionTaskOutcome
+        ):
+            raise RuntimeError(completed.error or "素材归集已停止")
+        return completed.outcome.result
 
     def list_project_collections(self) -> list[ProjectCollectionRecord]:
         return self._collections.list_records()
@@ -475,9 +497,7 @@ class EditorProjectMediaCommands:
         requested_presets = {item.preset_id for item in normalized}
         before_snapshots = {
             record.sequence_id: self._sequences.snapshot_variant(record.sequence_id)
-            for record in self._sequences.list_variants(
-                source_sequence_id, include_archived=False
-            )
+            for record in self._sequences.list_variants(source_sequence_id, include_archived=False)
             if record.preset_id in requested_presets
         }
         result = self._sequences.generate_variants(
@@ -544,9 +564,7 @@ class EditorProjectMediaCommands:
                 path=f"/sequences/{sequence_id}",
                 action="create",
                 value=next(
-                    item.model_dump(mode="json")
-                    for item in result.sequences
-                    if item.id == sequence_id
+                    item.model_dump(mode="json") for item in result.sequences if item.id == sequence_id
                 ),
             )
             for sequence_id in result.created_sequence_ids
@@ -564,9 +582,7 @@ class EditorProjectMediaCommands:
                 path=f"/sequences/{sequence_id}/variant-sync",
                 action="update",
                 value=next(
-                    item.model_dump(mode="json")
-                    for item in result.plans
-                    if item.sequence_id == sequence_id
+                    item.model_dump(mode="json") for item in result.plans if item.sequence_id == sequence_id
                 ),
             )
             for sequence_id in result.refreshed_sequence_ids
@@ -627,9 +643,7 @@ class EditorProjectMediaCommands:
         markup: list[dict[str, Any]],
     ) -> ReviewThread:
         self._require_writable()
-        return self._review_packages.set_markup(
-            sequence_id, thread_id, snapshot_id, markup
-        )
+        return self._review_packages.set_markup(sequence_id, thread_id, snapshot_id, markup)
 
     def export_review_package(
         self,

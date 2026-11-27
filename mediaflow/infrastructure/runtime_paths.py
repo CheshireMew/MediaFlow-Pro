@@ -16,7 +16,7 @@ from mediaflow.infrastructure.runtime_contract import (
     RuntimeContract,
     load_runtime_contract,
 )
-from mediaflow.infrastructure.storage_budget import project_cache_identity
+from mediaflow.infrastructure.storage_inventory import project_cache_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -46,3 +46,15 @@ def open_project_database(
         if connection is not None:
             connection.close()
         raise
+
+
+def open_project_snapshot(database: bytes) -> sqlite3.Connection:
+    """Own a detached, immutable project read model under the same SQLite contract."""
+    connection = open_project_database(":memory:", read_only=False, check_same_thread=False)
+    try:
+        connection.deserialize(database)
+        connection.execute("PRAGMA query_only=ON")
+        return connection
+    except BaseException:
+        connection.close()
+        raise

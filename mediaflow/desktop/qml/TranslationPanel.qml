@@ -337,7 +337,7 @@ ColumnLayout {
                                 + "/text"
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.max(48, implicitHeight)
-                            text: comparisonRow.modelData.draftText
+                            sourceText: comparisonRow.modelData.draftText
                             placeholderText: qsTr("尚未生成译文")
                             enabled: root.canEdit && Boolean(comparisonRow.modelData.targetSegmentId)
                             onTextChanged: {

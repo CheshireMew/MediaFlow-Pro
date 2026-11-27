@@ -10,16 +10,9 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QUrl, Slot
 
 from mediaflow.application.workflow_models import WorkflowUpdate
-from mediaflow.desktop.coordinators import (
-    BackgroundRequests,
-    ProjectLifecycle,
-    RuntimeToolOperations,
-    SettingsPersistence,
-    TaskOperations,
-    TimelineAssetOperations,
-)
+from mediaflow.desktop.component_contexts import TimelineSnappingContext
 from mediaflow.desktop.presentation_messages import status_message
-from mediaflow.desktop.presenters import PresentationProjectors
+from mediaflow.desktop.session_components import DesktopSessionActions, compose_desktop_components
 from mediaflow.desktop.session_events import SESSION_EVENT_NAMES, SessionEvents
 from mediaflow.desktop.session_state import (
     DesktopSessionState,
@@ -80,16 +73,31 @@ class ProjectSession(QObject):
             ),
         )
         self.models = SessionModels.create(self)
-        self._timeline_snapping = TimelineSnappingCoordinator(self)
+        self._timeline_snapping = TimelineSnappingCoordinator(
+            TimelineSnappingContext(self.state, self.models)
+        )
         self.events = SessionEvents(self)
         self.updates = SessionUpdates(self.events, self)
-        self.background = BackgroundRequests(self)
-        self.runtime_tools = RuntimeToolOperations(self)
-        self.settings_persistence = SettingsPersistence(self)
-        self.tasks = TaskOperations(self)
-        self.timeline_assets = TimelineAssetOperations(self)
-        self.projectors = PresentationProjectors.create(self)
-        self.lifecycle = ProjectLifecycle(self)
+        components = compose_desktop_components(
+            parent=self, state=self.state, models=self.models, updates=self.updates,
+            api=self._api, snapping=self._timeline_snapping,
+            actions=DesktopSessionActions(
+                set_download_plan=self._set_download_plan,
+                set_status=self._set_status,
+                apply_workflow_update=self._apply_workflow_update,
+                finish_sequence_in_out_edit=self._finish_sequence_in_out_edit,
+                require_writable=self._require_writable,
+                snap_tolerance_frames=self._snap_tolerance_frames,
+            ),
+        )
+        self.background = components.background
+        self.runtime_tools = components.runtime_tools
+        self.settings_persistence = components.settings_persistence
+        self.tasks = components.tasks
+        self.timeline_assets = components.timeline_assets
+        self.preview = components.preview
+        self.projectors = components.projectors
+        self.lifecycle = components.lifecycle
         self._controller_notifiers_attached = False
         self._home_requests_started = False
         self.events.errorOccurred.connect(self._log_ui_error)
@@ -185,16 +193,16 @@ class ProjectSession(QObject):
         self.state.selection.subtitle_segment_ids = list(selected_ids)
         if changed_segments is None:
             self.projectors.subtitles.refresh_documents()
-            self.projectors.timeline.refresh_preview_subtitles()
+            self.projectors.timeline_subtitles.refresh_preview_subtitles()
             self.updates.commit(project=True)
         else:
             self.projectors.subtitles.refresh_segment_rows(changed_segments)
-            self.projectors.timeline.refresh_preview_subtitle_segments(
+            self.projectors.timeline_subtitles.refresh_preview_subtitle_segments(
                 changed_segments
             )
         self.updates.commit(selection=True)
         self.updates.commit(history=True)
-        self.projectors.timeline.schedule_preview_graph()
+        self.preview.schedule()
         self._set_status(status_source, *status_arguments)
 
     def _finish_sequence_in_out_edit(

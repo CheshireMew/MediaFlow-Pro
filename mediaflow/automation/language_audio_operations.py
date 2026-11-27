@@ -3,7 +3,7 @@ from __future__ import annotations
 from mediaflow.automation.operation_context import OperationContext
 from mediaflow.domain.asr import TranscriptionPlan
 from mediaflow.domain.audio import AudioBus, AudioEffect
-from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan
+from mediaflow.domain.sequence_audio import build_dialogue_transcription_plan, select_audible_sequence_audio
 from mediaflow.domain.settings import AsrSettings
 from mediaflow.domain.speech_review import SpeechReviewRules, review_transcript
 from mediaflow.domain.task_commands import TranscribeSequenceCommand
@@ -295,8 +295,15 @@ def apply_transcript_edit(context: OperationContext) -> dict:
 
 
 def inspect_audio(context: OperationContext) -> dict:
-    buses = context.project.list_audio_buses(context.sequence_id())
+    sequence_id = context.sequence_id()
+    buses = context.project.list_audio_buses(sequence_id)
+    selection = select_audible_sequence_audio(
+        context.project.timeline(sequence_id).state,
+        {asset.id: asset for asset in context.project.list_assets()},
+        buses,
+    )
     return {
+        "audible_clip_ids": list(selection.clip_ids),
         "buses": [
             {
                 **bus.model_dump(

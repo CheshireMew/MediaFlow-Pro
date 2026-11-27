@@ -64,6 +64,7 @@ from mediaflow.infrastructure.output_reservation import (
 from mediaflow.infrastructure.project_repository import ProjectRepository
 from mediaflow.infrastructure.runtime_context import RuntimeContext
 from mediaflow.infrastructure.runtime_paths import RuntimePaths
+from mediaflow.infrastructure.task_repository import TaskRepository
 from tests.v2.real_media import generate_real_media
 
 
@@ -563,16 +564,21 @@ def test_long_output_set_uses_short_siblings_for_commit_and_rollback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    parent = tmp_path
     first_name = f"{'feature-export-' * 6}video.mp4"
     second_name = f"{'feature-export-' * 6}subtitle.srt"
-    while len(str(parent / first_name)) < 215:
-        parent /= "deep-user-export-folder"
+    longest_path = max(
+        len(str(tmp_path / name).encode("utf-16-le")) // 2
+        for name in (first_name, second_name)
+    )
+    padding = WINDOWS_INTEROP_PATH_UTF16_LIMIT - longest_path - 1
+    assert padding > 0, "The test root must leave room for a boundary-length output"
+    parent = tmp_path / ("d" * padding)
     parent.mkdir(parents=True)
     first = (parent / first_name).resolve()
     second = (parent / second_name).resolve()
     assert len(str(first).encode("utf-16-le")) // 2 <= 240
     assert len(str(second).encode("utf-16-le")) // 2 <= 240
+    assert max(utf16_units(str(path)) for path in (first, second)) == WINDOWS_INTEROP_PATH_UTF16_LIMIT
     first.write_bytes(b"old-video")
     second.write_bytes(b"old-subtitle")
 
@@ -1550,9 +1556,11 @@ def test_export_task_persists_real_quality_report_history_and_proof_frames(
         project.close()
 
 
+@pytest.mark.parametrize("failure_point", ["history", "terminal_save"])
 def test_export_history_failure_withdraws_real_published_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
 ) -> None:
     paths = RuntimeContext.discover().paths
     source = tmp_path / "history-failure-source.mp4"
@@ -1585,14 +1593,21 @@ def test_export_history_failure_withdraws_real_published_output(
         preset="ultrafast",
     )
 
-    def fail_history_save(_self, _record) -> None:
-        raise RuntimeError("injected export history failure")
+    failure_message = f"injected export {failure_point} failure"
+    if failure_point == "history":
+        def fail_history_save(_self, _record) -> None:
+            raise RuntimeError(failure_message)
 
-    monkeypatch.setattr(
-        type(repository.records),
-        "save_export_history",
-        fail_history_save,
-    )
+        monkeypatch.setattr(type(repository.records), "save_export_history", fail_history_save)
+    else:
+        update_owned = TaskRepository.update_owned
+
+        def fail_terminal_save(self, task, *args, **kwargs):
+            if task.status == TaskStatus.COMPLETED:
+                raise RuntimeError(failure_message)
+            return update_owned(self, task, *args, **kwargs)
+
+        monkeypatch.setattr(TaskRepository, "update_owned", fail_terminal_save)
     project = EditorProject(
         repository,
         settings=ServiceSettings(),
@@ -1612,7 +1627,7 @@ def test_export_history_failure_withdraws_real_published_output(
         completed = project.wait_for_task(task.id, timeout=90)
 
         assert completed.status == TaskStatus.FAILED
-        assert "injected export history failure" in (completed.error or "")
+        assert failure_message in (completed.error or "")
         assert not completed.artifacts
         assert not output.exists()
         assert repository.records.list_export_history(sequence_id) == []

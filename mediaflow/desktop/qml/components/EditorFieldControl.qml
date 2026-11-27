@@ -5,6 +5,7 @@ import ".."
 ColumnLayout {
     id: root
     required property var field
+    property string collaborationPath: ""
     property var options: []
     property bool showLabel: true
     signal valueCommitted(var value)
@@ -63,7 +64,8 @@ ColumnLayout {
         AppTextField {
             Layout.fillWidth: true
             Accessible.name: root.accessibleLabel
-            text: String(root.field.value ?? "")
+            collaborationPath: root.collaborationPath
+            sourceText: String(root.field.value ?? "")
             placeholderText: String(root.definition.kind || "")
             onEditingFinished: root.valueCommitted(text)
         }
@@ -74,7 +76,8 @@ ColumnLayout {
         AppTextField {
             Layout.fillWidth: true
             Accessible.name: root.accessibleLabel
-            text: String(root.field.value ?? root.definition.default ?? 0)
+            collaborationPath: root.collaborationPath
+            sourceText: String(root.field.value ?? root.definition.default ?? 0)
             onEditingFinished: root.valueCommitted(
                 root.definition.kind === "integer"
                     ? Math.round(Number(text)) : Number(text))
@@ -123,7 +126,8 @@ ColumnLayout {
             AppTextField {
                 Layout.preferredWidth: 78
                 Accessible.name: root.accessibleLabel
-                text: root.definition.kind === "integer"
+                collaborationPath: root.collaborationPath
+                sourceText: root.definition.kind === "integer"
                     ? String(Math.round(slider.value))
                     : Number(slider.value).toFixed(
                         Number(root.constraints.step ?? 0.01) < 1 ? 2 : 0)

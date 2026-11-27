@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+from dataclasses import replace
 from fractions import Fraction
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -52,11 +53,14 @@ from tests.v2.real_media import generate_real_media
 def test_media_probe_timecode_supports_non_drop_drop_frame_and_clock_conversion() -> None:
     ntsc = ProjectProfile(fps_numerator=30_000, fps_denominator=1_001)
     assert MediaProbe._timecode_frame("01:00:00;00", Fraction(30_000, 1_001), ntsc) == 107_892
-    assert MediaProbe._timecode_frame(
-        "01:02:03:04",
-        Fraction(25, 1),
-        ProjectProfile(fps_numerator=25, fps_denominator=1),
-    ) == (1 * 3600 + 2 * 60 + 3) * 25 + 4
+    assert (
+        MediaProbe._timecode_frame(
+            "01:02:03:04",
+            Fraction(25, 1),
+            ProjectProfile(fps_numerator=25, fps_denominator=1),
+        )
+        == (1 * 3600 + 2 * 60 + 3) * 25 + 4
+    )
     metadata = MediaMetadata(duration_frames=250, start_timecode_frame=1_000)
     converted = metadata.in_frame_clock(
         ProjectProfile(fps_numerator=25, fps_denominator=1),
@@ -88,9 +92,7 @@ def test_native_media_services_reject_an_overlong_external_source_before_launch(
             short_source,
             AssetKind.VIDEO,
         )
-        asset = repository.assets.update_asset(
-            asset.model_copy(update={"path": str(deep_source)})
-        )
+        asset = repository.assets.update_asset(asset.model_copy(update={"path": str(deep_source)}))
         profile = repository.sequences.get_sequence(
             repository.projects.get_project().main_sequence_id
         ).profile
@@ -249,7 +251,9 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
     tmp_path: Path,
     max_project_path: Path,
 ) -> None:
-    paths = RuntimeContext.discover().paths
+    paths = replace(
+        RuntimeContext.discover().paths, runtime_dir=Path(os.environ["MEDIAFLOW_TEST_ROOT"]) / "rt"
+    )
     source = tmp_path / "source.mp4"
     generate_real_media(source, paths)
 
@@ -293,9 +297,7 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
         assert utf16_units(str(proxy_path)) <= 240
         proxy_probe = MediaProbe(paths).probe(proxy_path, timeline_profile=profile)
         assert proxy_probe.metadata.has_video is True
-        proxy_encoding = [
-            item for item in proxy_progress if item.message_code == "proxy_encoding"
-        ]
+        proxy_encoding = [item for item in proxy_progress if item.message_code == "proxy_encoding"]
         assert proxy_encoding
         assert proxy_encoding[-1].completed == proxy_encoding[-1].total
 
@@ -317,9 +319,7 @@ def test_real_ffmpeg_media_becomes_project_asset_proxy_and_waveform(
             first=0,
             last=1,
         )
-        calculating = [
-            item for item in waveform_progress if item.message_code == "waveform_calculating"
-        ]
+        calculating = [item for item in waveform_progress if item.message_code == "waveform_calculating"]
         assert calculating
         assert all(item.mode == "determinate" and item.unit == "samples" for item in calculating)
         assert calculating[-1].completed == calculating[-1].total
@@ -359,12 +359,8 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
         waveform_path = repository.project_dir / updated_asset.waveform_path
         waveform_header = inspect_waveform_cache(waveform_path)
 
-        decoding = [
-            item for item in progress_events if item.message_code == "waveform_decoding"
-        ]
-        calculating = [
-            item for item in progress_events if item.message_code == "waveform_calculating"
-        ]
+        decoding = [item for item in progress_events if item.message_code == "waveform_decoding"]
+        calculating = [item for item in progress_events if item.message_code == "waveform_calculating"]
         assert decoding
         assert decoding[-1].mode == "determinate"
         assert decoding[-1].unit == "media_seconds"
@@ -381,14 +377,11 @@ def test_waveform_task_progress_survives_events_storage_and_artifact_consumption
         assert transported_tasks[-1] == persisted
         waveform_path = Path(updated_asset.waveform_path)
         expected_waveform = (
-            waveform_path
-            if waveform_path.is_absolute()
-            else repository.project_dir / waveform_path
+            waveform_path if waveform_path.is_absolute() else repository.project_dir / waveform_path
         )
-        assert [
-            artifact.resolve(repository.project_dir)
-            for artifact in completed.artifacts
-        ] == [expected_waveform]
+        assert [artifact.resolve(repository.project_dir) for artifact in completed.artifacts] == [
+            expected_waveform
+        ]
         assert waveform_header.sample_count > 0
         assert waveform_header.levels[0].count > 0
     finally:
@@ -524,7 +517,9 @@ def test_thumbnail_cache_tracks_content_when_size_and_timestamp_are_unchanged(
 
 
 def test_real_ytdlp_download_returns_files_then_application_registers_assets(tmp_path: Path) -> None:
-    paths = RuntimeContext.discover().paths
+    paths = replace(
+        RuntimeContext.discover().paths, runtime_dir=Path(os.environ["MEDIAFLOW_TEST_ROOT"]) / "rt"
+    )
     web_root = tmp_path / "web"
     web_root.mkdir()
     source = web_root / "sample.mp4"
@@ -661,16 +656,11 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
     )
     selected_output = tmp_path / "Selected Output"
     try:
-        url = (
-            f"http://127.0.0.1:"
-            f"{server.server_address[1]}/sample.mp4"
-        )
+        url = f"http://127.0.0.1:{server.server_address[1]}/sample.mp4"
         plan = YtDlpDownloadService(paths).analyze(url)
 
         def fail_registration(*_args, **_kwargs):
-            raise RuntimeError(
-                "injected asset registration failure"
-            )
+            raise RuntimeError("injected asset registration failure")
 
         monkeypatch.setattr(
             repository.assets,
@@ -681,9 +671,7 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
             DownloadMediaCommand(
                 request=DownloadRequest(
                     entry=plan.entries[0],
-                    output_directory=str(
-                        selected_output.resolve()
-                    ),
+                    output_directory=str(selected_output.resolve()),
                 )
             )
         )
@@ -697,21 +685,12 @@ def test_real_download_registration_failure_withdraws_user_visible_files(
         visible_files = [
             path
             for path in selected_output.rglob("*")
-            if path.is_file()
-            and "MediaFlow Pro Failed Downloads"
-            not in path.parts
+            if path.is_file() and "MediaFlow Pro Failed Downloads" not in path.parts
         ]
-        archived_files = list(
-            (
-                selected_output
-                / "MediaFlow Pro Failed Downloads"
-            ).rglob("*.mp4")
-        )
+        archived_files = list((selected_output / "MediaFlow Pro Failed Downloads").rglob("*.mp4"))
         assert visible_files == []
         assert len(archived_files) == 1
-        assert archived_files[0].stat().st_size == (
-            source.stat().st_size
-        )
+        assert archived_files[0].stat().st_size == (source.stat().st_size)
         assert not list(tmp_path.glob(".mf-dl-*"))
     finally:
         project.close()

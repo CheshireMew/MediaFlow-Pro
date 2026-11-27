@@ -2,7 +2,7 @@
   "protocol": "mediaflow-generated-test-fixture",
   "version": 1,
   "producer": "visual-multimedia/assets/web-card-cases/social-evidence-variants",
-  "producer_revision": "0c3b1fdac281300e09f14e1d5714cc12ad88ddc1",
+  "producer_revision": "0f37c9db84cbcc5d85fbb1772cdb8bc984217c14",
   "editable_media_version": 6,
   "files": {
     "assets/creator-avatar.png": "255e6243648bbd731aa269c4ac5643e89a818c7ca79b334bec582584c73af91b",

@@ -22,9 +22,21 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
         self._drafts: dict[tuple[str, str], str] = {}
         self._observed_document_id = ""
         self._comparison_request_id = 0
+        self._save_request_id = 0
+        self._draft_versions: dict[tuple[str, str], int] = {}
+        self._draft_serial = 0
+        self._draft_generation = session.state.binding.generation
+
+    def _ensure_draft_session(self) -> None:
+        generation = self._session.state.binding.generation
+        if generation != self._draft_generation:
+            self._draft_generation = generation
+            self._drafts.clear()
+            self._draft_versions.clear()
 
     @Property(dict, notify=presentationChanged)
     def comparisonData(self) -> dict[str, Any]:
+        self._ensure_draft_session()
         document = dict(self._comparison)
         target_document_id = str(document.get("targetDocumentId") or "")
         document["rows"] = [
@@ -109,6 +121,7 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
 
     @Slot(str, str)
     def refreshComparison(self, document_id: str, target_language: str) -> None:
+        self._ensure_draft_session()
         self._comparison_request_id += 1
         request_id = self._comparison_request_id
         if document_id != self._observed_document_id:
@@ -134,15 +147,25 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
 
     @Slot(str, str)
     def storeTranslationDraft(self, target_segment_id: str, text: str) -> None:
+        self._ensure_draft_session()
         target_document_id = str(self._comparison.get("targetDocumentId") or "")
         if not target_document_id or not target_segment_id:
             return
-        self._drafts[(target_document_id, target_segment_id)] = text
+        key = (target_document_id, target_segment_id)
+        if self._drafts.get(key) == text:
+            return
+        self._drafts[key] = text
+        self._session.state.binding.require_current().begin_draft(
+            f"/subtitles/documents/{target_document_id}/segments/{target_segment_id}/text"
+        )
+        self._draft_serial += 1
+        self._draft_versions[key] = self._draft_serial
         self.presentationChanged.emit()
 
     @Slot(str)
     @report_ui_errors
     def saveTranslationSegment(self, target_segment_id: str) -> None:
+        self._ensure_draft_session()
         self._session._require_writable()
         target_document_id = str(self._comparison.get("targetDocumentId") or "")
         key = (target_document_id, target_segment_id)
@@ -150,16 +173,21 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
             return
         text = self._drafts[key]
         project = self._session.state.binding.require_current()
-        request_id = (self._comparison_request_id, target_document_id, target_segment_id)
+        generation = self._session.state.binding.generation
+        version = self._draft_versions[key]
+        self._save_request_id += 1
+        request_id = (generation, self._save_request_id)
+        draft_snapshot = project.capture_drafts()
+
+        def save() -> object:
+            with project.use_drafts(draft_snapshot):
+                return project.update_translation_segment_text(target_document_id, target_segment_id, text)
+
         self._session.background.submit_project_callback(
             "translation_segment_save",
             request_id,
-            lambda: project.update_translation_segment_text(
-                target_document_id,
-                target_segment_id,
-                text,
-            ),
-            on_result=lambda _result: self._translation_segment_saved(key),
+            save,
+            on_result=lambda _result: self._translation_segment_saved(key, generation, version),
             on_error=lambda error: self._session.updates.report_error(
                 f"保存译文失败：{error}"
             ),
@@ -241,11 +269,15 @@ class SubtitleTranslationController(ControllerFacet[SubtitlePresentationScope]):
             return
         self._session.updates.report_error(f"读取翻译对照失败：{error}")
 
-    def _translation_segment_saved(self, key: tuple[str, str]) -> None:
-        self._drafts.pop(key, None)
+    def _translation_segment_saved(self, key: tuple[str, str], generation: int, version: int) -> None:
+        if generation != self._session.state.binding.generation:
+            return
+        if self._draft_versions.get(key) == version:
+            self._drafts.pop(key, None)
+            self._draft_versions.pop(key, None)
         self._session.projectors.subtitles.refresh_documents()
-        self._session.projectors.timeline.refresh_preview_subtitles()
-        self._session.projectors.timeline.schedule_preview_graph()
+        self._session.projectors.timeline_subtitles.refresh_preview_subtitles()
+        self._session.preview.schedule()
         self._session._set_status("译文已保存")
         self._session.updates.commit(project=True)
         self._session.updates.commit(history=True)

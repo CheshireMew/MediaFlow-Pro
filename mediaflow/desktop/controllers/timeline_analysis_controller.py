@@ -11,27 +11,27 @@ from mediaflow.domain.task_commands import (
 )
 
 from .controller_facet import ControllerFacet, report_ui_errors
-from .controller_scopes import TimelinePresentationScope
+from .timeline_controller_scopes import TimelineAnalysisScope
 from .timeline_selection import (
     selected_video_clip,
     sequence_boundary_analysis_running,
 )
 
 
-class TimelineAnalysisController(ControllerFacet[TimelinePresentationScope]):
+class TimelineAnalysisController(ControllerFacet[TimelineAnalysisScope]):
     @Slot(float)
     @report_ui_errors
     def detectScenesSelected(self, threshold: float = 0.35) -> None:
         self._session._require_writable()
-        clip = selected_video_clip(self._session)
+        clip = selected_video_clip(self._session.project_binding, self._session.read_selection())
         self._session.tasks.start(
             AnalyzeScenesCommand(
-                sequence_id=self._session.state.binding.active_sequence_id,
+                sequence_id=self._session.project_binding.active_sequence_id,
                 clip_id=clip.id,
                 threshold=threshold,
             ),
             [clip.asset_id],
-            sequence_id=self._session.state.binding.active_sequence_id,
+            sequence_id=self._session.project_binding.active_sequence_id,
         )
         self._session._set_status("正在检测场景切点")
 
@@ -49,15 +49,15 @@ class TimelineAnalysisController(ControllerFacet[TimelinePresentationScope]):
         if mode not in {"auto_reframe", "subject_tracking"}:
             raise ValueError("请选择有效的主体跟踪模式")
         tracking_mode = cast(Literal["auto_reframe", "subject_tracking"], mode)
-        clip = selected_video_clip(self._session)
+        clip = selected_video_clip(self._session.project_binding, self._session.read_selection())
         self._session.tasks.start(
             TrackSubjectCommand(
-                sequence_id=self._session.state.binding.active_sequence_id,
+                sequence_id=self._session.project_binding.active_sequence_id,
                 clip_id=clip.id,
                 mode=tracking_mode,
             ),
             [clip.asset_id],
-            sequence_id=self._session.state.binding.active_sequence_id,
+            sequence_id=self._session.project_binding.active_sequence_id,
         )
         self._session._set_status("正在分析画面主体")
 
@@ -65,17 +65,17 @@ class TimelineAnalysisController(ControllerFacet[TimelinePresentationScope]):
     @report_ui_errors
     def analyzeSequenceBoundaries(self) -> None:
         self._session._require_writable()
-        if not self._session.state.binding.require_timeline().state.clips:
+        if not self._session.project_binding.require_timeline().state.clips:
             raise ValueError("请先向时间线添加媒体")
-        if sequence_boundary_analysis_running(self._session):
+        if sequence_boundary_analysis_running(self._session.project_binding, self._session.task_view_state):
             raise RuntimeError("当前序列正在分析入出点")
-        snapshot_hash = self._session.state.binding.require_current().sequence_boundary_snapshot_hash(
-            self._session.state.binding.active_sequence_id
+        snapshot_hash = self._session.project_binding.require_current().sequence_boundary_snapshot_hash(
+            self._session.project_binding.active_sequence_id
         )
         self._session.tasks.start(
             AnalyzeSequenceBoundsCommand(
-                sequence_id=self._session.state.binding.active_sequence_id,
+                sequence_id=self._session.project_binding.active_sequence_id,
                 snapshot_hash=snapshot_hash,
             ),
-            sequence_id=self._session.state.binding.active_sequence_id,
+            sequence_id=self._session.project_binding.active_sequence_id,
         )

@@ -139,10 +139,7 @@ def test_download_path_preflight_runs_before_directory_creation_or_network(
     thread.start()
     first_missing = tmp_path / "must-not-be-created"
     output_dir = first_missing
-    while (
-        utf16_units(str(output_dir))
-        <= WINDOWS_INTEROP_PATH_UTF16_LIMIT
-    ):
+    while utf16_units(str(output_dir)) <= WINDOWS_INTEROP_PATH_UTF16_LIMIT:
         output_dir /= "deep-download-directory"
     url = f"http://127.0.0.1:{server.server_address[1]}/media.mp4"
     request = DownloadRequest(
@@ -157,9 +154,7 @@ def test_download_path_preflight_runs_before_directory_creation_or_network(
     )
     try:
         with pytest.raises(ValueError, match="路径过深"):
-            YtDlpDownloadService(RuntimeContext.discover().paths).download(
-                request
-            )
+            YtDlpDownloadService(RuntimeContext.discover().paths).download(request)
     finally:
         server.shutdown()
         server.server_close()
@@ -434,9 +429,7 @@ def test_ytdlp_analysis_cancels_after_a_bounded_socket_wait(monkeypatch) -> None
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                YtDlpDownloadService(
-                    RuntimeContext.discover().paths
-                ).analyze,
+                YtDlpDownloadService(RuntimeContext.discover().paths).analyze,
                 url,
                 check_cancelled=check_cancelled,
             )
@@ -454,6 +447,12 @@ def test_ytdlp_analysis_cancels_after_a_bounded_socket_wait(monkeypatch) -> None
 
 
 def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from mediaflow.environment import test_run_root
+    from mediaflow.infrastructure.storage_receipts import storage_receipt_inventory
+
+    paths = replace(RuntimeContext.discover().paths, runtime_dir=test_run_root() / "rt")
     web_root = tmp_path / "web"
     web_root.mkdir()
     source = web_root / "large.mp4"
@@ -462,13 +461,14 @@ def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) ->
     cancel_requested = threading.Event()
 
     class Handler(SimpleHTTPRequestHandler):
+        timeout = 1.0
         def copyfile(self, source_file, output_file) -> None:
             try:
                 while chunk := source_file.read(4096):
                     output_file.write(chunk)
                     output_file.flush()
                     time.sleep(0.005)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
                 return
 
         def log_message(self, _format: str, *_args) -> None:
@@ -478,7 +478,8 @@ def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) ->
         ("127.0.0.1", 0),
         partial(Handler, directory=str(web_root)),
     )
-    server.daemon_threads = True
+    # Join the bounded upstream reader before the case files are removed.
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
@@ -500,9 +501,7 @@ def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) ->
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                YtDlpDownloadService(
-                    RuntimeContext.discover().paths
-                ).download,
+                YtDlpDownloadService(paths).download,
                 request,
                 progress=lambda _progress: download_started.set(),
                 check_cancelled=check_cancelled,
@@ -520,14 +519,15 @@ def test_ytdlp_download_observes_cancellation_while_streaming(tmp_path: Path) ->
     visible_files = [
         path
         for path in output_dir.rglob("*")
-        if path.is_file()
-        and "MediaFlow Pro Failed Downloads"
-        not in path.parts
+        if path.is_file() and "MediaFlow Pro Failed Downloads" not in path.parts
     ]
     assert visible_files == []
-    assert not list(
-        output_dir.parent.glob(".mf-dl-*")
+    assert not list(output_dir.parent.glob(".mf-dl-*"))
+    records = storage_receipt_inventory(paths.runtime_dir)["records"]
+    receipt = next(
+        record for record in records if record["owned_root"].startswith(str(output_dir.parent / ".mf-dl-"))
     )
+    assert receipt["terminal_state"] == "interrupted"
 
 
 def test_cookie_store_converts_browser_json_and_resolves_site_cookie(tmp_path) -> None:

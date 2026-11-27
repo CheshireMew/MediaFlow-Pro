@@ -19,8 +19,7 @@ from .commands import (
     DesktopCommand,
     DesktopCommandRequest,
     DesktopCommandResult,
-    command_models,
-    command_signature,
+    command_contract,
 )
 from .execution import ServiceWorkload
 
@@ -30,9 +29,18 @@ class ApplicationCommand:
     name: str
     workload: ServiceWorkload
     handler: Callable[..., object]
-    signature: inspect.Signature
-    request_model: type[DesktopCommandRequest]
-    result_model: type[DesktopCommandResult]
+
+    @property
+    def signature(self) -> inspect.Signature:
+        return command_contract("application", self.name, self.handler).signature
+
+    @property
+    def request_model(self) -> type[DesktopCommandRequest]:
+        return command_contract("application", self.name, self.handler).request_model
+
+    @property
+    def result_model(self) -> type[DesktopCommandResult]:
+        return command_contract("application", self.name, self.handler).result_model
 
     def arguments_from_call(self, args: tuple[object, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
         bound = self.signature.bind(*args, **kwargs)
@@ -145,16 +153,30 @@ def write_preview_snapshot(
     *,
     use_proxies: bool,
     prefer_sdr_preview_proxy: bool,
+    request_owner: str = "direct",
+    request_generation: int | None = None,
 ) -> Path:
     return self.application.write_preview_snapshot(
         project_dir, state, use_proxies=use_proxies, prefer_sdr_preview_proxy=prefer_sdr_preview_proxy,
+        request_owner=request_owner, request_generation=request_generation,
+    )
+
+
+def cancel_preview_snapshot_requests(
+    self: Any, project_dir: str | Path, *, request_owner: str, request_generation: int,
+) -> None:
+    self.application.cancel_preview_snapshot_requests(
+        project_dir, request_owner=request_owner, request_generation=request_generation,
     )
 
 
 def write_asset_preview_snapshot(
     self: Any, project_dir: str | Path, sequence_id: str, asset_id: str,
+    *, request_owner: str = "direct",
 ) -> Path:
-    return self.application.write_asset_preview_snapshot(project_dir, sequence_id, asset_id)
+    return self.application.write_asset_preview_snapshot(
+        project_dir, sequence_id, asset_id, request_owner=request_owner,
+    )
 
 
 def cookie_status(self: Any, domain: str) -> dict[str, JsonValue]:
@@ -177,7 +199,8 @@ def _registry() -> dict[str, ApplicationCommand]:
                      write_asset_preview_snapshot)),
         ("runtime", (discover_encoder_policy_options, installed_asr_models, recent_projects,
                      search_media_resources, runtime_tool_status)),
-        ("control", (cancel_runtime_tool, cancel_timeline_filmstrip_requests)),
+        ("control", (cancel_runtime_tool, cancel_timeline_filmstrip_requests,
+                     cancel_preview_snapshot_requests)),
     )
     commands = {}
     for workload, handlers in groups:
@@ -185,13 +208,7 @@ def _registry() -> dict[str, ApplicationCommand]:
             name = handler.__name__
             if name in commands:
                 raise RuntimeError(f"Duplicate application command: {name}")
-            signature, annotations, result = command_signature(handler)
-            request_model, result_model = command_models(
-                "application", name, signature, annotations, result,
-            )
-            commands[name] = ApplicationCommand(
-                name, workload, handler, signature, request_model, result_model,
-            )
+            commands[name] = ApplicationCommand(name, workload, handler)
     return commands
 
 

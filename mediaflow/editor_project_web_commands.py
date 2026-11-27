@@ -11,7 +11,10 @@ from mediaflow.application.web_batch_service import WebBatchService
 from mediaflow.application.web_clip_editing_service import WebClipEditingService
 from mediaflow.application.web_package_service import WebPackageService
 from mediaflow.application.web_rebind_service import WebRebindService
+from mediaflow.domain.enums import TaskStatus
 from mediaflow.domain.project import Asset
+from mediaflow.domain.task_commands import ImportWebPackageCommand, PrepareWebSequenceCommand, TaskCommand
+from mediaflow.domain.tasks import Task, WebPackageImportTaskOutcome
 from mediaflow.domain.timeline import TimelineState
 from mediaflow.domain.web_manifest import WebAssetSpec
 from mediaflow.domain.web_rendering import WebRenderPlan
@@ -42,8 +45,25 @@ class EditorProjectWebCommands:
 
         def timeline(self, sequence_id: str) -> TimelineEditor: ...
 
-    def import_web_package(self, source: str | Path) -> Asset:
-        return self._web_packages.import_package(source)
+        def start_task(
+            self,
+            command: TaskCommand,
+            input_asset_ids: list[str] | None = None,
+            *,
+            sequence_id: str | None = None,
+            idempotency_key: str | None = None,
+        ) -> Task: ...
+
+        def wait_for_task(self, task_id: str, timeout: float | None = None) -> Task: ...
+
+    def import_web_package(self, source: str | Path, *, idempotency_key: str | None = None) -> Asset:
+        task = self.start_task(ImportWebPackageCommand(source=str(source)), idempotency_key=idempotency_key)
+        completed = self.wait_for_task(task.id)
+        if completed.status != TaskStatus.COMPLETED or not isinstance(
+            completed.outcome, WebPackageImportTaskOutcome
+        ):
+            raise RuntimeError(completed.error or "网页导入已停止")
+        return self._repository.assets.get_asset(completed.outcome.asset_id)
 
     def populate_sample_project(self) -> None:
         from mediaflow.application.sample_project_service import SampleProjectService
@@ -443,7 +463,10 @@ class EditorProjectWebCommands:
         )
 
     def prepare_web_sequence(self, state: TimelineState) -> None:
-        WebRenderService(self._repository, self._paths).ensure_sequence(state)
+        task = self.start_task(PrepareWebSequenceCommand(state=state), sequence_id=state.sequence.id)
+        completed = self.wait_for_task(task.id)
+        if completed.status != TaskStatus.COMPLETED:
+            raise RuntimeError(completed.error or "网页序列渲染已停止")
 
     def inspect_web_clip_render(
         self,

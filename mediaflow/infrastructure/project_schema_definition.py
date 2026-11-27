@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PROJECT_FILE_NAME = "project.mfp"
-PROJECT_SCHEMA_VERSION = 57
+PROJECT_SCHEMA_VERSION = 58
 MANAGED_DIRECTORIES = ("sources", "generated", "proxies", "cache", "exports")
 
 
@@ -492,6 +492,8 @@ CREATE TABLE IF NOT EXISTS task (
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     sequence_id TEXT REFERENCES sequence(id) ON DELETE SET NULL,
     idempotency_key TEXT,
+    execution_scope TEXT NOT NULL DEFAULT 'project'
+        CHECK(execution_scope IN ('project', 'archive_history')),
     command_json TEXT NOT NULL,
     status TEXT NOT NULL,
     progress_json TEXT NOT NULL,

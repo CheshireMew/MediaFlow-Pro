@@ -26,13 +26,14 @@ Rectangle {
         && (kind === "video" || kind === "image") && previewUrl.length > 0
     readonly property bool canEdit:
         mediaflow.workspaceViewController.actionCapabilities.canEdit
-    property var draggedAssetIds: mediaflow.mediaController.isAssetSelected(assetId)
+    readonly property bool selected: mediaflow.mediaController.selectedAssetIds.indexOf(assetId) >= 0
+    property var draggedAssetIds: selected
         ? mediaflow.mediaController.selectedAssetIds : [assetId]
 
     radius: listMode ? Theme.radiusSmall : Theme.radius
-    color: mediaflow.mediaController.isAssetSelected(assetId)
+    color: selected
         ? Theme.accentSoft : pointer.containsMouse ? Theme.surfaceHover : Theme.surfaceRaised
-    border.color: mediaflow.mediaController.isAssetSelected(assetId)
+    border.color: selected
         ? Theme.accent
         : pointer.containsMouse ? Theme.borderStrong : Theme.borderSubtle
     border.width: activeFocus ? 2 : 1
@@ -40,7 +41,7 @@ Rectangle {
     Accessible.name: name
     Accessible.description: detailLabel()
     Accessible.role: Accessible.ListItem
-    Accessible.selected: mediaflow.mediaController.isAssetSelected(assetId)
+    Accessible.selected: selected
 
     Keys.onSpacePressed: function (event) {
         mediaflow.mediaController.selectAsset(

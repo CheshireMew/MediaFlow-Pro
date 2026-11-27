@@ -104,6 +104,7 @@ Item {
                 required property string commandType
                 required property string kind
                 required property string status
+                required property string executionScope
                 required property string statusLabel
                 required property string progressMode
                 required property real progressValue
@@ -226,7 +227,8 @@ Item {
                             onClicked: mediaflow.taskController.openArtifact(String(artifacts[0]))
                         }
                         AppButton {
-                            visible: status === "failed" || status === "cancelled"
+                            visible: executionScope === "project"
+                                && (status === "failed" || status === "cancelled")
                             enabled: root.canManageTasks
                             text: qsTr("重试")
                             onClicked: mediaflow.taskController.retryTask(taskId)

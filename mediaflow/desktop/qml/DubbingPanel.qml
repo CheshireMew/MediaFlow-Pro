@@ -16,7 +16,54 @@ ColumnLayout {
     property string selectedSourceDocumentId: ""
     property string selectedTargetDocumentId: ""
     property string selectedSessionId: ""
+    property var drafts: ({})
     spacing: 9
+
+    function draftKey(kind, id, sessionId) {
+        return String(sessionId || selectedSessionId) + "/" + kind + "/" + String(id);
+    }
+
+    function draftValue(kind, id, field, fallback) {
+        const draft = drafts[draftKey(kind, id)];
+        return draft && draft[field] !== undefined ? draft[field] : fallback;
+    }
+
+    function rememberDraft(kind, id, field, value) {
+        const key = draftKey(kind, id);
+        const next = Object.assign({}, drafts);
+        next[key] = Object.assign({}, next[key] || {});
+        next[key][field] = value;
+        drafts = next;
+    }
+
+    function finishDraft(kind, id, sessionId, saved) {
+        if (!saved)
+            return;
+        const next = Object.assign({}, drafts);
+        delete next[draftKey(kind, id, sessionId)];
+        drafts = next;
+    }
+
+    function saveSpeaker(id, name, review, reference) {
+        const sessionId = selectedSessionId;
+        finishDraft("speaker", id, sessionId,
+            mediaflow.dubbingController.updateSpeaker(sessionId, id,
+                Number(sessionData.revision), name, review, reference));
+    }
+
+    function saveReference(speakerId, id, text, language) {
+        const sessionId = selectedSessionId;
+        finishDraft("reference", id, sessionId,
+            mediaflow.dubbingController.updateReference(sessionId, speakerId, id,
+                Number(sessionData.revision), text, language));
+    }
+
+    function saveUtterance(id, text, speakerId) {
+        const sessionId = selectedSessionId;
+        finishDraft("utterance", id, sessionId,
+            mediaflow.dubbingController.updateUtterance(sessionId, id,
+                Number(sessionData.revision), text, speakerId, "accepted"));
+    }
 
     function indexOfId(values, field, value) {
         for (let index = 0; index < values.length; ++index) {
@@ -77,8 +124,10 @@ ColumnLayout {
     }
 
     function refreshSession() {
-        sessionData = selectedSessionId
+        const incoming = selectedSessionId
             ? (mediaflow.dubbingController.session(selectedSessionId) || {}) : ({});
+        if (incoming.sessionId !== sessionData.sessionId || incoming.revision !== sessionData.revision)
+            sessionData = incoming;
     }
 
     Component.onCompleted: refresh()
@@ -86,7 +135,10 @@ ColumnLayout {
     Connections {
         target: mediaflow.dubbingController
         function onProjectStateChanged() { root.refresh(); }
-        function onTasksChanged() { root.refresh(); }
+        function onTasksChanged() {
+            root.sourceReadiness = mediaflow.dubbingController.sourceReadiness() || {};
+            root.refreshSession();
+        }
         function onSettingsChanged() { root.refresh(); }
     }
 
@@ -261,8 +313,11 @@ ColumnLayout {
                                 Layout.fillWidth: true
                                 AppTextField {
                                     id: speakerName
+                                    objectName: "dubbingSpeakerNameEditor"
                                     Layout.fillWidth: true
-                                    text: String(speakerCard.modelData.displayName)
+                                    sourceText: String(root.draftValue("speaker", speakerCard.modelData.speakerId,
+                                        "displayName", speakerCard.modelData.displayName))
+                                    onTextEdited: root.rememberDraft("speaker", speakerCard.modelData.speakerId, "displayName", text)
                                 }
                                 AppComboBox {
                                     id: speakerReview
@@ -274,14 +329,14 @@ ColumnLayout {
                                         {text: qsTr("自动"), value: "automatic"}
                                     ]
                                     currentIndex: root.indexOfId(
-                                        model, "value", speakerCard.modelData.reviewStatus)
+                                        model, "value", root.draftValue("speaker", speakerCard.modelData.speakerId,
+                                            "reviewStatus", speakerCard.modelData.reviewStatus))
+                                    onActivated: root.rememberDraft("speaker", speakerCard.modelData.speakerId, "reviewStatus", currentValue)
                                 }
                                 AppButton {
                                     text: qsTr("保存说话人")
-                                    onClicked: mediaflow.dubbingController.updateSpeaker(
-                                        root.selectedSessionId,
+                                    onClicked: root.saveSpeaker(
                                         String(speakerCard.modelData.speakerId),
-                                        Number(root.sessionData.revision),
                                         speakerName.text,
                                         String(speakerReview.currentValue),
                                         String(primaryReference.currentValue || ""))
@@ -303,7 +358,9 @@ ColumnLayout {
                                 currentIndex: root.indexOfId(
                                     speakerCard.modelData.references || [],
                                     "referenceId",
-                                    speakerCard.modelData.primaryReferenceId)
+                                    root.draftValue("speaker", speakerCard.modelData.speakerId,
+                                        "primaryReferenceId", speakerCard.modelData.primaryReferenceId))
+                                onActivated: root.rememberDraft("speaker", speakerCard.modelData.speakerId, "primaryReferenceId", currentValue)
                             }
                             Repeater {
                                 model: speakerCard.modelData.references || []
@@ -329,24 +386,27 @@ ColumnLayout {
                                         AppTextField {
                                             id: referenceLanguage
                                             Layout.preferredWidth: 64
-                                            text: String(referenceRow.modelData.language)
+                                            sourceText: String(root.draftValue("reference", referenceRow.modelData.referenceId,
+                                                "language", referenceRow.modelData.language))
+                                            onTextEdited: root.rememberDraft("reference", referenceRow.modelData.referenceId, "language", text)
                                         }
                                         Item { Layout.fillWidth: true }
                                         AppButton {
                                             text: qsTr("保存参考原文")
-                                            onClicked: mediaflow.dubbingController.updateReference(
-                                                root.selectedSessionId,
+                                            onClicked: root.saveReference(
                                                 String(speakerCard.modelData.speakerId),
                                                 String(referenceRow.modelData.referenceId),
-                                                Number(root.sessionData.revision),
                                                 referenceText.text,
                                                 referenceLanguage.text)
                                         }
                                     }
                                     AppTextField {
                                         id: referenceText
+                                        objectName: "dubbingReferenceTextEditor"
                                         Layout.fillWidth: true
-                                        text: String(referenceRow.modelData.text)
+                                        sourceText: String(root.draftValue("reference", referenceRow.modelData.referenceId,
+                                            "text", referenceRow.modelData.text))
+                                        onTextEdited: root.rememberDraft("reference", referenceRow.modelData.referenceId, "text", text)
                                         placeholderText: qsTr("参考音频中实际说出的原文")
                                     }
                                 }
@@ -404,13 +464,16 @@ ColumnLayout {
                             Layout.fillWidth: true
                             AppComboBox {
                                 id: utteranceSpeaker
+                                objectName: "dubbingUtteranceSpeakerEditor"
                                 Layout.preferredWidth: 150
                                 model: root.sessionData.speakers || []
                                 textRole: "displayName"
                                 valueRole: "speakerId"
                                 currentIndex: root.indexOfId(
                                     root.sessionData.speakers || [],
-                                    "speakerId", utteranceCard.modelData.speakerId)
+                                    "speakerId", root.draftValue("utterance", utteranceCard.modelData.utteranceId,
+                                        "speakerId", utteranceCard.modelData.speakerId))
+                                onActivated: root.rememberDraft("utterance", utteranceCard.modelData.utteranceId, "speakerId", currentValue)
                             }
                             StatusBadge {
                                 text: root.statusLabel(utteranceCard.modelData.status)
@@ -448,8 +511,11 @@ ColumnLayout {
                         }
                         AppTextField {
                             id: targetText
+                            objectName: "dubbingTargetTextEditor"
                             Layout.fillWidth: true
-                            text: String(utteranceCard.modelData.targetText)
+                            sourceText: String(root.draftValue("utterance", utteranceCard.modelData.utteranceId,
+                                "targetText", utteranceCard.modelData.targetText))
+                            onTextEdited: root.rememberDraft("utterance", utteranceCard.modelData.utteranceId, "targetText", text)
                         }
                         Text {
                             Layout.fillWidth: true
@@ -464,13 +530,10 @@ ColumnLayout {
                             Item { Layout.fillWidth: true }
                             AppButton {
                                 text: qsTr("保存并确认")
-                                onClicked: mediaflow.dubbingController.updateUtterance(
-                                    root.selectedSessionId,
+                                onClicked: root.saveUtterance(
                                     String(utteranceCard.modelData.utteranceId),
-                                    Number(root.sessionData.revision),
                                     targetText.text,
-                                    String(utteranceSpeaker.currentValue),
-                                    "accepted")
+                                    String(utteranceSpeaker.currentValue))
                             }
                             AppButton {
                                 text: qsTr("重做本句")

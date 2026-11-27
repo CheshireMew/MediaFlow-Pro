@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mediaflow.desktop.component_contexts import SettingsPersistenceContext
 from mediaflow.domain.settings import DesktopSettings, ServiceSettings
 
 from .base import SessionCoordinator
 
 
-class SettingsPersistence(SessionCoordinator):
+class SettingsPersistence(SessionCoordinator[SettingsPersistenceContext]):
     def commit(
         self,
         candidate: ServiceSettings | DesktopSettings,
@@ -15,21 +16,21 @@ class SettingsPersistence(SessionCoordinator):
         *status_arguments: object,
     ) -> None:
         if isinstance(candidate, ServiceSettings):
-            self._session._api.replace_service_settings(candidate)
-            self._session.state.service_settings = self._session._api.service_settings
-            if self._session.state.binding.current:
-                self._session.state.binding.require_current().update_settings(
-                    self._session.state.service_settings
+            self._context.replace_service_settings(candidate)
+            self._context.state.service_settings = self._context.read_service_settings()
+            if self._context.state.binding.current:
+                self._context.state.binding.require_current().update_settings(
+                    self._context.state.service_settings
                 )
-                self._session.updates.commit(workflow=True)
+                self._context.updates.commit(workflow=True)
         else:
-            self._session._api.replace_desktop_settings(candidate)
-            self._session.state.desktop_settings = self._session._api.desktop_settings
-        self._session.projectors.workspace.refresh_settings_models()
-        self._session.updates.commit(settings=True)
-        self._session.updates.commit(selection=True)
+            self._context.replace_desktop_settings(candidate)
+            self._context.state.desktop_settings = self._context.read_desktop_settings()
+        self._context.refresh_settings_models()
+        self._context.updates.commit(settings=True)
+        self._context.updates.commit(selection=True)
         if status_source:
-            self._session._set_status(status_source, *status_arguments)
+            self._context.set_status(status_source, *status_arguments)
 
     def commit_pair(
         self,
@@ -40,22 +41,22 @@ class SettingsPersistence(SessionCoordinator):
     ) -> None:
         """Persist one validated settings form and notify presentation once."""
 
-        self._session._api.replace_service_settings(service_candidate)
-        self._session.state.service_settings = self._session._api.service_settings
-        if self._session.state.binding.current:
-            self._session.state.binding.require_current().update_settings(
-                self._session.state.service_settings
+        self._context.replace_service_settings(service_candidate)
+        self._context.state.service_settings = self._context.read_service_settings()
+        if self._context.state.binding.current:
+            self._context.state.binding.require_current().update_settings(
+                self._context.state.service_settings
             )
-        self._session._api.replace_desktop_settings(desktop_candidate)
-        self._session.state.desktop_settings = self._session._api.desktop_settings
-        self._session.projectors.workspace.refresh_settings_models()
-        self._session.updates.commit(
+        self._context.replace_desktop_settings(desktop_candidate)
+        self._context.state.desktop_settings = self._context.read_desktop_settings()
+        self._context.refresh_settings_models()
+        self._context.updates.commit(
             settings=True,
             selection=True,
-            workflow=self._session.state.binding.current is not None,
+            workflow=self._context.state.binding.current is not None,
         )
         if status_source:
-            self._session._set_status(status_source, *status_arguments)
+            self._context.set_status(status_source, *status_arguments)
 
     def remember_default_project_directory(
         self,
@@ -64,8 +65,8 @@ class SettingsPersistence(SessionCoordinator):
         *status_arguments: object,
     ) -> None:
         selected = str(directory.expanduser().resolve())
-        if self._session.state.service_settings.default_project_directory == selected:
+        if self._context.state.service_settings.default_project_directory == selected:
             return
-        candidate = self._session.state.service_settings.model_copy(deep=True)
+        candidate = self._context.state.service_settings.model_copy(deep=True)
         candidate.default_project_directory = selected
         self.commit(candidate, status_source, *status_arguments)
